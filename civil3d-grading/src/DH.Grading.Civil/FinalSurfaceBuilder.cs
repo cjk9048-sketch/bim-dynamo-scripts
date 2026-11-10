@@ -534,6 +534,8 @@ internal static class FinalSurfaceBuilder
         public List<Tri>? Tris;
         public string Source = "";
         public Geometry? RoadArea, RoadPave, RoadLane;
+        /// <summary>★[v116.8 · JACK 1110 포장 종류] 콘크리트 포장 도로의 차로(지형 «진입도로(콘크리트)») — 없으면 null(옛 결과 그대로).</summary>
+        public Geometry? RoadLaneConc;
         /// <summary>★[v111.8.1] 도로 소단 띠(엔진 계단선 짝 · <see cref="RoadBenches.Strips"/>) — 지형에 도로가 들었으면 늘 있음(없으면 빈 것).</summary>
         public Geometry? RoadBench;
         public CachedGroundSurface? Base;
@@ -635,7 +637,7 @@ internal static class FinalSurfaceBuilder
         // 포장(차로 + 길어깨) · 차로 — 설계에서(노선 + 폭)
         if (P.InTerrain)
         {
-            var paves = new List<Geometry>(); var lanes = new List<Geometry>();
+            var paves = new List<Geometry>(); var lanes = new List<Geometry>(); var lanesC = new List<Geometry>();
             foreach (var (r, _, f) in roadT)
             {
                 try
@@ -646,12 +648,14 @@ internal static class FinalSurfaceBuilder
                     var (pv, ln, nd) = RoadLanes.Pavement(tr, rl, gf);
                     if (nd > 0) log.AppendLine($"  포장 «{r.Name}»: 노선 자리를 못 얻은 측점 {nd}개(포장 · 차로 합)는 양쪽에서 뺌");
                     if (pv != null) paves.Add(pv);
-                    if (ln != null) lanes.Add(ln);
+                    // ★[v116.8] 콘크리트 도로 차로는 따로 · ★[설치 전 검토 L9] 차로 다각형을 못 얻은 도로는 그 도로 포장 전체를 제 종류 차로로(«둘 다 없으면 포장 = 차로» 전체 규칙에 기대지 않게)
+                    var lnK = ln ?? pv;
+                    if (lnK != null) (r.D?.PaveKind == 1 ? lanesC : lanes).Add(lnK);
                 }
                 catch (Exception ex) { warn.Add($"진입도로 «{r.Name}» 포장을 못 셈 — {ex.Message}"); }
             }
             Geometry? U(List<Geometry> g) => g.Count == 0 ? null : g.Count == 1 ? g[0] : NetTopologySuite.Operation.Union.CascadedPolygonUnion.Union(g);
-            P.RoadPave = U(paves); P.RoadLane = U(lanes);
+            P.RoadPave = U(paves); P.RoadLane = U(lanes); P.RoadLaneConc = U(lanesC);
             // ★★[v111.8.1 · JACK 1103 «진입도로의 소단이 안 보여»] 소단 띠 — 도로 소단은 종단 경사를 따라가 세모 기울기(1:10)로는 못 가른다(시험 도면 소단 세모 607개 중 0개).
             //   엔진이 그린 계단선 짝 사이 횡단으로 평평한 띠(높이 = 그 도로 면) · 짝 찾는 거리 = 설계 소단폭 · 옹벽 사이 소단 길이 중 큰 것 + 0.3 m(옹벽 면 평면폭 포함)
             var benches = new List<Geometry>();
@@ -661,6 +665,21 @@ internal static class FinalSurfaceBuilder
                 var tl = RoadTierLines(db, tr);
                 foreach (var (r, t, _) in roadT)
                 {
+                    // ★★[v116.5 · JACK 1110 «소단 표시 누락»] 고리 면 도로 = 면 높이 규칙의 소단 자리(계단선 짝은 두 다리가 만나는 안쪽에서 꺾여 소단을 놓침) · 아니면 아래 옛 계단선 짝
+                    {
+                        var rzA = new CachedGroundSurface(t);
+                        NetTopologySuite.Geometries.Geometry? ga = null; string gNote;
+                        var swA = System.Diagnostics.Stopwatch.StartNew();
+                        try { ga = RoadSession.RingBenchArea(db, r.Aid, r.D, (x, y) => rzA.TryGetElevation(x, y, out _), out gNote); }
+                        catch (Exception exA) { gNote = "예외 — " + exA.Message; }
+                        if (ga != null)
+                        {
+                            log.AppendLine($"  소단 «{r.Name}»: 면 규칙 — {gNote} · {swA.ElapsedMilliseconds} ms");
+                            if (!ga.IsEmpty) benches.Add(ga);
+                            continue;
+                        }
+                        log.AppendLine($"  소단 «{r.Name}»: 면 규칙 못 씀({gNote}) → 계단선 짝");
+                    }
                     if (!tl.TryGetValue(r.Aid.Handle.ToString(), out var ls) || ls.Count == 0) { log.AppendLine($"  소단 «{r.Name}»: 계단선 없음 — 소단 없음"); continue; }
                     double reach = Math.Max(r.D.CutBenchW, r.D.FillBenchW);
                     foreach (var w in r.D.TierWalls) if (w.Length >= 5 && double.IsFinite(w[4])) reach = Math.Max(reach, w[4]);

@@ -248,7 +248,7 @@ internal static class RoadXsec
             d.XsecViewAt = ok ? RoadSession.ViewAt(db, t.Views) : Array.Empty<double>();   // ★[v111.7] 첫 · 끝 뷰 자리(옮겼나 — 저절로 다시 그리기 · 못 그렸으면 없음)
             if (ok) d.XsecLost = false;                                                       // ★[v111.7] 그려졌으면 «못 그림» 알림 끔(못 그렸으면 RoadSession.MakeXsec가 켬)
             // ★[v112.1 검토 M2] 본 도로 면도 열쇠에(본 도로 [업데이트] = 새 핸들 → 가지 횡단도 «바뀜»)
-            d.XsecStamp = ok ? RoadXsecRules.Stamp(RoadXsecRules.StationsKey(stations), roadSurf.Handle.ToString() + MainsKey(mainIds), d.SurfaceSig) : "";
+            d.XsecStamp = ok ? RoadXsecRules.Stamp(RoadXsecRules.StationsKey(stations), roadSurf.Handle.ToString() + MainsKey(mainIds), d.SurfaceSig, Commands.XsecViewCommand.PaveDrawn.TryGetValue(aid, out var pk) ? pk : d.PaveKey) : "";   // ★[v116.8] 포장 토큰 4칸
             s.Design = d;
             try { s.SaveDesign(); } catch (System.Exception exS) { log.AppendLine("  ⚠횡단 기록 저장 실패 — " + exS.Message); }
         }

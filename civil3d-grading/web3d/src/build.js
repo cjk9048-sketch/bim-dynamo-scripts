@@ -184,6 +184,7 @@ export class Build {
     T.obj.material = T.mats;
     for (const id of ['ground', 'excav', 'drain', 'cad', 'align', 'ralign', 'slope']) if (L[id] && L[id].obj) L[id].obj.visible = false;
     if (T.lanes) T.lanes.visible = false;            // 차선도(끝나면 applyTerrainMode가 되살림)
+    if (T.joints) T.joints.visible = false;          // ★[v116.8 · 검토 M2] 줄눈도
     for (const m of this._wallMats()) { m.clippingPlanes = [this.rise]; m.clipShadows = true; m.side = THREE.DoubleSide; m.needsUpdate = true; }
     this.mesh.visible = true;
     this.set(0);
@@ -216,11 +217,14 @@ export class Build {
   // 흰 차선 — 포장·녹화에서 지형과 함께 서서히(그 전엔 숨김) · 끝나면 불투명으로 되돌림(보이기는 main의 applyTerrainMode가)
   _laneFade(a, on) {
     const T = this.L.terrain;
-    if (!T.lanes || !T.laneMat) return;
-    const tr = on && a < 0.999, m = T.laneMat;
-    if (m.transparent !== tr) { m.transparent = tr; m.needsUpdate = true; }
-    m.opacity = tr ? a : 1;
-    if (on) T.lanes.visible = a > 0;
+    // ★[v116.8 · 검토 M2] 콘크리트 줄눈도 차선과 함께
+    for (const [obj, m] of [[T.lanes, T.laneMat], [T.joints, T.jointMat]]) {
+      if (!obj || !m) continue;
+      const tr = on && a < 0.999;
+      if (m.transparent !== tr) { m.transparent = tr; m.needsUpdate = true; }
+      m.opacity = tr ? a : 1;
+      if (on) obj.visible = a > 0;
+    }
   }
 
   set(k) {

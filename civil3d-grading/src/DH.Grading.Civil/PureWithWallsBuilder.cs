@@ -319,7 +319,7 @@ internal static class PureWithWallsBuilder
 
     /// <summary>★[v111.6] 부지 선형(<c>DH선형…</c>)마다 적힌 면 도장 앞 두 칸을 지금 면과 견준다 — (옛 면 기준 수 · 도장 없는 수 · 지금 면 도장 앞 두 칸).
     /// 읽기만 · 선형이 하나도 없으면 지금 면은 재지 않는다(명령이 끝날 때마다 불리므로 — 결과는 종전 셈과 같다). 예외는 부르는 쪽이 받는다.</summary>
-    static (int Stale, int Unknown, string Now) CountStale(Database db, Autodesk.Civil.ApplicationServices.CivilDocument civ)
+    internal static (int Stale, int Unknown, string Now) CountStale(Database db, Autodesk.Civil.ApplicationServices.CivilDocument civ)
     {
         var heads = new System.Collections.Generic.List<string?>();   // 선형마다 도장 앞 두 칸 · null = 도장 없음
         using (var tr = db.TransactionManager.StartTransaction())

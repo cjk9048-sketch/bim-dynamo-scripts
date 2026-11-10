@@ -179,6 +179,8 @@ public static class WallByLine
         public virtual string Name => "링";
         /// <summary>★[v114.3 · S218 (b)] 소단 가운데에도 줄을 넣는가(높이가 비틀린 단 표 — 도로). 부지 링은 거짓(옛 판 비트 같음).</summary>
         public virtual bool MidBench => false;
+        /// <summary>★[v116.6] 로그 한 줄(단 표 · 셈) — 기본 = 이름.</summary>
+        public virtual string Text => Name;
     }
 
     /// <summary>★★[v114.3 · JACK 1105 «옛 사면 소단 높이에 맞춤» · 계획 `2026-11-05_옹벽소단_사면소단높이.md` 2판 1절] 옛 사면 소단 높이 —

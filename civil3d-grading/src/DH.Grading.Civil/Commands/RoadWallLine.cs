@@ -42,7 +42,7 @@ internal static class RoadWallLine
     {
         var t = new Trial();
         if (GradingSettings.WallLineOff || WallByLine.Off || RoadGrade.WallOff) { t.Why = "⚠선 옹벽(v114)이 꺼져 있습니다(정지옵션 WallLineOff)"; return t; }
-        var (inp, r, p0, lines, path, why) = s.P0Now();
+        var (inp, r, p0, lines, path, why, ring) = s.P0Now();
         if (inp == null || r == null || p0 == null || lines == null) { t.Why = why; return t; }
         if (path == "칸 면") { t.Why = "칸 면 위에는 선 옹벽을 안 짓습니다(이 도로는 선 면 · 선 따라 TIN을 못 지음)"; return t; }
         t.Bl = SiteBlockers(doc.Database);
@@ -50,7 +50,7 @@ internal static class RoadWallLine
         var cur = p0;
         if (prev.Count > 0)
         {
-            var ws0 = RoadGrade.ApplyWalls(inp, r, p0, lines, path, prev, t.Bl);
+            var ws0 = RoadGrade.ApplyWalls(inp, r, p0, lines, path, prev, t.Bl, ring: ring);
             cur = ws0.Tris;
             foreach (var w in ws0.Built) foreach (var z in w.Built!.ZoneF.Concat(w.Built.ZoneC)) t.Bl.Add(($"앞 선 옹벽 {w.No}의 바꿀 자리", z));
         }
@@ -64,10 +64,10 @@ internal static class RoadWallLine
     internal static Trial Try(Document doc, RoadSession s, IReadOnlyList<Point3> src, int no, double tc, double tf, double reach, bool topStep = false, double blockLen = 9)
     {
         var t = new Trial();
-        var (inp, r, p0, lines, path, why) = s.P0Now();
+        var (inp, r, p0, lines, path, why, ring) = s.P0Now();
         if (inp == null || r == null || p0 == null || lines == null) { t.Why = why; return t; }
         var all = inp.LineWalls.Where(w => w.No != no).Append(new RoadGrade.LineWall(no, src.Select(q => q.X).ToArray(), src.Select(q => q.Y).ToArray(), tc, tf, reach, topStep, topStep ? blockLen : 0)).ToList();
-        t.Ws = RoadGrade.ApplyWalls(inp, r, p0, lines, path, all, SiteBlockers(doc.Database));
+        t.Ws = RoadGrade.ApplyWalls(inp, r, p0, lines, path, all, SiteBlockers(doc.Database), ring: ring);
         t.St = t.Ws.Walls.LastOrDefault(w => w.No == no);
         if (t.St == null) t.Why = "시험 짓기에 안 들어감"; else if (!t.St.Ok) t.Why = t.St.Why;
         return t;
@@ -99,10 +99,10 @@ internal static class RoadWallLine
         d.BoundWalls.Add(rec);
         s.SaveDesign(); s.Recompute();
         var b = st.Built!;
-        string note = $"추가한 옹벽 {no} — {(st.Side < 0 ? "좌" : "우")} · {string.Join("+", new[] { b.HasFill ? "성토" : "", b.HasCut ? "절토" : "" }.Where(q => q.Length > 0))} · 선 {b.LineLen:F1} m · 단높이 = 도로 사면 · 소단 절토 {tc:0.##} / 성토 {tf:0.##} m"
+        string note = $"추가한 옹벽 {no} — {(st.Side < 0 ? "좌" : st.Side > 0 ? "우" : "끝")} · {string.Join("+", new[] { b.HasFill ? "성토" : "", b.HasCut ? "절토" : "" }.Where(q => q.Length > 0))} · 선 {b.LineLen:F1} m · 단높이 = 도로 사면 · 소단 절토 {tc:0.##} / 성토 {tf:0.##} m"
                     + (topStep ? string.Format(System.Globalization.CultureInfo.InvariantCulture, " · 천단 계단 {0:0.##} m", blockLen) : "")
                     + $" · 선 바깥 최대 {b.FootMax:F2} m" + $" · 교차각 {st.Cut.AngleA:F0}°/{st.Cut.AngleB:F0}°" + (b.Warn.Count > 0 ? " · ⚠" + string.Join(" · ⚠", b.Warn) : "") + (st.Cut.Warn.Count > 0 ? " · ⚠" + string.Join(" · ⚠", st.Cut.Warn) : "")
-                    + (ringWas && s.Last != null && s.Pieces.All(p => p.Ring == null) ? " · 이 도로는 옹벽이 있어 옛 방식으로 다시 지었습니다" : "");   // ★[v116 · D2] 벽 기록 → 옛 엔진
+                    + (ringWas && s.Last != null && s.Pieces.All(p => p.Ring == null) ? " · 고리 면을 못 지어 옛 방식으로 다시 지었습니다" : "");   // ★[v116 · D2] 벽 기록 → 옛 엔진
         try { DiagLog.Append($"\n■ {Tag} {System.DateTime.Now:HH:mm:ss} — {note} · 옛 경계 {st.Cut.AreaOld:F1} = 새 {st.Cut.AreaNew:F1} + 잘라낼 {st.Cut.AreaCut:F1}㎡ · {st.Ms} ms\n{st.Log.TrimEnd()}"); } catch { }
         SelfCheckLog.Line(Tag, true, note, doc.Name);
         if (redraw) RoadCommand.RedrawStale(doc, s);

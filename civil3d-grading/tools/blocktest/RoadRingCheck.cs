@@ -92,8 +92,10 @@ static class RoadRingCheck
             ("⑯ 90° R15 오른쪽 굽이 절토", Road(Walk((45, 0, 0), (0, -90, 15), (45, 0, 0)), 70, 0.15, (x, y) => 64 - 0.25 * y - 0.06 * x, 60)),
             ("⑰ 120° R30 산비탈", Road(Walk((45, 0, 0), (0, 120, 30), (40, 0, 0)), 70, 0.15, (x, y) => 66 + 0.25 * y - 0.06 * x, 60)),
         };
+        var only = Environment.GetEnvironmentVariable("BLOCKTEST_RRONLY");   // 개발 중 한 경우만(태그 앞 글자 — 예 «⑫»)
         foreach (var (tag, inp) in cases)
         {
+            if (!string.IsNullOrEmpty(only) && !only.Split(',').Any(o => tag.StartsWith(o))) continue;
             var b = RoadRing.Build(inp);
             for (int w = 0; w < 2 && b.ReachHit; w++) { inp.Reach *= 1.6; b = RoadRing.Build(inp); }   // Civil RingRun과 같은 찾는 거리 넓힘
             Check($" {tag} 지어짐", b.Ok, b.Note.Length > 400 ? b.Note[..400] : b.Note);
@@ -222,8 +224,78 @@ static class RoadRingCheck
                 }
                 Check($" {tag} 가파른 세모 0(설계 최대 {gmax:F2} × 1.15 넘음 — 톱니)", nSteep == 0, $"넘는 세모 {nSteep} · 최대 {worstG:F2} @{wAt}");
             }
-            var ticks = RoadRing.Ticks(b);
+            var tst = new RoadRing.TickStats();
+            var ticks = RoadRing.Ticks(b, 1.0, 5.0, false, tst);
             Check($" {tag} 노리선", !b.Lines.Any(l => l.Role == RoadGrade.LineRole.Crest) || ticks.Count > 0, $"노리선 {ticks.Count}");
+            // ★[v116.5 · 설치 전 검토 L] 빠진 빗금 — 윗선 점에서 못 그은 비율(윗선 끝 · 골을 따라 돈 토막 · 땅에 붙은 실 같은 면만 — JACK 도로 5 %) · 미리보기(1 m 격자 · 긴 빗금만)도 도로 면 안 지남
+            {
+                // 부딪힘 자리(Kind 4)는 뺌 — 그 자리 계단선이 이긴 면과 안 맞아 빗금이 선과 나란(⚠부딪힘 알림 자리 · 알려진 빈틈)
+                int shotsN = tst.CrestShots - tst.ConflictShots, missN = tst.CrestMiss - tst.ConflictMiss;
+                double miss = shotsN <= 0 ? 0 : missN / (double)shotsN;
+                var pv = RoadRing.Preview(inp);
+                var tkp = pv.Ok ? RoadRing.Ticks(pv, 1.0, 5.0, true) : new();
+                int pvDeck = tkp.Count(t => Enumerable.Range(2, 8).Any(k => pv.Ev.OnDeck(t.A.X + (t.B.X - t.A.X) * k / 10.0, t.A.Y + (t.B.Y - t.A.Y) * k / 10.0, out _)));
+                Check($" {tag} 노리선 빠짐 10 % 안 · 미리보기 도로 면 안 지남", miss <= 0.10 && pvDeck == 0 && (!pv.Ok || tkp.Count > 0 || ticks.Count == 0),
+                    $"윗선 점(부딪힘 밖) {shotsN} 중 못 그음 {missN}({miss:P1}) · 부딪힘 자리 {tst.ConflictShots} 중 {tst.ConflictMiss} · 모두 못 그음 {tst.CrestMiss}( — 면 아님 {tst.Misses.Count(q => q.Why == 0)} · 20 cm 아래 {tst.Misses.Count(q => q.Why == 1)} · 윗선과 나란 {tst.Misses.Count(q => q.Why == 2)}) · 데이라잇에서 {tst.DayDrawn} · 미리보기 {tkp.Count}(도로 면 지남 {pvDeck})");
+                if (Environment.GetEnvironmentVariable("BLOCKTEST_RRDIAG") == "1") foreach (var q in tst.Misses) Console.WriteLine($"   [못 그음 {tag}] ({q.X - OX:F2}, {q.Y - OY:F2}) 까닭 {q.Why}");
+                // ★[v116.5 · JACK 1110 «소단 표시 누락»(3D)] 3D 소단 자리(미리보기 1 m → 0.25 m 칸) — 지은 면 셈의 소단 속(가장자리 0.2 m 안 — 칸 대각 반 0.177 m 넘침은 뺌) 0.5 m 점을 97 % 넘게 덮고 · 사면 속 점은 0.5 % 안만
+                if (pv.Ok)
+                {
+                    var ba = RoadRing.BenchArea(pv);
+                    var prepA = ba.Area == null ? null : NetTopologySuite.Geometries.Prepared.PreparedGeometryFactory.Prepare(ba.Area);
+                    var gfa = NtsSupport.Factory();
+                    int nB = 0, inB = 0, nF = 0, inF = 0;
+                    var envA = b.Deck.Poly.EnvelopeInternal; double rA = b.Ev.Reach;
+                    for (double x = envA.MinX - rA; x <= envA.MaxX + rA; x += 0.5)
+                        for (double y = envA.MinY - rA; y <= envA.MaxY + rA; y += 0.5)
+                        {
+                            var q = b.Ev.Eval(x, y); if (q.Kind is not (2 or 3 or 4)) continue;
+                            bool cutA = q.Kind != 3; var w = cutA ? q.WHi : q.WLo; var pr = cutA ? b.Ev.Pc : b.Ev.Pf;
+                            if (w.Src < 0 || w.Src >= 2 * b.Deck.B.Count) continue;
+                            bool bench = false, face = false;
+                            for (int i = 1; i < pr.E.Count; i++)
+                                if (w.Dist > pr.E[i - 1].D + 0.2 && w.Dist < pr.E[i].D - 0.2) { if (Math.Abs(pr.E[i].R - pr.E[i - 1].R) < 1e-9) bench = true; else face = true; }   // 0.2 m = 0.25 m 칸 대각 반(0.177) 넘게 — 칸으로 칠한 가장자리 넘침은 빼고 잼
+                            if (!bench && !face) continue;
+                            bool cov = prepA != null && prepA.Covers(gfa.CreatePoint(new NetTopologySuite.Geometries.Coordinate(x, y)));
+                            if (bench) { nB++; if (cov) inB++; } else { nF++; if (cov) inF++; }
+                        }
+                    bool hasBench = b.Ev.Pf.E.Count >= 3 || b.Ev.Pc.E.Count >= 3;
+                    Check($" {tag} 3D 소단 자리(면 규칙) — 소단 속 97 % 넘게 · 사면 속 0.5 % 안", nB == 0 ? inF == 0 : inB >= 0.97 * nB && inF <= 0.005 * Math.Max(1, nF),
+                        $"{ba.Text} · 소단 속 점 {nB} 중 {inB}({(nB == 0 ? 100 : 100.0 * inB / nB):F1} %) · 사면 속 점 {nF} 중 {inF} 덮음");
+                }
+                var tdir = Environment.GetEnvironmentVariable("BLOCKTEST_RRTICKDUMP");   // 진단 — 선 · 빗금 · 못 그은 점 · 도로 둘레 · 데이라잇(상대 좌표)
+                if (!string.IsNullOrEmpty(tdir))
+                {
+                    var ci = System.Globalization.CultureInfo.InvariantCulture; var sub = Path.Combine(tdir, new string(tag.Where(char.IsLetterOrDigit).ToArray()));
+                    Directory.CreateDirectory(sub);
+                    File.WriteAllLines(Path.Combine(sub, "lines.txt"), b.Lines.Select(l => $"{(l.Cut ? "C" : "F")} {l.K} {l.Role} {l.Side} " + string.Join(" ", l.Pts.Select(p => $"{(p.X - OX).ToString("F3", ci)},{(p.Y - OY).ToString("F3", ci)},{p.Z.ToString("F3", ci)}"))));
+                    File.WriteAllLines(Path.Combine(sub, "ticks.txt"), ticks.Select(t => string.Join(" ", new[] { t.A.X - OX, t.A.Y - OY, t.A.Z, t.B.X - OX, t.B.Y - OY, t.B.Z }.Select(v => v.ToString("F3", ci)))));
+                    File.WriteAllLines(Path.Combine(sub, "deck.txt"), Enumerable.Range(0, b.Deck.B.Count).Select(i => $"{(b.Deck.B[i].X - OX).ToString("F3", ci)} {(b.Deck.B[i].Y - OY).ToString("F3", ci)} {b.Deck.B[i].Z.ToString("F3", ci)} {b.Deck.BSide[i]}"));
+                    File.WriteAllLines(Path.Combine(sub, "center.txt"), Enumerable.Range(0, b.Deck.X.Length).Select(i => $"{(b.Deck.X[i] - OX).ToString("F3", ci)} {(b.Deck.Y[i] - OY).ToString("F3", ci)}"));
+                    File.WriteAllLines(Path.Combine(sub, "daylight.txt"), b.Daylight.Select(l => string.Join(" ", l.Select(p => $"{(p.X - OX).ToString("F3", ci)},{(p.Y - OY).ToString("F3", ci)}"))));
+                    File.WriteAllLines(Path.Combine(sub, "miss.txt"), tst.Misses.Select(q => $"{(q.X - OX).ToString("F3", ci)} {(q.Y - OY).ToString("F3", ci)} {q.Why}"));
+                }
+            }
+            // ★[v116.5 · JACK 1110 «노리선이 이상하게»] 빗금이 도로 면을 지나지 않음(옛: 길 건너 아랫선으로 그어 도로를 가로지름) · 부채 묶음 없음(옛: 아랫선 끝 · 모서리 한 점으로 3개 넘게 모임)
+            {
+                int onDeck = 0; double maxL = 0;
+                var endN = new Dictionary<(long, long), int>();
+                foreach (var (A, B) in ticks)
+                {
+                    maxL = Math.Max(maxL, Math.Sqrt(Math.Pow(B.X - A.X, 2) + Math.Pow(B.Y - A.Y, 2)));
+                    for (int k = 2; k <= 9; k++) if (b.Ev.OnDeck(A.X + (B.X - A.X) * k / 10.0, A.Y + (B.Y - A.Y) * k / 10.0, out _)) { onDeck++; break; }
+                    var ek = ((long)Math.Round(B.X * 1000), (long)Math.Round(B.Y * 1000)); endN[ek] = endN.GetValueOrDefault(ek) + 1;
+                }
+                // 절토 볼록 모서리 원뿔은 빗금이 그 모서리(도로 가장자리 위 꼭짓점 = 원뿔 꼭대기)로 모이는 게 맞음 — 끝이 도로 가장자리 5 mm 밖에서 모인 묶음만 셈
+                var badFans = endN.Where(kv => kv.Value >= 3 && b.Ev.NearestFoot(kv.Key.Item1 / 1000.0, kv.Key.Item2 / 1000.0).D > 0.005).ToList();
+                int fan = badFans.Sum(kv => kv.Value);
+                string fanAt = string.Join(" ", badFans.Take(2).Select(kv =>
+                {
+                    var g = ticks.Where(t => (long)Math.Round(t.B.X * 1000) == kv.Key.Item1 && (long)Math.Round(t.B.Y * 1000) == kv.Key.Item2).ToList();
+                    return $"끝({kv.Key.Item1 / 1000.0 - OX:F2}, {kv.Key.Item2 / 1000.0 - OY:F2}) ← " + string.Join(", ", g.Select(t => $"({t.A.X - OX:F2}, {t.A.Y - OY:F2}) {Math.Sqrt(Math.Pow(t.B.X - t.A.X, 2) + Math.Pow(t.B.Y - t.A.Y, 2)):F2} m"));
+                }));
+                Check($" {tag} 노리선 도로 면 안 지남 · 부채 묶음 0", onDeck == 0 && fan == 0, $"도로 면 지남 {onDeck} · 한 끝점에 3개 넘게 모인 빗금 {fan} · 가장 긴 {maxL:F2} m / {ticks.Count}" + (fanAt.Length > 0 ? " · " + fanAt : ""));
+            }
         }
     }
 }

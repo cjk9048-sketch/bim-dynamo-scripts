@@ -53,8 +53,13 @@ public static class StructUnits
             }
         double cxr = (raw.X0 + raw.X1) / 2, cyr = (raw.Y0 + raw.Y1) / 2;
         bool nearOrigin = Math.Abs(cxr * f0) < 5000 && Math.Abs(cyr * f0) < 5000;   // INSUNITS로 읽어 원점 5 km 안
-        note = nearOrigin ? "구조물이 원점 근처에 있습니다 — Revit에서 «공유» 좌표로 내보내세요"
-                          : "구조물이 원지반과 겹치지 않습니다(단위 m · mm · cm · ft 모두) — 좌표계를 확인하세요";
+        // ★[v116.7 · JACK 1110 스샷 «공유 좌표로 내보내도 · 프로젝트 기준점으로 내보내도 원점 근처»] 잰 자리(구조물 · 원지반 가운데)를 함께 —
+        //   Revit 공유 좌표 자체가 원점 근처면(mm 프로젝트에 m 값 · 2D 도면 좌표) «공유로 내보내세요»만으로는 못 고친다
+        var gb = ground.Value;
+        string at = string.Format(System.Globalization.CultureInfo.InvariantCulture, "구조물 가운데 X {0:F1} · Y {1:F1} m · 원지반 가운데 X {2:F0} · Y {3:F0} m",
+            cxr * f0, cyr * f0, (gb.X0 + gb.X1) / 2, (gb.Y0 + gb.Y1) / 2);
+        note = nearOrigin ? $"구조물이 원점 근처에 있습니다({at}) — Revit 공유 좌표가 Civil 좌표와 다릅니다: Revit에서 Civil 도면을 CAD 링크로 건물 자리에 맞춘 뒤 관리 → 좌표 → «좌표 획득» → IFC · DWG를 «공유 좌표»로 내보내세요"
+                          : $"구조물이 원지반과 겹치지 않습니다(단위 m · mm · cm · ft 모두 · {at}) — 좌표계를 확인하세요";
         return double.NaN;
     }
 

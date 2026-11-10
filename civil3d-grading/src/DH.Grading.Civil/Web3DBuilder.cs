@@ -23,6 +23,8 @@ internal sealed class Web3DCollect
     public IReadOnlyList<WallDaylight.Tri>? MeshTris;
     /// <summary>★[v111.8] 진입도로 자리(F ⊕ ε 합) · 포장(차로 + 길어깨) · 차로 · 정지면 높이(절/성 가름) · 차선을 그릴 도로 — 지형에 도로가 들었을 때만.</summary>
     public Geometry? RoadArea, RoadPave, RoadLane;
+    /// <summary>★[v116.8] 콘크리트 도로 차로(<see cref="TerrainMesh.Input.RoadLaneConc"/>).</summary>
+    public Geometry? RoadLaneConc;
     /// <summary>★[v111.8.1] 도로 소단 띠(엔진 계단선 짝) — 지형에 도로가 들었을 때만.</summary>
     public Geometry? RoadBench;
     public CachedGroundSurface? BaseZ;
@@ -148,7 +150,7 @@ internal static class Web3DBuilder
             WallMask = c.WallMask,
             WallFoot = walls?.Foot,
             // ★[v111.8 · 계획 6장] 진입도로 자리 · 포장 · 차로 · 정지면 높이(도로가 지형에 들었을 때만 — 아니면 null = 옛 규칙)
-            RoadArea = c.RoadArea, RoadPave = c.RoadPave, RoadLane = c.RoadLane, RoadBench = c.RoadBench,
+            RoadArea = c.RoadArea, RoadPave = c.RoadPave, RoadLane = c.RoadLane, RoadLaneConc = c.RoadLaneConc, RoadBench = c.RoadBench,
             BaseZ = c.BaseZ == null ? null : (x, y) => c.BaseZ.TryGetElevation(x, y, out double z) ? z : null,
         };
         var tm = TerrainMesh.Build(inp, ox, oy);
@@ -200,6 +202,36 @@ internal static class Web3DBuilder
                 log.AppendLine($"  차선: {string.Join(" · ", laneTexts)} · 높이 − (지형 + {RoadMarks.Lift} m) 최대 {laneDz * 1000:F3} mm");
             }
             catch (System.Exception lex) { c.Warn.Add("흰 차선을 못 그렸습니다 — " + lex.Message); log.AppendLine("  차선: 실패 — " + lex); }
+        }
+        // ④a1 ★★[v116.8 · JACK 1110 «콘크리트 질감 + 가로 줄눈»] 콘크리트 포장 도로만 — 가로 줄눈 띠(설계 노선 직각 · 간격 = 설계 칸 · 폭 3 cm · 높이 = 지형 + 3 cm) ·
+        //   콘크리트 도로가 없으면 머리를 안 넣음(장면 바이트 그대로)
+        object? jointHead = null;
+        if (c.Lanes.Any(r => r.D?.PaveKind == 1) && designC != null)
+        {
+            try
+            {
+                var jp = new List<float>(); var ji = new List<int>(); int jl = 0; double jDz = 0; var jt = new List<string>();
+                using var trJ = db.TransactionManager.StartTransaction();
+                foreach (var rd in c.Lanes.Where(r => r.D?.PaveKind == 1))
+                {
+                    var pf = rd.Foot == null ? null : NetTopologySuite.Geometries.Prepared.PreparedGeometryFactory.Prepare(rd.Foot);
+                    double? Z(double x, double y) => (pf == null || pf.Covers(gf.CreatePoint(new Coordinate(x, y)))) && designC.TryGetElevation(x, y, out double z) ? z : null;
+                    var rr = RoadLanes.Joints(trJ, rd, Z);
+                    int b0 = jp.Count / 3;
+                    foreach (var p in rr.Pos)
+                    {
+                        jp.Add((float)(p.X - ox)); jp.Add((float)(p.Y - oy)); jp.Add((float)p.Z);
+                        if (designC.TryGetElevation(p.X, p.Y, out double zt)) jDz = System.Math.Max(jDz, System.Math.Abs(p.Z - (zt + RoadPave.JointLift)));
+                    }
+                    foreach (int i in rr.Idx) ji.Add(b0 + i);
+                    jl += rr.Lines;
+                    jt.Add($"«{rd.Name}» {rr.Lines}줄 · 칸 {rr.Cells:N0} → {rr.Kept:N0}" + (rr.Dropped > 0 ? $" · 버림 {rr.Dropped}(지형 없음 {rr.DropNoZ} · 꼬임 {rr.DropTwist} · 자리 없음 {rr.DropGap})" : ""));
+                }
+                trJ.Commit();
+                if (ji.Count > 0) jointHead = new Dictionary<string, object> { ["pos"] = sc.F32(jp.ToArray()), ["idx"] = sc.U32(ji.ToArray()), ["n"] = jl };
+                log.AppendLine($"  줄눈: {string.Join(" · ", jt)} · 높이 − (지형 + {RoadPave.JointLift} m) 최대 {jDz * 1000:F3} mm");
+            }
+            catch (System.Exception jex) { c.Warn.Add("콘크리트 줄눈을 못 그렸습니다 — " + jex.Message); log.AppendLine("  줄눈: 실패 — " + jex); }
         }
         // ④a2 ★★[도로 마무리 ② · 계획 6.6] 측구 — 윗면 = 도로 면 측구 자리(«길어깨» 콘크리트 구분 · RoadLanes 포장 폭) · 그 위:
         //   U형 = 홈 자리(안폭)에 어두운 띠(그레이팅 · 뚜껑 없으면 물길) · L형 = 경계석 몸통(폭 · 보이는 높이)을 지형 위로 · 땅속 몸통은 안 그림(계획 12장).
@@ -538,6 +570,7 @@ internal static class Web3DBuilder
         // ★[v111.8 · M6] 토량은 계획부지만(다음 판) — 진입도로가 있을 때만 표 아래 한 줄 · 차선은 있을 때만(도로 없는 장면은 머리 그대로)
         if (c.HasRoads && H["earth"] is Dictionary<string, object> eh) eh["note"] = "진입도로 제외";
         if (laneHead != null) H["lanes"] = laneHead;
+        if (jointHead != null) H["joints"] = jointHead;   // ★[v116.8] 콘크리트 도로가 있을 때만
         if (ditchHead != null) H["ditches"] = ditchHead;   // ★[도로 마무리 ②] 측구가 있을 때만
         if (strataHead != null) H["strata"] = strataHead;
         if (roadAlignHead != null) H["roadAlign"] = roadAlignHead;

@@ -121,6 +121,16 @@ internal static class RoadLanes
         return (U(paves), U(lanes), dropped);
     }
 
+    /// <summary>★★[v116.8 · JACK 1110 «콘크리트 질감 + 가로 줄눈»] 콘크리트 포장 도로의 가로 줄눈 띠 — 도로 구간마다 구간 시작부터 간격(설계 <see cref="RoadDesign.JointGap"/>) ·
+    /// 차로 −좌 반폭 ~ +우 반폭(<see cref="RoadPave.Joints"/> · 노선 직각) · 높이 = <paramref name="zAt"/> + 0.03 m. 아스팔트 도로 = 빈 결과.</summary>
+    internal static RoadMarks.RibbonResult Joints(Transaction tr, Road r, Func<double, double, double?> zAt)
+    {
+        if (r.D == null || r.D.PaveKind != 1) return new RoadMarks.RibbonResult();
+        var al = (CivilDb.Alignment)tr.GetObject(r.Aid, OpenMode.ForRead);
+        var sp = r.Spans;
+        return RoadPave.Joints(sp, r.D.JointGap, (s, o) => RoadRanges.Inside(sp, s) ? At(al, s, o) : null, _ => (r.HalfL, r.HalfR), zAt);
+    }
+
     /// <summary>흰 차선 띠(양쪽) — 높이 = <paramref name="zAt"/> + 0.03 m(Core <see cref="RoadMarks.Lift"/>) · 지형 없음 · 곡선 안쪽 좁음 · 꼬인 칸은 Core가 버리고 센다.</summary>
     internal static RoadMarks.RibbonResult Lanes(Transaction tr, Road r, Func<double, double, double?> zAt)
     {
@@ -129,6 +139,7 @@ internal static class RoadLanes
         var sp = r.Spans;
         var st = new List<double>();
         for (int i = 0; i < sp.Count; i++) { if (i > 0) st.Add((sp[i - 1].B + sp[i].A) / 2); st.AddRange(Stations(al, sp[i].A, sp[i].B)); }
-        return RoadMarks.Lanes(st, (s, o) => RoadRanges.Inside(sp, s) ? At(al, s, o) : null, _ => (r.HalfL, r.HalfR), zAt);
+        // ★[v116.5 · JACK 1110 «차로는 중간에 흰색 점선 차선»] 가운데 흰 점선(칠 3 m · 빈 5 m · 폭 0.15 m — 구간마다 구간 시작부터)
+        return RoadMarks.Lanes(st, (s, o) => RoadRanges.Inside(sp, s) ? At(al, s, o) : null, _ => (r.HalfL, r.HalfR), zAt, centerSpans: sp);
     }
 }

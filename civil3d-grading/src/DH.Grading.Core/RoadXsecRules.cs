@@ -147,6 +147,31 @@ public static class RoadXsecRules
         return layoutNow >= 0 && was != layoutNow ? "횡단도 배치가 바뀌었습니다" : "";
     }
 
+    /// <summary>★[v116.8 · JACK 1110 포장 종류] 그린 횡단도 지문 4칸 — «측점|지표면 핸들|지표면 지문|포장 토큰»(<see cref="RoadPave.Key"/>).</summary>
+    public static string Stamp(string stationsKey, string surfHandle, string surfSig, string paveKey)
+        => $"{stationsKey ?? ""}|{surfHandle ?? ""}|{surfSig ?? ""}|{paveKey ?? ""}";
+
+    /// <summary>★[v116.8] 옛 3칸 도장(포장 토큰 없이 그린 횡단도) 알림.</summary>
+    public const string PaveOld = "포장 층 없이 그린 횡단도입니다";
+    /// <summary>★[v116.8] 포장 토큰이 다름.</summary>
+    public const string PaveChanged = "포장이 바뀌었습니다";
+
+    /// <summary>★[v116.8 · JACK 1110 포장 종류] 판정 차례 = 측점 → 지표면 → <b>포장</b> → 축척 → 배치. 도장 칸이 정확히 셋(옛 판)이면 <see cref="PaveOld"/> 한 번 ·
+    /// 넷이면 넷째 칸 ≠ <paramref name="paveNow"/>일 때 <see cref="PaveChanged"/>. 실패 도장(빈 글 · 한 칸)은 옛 판처럼 축척 · 배치만.</summary>
+    public static string Stale(string stampWas, string stationsNow, string surfHandleNow, string surfSigNow, string paveNow,
+                               double pinWas, double pinNow, double annoWas, double annoNow, int layoutWas, int layoutNow)
+    {
+        var w = (stampWas ?? "").Split('|');
+        if (w.Length >= 3)
+        {
+            if (w[0] != (stationsNow ?? "")) return "종단이 수정되었습니다";
+            if (w[1] != (surfHandleNow ?? "") || w[2] != (surfSigNow ?? "")) return "지표면이 다시 만들어졌습니다";
+            if (w.Length == 3) return PaveOld;
+            if (w[3] != (paveNow ?? "")) return PaveChanged;
+        }
+        return Stale("", stationsNow, surfHandleNow, surfSigNow, pinWas, pinNow, annoWas, annoNow, layoutWas, layoutNow);
+    }
+
     /// <summary>도면설정 «횡단도 배치» 기본 차례 번호(1 = 1×2) — <c>GradingSettings.XsecLayout</c> 기본값과 같다.</summary>
     public const int LayoutDefault = 1;
 

@@ -263,7 +263,7 @@ internal static class StructImport
     sealed class Entry { public string Key = ""; public StructModel Model = null!; public string Note = ""; }
     static readonly ConditionalWeakTable<Database, Dictionary<int, Entry>> Cache = new();
 
-    static string KeyOf(StructRec r, BlockReference br)
+    internal static string KeyOf(StructRec r, BlockReference br)
     {
         var m = br.BlockTransform;
         var sb = new System.Text.StringBuilder(r.Sha16);
@@ -374,6 +374,13 @@ internal static class StructImport
                     try { if (db.TryGetObjectId(new Handle(System.Convert.ToInt64(r.XrefHandle, 16)), out var iid) && !iid.IsErased && tr.GetObject(iid, OpenMode.ForRead) is BlockReference br) btrId = br.BlockTableRecord; } catch { }
                     if (btrId.IsNull) continue;
                     string? p = ResolvePath(db, tr, btrId, r);
+                    // ★[v116.5] IFC 원본이 옆 DWG보다 새것이면 옆 DWG를 다시 만든다(아래에서 바뀜으로 잡혀 다시 실림)
+                    if (p != null && StructIfc.IsSide(p) && StructIfc.Stale(p))
+                    {
+                        if (StructIfc.ToDwg(StructIfc.IfcOf(p), out string inote, p) == null) msgs.Add($"⚠IFC가 바뀌었지만 다시 못 바꿈: {r.Name} — {inote}");
+                        else log?.AppendLine($"  [구조물] IFC가 바뀌어 옆 DWG를 다시 만듦: {r.Name} · {inote}");
+                    }
+                    if (p == null && r.PathAbs.Length > 0 && StructIfc.IsSide(r.PathAbs) && File.Exists(StructIfc.IfcOf(r.PathAbs)) && StructIfc.ToDwg(StructIfc.IfcOf(r.PathAbs), out _, r.PathAbs) != null) p = r.PathAbs;   // 옆 DWG를 지웠으면 IFC에서 다시
                     if (p == null) { msgs.Add($"⚠원본 없음: {r.Name}"); missing?.Add(r.Id); continue; }
                     var fi = new FileInfo(p);
                     string mt = MtimeOf(p);
@@ -425,6 +432,7 @@ internal static class StructImport
         {
             string? p = ResolvePath(db, tr, btrId, r);
             if (p == null) return false;
+            if (StructIfc.IsSide(p) && StructIfc.Stale(p)) return true;   // ★[v116.5] IFC가 옆 DWG보다 새것
             return new FileInfo(p).Length != (long)r.Size || MtimeOf(p) != r.Mtime;
         }
         catch { return false; }

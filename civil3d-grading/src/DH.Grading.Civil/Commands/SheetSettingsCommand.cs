@@ -61,7 +61,7 @@ public sealed class SheetSettingsCommand
     }
 
     /// <summary>★[v111.7.2 검토 낮음] 이 도면에 부지 횡단뷰(진입도로가 아닌 노선의 검토선에 매달린 횡단뷰)가 있나.</summary>
-    static bool HasSiteXsec(Autodesk.AutoCAD.DatabaseServices.Database db)
+    internal static bool HasSiteXsec(Autodesk.AutoCAD.DatabaseServices.Database db)
     {
         try
         {
@@ -146,7 +146,7 @@ public sealed class SheetSettingsCommand
         bool xsecBack = false;
         // ★[v111.7.2] 횡단도 배치만 바꿔도 부지 횡단도를 같은 자리에 다시(종단을 안 다시 그렸어도)
         //   ★[검토 낮음] 배치만 바뀐 때는 이 도면에 부지 횡단뷰가 있을 때만(LastAt은 세션 값 — 다른 도면에서 그린 자리일 수 있음)
-        bool xsecTried = XsecViewCommand.LastAt != null && (profileTouched || (layoutChanged && HasSiteXsec(doc.Database)));
+        bool xsecTried = XsecViewCommand.KnowsSiteAt(doc.Database) && (profileTouched || (layoutChanged && HasSiteXsec(doc.Database)));
         if (xsecTried)
             doc.Editor.WriteMessage("\n[도면 설정] 횡단도도 같은 자리에 다시 그립니다 — 장수가 많으면 시간이 걸립니다...");
         try { if (xsecTried) xsecBack = XsecViewCommand.Refresh(doc); }

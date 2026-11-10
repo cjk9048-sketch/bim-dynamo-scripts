@@ -264,13 +264,19 @@ public sealed class WallCompositeCommand
         _quiet = false;
         // ★[v105.1.1 · JACK 1023] 로딩 창 — 옹벽 변환이 이어 태운 합성 · [옹벽 합성] 단추 모두(관문 합성 RunFor는 관문이 띄운다 · 종단이 띄운 창이면 그 창을 쓴다)
         using var busy = BusyPopup.Scope(CreateGradingCommand.BusyText);
-        try { if (docJ != null) RunInner(docJ); }
+        bool compOk = false;   // ★[v116.10] 끝까지 돌았나 — 예외로 빠질 때는 종단을 다시 그리지 않는다(알림만)
+        try { if (docJ != null) RunInner(docJ); compOk = true; }
         catch (System.Exception ex) { job.Done(false, $"예외 — {ex.GetType().Name}: {ex.Message}"); throw; }
         finally
         {
             EventViewerMute.End(evPrev); _job = null; _issuesBefore = null;
             // ★[v103.2 · 계획 2-6] 그려 둔 종단 · 횡단이 옛 면 기준이면 한 줄 — 관문이 부른 합성(RunFor)은 곧 종단을 그리므로 안 알린다
-            if (docJ != null) PureWithWallsBuilder.NotifyStale(docJ);
+            //   ★★[v116.10 · JACK 1110 · 인터뷰 «자동으로 그 자리에»] 합성 단추 · 옹벽 추가 · 정지면 생성이 이어 태운 합성 끝 = 알림 대신 같은 자리에 다시 그림
+            if (docJ != null)
+            {
+                if (compOk) SiteSheetsRefresh.Run(docJ, "옹벽 합성");
+                else PureWithWallsBuilder.NotifyStale(docJ);
+            }
         }
         // ★[v114.2 · JACK 1105 «명령 뒤 되돌리기 기록 비움»] 정지면_DH를 바꿔 끼웠고 그것을 따르는 지표면 종단이 있으면 Ctrl+Z 기록을 비운다(Civil 결함 회피 · 명령 끝 · 트랜잭션 밖)
         UndoGuard.FlushNow(docJ);

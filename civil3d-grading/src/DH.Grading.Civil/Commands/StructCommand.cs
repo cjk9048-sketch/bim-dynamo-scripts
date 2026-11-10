@@ -10,7 +10,8 @@ using CivilDb = Autodesk.Civil.DatabaseServices;
 
 namespace DH.Grading.Civil.Commands;
 
-/// <summary>★★★[v115 · JACK 1105 Revit 구조물 · 계획 5.4] [기타] → [구조물] — 불러오기(DHSTRUCT) · 다시 반영(DHSTRUCTUPD) · 지우기(DHSTRUCTOFF).
+/// <summary>★★★[v115 · JACK 1105 Revit 구조물 · 계획 5.4] [기타] → [구조물] — 불러오기(DHSTRUCT) · 좌표계 내보내기(DHSTRUCTPTS · v116.9) · 지우기(DHSTRUCTOFF).
+/// [다시 반영](DHSTRUCTUPD)은 v116.9에서 없앰(JACK 1110) — 원본이 바뀌면 같은 파일을 다시 불러옴(바꿔치기).
 /// 창 없음 · 끝 알림 한 줄 · 자세한 건 진단 로그. 보기 전용(지표면 · 토공량은 안 바꿈 — UndoGuard 대상 아님).</summary>
 public sealed class StructCommand
 {
@@ -26,11 +27,16 @@ public sealed class StructCommand
         try { fd = System.Convert.ToInt16(AcadApp.GetSystemVariable("FILEDIA")); } catch { }
         if (fd == 0 || SelfCheckLog.Headless)
         {
-            var r = ed.GetString(new PromptStringOptions("\n[구조물] Revit 3D DWG 경로: ") { AllowSpaces = true });
+            var r = ed.GetString(new PromptStringOptions("\n[구조물] Revit 내보내기 파일(DWG · IFC) 경로: ") { AllowSpaces = true });
             string s = r.Status == PromptStatus.OK ? (r.StringResult ?? "").Trim().Trim('"') : "";
             return s.Length > 0 ? s : null;
         }
-        var dlg = new Microsoft.Win32.OpenFileDialog { Filter = "Revit 3D DWG (*.dwg)|*.dwg", Title = "Revit 구조물 3D DWG" };
+        // ★[v116.5 · JACK 1110 «구조물은 Revit에서 — rvt · ifc · fbx»] DWG · IFC를 읽음 · RVT · FBX · Navisworks는 골라도 까닭 · 내보내는 법을 알림
+        var dlg = new Microsoft.Win32.OpenFileDialog
+        {
+            Filter = "Revit 내보내기 (*.dwg;*.ifc)|*.dwg;*.ifc|Revit 3D DWG (*.dwg)|*.dwg|IFC (*.ifc)|*.ifc|Revit · FBX · Navisworks (*.rvt;*.rfa;*.fbx;*.nwc;*.nwd) — 못 읽음(까닭 안내)|*.rvt;*.rfa;*.fbx;*.nwc;*.nwd",
+            Title = "Revit 구조물 — DWG · IFC",
+        };
         return dlg.ShowDialog() == true ? dlg.FileName : null;
     }
 
@@ -101,12 +107,28 @@ public sealed class StructCommand
         if (path == null) { ed.WriteMessage("\n[구조물] 취소"); return; }
         try { path = Path.GetFullPath(path); } catch { }
         if (!File.Exists(path)) { Done(ed, log, "⚠파일 없음: " + path); return; }
+        if (StructIfc.NotReadable(path) is { } nr0) { Done(ed, log, "⚠" + nr0); return; }
+        string srcFile = path, ifcNote = "";
+        if (string.Equals(Path.GetExtension(path), ".ifc", System.StringComparison.OrdinalIgnoreCase))
+        {
+            // ★[v116.5] IFC → 옆 DWG(«이름.ifc.dh.dwg» · m) → 아래 DWG 흐름 그대로
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            var side = StructIfc.ToDwg(path, out ifcNote);
+            log.AppendLine($"  IFC {path} → {(side ?? "실패")} · {ifcNote} · {sw.ElapsedMilliseconds} ms");
+            if (side == null) { Done(ed, log, "⚠" + ifcNote); return; }
+            path = side;
+        }
         if (!Probe(path, out int ins, out var raw, out string pw)) { Done(ed, log, "⚠" + pw); return; }
         var ground = StructImport.GroundBox(db, out var gid);
         double f = StructUnits.PickFactor(ins, raw, ground, out string fnote);
         log.AppendLine($"  {path} · INSUNITS {ins} · 범위 {raw.X0:F1},{raw.Y0:F1} ~ {raw.X1:F1},{raw.Y1:F1} · 계수 {f} {fnote}");
-        if (double.IsNaN(f)) { Done(ed, log, "⚠" + fnote); return; }
-        string def = StructUnits.NameFromFile(path);
+        if (double.IsNaN(f))
+        {
+            // ★[v116.7 · JACK 1110] «프로젝트 기준점»으로 내보낸 IFC면 그 까닭을 앞에(공유 좌표 자체가 원점 근처인 경우는 fnote가 안내)
+            string cb = srcFile != path ? StructIfc.CoordBaseHint(srcFile) : "";
+            Done(ed, log, "⚠" + (cb.Length > 0 ? cb + " · " : "") + fnote); return;
+        }
+        string def = StructUnits.NameFromFile(srcFile);
         var nr = ed.GetString(new PromptStringOptions("\n[구조물] 이름") { AllowSpaces = true, DefaultValue = def, UseDefaultValue = true });   // 기본값 <이름>은 AutoCAD가 붙인다
         if (nr.Status != PromptStatus.OK) { ed.WriteMessage("\n[구조물] 취소"); return; }
         string name = (nr.StringResult ?? "").Trim(); if (name.Length == 0) name = def;
@@ -186,17 +208,140 @@ public sealed class StructCommand
         }
         catch { }
         if (me.Model.Unused > 0) warn.Add($"안 쓴 개체 {me.Model.Unused}");
-        string s = StructDraw.Reflect(db, log, reload: false);
+        if (ifcNote.Contains('⚠')) warn.Add(ifcNote[ifcNote.IndexOf('⚠')..]);   // ★[v116.5] IFC에서 못 읽은 형상 · 구멍(셈)
+        string s = StructDraw.Reflect(db, log);
         Done(ed, log, s + (warn.Count > 0 ? " · " + string.Join(" · ", warn.Distinct()) : ""));
     }
 
-    [CommandMethod("DHSTRUCTUPD")]
-    public void Update()
+    // ── ★★[v116.9 · JACK 1110 «구조물 좌표계 내보내기»] Civil → Revit 애드인 기준점 파일(계획_Civil구조물기준점_내보내기.md) ──
+    //   인터뷰 1110: 도면 표시 안 남김 · 이름 기본값 = 이 도면에서 마지막에 쓴 이름(처음엔 도면 이름) · 원지반 + 최종 지표면 표고 둘 다
+    static readonly Dictionary<string, string> LastPtsName = new(System.StringComparer.OrdinalIgnoreCase);
+    static string LastPtsDir = "";
+
+    static double? ElevAt(Transaction tr, ObjectId sid, double x, double y)
+    {
+        if (sid.IsNull || sid.IsErased) return null;
+        try { return tr.GetObject(sid, OpenMode.ForRead) is CivilDb.TinSurface ts ? ts.FindElevationAtXY(x, y) : null; }
+        catch { return null; }   // 면 밖
+    }
+
+    [CommandMethod("DHSTRUCTPTS")]
+    public void ExportPoints()
     {
         var doc = AcadApp.DocumentManager.MdiActiveDocument; if (doc == null) return;
+        var ed = doc.Editor; var db = doc.Database;
         GradingSettings.SyncToDocument(doc);
-        var log = new System.Text.StringBuilder("\n■ DHSTRUCTUPD(구조물 다시 반영)\n");
-        Done(doc.Editor, log, StructDraw.Reflect(doc.Database, log, reload: true));
+        var log = new System.Text.StringBuilder("\n■ DHSTRUCTPTS(구조물 좌표계 내보내기)\n");
+        // ★[설치 전 검토 중간] 배치(종이) 공간에서 찍으면 종이 좌표가 그대로 적힌다(뷰포트 너머 스냅이어도) — 진입도로 명령과 같은 문
+        try
+        {
+            if (System.Convert.ToInt32(AcadApp.GetSystemVariable("TILEMODE")) == 0 && System.Convert.ToInt32(AcadApp.GetSystemVariable("CVPORT")) == 1)
+            { Done(ed, log, "⚠원인: 배치(종이) 공간에서는 도면 좌표를 못 찍음 — 모형 공간(또는 배치의 모형 뷰포트 안)에서 다시"); return; }
+        }
+        catch { }
+        int ins = (int)db.Insunits;
+        if (!StructPoints.TryToMeter(ins, out double f, out bool assumed))
+        { Done(ed, log, $"⚠원인: 도면 단위({StructPoints.UnitName(ins)})를 m로 바꾸는 표가 없음 — UNITS로 m · mm · cm 중 하나로 정한 뒤 다시"); return; }
+        string docName = doc.Name ?? "";
+        bool named = false; try { named = doc.IsNamedDrawing; } catch { }
+
+        // ① 이름
+        string def = LastPtsName.TryGetValue(docName, out var ln) && ln.Length > 0 ? ln : Path.GetFileNameWithoutExtension(docName);
+        if (string.IsNullOrWhiteSpace(def)) def = "구조물";
+        var nr = ed.GetString(new PromptStringOptions("\n[구조물] 이름") { AllowSpaces = true, DefaultValue = def, UseDefaultValue = true });
+        if (nr.Status != PromptStatus.OK) { ed.WriteMessage("\n[구조물] 취소"); return; }
+        string name = (nr.StringResult ?? "").Trim(); if (name.Length == 0) name = def;
+
+        // ② 점 1 → 점 2(UCS로 받은 값을 WCS로 · 1 m 미만이면 다시)
+        var ucs = ed.CurrentUserCoordinateSystem;
+        bool ucsWorld = ucs.IsEqualTo(Matrix3d.Identity);
+        var r1 = ed.GetPoint(new PromptPointOptions("\n[구조물] 점 1 — 구조물 모서리(끝점 · 교차점 스냅): "));
+        if (r1.Status != PromptStatus.OK) { ed.WriteMessage("\n[구조물] 취소"); return; }
+        Point3d w1 = r1.Value.TransformBy(ucs), w2;
+        while (true)
+        {
+            var r2 = ed.GetPoint(new PromptPointOptions("\n[구조물] 점 2 — 다른 모서리(Revit에서도 이 순서로 찍습니다): ") { UseBasePoint = true, BasePoint = r1.Value, UseDashedLine = true });
+            if (r2.Status != PromptStatus.OK) { ed.WriteMessage("\n[구조물] 취소"); return; }
+            w2 = r2.Value.TransformBy(ucs);
+            double dm = System.Math.Sqrt((w2.X - w1.X) * (w2.X - w1.X) + (w2.Y - w1.Y) * (w2.Y - w1.Y)) * f;
+            if (dm >= StructPoints.MinDist) break;
+            ed.WriteMessage($"\n[구조물] 두 점 거리 {dm:F3} m — {StructPoints.MinDist:F0} m 넘게 떨어진 모서리를 고르세요");
+        }
+
+        // ③ 표고(원지반 · 최종 지표면) · 좌표계
+        StructPoints.Pt p1, p2;
+        string gName = "", fName = "";
+        {
+            var gid = ImportGisCommand.FindGroundSurface(db, out gName, out int gTris);
+            if (gTris <= 0) gid = ObjectId.Null;
+            using var tr = db.TransactionManager.StartTransaction();
+            ObjectId fid = ObjectId.Null;
+            try
+            {
+                foreach (ObjectId sid in Autodesk.Civil.ApplicationServices.CivilDocument.GetCivilDocument(db).GetSurfaceIds())
+                    if (!sid.IsErased && tr.GetObject(sid, OpenMode.ForRead) is CivilDb.TinSurface s && s.Name == FinalSurfaceBuilder.Name) { fid = sid; fName = s.Name; break; }
+            }
+            catch { }
+            StructPoints.Pt Mk(Point3d w)
+            {
+                double? g = ElevAt(tr, gid, w.X, w.Y), fz = ElevAt(tr, fid, w.X, w.Y);
+                return new StructPoints.Pt(w.X * f, w.Y * f, w.Z * f, gName ?? "", g * f, fName, fz * f);
+            }
+            p1 = Mk(w1); p2 = Mk(w2);
+            tr.Commit();
+        }
+        string code = KoreaCs.Read(db);
+        int? det = KoreaCs.ResolveEpsgFromCode(code);
+        // ★[설치 전 검토 낮음] SyncToDocument가 이미 도면 값으로 맞춘 설정 값을 쓴다 — 도면 코드로 못 나타내는 원점(구 좌표계 · UTM-K)을 고른 판은 그 고름을 지킨다
+        //   (ResolveEpsgFromCode는 신/구를 못 가려 늘 신을 준다). 출처는 실제로 도면 값을 따랐을 때만 «drawing».
+        int epsg = GradingSettings.ExportEpsg;
+        bool fromDrawing = det.HasValue && det.Value == epsg && KoreaCs.CodeForEpsg(epsg) != null;
+        var info = new StructPoints.Info(name, epsg, code, fromDrawing ? "drawing" : "settings", Path.GetFileName(docName), named ? docName : "",
+            ins, ucsWorld, "Civil 3D · AutoCAD " + AcadApp.Version, "DH.Grading " + GradingSettings.Version, System.DateTimeOffset.Now);
+        string json = StructPoints.Json(info, p1, p2);
+
+        // ④ 저장(기본 = 도면 폴더 · 없으면 마지막 폴더)
+        string defDir = named ? (Path.GetDirectoryName(docName) ?? "") : LastPtsDir;
+        if (defDir.Length == 0 || !Directory.Exists(defDir)) defDir = System.Environment.GetFolderPath(System.Environment.SpecialFolder.MyDocuments);
+        string defFile = StructPoints.SafeFileName(name) + "_Civil기준점.json";
+        string? path;
+        short fd = 1; try { fd = System.Convert.ToInt16(AcadApp.GetSystemVariable("FILEDIA")); } catch { }
+        if (fd == 0 || SelfCheckLog.Headless)
+        {
+            var pr = ed.GetString(new PromptStringOptions("\n[구조물] 저장할 파일") { AllowSpaces = true, DefaultValue = Path.Combine(defDir, defFile), UseDefaultValue = true });
+            path = pr.Status == PromptStatus.OK ? (pr.StringResult ?? "").Trim().Trim('"') : null;
+            if (path != null && path.Length == 0) path = Path.Combine(defDir, defFile);
+        }
+        else
+        {
+            var dlg = new Microsoft.Win32.SaveFileDialog { Title = "구조물 기준점 파일(Revit 애드인용)", Filter = "구조물 기준점 (*.json)|*.json", FileName = defFile, InitialDirectory = defDir, DefaultExt = ".json", AddExtension = true, OverwritePrompt = true };
+            path = dlg.ShowDialog() == true ? dlg.FileName : null;
+        }
+        if (string.IsNullOrEmpty(path)) { ed.WriteMessage("\n[구조물] 취소"); return; }
+        try
+        {
+            path = Path.GetFullPath(path);
+            File.WriteAllText(path, json, new System.Text.UTF8Encoding(false));
+            // 되읽기 — 쓴 x · y가 그대로 읽히나(비트 그대로)
+            using var jd = System.Text.Json.JsonDocument.Parse(File.ReadAllText(path, System.Text.Encoding.UTF8));
+            var pa = jd.RootElement.GetProperty("points");
+            bool same = pa.GetArrayLength() == 2 && pa[0].GetProperty("x").GetDouble() == p1.X && pa[0].GetProperty("y").GetDouble() == p1.Y && pa[1].GetProperty("x").GetDouble() == p2.X && pa[1].GetProperty("y").GetDouble() == p2.Y;
+            if (!same) { Done(ed, log, "⚠원인: 저장한 파일을 다시 읽으니 좌표가 다름 — " + path); return; }
+        }
+        catch (System.Exception ex) { Done(ed, log, "⚠원인: 저장 실패 — " + ex.Message); return; }
+        LastPtsName[docName] = name;
+        try { LastPtsDir = Path.GetDirectoryName(path) ?? ""; } catch { }
+        var (dist, brg) = StructPoints.Check(p1, p2);
+        var ic = System.Globalization.CultureInfo.InvariantCulture;
+        string El(StructPoints.Pt p) => (p.Ground is double g ? string.Format(ic, " 원지반 {0:F3}", g) : "") + (p.Final is double q ? string.Format(ic, " 최종 {0:F3}", q) : "");
+        var notes = new List<string>();
+        if (ins != 6) notes.Add(assumed ? "도면 단위 없음(INSUNITS 0) → m로 봄" : $"도면 단위 {StructPoints.UnitName(ins)} → m로 바꿔 적음");
+        if (!ucsWorld) notes.Add("UCS가 WCS가 아니어서 WCS 값으로 바꿔 적음");
+        if (!det.HasValue) notes.Add($"도면 좌표계 {(code.Length > 0 ? "«" + code + "» 자동인식 밖" : "없음")} — 설정값 EPSG {epsg}");
+        else if (!fromDrawing) notes.Add($"좌표계 = 설정에서 고른 EPSG {epsg}(도면 코드 «{code}»로는 원점을 못 가림)");
+        log.AppendLine(json);
+        Done(ed, log, string.Format(ic, "기준점 저장 — {0} · 점1 ({1:F3}, {2:F3}){3} · 점2 ({4:F3}, {5:F3}){6} · 거리 {7:F3} m · 방향 {8:F2}° · 단위 m · EPSG {9}",
+            path, p1.X, p1.Y, El(p1), p2.X, p2.Y, El(p2), dist, brg, epsg) + (notes.Count > 0 ? " · " + string.Join(" · ", notes) : ""));
     }
 
     [CommandMethod("DHSTRUCTOFF")]

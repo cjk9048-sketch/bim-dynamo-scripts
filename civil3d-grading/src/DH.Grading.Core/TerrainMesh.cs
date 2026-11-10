@@ -12,10 +12,11 @@ namespace DH.Grading.Core;
 /// </list></summary>
 public static class TerrainMesh
 {
-    /// <summary>★[v111.8 · 계획_v111_8.md 6장 · JACK 1102 «차로 = 아스팔트 · 길어깨 = 콘크리트»] 진입도로 구분 둘(차로 · 길어깨)은 <b>맨 끝</b>에 — 옛 번호 그대로(옛 뷰어 · S175 옛 답).</summary>
-    public enum Cls : byte { Ground, Plan, Bench, SlopeCut, SlopeFill, WallZone, WallFace, Other, Road, Shoulder }
-    public static readonly string[] Keys = { "ground", "plan", "bench", "slopeCut", "slopeFill", "wallZone", "wallFace", "other", "road", "shoulder" };
-    public static readonly string[] Names = { "원지반", "계획면", "소단", "사면(절토)", "사면(성토)", "옹벽 자리", "옹벽 면", "정지", "진입도로", "길어깨" };
+    /// <summary>★[v111.8 · 계획_v111_8.md 6장 · JACK 1102 «차로 = 아스팔트 · 길어깨 = 콘크리트»] 진입도로 구분 둘(차로 · 길어깨)은 <b>맨 끝</b>에 — 옛 번호 그대로(옛 뷰어 · S175 옛 답).
+    /// ★[v116.8 · JACK 1110 포장 종류] 콘크리트 차로(<see cref="Cls.RoadConc"/>)도 <b>맨 끝</b>에 덧붙임 — 옛 번호 그대로.</summary>
+    public enum Cls : byte { Ground, Plan, Bench, SlopeCut, SlopeFill, WallZone, WallFace, Other, Road, Shoulder, RoadConc }
+    public static readonly string[] Keys = { "ground", "plan", "bench", "slopeCut", "slopeFill", "wallZone", "wallFace", "other", "road", "shoulder", "roadConc" };
+    public static readonly string[] Names = { "원지반", "계획면", "소단", "사면(절토)", "사면(성토)", "옹벽 자리", "옹벽 면", "정지", "진입도로", "길어깨", "진입도로(콘크리트)" };
 
     public sealed class Input
     {
@@ -34,6 +35,8 @@ public static class TerrainMesh
         public Geometry? RoadArea;
         /// <summary>★[v111.8] 설계 포장(차로 + 길어깨 — 노선에서) · 차로만(차로 끝까지). 차로가 null이면 포장 전체가 «진입도로».</summary>
         public Geometry? RoadPave, RoadLane;
+        /// <summary>★[v116.8 · JACK 1110 포장 종류] 콘크리트 포장 도로의 차로(차로 끝까지) — 안이면 «진입도로(콘크리트)». 겹치면 콘크리트 먼저. null = 콘크리트 도로 없음(옛 결과와 비트 같음).</summary>
+        public Geometry? RoadLaneConc;
         /// <summary>★[v111.8] 정지면 높이(도로 사면 절/성 가름 — 무게중심 높이 ≥ 이것이면 성토) · null이면 원지반으로.</summary>
         public Func<double, double, double?>? BaseZ;
         /// <summary>★[v111.8] 도로 자리 «소단» — 경사(높이/수평)가 이보다 작으면(1:10). <see cref="RoadBench"/>가 없을 때만(옛 규칙).</summary>
@@ -136,7 +139,7 @@ public static class TerrainMesh
         IPreparedGeometry? P(Geometry? g) => g == null || g.IsEmpty ? null : PreparedGeometryFactory.Prepare(g);
         var pMask = P(inp.WallMask); var pFoot = P(inp.WallFoot); var pBench = P(inp.Bench);
         var pCut = P(inp.SlopeCut); var pFill = P(inp.SlopeFill); var pPlan = P(inp.Plan);
-        var pRoad = P(inp.RoadArea); var pPave = P(inp.RoadPave); var pLane = P(inp.RoadLane);
+        var pRoad = P(inp.RoadArea); var pPave = P(inp.RoadPave); var pLane = P(inp.RoadLane); var pLaneC = P(inp.RoadLaneConc);
         var pRBench = P(inp.RoadBench);
         bool benchRule = inp.RoadBench != null;
         var gf = NtsSupport.Factory();
@@ -156,7 +159,11 @@ public static class TerrainMesh
                 var rp = gf.CreatePoint(new Coordinate(rx, ry));
                 if (pRoad.Contains(rp) && !(benchRule && OnBase(a) && OnBase(b) && OnBase(c) && !(pPave != null && pPave.Contains(rp))))
                 {
-                    if (pPave != null && pPave.Contains(rp)) k = pLane == null || pLane.Contains(rp) ? Cls.Road : Cls.Shoulder;
+                    // ★[v116.8] 콘크리트 차로 먼저(겹침 = 콘크리트) · «차로 다각형이 없으면 포장 전체 = 차로» 옛 규칙은 아스팔트 · 콘크리트 차로가 <b>둘 다</b> 없을 때만
+                    //   (콘크리트 도로만 있을 때 길어깨가 차로로 바뀌지 않게)
+                    if (pPave != null && pPave.Contains(rp))
+                        k = pLaneC != null && pLaneC.Contains(rp) ? Cls.RoadConc
+                          : (pLane == null && pLaneC == null) || (pLane != null && pLane.Contains(rp)) ? Cls.Road : Cls.Shoulder;
                     else if (!changed) k = Cls.Ground;
                     else
                     {

@@ -65,10 +65,60 @@ public sealed partial class XsecViewCommand
     /// 그린 적이 없으면(<see cref="LastAt"/>가 비었으면) 아무 일도 하지 않는다.</summary>
     internal static bool Refresh(Autodesk.AutoCAD.ApplicationServices.Document doc)
     {
-        if (LastAt == null || doc == null) return false;
+        if (doc == null) return false;
+        // ★[v116.10 · 설치 전 검토 낮음] 도면에 적어 둔 자리가 먼저(이 도면 것 — LastAt은 세션 값이라 다른 도면 것일 수 있고 Civil을 다시 켜면 없다)
+        var at = ReadSiteAt(doc.Database) ?? LastAt;
+        if (at == null) return false;
         // ★[검토 0908 · 높음] <b>Build가 말한 것을 그대로 넘긴다</b> — 종전엔 무조건 true였다.
-        try { return Build(doc, LastAt); }
+        try { return Build(doc, at); }
         catch { return false; }
+    }
+
+    /// <summary>★[v116.10] 부지 횡단도를 다시 그릴 자리를 아는가(도면에 적힌 자리 · 이 세션에서 그린 자리).</summary>
+    internal static bool KnowsSiteAt(Database db) => LastAt != null || ReadSiteAt(db) != null;
+
+    /// <summary>★[v116.10 · JACK 1110 «부지를 고쳐도 종단이 안 따라옴»] 부지 횡단도를 <paramref name="at"/>(도면에 적어 둔 자리)에 다시 그린다 — 부지를 고친 뒤 종단 갱신이 부른다.</summary>
+    internal static bool RefreshAt(Autodesk.AutoCAD.ApplicationServices.Document doc, Point3d at)
+    {
+        if (doc == null) return false;
+        try { return Build(doc, at); }
+        catch { return false; }
+    }
+
+    /// <summary>★[v116.10] 부지 횡단도를 놓은 자리(왼쪽 아래)를 <b>도면에</b> 적는 이름 — <see cref="LastAt"/>은 세션 값이라 Civil을 다시 켜면 잃는다
+    /// (그러면 종단을 다시 그릴 때 Civil이 지운 횡단도를 다시 못 그린다).</summary>
+    const string SiteAtKey = "DH_SITE_XSEC_AT";
+
+    static void SaveSiteAt(Database db, Point3d at, System.Text.StringBuilder log)
+    {
+        try
+        {
+            using var tr = db.TransactionManager.StartTransaction();
+            var nod = (DBDictionary)tr.GetObject(db.NamedObjectsDictionaryId, OpenMode.ForWrite);
+            Xrecord xr;
+            if (nod.Contains(SiteAtKey)) xr = (Xrecord)tr.GetObject(nod.GetAt(SiteAtKey), OpenMode.ForWrite);
+            else { xr = new Xrecord(); nod.SetAt(SiteAtKey, xr); tr.AddNewlyCreatedDBObject(xr, true); }
+            xr.Data = new ResultBuffer(new TypedValue((int)DxfCode.XCoordinate, at));
+            tr.Commit();
+        }
+        catch (System.Exception ex) { log.AppendLine("  ⚠횡단도 자리를 도면에 못 적음(부지를 고친 뒤 횡단도를 저절로 다시 못 그릴 수 있다) — " + ex.Message); }
+    }
+
+    /// <summary>★[v116.10] 도면에 적어 둔 부지 횡단도 자리 — 없으면 null(이 판 전에 그린 횡단도 · 그린 적 없음).</summary>
+    internal static Point3d? ReadSiteAt(Database db)
+    {
+        try
+        {
+            using var tr = db.TransactionManager.StartTransaction();
+            Point3d? r = null;
+            var nod = (DBDictionary)tr.GetObject(db.NamedObjectsDictionaryId, OpenMode.ForRead);
+            if (nod.Contains(SiteAtKey) && tr.GetObject(nod.GetAt(SiteAtKey), OpenMode.ForRead) is Xrecord xr && xr.Data != null)
+                foreach (TypedValue tv in xr.Data)
+                    if (tv.TypeCode == (short)DxfCode.XCoordinate && tv.Value is Point3d p) r = p;
+            tr.Commit();
+            return r;
+        }
+        catch { return null; }
     }
 
     /// <summary>명령 들어올 때의 메모리 자국 — 끝에서 견준다(JACK 0901 "튕긴다").</summary>
@@ -214,6 +264,7 @@ public sealed partial class XsecViewCommand
             at = pr.Value.TransformBy(ed.CurrentUserCoordinateSystem);
         }
         if (t == null) LastAt = at;   // ★다음에 측점을 고치면 이 자리에 다시 그린다(★[v111.5] 진입도로 자리는 RoadDesign.XsecAt)
+        if (t == null) SaveSiteAt(db, at, log);   // ★[v116.10] 도면에도 — Civil을 다시 켠 뒤 부지를 고쳐도 같은 자리에 다시 그린다
 
         X9("지난번 것 지우기 시작 — 여기서 죽으면 빈 도면만 남는다");
         // ★[JACK 0826] <b>지난번 것을 지운다</b> — 안 지우면 유령이 겹친다.
@@ -840,7 +891,8 @@ public sealed partial class XsecViewCommand
         DrawStrataNames(db, viewIds, kindOf, alignId, wl, wr, scale, leftLim, log);   // ★[JACK 0828] 지층·지하수위 이름
         X9("옹벽 단면");
         // ★[v111.5 · 계획 2 · 검토 M2] 진입도로 = 옹벽 단면 · 터파기선을 안 그림(도로 옹벽은 지표면 선의 수직면으로만 — 부지 옹벽 기록은 부지 노선 것)
-        string wsec = t == null ? DrawWallSections(db, viewIds, alignId, wl, wr, scale, log, qty.X2) : DrawDitchSections(db, viewIds, alignId, wl, wr, scale, log);   // ★★★[v104.1 · JACK 1022] 옹벽 단면 넣기 · ★[v105.3] 2D 터파기선 · 배면 · ★[도로 마무리 ②] 진입도로 = 측구 단면
+        string wsec = t == null ? DrawWallSections(db, viewIds, alignId, wl, wr, scale, log, qty.X2) : DrawDitchSections(db, viewIds, alignId, wl, wr, scale, log);
+        if (t != null) { string psec = DrawPaveSections(db, viewIds, alignId, wl, wr, scale, log); if (psec.Length > 0) wsec = wsec.Length > 0 ? wsec + " · " + psec : psec; }   // ★[v116.8 · JACK 1110] 진입도로 = 포장 층   // ★★★[v104.1 · JACK 1022] 옹벽 단면 넣기 · ★[v105.3] 2D 터파기선 · 배면 · ★[도로 마무리 ②] 진입도로 = 측구 단면
         // ★[v115 · JACK 1105 Revit 구조물] 자른 면(진입도로는 BuildRoad 표식이 붙는다) · 부지 축척은 [다시 반영]용으로 적어 둠
         int nStr9 = StructDraw.IntoSections(db, viewIds.Select(v => v.Id), scale, log);
         if (t == null && nStr9 > 0) StructDraw.RememberSiteXsecScale(db, scale);
