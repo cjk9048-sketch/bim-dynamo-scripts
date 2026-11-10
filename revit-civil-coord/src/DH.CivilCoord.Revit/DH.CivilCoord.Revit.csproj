@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <UseWPF>true</UseWPF>
+    <PlatformTarget>x64</PlatformTarget>
+    <AssemblyName>DH.CivilCoord.Revit</AssemblyName>
+    <RootNamespace>DH.CivilCoord.Revit</RootNamespace>
+    <Version>1.0.0</Version>
+  </PropertyGroup>
+
+  <!-- Revit 2026 API: NuGet 빌드타임 참조(런타임 DLL 미복사). 판은 수량산출 애드인과 같이 2026.3.0 으로 못 박는다
+       (쓰는 Revit 이 26.3 — 더 새 판으로 빌드하면 'Assembly version conflict'). -->
+  <ItemGroup>
+    <PackageReference Include="Nice3point.Revit.Api.RevitAPI" Version="[2026.3.0]" ExcludeAssets="runtime" />
+    <PackageReference Include="Nice3point.Revit.Api.RevitAPIUI" Version="[2026.3.0]" ExcludeAssets="runtime" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\DH.CivilCoord.Core\DH.CivilCoord.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Resources\*.png" />
+  </ItemGroup>
+
+</Project>

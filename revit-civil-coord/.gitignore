@@ -1,0 +1,11 @@
+bin/
+obj/
+.omc/
+*.tmp
+*.user
+.vs/
+src/DH.CivilCoord.Tests/TestResults/
+# 현장(고객) 값이 든 것 — 공개 저장소에 올리지 않는다(JACK 2026-10-14: "애드인 소스만 푸시").
+*.ifc
+*.rvt
+*.dwg
