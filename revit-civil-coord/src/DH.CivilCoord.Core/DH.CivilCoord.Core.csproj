@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Revit 없이 도는 부분: 두 점 맞춤 수학 · IFC GUID · IFC 쓰기. 시험(DH.CivilCoord.Tests)이 Revit 없이 검사한다. -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>DH.CivilCoord.Core</AssemblyName>
+    <RootNamespace>DH.CivilCoord.Core</RootNamespace>
+    <Version>1.0.0</Version>
+  </PropertyGroup>
+
+</Project>
