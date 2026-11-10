@@ -50,17 +50,23 @@ public sealed class IfcJob
     public string AppVersion = "1.0.0";
     public DateTime Time = DateTime.Now;
 
-    /// <summary>IfcSite 배치 = Civil 좌표로 옮기는 값: 세계 = R(Angle)·p + (Tx, Ty) · 높이 = z + Tz (m · 라디안).</summary>
+    /// <summary>IfcSite 배치 = Civil 좌표로 옮기는 값: 세계 XY = R(Angle)·(Scale·p) + (Tx, Ty) · 높이 = z + Tz (m · 라디안).</summary>
     public double Tx, Ty, Tz, Angle;
+
+    /// <summary>평면 비율(X · Y만 · 높이는 그대로 — JACK 1110). IFC 배치는 비율을 못 담아 꼭짓점 X · Y에 곱해 쓴다.</summary>
+    public double Scale = 1;
+
+    /// <summary>IfcSite 에 붙는 속성 묶음 DH_CivilFit(맞춤 값 기록 — 나비스웍스에서 보임).</summary>
+    public readonly List<(string Name, string Value)> SiteProps = new();
 
     public readonly List<StoreyInfo> Storeys = new();
     public readonly List<MeshPart> Parts = new();
 
-    /// <summary>Revit 내부 좌표(m) → Civil 세계 좌표(m) — IfcSite 배치와 같은 식.</summary>
+    /// <summary>Revit 내부 좌표(m) → Civil 세계 좌표(m) — 꼭짓점 비율 + IfcSite 배치와 같은 식.</summary>
     public (double X, double Y, double Z) ToWorld((double X, double Y, double Z) p)
     {
-        double c = Math.Cos(Angle), s = Math.Sin(Angle);
-        return (c * p.X - s * p.Y + Tx, s * p.X + c * p.Y + Ty, p.Z + Tz);
+        double c = Math.Cos(Angle), s = Math.Sin(Angle), x = Scale * p.X, y = Scale * p.Y;
+        return (c * x - s * y + Tx, s * x + c * y + Ty, p.Z + Tz);
     }
 
     /// <summary>세계 좌표 범위(부재가 없으면 null).</summary>

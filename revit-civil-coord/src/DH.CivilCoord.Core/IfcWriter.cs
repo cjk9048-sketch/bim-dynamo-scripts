@@ -85,6 +85,12 @@ public static class IfcWriter
         int bldPl = o.Add($"IFCLOCALPLACEMENT(#{sitePl},#{ident})");
         int bld = o.Add($"IFCBUILDING({S(Gid(projGuid, "building"))},#{oh},{S(job.BuildingName)},$,$,#{bldPl},$,$,.ELEMENT.,$,$,$)");
         o.Add($"IFCRELAGGREGATES({S(Gid(projGuid, "rel/project-site"))},#{oh},$,$,#{project},(#{site}))");
+        if (job.SiteProps.Count > 0)
+        {
+            var sp = job.SiteProps.Select(p => o.Add($"IFCPROPERTYSINGLEVALUE({S(p.Name)},$,IFCLABEL({S(Trim255(p.Value))}),$)")).ToList();
+            int pset = o.Add($"IFCPROPERTYSET({S(Gid(projGuid, "pset/site"))},#{oh},'DH_CivilFit',$,({Refs(sp)}))");
+            o.Add($"IFCRELDEFINESBYPROPERTIES({S(Gid(projGuid, "rel/pset/site"))},#{oh},$,$,(#{site}),#{pset})");
+        }
         o.Add($"IFCRELAGGREGATES({S(Gid(projGuid, "rel/site-building"))},#{oh},$,$,#{site},(#{bld}))");
 
         // 층(쓰는 부재가 있는 레벨만)
@@ -119,7 +125,8 @@ public static class IfcWriter
                 {
                     var v = sh.V[i];
                     if (i > 0) sb.Append(',');
-                    sb.Append('(').Append(F(v.X)).Append(',').Append(F(v.Y)).Append(',').Append(F(v.Z)).Append(')');
+                    // 평면 비율은 꼭짓점 X · Y 에(높이 Z 는 그대로 — 배치는 비율을 못 담음)
+                    sb.Append('(').Append(F(job.Scale * v.X)).Append(',').Append(F(job.Scale * v.Y)).Append(',').Append(F(v.Z)).Append(')');
                 }
                 sb.Append("))");
                 int pts = o.Add(sb.ToString());

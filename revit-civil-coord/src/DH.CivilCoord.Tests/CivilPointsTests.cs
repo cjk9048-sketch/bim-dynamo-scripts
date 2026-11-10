@@ -99,21 +99,94 @@ public class CivilPointsTests
     }
 
     [Fact]
-    public void State_TakesCivilValues_AndNoticesHandEdits()
+    public void State_FileAndManual_AreKeptApart()
     {
         var cp = CivilPoints.Parse(Sample, out _);
-        var st = new FitState { R1 = new[] { 0.0, 0.0 }, R2 = new[] { 31.9276, 0.0 } };
+        var st = new FitState { R1 = new[] { 0.0, 0.0 }, R2 = new[] { 31.9276, 0.0 }, C1X = "1", C1Y = "2", C2X = "41", C2Y = "2" };
         st.ApplyCivil(cp, @"C:\x\a.json");
-        Assert.Equal("200,123.45", st.C1X);
-        Assert.Equal("450,677.84", st.C2Y);
-        Assert.True(st.CivilUntouched);
-        var fit = st.Fit()!;
+        Assert.Equal("file", st.Mode);
+        Assert.Equal("1", st.C1X);   // 직접 입력 칸은 그대로
+        Assert.Equal(("200,123.45", "450,678.9", "200,155.36", "450,677.84"), st.FileValues);
+        var fit = st.Fit()!;          // 파일 모드 = 파일 값
         Assert.Equal(200123.45, fit.C1.X, 9);
         Assert.True(Math.Abs(fit.DistanceError) < 1e-4);
-        st.C2Y = "450,677.85";
-        Assert.False(st.CivilUntouched);
+        st.Mode = "manual";           // 직접 입력 = 칸 값
+        Assert.Equal(1, st.Fit()!.C1.X, 9);
         var back = FitState.FromJson(st.ToJson())!;
         Assert.Equal(@"C:\x\a.json", back.CivilFile);
         Assert.Equal(st.CivilLoaded, back.CivilLoaded);
+        Assert.Equal("manual", back.Mode);
+    }
+
+    [Fact]
+    public void Sketch_IsReadAndBadLinesDropped()
+    {
+        string withSketch = With("\"check\": {", """
+            "sketch": { "center": [200140, 450678], "radius": 80, "lines": [
+              { "kind": "site", "layer": "부지", "closed": true, "pts": [[200100, 450650], [200180, 450650], [200180, 450710], [200100, 450710]] },
+              { "kind": "road", "pts": [[200090, 450640], [200190, 450640]] },
+              { "kind": "wall", "pts": [[1, "x"]] },
+              { "pts": [[5, 5]] },
+              "not a line"
+            ] },
+            "check": {
+            """);
+        var cp = CivilPoints.Parse(withSketch, out var err);
+        Assert.Null(err);
+        Assert.Equal(2, cp.Sketch.Count);
+        Assert.Equal(3, cp.SketchDropped);
+        Assert.Equal("site", cp.Sketch[0].Kind);
+        Assert.True(cp.Sketch[0].Closed);
+        Assert.Equal("other", new CivilPoints.SketchLine().Kind);
+        Assert.Equal(new P2(200190, 450640), cp.Sketch[1].Pts[1]);
+    }
+
+    [Fact]
+    public void Sketch_Missing_IsFine_AndFileChangeIsNoticed()
+    {
+        var cp = CivilPoints.Parse(Sample, out _);
+        Assert.Empty(cp.Sketch);
+        var st = new FitState();
+        st.ApplyCivil(cp, "a.json");
+        Assert.False(st.FileDiffers(cp));
+        var moved = CivilPoints.Parse(Sample.Replace("\"x\": 200155.36", "\"x\": 200155.46").Replace("\"check\": { \"distance\": 31.927600, \"bearingDeg\": -1.902567 }", "\"check\": null"), out var err);
+        Assert.Null(err);
+        Assert.True(st.FileDiffers(moved));
+    }
+
+    [Fact]
+    public void Hull_Square_WithInnerAndCollinearPoints()
+    {
+        var pts = new[] { new P2(0, 0), new P2(10, 0), new P2(10, 5), new P2(0, 5), new P2(5, 2), new P2(5, 0), new P2(0, 0) };
+        var h = Hull.Convex(pts);
+        Assert.Equal(4, h.Count);
+        Assert.Equal(50, Hull.Area(h), 9);
+        Assert.Equal(2, Hull.Convex(new[] { new P2(0, 0), new P2(1, 1) }).Count);
+    }
+
+    [Fact]
+    public void State_FileMode_WithoutFile_HasNoFit()
+    {
+        var st = new FitState { Mode = "file", R1 = new[] { 0.0, 0.0 }, R2 = new[] { 30.0, 0.0 }, C1X = "1", C1Y = "2", C2X = "31", C2Y = "2" };
+        Assert.Null(st.Fit());
+    }
+
+    [Fact]
+    public void State_OldRecord_ResolvesMode()
+    {
+        var typed = new FitState { C1X = "1", C1Y = "2", C2X = "31", C2Y = "2" };   // v1.0 에서 손으로 넣은 기록(Mode 없음)
+        typed.ResolveMode();
+        Assert.Equal("manual", typed.Mode);
+        var empty = new FitState();
+        empty.ResolveMode();
+        Assert.Equal("file", empty.Mode);
+        // v1.0: 파일 값을 칸에 넣은 그대로 → 파일 · 칸을 손으로 고친 기록 → 직접 입력(고친 값이 말없이 바뀌지 않게)
+        var asLoaded = new FitState { CivilFile = "a.json", CivilLoaded = "1|2|31|2", C1X = "1", C1Y = "2", C2X = "31", C2Y = "2" };
+        asLoaded.ResolveMode();
+        Assert.Equal("file", asLoaded.Mode);
+        var edited = new FitState { R1 = new[] { 0.0, 0.0 }, R2 = new[] { 30.0, 0.0 }, CivilFile = "a.json", CivilLoaded = "1|2|31|2", C1X = "1", C1Y = "2", C2X = "31.5", C2Y = "2" };
+        edited.ResolveMode();
+        Assert.Equal("manual", edited.Mode);
+        Assert.Equal(31.5, edited.Fit()!.C2.X, 9);
     }
 }
