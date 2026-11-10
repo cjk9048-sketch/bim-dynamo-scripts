@@ -298,7 +298,11 @@ public sealed class StructCommand
         bool fromDrawing = det.HasValue && det.Value == epsg && KoreaCs.CodeForEpsg(epsg) != null;
         var info = new StructPoints.Info(name, epsg, code, fromDrawing ? "drawing" : "settings", Path.GetFileName(docName), named ? docName : "",
             ins, ucsWorld, "Civil 3D · AutoCAD " + AcadApp.Version, "DH.Grading " + GradingSettings.Version, System.DateTimeOffset.Now);
-        string json = StructPoints.Json(info, p1, p2);
+        // ③-b ★[v116.13 · JACK 1110 저녁 · Revit 터미널 약속 §3 «sketch»] 미리보기 선 — 두 점 가운데 반지름(80 m · 거리 3배 중 큰 값) 안의 우리 평면 선
+        StructPoints.Sketch? sketch = null; string sketchNote = "";
+        try { sketch = BuildSketch(db, w1, w2, f, log, out sketchNote); }
+        catch (System.Exception sx) { sketchNote = "미리보기 선 못 모음 — " + sx.Message; log.AppendLine("  ⚠" + sketchNote); }
+        string json = StructPoints.Json(info, p1, p2, sketch);
 
         // ④ 저장(기본 = 도면 폴더 · 없으면 마지막 폴더)
         string defDir = named ? (Path.GetDirectoryName(docName) ?? "") : LastPtsDir;
@@ -339,9 +343,151 @@ public sealed class StructCommand
         if (!ucsWorld) notes.Add("UCS가 WCS가 아니어서 WCS 값으로 바꿔 적음");
         if (!det.HasValue) notes.Add($"도면 좌표계 {(code.Length > 0 ? "«" + code + "» 자동인식 밖" : "없음")} — 설정값 EPSG {epsg}");
         else if (!fromDrawing) notes.Add($"좌표계 = 설정에서 고른 EPSG {epsg}(도면 코드 «{code}»로는 원점을 못 가림)");
-        log.AppendLine(json);
+        log.AppendLine(sketch == null ? json : StructPoints.Json(info, p1, p2));   // 진단 로그엔 미리보기 선 빼고(수만 점) — 선 수는 아래 한 줄
+        if (sketchNote.Length > 0) log.AppendLine("  미리보기 선: " + sketchNote);
         Done(ed, log, string.Format(ic, "기준점 저장 — {0} · 점1 ({1:F3}, {2:F3}){3} · 점2 ({4:F3}, {5:F3}){6} · 거리 {7:F3} m · 방향 {8:F2}° · 단위 m · EPSG {9}",
-            path, p1.X, p1.Y, El(p1), p2.X, p2.Y, El(p2), dist, brg, epsg) + (notes.Count > 0 ? " · " + string.Join(" · ", notes) : ""));
+            path, p1.X, p1.Y, El(p1), p2.X, p2.Y, El(p2), dist, brg, epsg)
+            + (sketch != null ? $" · 미리보기 선 {sketch.Lines.Count}개" : " · ⚠미리보기 선 없음")
+            + (notes.Count > 0 ? " · " + string.Join(" · ", notes) : ""));
+    }
+
+    /// <summary>★[v116.13 · 약속 §2-6 · §3 «sketch»] 미리보기 선 모으기 — 모형 공간의 우리 평면 선(옹벽선 · 소단선 · 사면선 · 정지 경계 · 구조물 평면) +
+    /// 계획 부지 경계(정지 기록의 계획 폴리선) + 진입도로 포장 윤곽(3D 보기와 같은 셈 — <see cref="RoadLanes.Pavement"/>).
+    /// 범위 = 두 점 가운데에서 반지름(<see cref="StructPoints.SketchRadius"/>) 상자에 걸치는 선을 통째로(Revit이 잘라 그림) · 곡선은 0.5 m 꺾은선 · XY만 · m.
+    /// 꼭짓점 합계가 5만을 넘으면 덜 중요한 종류부터 뺀다(<see cref="StructPoints.Trim"/>). 도면은 안 바꾼다(읽기만).</summary>
+    static StructPoints.Sketch BuildSketch(Database db, Point3d w1, Point3d w2, double f, System.Text.StringBuilder log, out string note)
+    {
+        double cx = (w1.X + w2.X) / 2, cy = (w1.Y + w2.Y) / 2;
+        double distM = System.Math.Sqrt((w2.X - w1.X) * (w2.X - w1.X) + (w2.Y - w1.Y) * (w2.Y - w1.Y)) * f;
+        double rM = StructPoints.SketchRadius(distM), rU = rM / f;           // m · 도면 단위
+        double step = 0.5 / f;                                              // 곡선 꺾은선 간격 0.5 m(도면 단위로)
+        string? KindOf(string layer)
+        {
+            if (layer == "DH-옹벽선" || layer == "DH도로-옹벽선") return "wall";
+            if (layer == "DH-소단선" || layer == "DH도로-소단선") return "bench";
+            if (layer == "DH-정지경계") return "site";
+            if (layer == StructImport.LayPlan) return "struct";
+            if (layer.StartsWith("DH-사면선", System.StringComparison.Ordinal) || layer == "DH도로-사면선") return "other";
+            return null;
+        }
+        bool Near(Extents3d e) => e.MaxPoint.X >= cx - rU && e.MinPoint.X <= cx + rU && e.MaxPoint.Y >= cy - rU && e.MinPoint.Y <= cy + rU;
+        List<(double X, double Y)> Meters(IEnumerable<(double X, double Y)> pts) => pts.Select(p => (p.X * f, p.Y * f)).ToList();
+        var lines = new List<StructPoints.SketchLine>();
+        var seen = new HashSet<ObjectId>();
+        var cnt = new Dictionary<string, int>();
+        void Add(string kind, string layer, bool closed, List<(double X, double Y)> pts)
+        {
+            if (pts.Count < 2) return;
+            lines.Add(new StructPoints.SketchLine(kind, layer, closed, pts));
+            cnt[kind] = (cnt.TryGetValue(kind, out int c) ? c : 0) + 1;
+        }
+        using (var tr = db.TransactionManager.StartTransaction())
+        {
+            // ① 모형 공간 우리 레이어 선
+            var ms = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForRead);
+            foreach (ObjectId id in ms)
+            {
+                try
+                {
+                    if (tr.GetObject(id, OpenMode.ForRead) is not Curve c || c.IsErased) continue;
+                    string? k = KindOf(c.Layer ?? ""); if (k == null) continue;
+                    Extents3d ex; try { ex = c.GeometricExtents; } catch { continue; }
+                    if (!Near(ex)) continue;
+                    var pts = SampleXY(c, step); if (pts.Count < 2) continue;
+                    bool closed = c.Closed || (pts.Count > 2 && pts[0] == pts[^1]);
+                    Add(k, c.Layer ?? "", closed, Meters(pts)); seen.Add(id);
+                }
+                catch { }
+            }
+            // ② 계획 부지 경계 — 정지 기록 구역마다 계획 폴리선(어느 레이어든)
+            try
+            {
+                var regs = GradingBundleStore.TryLoadAll(db, tr, out _);
+                if (regs != null)
+                    foreach (var rg in regs)
+                    {
+                        try
+                        {
+                            string ph = rg.PlanHandle ?? ""; if (ph.Length == 0) continue;
+                            if (!db.TryGetObjectId(new Handle(System.Convert.ToInt64(ph, 16)), out var pid) || pid.IsErased || seen.Contains(pid)) continue;
+                            if (tr.GetObject(pid, OpenMode.ForRead) is not Curve pc) continue;
+                            if (!Near(pc.GeometricExtents)) continue;
+                            var pts = SampleXY(pc, step);
+                            Add("site", pc.Layer ?? "", true, Meters(pts)); seen.Add(pid);
+                        }
+                        catch { }
+                    }
+            }
+            catch (System.Exception ex) { log.AppendLine("  미리보기 선 — 계획 경계 못 읽음: " + ex.Message); }
+            // ③ 진입도로 포장 윤곽(설계에서 — 도면에 선으로 없다)
+            try
+            {
+                var gf = new NetTopologySuite.Geometries.GeometryFactory();
+                foreach (var aid in RoadRanges.Roads(tr, db))
+                {
+                    try
+                    {
+                        var d = RoadDesign.Read(tr, aid); if (d == null) continue;
+                        string nm = ((Autodesk.Civil.DatabaseServices.Alignment)tr.GetObject(aid, OpenMode.ForRead)).Name ?? "";
+                        var rl = RoadLanes.Of(tr, aid, d, nm, null); if (rl == null) continue;
+                        var (pave, _, _) = RoadLanes.Pavement(tr, rl, gf);
+                        if (pave == null || pave.IsEmpty) continue;
+                        var env = pave.EnvelopeInternal;
+                        if (env.MaxX < cx - rU || env.MinX > cx + rU || env.MaxY < cy - rU || env.MinY > cy + rU) continue;
+                        for (int gi = 0; gi < pave.NumGeometries; gi++)
+                            if (pave.GetGeometryN(gi) is NetTopologySuite.Geometries.Polygon pg)
+                            {
+                                Add("road", "진입도로 포장(" + nm + ")", true, Meters(pg.ExteriorRing.Coordinates.Select(q => (q.X, q.Y))));
+                                for (int h = 0; h < pg.NumInteriorRings; h++) Add("road", "진입도로 포장(" + nm + ")", true, Meters(pg.GetInteriorRingN(h).Coordinates.Select(q => (q.X, q.Y))));
+                            }
+                    }
+                    catch { }
+                }
+            }
+            catch (System.Exception ex) { log.AppendLine("  미리보기 선 — 진입도로 못 읽음: " + ex.Message); }
+            tr.Commit();
+        }
+        var (kept, dropped) = StructPoints.Trim(lines);
+        int nPts = kept.Sum(l => l.Pts.Count);
+        var ic = System.Globalization.CultureInfo.InvariantCulture;
+        note = string.Format(ic, "반지름 {0:F1} m · 선 {1}({2}) · 꼭짓점 {3}{4}", rM, kept.Count,
+            string.Join(" · ", cnt.OrderBy(kv => kv.Key).Select(kv => kv.Key + " " + kv.Value)), nPts, dropped > 0 ? $" · 한도({StructPoints.SketchMaxPts})로 뺀 선 {dropped}" : "");
+        log.AppendLine("  미리보기 선: " + note);
+        return new StructPoints.Sketch(cx * f, cy * f, rM, kept);
+    }
+
+    /// <summary>곡선 → XY 점열(도면 단위) — 꼭짓점 그대로 · 굽은 토막(호 · 스플라인 · 원)은 <paramref name="step"/> 간격.</summary>
+    static List<(double X, double Y)> SampleXY(Curve c, double step)
+    {
+        var r = new List<(double X, double Y)>();
+        void Push(Point3d q) { if (r.Count == 0 || System.Math.Abs(r[^1].X - q.X) > 1e-9 || System.Math.Abs(r[^1].Y - q.Y) > 1e-9) r.Add((q.X, q.Y)); }
+        if (c is Line ln) { Push(ln.StartPoint); Push(ln.EndPoint); return r; }   // 선의 매개변수는 길이라 꼭짓점 셈에 안 맞음
+        double p0 = c.StartParam, p1 = c.EndParam;
+        bool vertexed = c is Polyline || c is Polyline2d || c is Polyline3d;
+        if (vertexed)
+        {
+            int nSeg = System.Math.Max(1, (int)System.Math.Round(p1 - p0));
+            for (int i = 0; i < nSeg; i++)
+            {
+                var a = c.GetPointAtParameter(p0 + i); var b = c.GetPointAtParameter(System.Math.Min(p1, p0 + i + 1)); var m = c.GetPointAtParameter(System.Math.Min(p1, p0 + i + 0.5));
+                Push(a);
+                double mx = (a.X + b.X) / 2, my = (a.Y + b.Y) / 2;
+                if ((m.X - mx) * (m.X - mx) + (m.Y - my) * (m.Y - my) > step * step * 1e-4)   // 굽은 토막(호 bulge)
+                {
+                    double d0 = c.GetDistanceAtParameter(p0 + i), d1 = c.GetDistanceAtParameter(System.Math.Min(p1, p0 + i + 1));
+                    int k = System.Math.Max(2, (int)System.Math.Ceiling((d1 - d0) / step));
+                    for (int q = 1; q < k; q++) Push(c.GetPointAtDist(d0 + (d1 - d0) * q / k));
+                }
+            }
+            Push(c.GetPointAtParameter(p1));
+        }
+        else
+        {
+            double L = c.GetDistanceAtParameter(p1);
+            int k = System.Math.Max(2, (int)System.Math.Ceiling(L / step));
+            for (int q = 0; q <= k; q++) Push(c.GetPointAtDist(L * q / k));
+        }
+        return r;
     }
 
     [CommandMethod("DHSTRUCTOFF")]

@@ -194,9 +194,12 @@ internal static class FinalSurfaceBuilder
     }
 
     /// <summary>★[계획 4장] 계획부지 다시 · 옹벽 합성 끝 알림 한 줄 — 우리 진입도로 면이 있을 때만(도로 없는 도면은 빈 글 = 알림 그대로).</summary>
-    internal static string SiteChangedNote(Database db)
+    /// <param name="auto">★[v116.12 · JACK 1110 인터뷰 «자동으로 [업데이트]까지»] 이 명령 끝에서 진입도로를 저절로 다시 짓는다(<see cref="Commands.SiteSheetsRefresh"/>) — 그 말로.</param>
+    internal static string SiteChangedNote(Database db, bool auto = false)
     {
-        return AnyRoads(db) ? "⚠계획부지가 바뀌어 진입도로 지표면 · 최종지표면_DH가 옛것입니다 — 진입도로 창 [업데이트]" : "";
+        if (!AnyRoads(db)) return "";
+        return auto ? "계획부지가 바뀌어 진입도로 지표면 · 최종지표면_DH를 이어서 새 부지에 맞춰 다시 짓습니다"
+                    : "⚠계획부지가 바뀌어 진입도로 지표면 · 최종지표면_DH가 옛것입니다 — 진입도로 창 [업데이트]";
     }
 
     /// <summary>★[v111.8 · 검토 L1] 도면에 우리 진입도로 면이 살아 있나(설계 기록의 면 핸들 + 레이어 · 설명) — 면 통계는 안 읽음(싸다) · 예외면 거짓.</summary>

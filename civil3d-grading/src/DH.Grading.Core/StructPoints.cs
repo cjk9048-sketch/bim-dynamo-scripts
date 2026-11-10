@@ -59,8 +59,36 @@ public static class StructPoints
         return s.Length == 0 ? "구조물" : s;
     }
 
-    /// <summary>JSON 글(UTF-8로 쓸 것). 점은 정확히 둘(찍은 순서).</summary>
-    public static string Json(Info i, Pt p1, Pt p2)
+    /// <summary>★[v116.13 · JACK 1110 저녁 «Civil 평면뷰를 개략적으로 같이 내보내 Revit 팝업에서 미리보기처럼» · 약속 §3 «sketch»(선택 칸 · version 1 그대로)]
+    /// 미리보기 선 하나 — <paramref name="Kind"/> = site · wall · road · struct · bench · contour · other(Revit 미리보기 색) · 원래 레이어 · 닫힘 · 점(m · WCS · XY).</summary>
+    public sealed record SketchLine(string Kind, string Layer, bool Closed, IReadOnlyList<(double X, double Y)> Pts);
+    /// <summary>미리보기 선 묶음 — 가운데 · 반지름(m · 기록용) · 선들.</summary>
+    public sealed record Sketch(double Cx, double Cy, double Radius, IReadOnlyList<SketchLine> Lines);
+    /// <summary>미리보기 꼭짓점 합계 한도(약속 §2-6 — 넘는 선은 Revit이 버림) — 넘치면 <see cref="Trim"/>가 뒤 종류부터 뺀다.</summary>
+    public const int SketchMaxPts = 50000;
+    /// <summary>미리보기 반지름(m) — 80 m와 두 점 거리 3배 중 큰 값(약속 §2-6 제안).</summary>
+    public static double SketchRadius(double dist) => Math.Max(80.0, 3 * dist);
+
+    /// <summary>꼭짓점 합계가 한도를 넘으면 덜 중요한 종류부터 통째로 뺀다(other → contour → bench → road → wall → site → struct 차례) — 2점 미만 · 숫자 아닌 점의 선도 뺀다.
+    /// 남긴 선 · 뺀 선 수.</summary>
+    public static (List<SketchLine> Kept, int Dropped) Trim(IEnumerable<SketchLine> lines, int max = SketchMaxPts)
+    {
+        var ok = lines.Where(l => l.Pts.Count >= 2 && l.Pts.All(p => double.IsFinite(p.X) && double.IsFinite(p.Y))).ToList();
+        int dropped = lines.Count() - ok.Count;
+        string[] order = { "other", "contour", "bench", "road", "wall", "site", "struct" };
+        foreach (var k in order)
+        {
+            if (ok.Sum(l => l.Pts.Count) <= max) break;
+            int n = ok.RemoveAll(l => l.Kind == k);
+            dropped += n;
+        }
+        // 한 종류만 남았는데도 넘치면 긴 선부터 뺀다(Revit이 넘는 선을 버리는 것과 같은 결과를 우리가 먼저)
+        while (ok.Count > 0 && ok.Sum(l => l.Pts.Count) > max) { var big = ok.OrderByDescending(l => l.Pts.Count).First(); ok.Remove(big); dropped++; }
+        return (ok, dropped);
+    }
+
+    /// <summary>JSON 글(UTF-8로 쓸 것). 점은 정확히 둘(찍은 순서). <paramref name="sketch"/>가 있으면 «sketch» 칸(선택)을 끝에 붙인다.</summary>
+    public static string Json(Info i, Pt p1, Pt p2, Sketch? sketch = null)
     {
         TryToMeter(i.Insunits, out _, out bool assumed);
         var (dist, brg) = Check(p1, p2);
@@ -98,6 +126,24 @@ public static class StructPoints
             }
             w.WriteEndArray();
             w.WriteStartObject("check"); w.WriteNumber("distance", Math.Round(dist, 6)); w.WriteNumber("bearingDeg", Math.Round(brg, 6)); w.WriteEndObject();
+            if (sketch != null)
+            {
+                w.WriteStartObject("sketch");
+                w.WriteStartArray("center"); w.WriteNumberValue(Math.Round(sketch.Cx, 3)); w.WriteNumberValue(Math.Round(sketch.Cy, 3)); w.WriteEndArray();
+                w.WriteNumber("radius", Math.Round(sketch.Radius, 3));
+                w.WriteStartArray("lines");
+                foreach (var l in sketch.Lines)
+                {
+                    w.WriteStartObject();
+                    w.WriteString("kind", l.Kind); w.WriteString("layer", l.Layer ?? ""); w.WriteBoolean("closed", l.Closed);
+                    w.WriteStartArray("pts");
+                    foreach (var (x, y) in l.Pts) { w.WriteStartArray(); w.WriteNumberValue(Math.Round(x, 3)); w.WriteNumberValue(Math.Round(y, 3)); w.WriteEndArray(); }
+                    w.WriteEndArray();
+                    w.WriteEndObject();
+                }
+                w.WriteEndArray();
+                w.WriteEndObject();
+            }
             w.WriteEndObject();
 
             void Surf(string key, string nm, double? z)
