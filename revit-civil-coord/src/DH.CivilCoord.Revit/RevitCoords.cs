@@ -154,18 +154,22 @@ internal static class SharedCoords
         }
         var after = loc.GetProjectPosition(XYZ.Zero);
         Log.Line($"공유 좌표\t전 동 {before.EastWest * Ft:0.000} 북 {before.NorthSouth * Ft:0.000} 높이 {before.Elevation * Ft:0.000} 각 {before.Angle * 180 / Math.PI:0.0000}°" +
-                 $"\t후 동 {after.EastWest * Ft:0.000} 북 {after.NorthSouth * Ft:0.000} 높이 {after.Elevation * Ft:0.000} 각 {after.Angle * 180 / Math.PI:0.0000}°");
-        return (true, "공유 좌표를 Civil 좌표로 바꿈 — Revit IFC · DWG · NWC를 «공유 좌표»로 내보내면 맞습니다");
+                 $"\t후 동 {after.EastWest * Ft:0.000} 북 {after.NorthSouth * Ft:0.000} 높이 {after.Elevation * Ft:0.000} 각 {after.Angle * 180 / Math.PI:0.0000}°\t평면 비율 {fit.Scale:0.000000}(공유 좌표엔 안 들어감)");
+        string msg = "공유 좌표를 Civil 좌표로 바꿈 — Revit IFC · DWG · NWC를 «공유 좌표»로 내보내면 맞습니다";
+        // Revit 공유 좌표는 비율을 못 담음(옮김 · 돌림만 — JACK 1110 인터뷰) → 두 점 가운데가 맞고 끝점은 거리 차의 반씩 어긋남을 알림
+        if (Math.Abs(fit.DistanceError) >= 0.0005)
+            msg += $"\n두 선분 길이 차 {fit.DistanceError * 1000:+0;-0} mm(비율 {fit.Scale:0.000000})는 공유 좌표에 넣을 수 없어, 끝점이 Civil과 {Math.Abs(fit.DistanceError) / 2 * 1000:0.0} mm씩 어긋남(IFC 내보내기는 비율 적용)";
+        return (true, msg);
     }
 
-    /// <summary>두 점을 Revit 에 물은 공유 좌표와 맞춤 값의 가장 큰 차(m · 높이 포함).</summary>
+    /// <summary>두 점을 Revit 에 물은 공유 좌표와 «옮김 + 돌림» 맞춤 값(비율 없음)의 가장 큰 차(m · 높이 포함).</summary>
     private static double Mismatch(ProjectLocation loc, Fit2D fit, double zOffM)
     {
         double worst = 0;
         foreach (var r in new[] { fit.R1, fit.R2 })
         {
             var pp = loc.GetProjectPosition(new XYZ(r.X / Ft, r.Y / Ft, 0));
-            var w = fit.Apply(r);
+            var w = fit.ApplyRigid(r);
             double dxy = Math.Sqrt(Math.Pow(pp.EastWest * Ft - w.X, 2) + Math.Pow(pp.NorthSouth * Ft - w.Y, 2));
             worst = Math.Max(worst, Math.Max(dxy, Math.Abs(pp.Elevation * Ft - zOffM)));
         }

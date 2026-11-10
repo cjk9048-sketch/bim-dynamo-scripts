@@ -28,13 +28,23 @@ namespace DH.CivilCoord.Tests
         }
 
         [Fact]
-        public void TwoPoints_DistanceMismatch_SplitsHalfEach()
+        public void TwoPoints_DistanceMismatch_IfcScales_SharedSplitsHalf()
         {
-            // Civil 두 점이 2 cm 더 멂 → 두 점 모두 1 cm 씩 어긋남(한쪽에 몰리지 않음)
+            // Civil 두 점이 2 cm 더 멂 → IFC 는 비율(30.02/30)로 두 점이 꼭 맞고 · 공유 좌표(비율 없음)는 두 점 모두 1 cm 씩 어긋남
             var f = new Fit2D(new P2(0, 0), new P2(30, 0), new P2(500000, 200000), new P2(500030.02, 200000));
             Assert.Equal(0.02, f.DistanceError, 9);
-            Assert.Equal(0.01, P2.Dist(f.Apply(f.R1), f.C1), 9);
-            Assert.Equal(0.01, P2.Dist(f.Apply(f.R2), f.C2), 9);
+            Assert.Equal(30.02 / 30, f.Scale, 12);
+            Assert.Equal(0, P2.Dist(f.Apply(f.R1), f.C1), 7);
+            Assert.Equal(0, P2.Dist(f.Apply(f.R2), f.C2), 7);
+            Assert.Equal(0.01, P2.Dist(f.ApplyRigid(f.R1), f.C1), 7);
+            Assert.Equal(0.01, P2.Dist(f.ApplyRigid(f.R2), f.C2), 7);
+            // k·R·p + T 꼴과 같은 값
+            var t = f.Translation; var p = new P2(7, -3);
+            double c = Math.Cos(f.Angle), s = Math.Sin(f.Angle), k = f.Scale;
+            Assert.Equal(f.Apply(p).X, k * (c * p.X - s * p.Y) + t.X, 7);
+            Assert.Equal(f.Apply(p).Y, k * (s * p.X + c * p.Y) + t.Y, 7);
+            var rt = f.RigidTranslation;
+            Assert.Equal(f.ApplyRigid(p).X, c * p.X - s * p.Y + rt.X, 7);
         }
 
         [Fact]
@@ -47,7 +57,7 @@ namespace DH.CivilCoord.Tests
         [Fact]
         public void State_ParsesCommasAndKeepsText()
         {
-            var st = new FitState { R1 = new[] { 1.0, 2.0 }, R2 = new[] { 11.0, 2.0 }, C1X = "200,123.450", C1Y = " 450678.9 ", C2X = "200133.450", C2Y = "450,678.900", Dz = "" };
+            var st = new FitState { Mode = "manual", R1 = new[] { 1.0, 2.0 }, R2 = new[] { 11.0, 2.0 }, C1X = "200,123.450", C1Y = " 450678.9 ", C2X = "200133.450", C2Y = "450,678.900", Dz = "" };
             var f = st.Fit();
             Assert.NotNull(f);
             Assert.Equal(200123.45, f!.C1.X, 9);
@@ -168,6 +178,34 @@ namespace DH.CivilCoord.Tests
             // 퇴화 세모는 빠짐 · 상자는 세모 12
             Assert.Equal(12, r.Parts[0].T.Count);
             Assert.Single(r.Parts[2].T);
+        }
+
+        [Fact]
+        public void CivilReader_ScaledFit_PutsBothPointsOnCivil_HeightsUnchanged()
+        {
+            // Civil 선분이 Revit 보다 0.3 % 긺 → 평면만 비율 · 높이 그대로(JACK 1110)
+            var r1 = new P2(-12.0, -8.0); var r2 = new P2(20.0, 5.0);
+            double th = 0.6, d = P2.Dist(r1, r2) * 1.003, a0 = Math.Atan2(r2.Y - r1.Y, r2.X - r1.X) + th;
+            var c1 = new P2(200123.45, 450678.9); var c2 = new P2(c1.X + d * Math.Cos(a0), c1.Y + d * Math.Sin(a0));
+            var fit = new Fit2D(r1, r2, c1, c2);
+            var t = fit.Translation;
+            var job = new IfcJob { FileName = "s.ifc", ProjectName = "s", Tx = t.X, Ty = t.Y, Tz = 0.5, Angle = fit.Angle, Scale = fit.Scale };
+            job.SiteProps.Add(("평면 비율", fit.Scale.ToString("0.000000")));
+            var p = new MeshPart { Entity = "IFCSLAB", Name = "바닥", Tag = "1" };
+            p.Shells.Add(Box(r1.X, r1.Y, 49.4, r2.X, r2.Y, 50.0));
+            job.Parts.Add(p);
+            var sw = new StringWriter(); IfcWriter.Write(job, sw);
+            string text = sw.ToString();
+            Assert.Contains("'DH_CivilFit'", text);
+            var r = IfcMesh.Parse(text);
+            var v = r.Parts[0].V;
+            Assert.Contains(v, q => Math.Abs(q.X - c1.X) < 1e-6 && Math.Abs(q.Y - c1.Y) < 1e-6 && Math.Abs(q.Z - 49.9) < 1e-9);
+            Assert.Contains(v, q => Math.Abs(q.X - c2.X) < 1e-6 && Math.Abs(q.Y - c2.Y) < 1e-6 && Math.Abs(q.Z - 50.5) < 1e-9);
+            // 높이 차(두께 0.6 m)는 비율과 상관없이 그대로
+            Assert.Equal(0.6, v.Max(q => q.Z) - v.Min(q => q.Z), 9);
+            // 쓴 값이 ToWorld 와 같음
+            foreach (var w in p.Shells[0].V.Select(job.ToWorld))
+                Assert.Contains(v, q => Math.Abs(q.X - w.X) < 1e-6 && Math.Abs(q.Y - w.Y) < 1e-6 && Math.Abs(q.Z - w.Z) < 1e-9);
         }
 
         [Fact]

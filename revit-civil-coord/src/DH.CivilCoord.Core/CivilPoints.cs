@@ -32,6 +32,22 @@ public sealed class CivilPoints
     public string Created = "", CivilApp = "", Addin = "";
     public readonly Pt[] Points = { new(), new() };
 
+    /// <summary>개략 평면 선 하나(Civil 도면 WCS · m) — 미리보기용(JACK 1110 «Civil 평면뷰를 개략적으로 같이 내보내 미리보기처럼»).</summary>
+    public sealed class SketchLine
+    {
+        /// <summary>site(계획 부지 경계) · wall(옹벽) · road(도로) · struct(구조물) · bench(소단) · contour(등고선) · other.</summary>
+        public string Kind = "other";
+        public string Layer = "";
+        public bool Closed;
+        public readonly List<P2> Pts = new();
+    }
+
+    /// <summary>미리보기 선(파일에 «sketch»가 없으면 빈 목록 — 선택 칸).</summary>
+    public readonly List<SketchLine> Sketch = new();
+    /// <summary>못 읽어 버린 선 · 한도(<see cref="MaxSketchVertices"/>)를 넘어 버린 선 개수.</summary>
+    public int SketchDropped;
+    public const int MaxSketchVertices = 50000;
+
     /// <summary>창 한 줄: «이름» · 도면 · EPSG.</summary>
     public string Summary
     {
@@ -59,7 +75,8 @@ public sealed class CivilPoints
         string text;
         try { text = File.ReadAllText(path); }
         catch (Exception ex) { error = "파일을 못 읽음 — " + ex.Message; return new CivilPoints(); }
-        return Parse(text, out error);
+        try { return Parse(text, out error); }
+        catch (Exception ex) { error = "파일 꼴이 틀림 — " + ex.Message; return new CivilPoints(); }   // 생각 못 한 꼴도 창이 터지지 않게
     }
 
     /// <summary>JSON → 기준점. 못 쓰면 error = 까닭(«원인:» 없이 한 줄).</summary>
@@ -120,6 +137,30 @@ public sealed class CivilPoints
                 got[no] = pt;
             }
             r.Points[0] = got[1]!; r.Points[1] = got[2]!;
+
+            // sketch(선택): 미리보기 선 — 모양이 틀린 선은 버리고 셈(파일 전체를 막지는 않음)
+            if (root.TryGetProperty("sketch", out var sk) && sk.ValueKind == JsonValueKind.Object &&
+                sk.TryGetProperty("lines", out var lines) && lines.ValueKind == JsonValueKind.Array)
+            {
+                int total = 0;
+                foreach (var ln in lines.EnumerateArray())
+                {
+                    if (ln.ValueKind != JsonValueKind.Object || !ln.TryGetProperty("pts", out var pa) || pa.ValueKind != JsonValueKind.Array) { r.SketchDropped++; continue; }
+                    var line = new SketchLine { Kind = Str(ln, "kind") is { Length: > 0 } k ? k : "other", Layer = Str(ln, "layer"), Closed = Bool(ln, "closed") ?? false };
+                    bool bad = false;
+                    foreach (var q in pa.EnumerateArray())
+                    {
+                        // TryGetDouble 은 숫자가 아닌 칸에서 예외를 던짐 — 종류부터 봄
+                        if (q.ValueKind != JsonValueKind.Array || q.GetArrayLength() < 2 ||
+                            q[0].ValueKind != JsonValueKind.Number || q[1].ValueKind != JsonValueKind.Number ||
+                            !q[0].TryGetDouble(out double qx) || !q[1].TryGetDouble(out double qy) || !double.IsFinite(qx) || !double.IsFinite(qy)) { bad = true; break; }
+                        line.Pts.Add(new P2(qx, qy));
+                    }
+                    if (bad || line.Pts.Count < 2 || total + line.Pts.Count > MaxSketchVertices) { r.SketchDropped++; continue; }
+                    total += line.Pts.Count;
+                    r.Sketch.Add(line);
+                }
+            }
 
             // check: x · y 로 다시 셈한 거리 · 방향과 같아야(손으로 고친 파일 막기)
             if (root.TryGetProperty("check", out var ck) && ck.ValueKind == JsonValueKind.Object)

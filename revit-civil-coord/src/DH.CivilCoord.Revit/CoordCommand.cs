@@ -37,11 +37,19 @@ public sealed class CoordCommand : IExternalCommand
 
         var saved = FitStore.Load(doc);
         var state = saved?.Clone() ?? new FitState();
-        string savedJson = (saved ?? new FitState()).ToJson();
+        // 비교 기준도 같은 규칙으로(모드 정하기) — 아니면 열고 닫기만 해도 «저장» 트랜잭션이 생김(검토 중간)
+        var baseline = (saved ?? new FitState()).Clone();
+        baseline.ResolveMode();
+        string savedJson = baseline.ToJson();
         var heights = LevelHeights.Read(doc);
         bool dark = false;
         try { dark = UIThemeManager.CurrentTheme == UITheme.Dark; } catch { }
         Log.Line($"열기\t{doc.Title}\t맞춤 값 {(saved != null ? "있음" : "없음")}");
+
+        state.ResolveMode();
+        // 미리보기: Revit 부재 윤곽(명령 한 번에 한 번) · Civil 파일(바뀐 때만 다시 읽음 — 선 · 바뀜 검사)
+        var footprints = Exporter.Footprints(uidoc, heights);
+        CivilPoints? civil = null; string civilKey = "";
 
         string status = "", kind = "";
         try
@@ -51,7 +59,24 @@ public sealed class CoordCommand : IExternalCommand
                 var fit0 = state.Fit();
                 double zOff = heights.OffsetM + state.DzValue;
                 var shared = SharedCoords.Read(doc, fit0?.Problem == null ? fit0 : null, zOff);
-                var win = new CoordWindow(state, heights, shared, status, kind, DefaultPath(doc), app.MainWindowHandle, dark);
+                bool civilChanged = false, civilExists = false;
+                string civilError = "";
+                if (state.CivilFile.Length > 0 && File.Exists(state.CivilFile))
+                {
+                    civilExists = true;
+                    string key = state.CivilFile + "|" + File.GetLastWriteTimeUtc(state.CivilFile).Ticks;
+                    if (key != civilKey)
+                    {
+                        var cp = CivilPoints.Read(state.CivilFile, out string? cerr);
+                        civil = cerr == null ? cp : null;
+                        // 못 읽었으면 시각을 기억하지 않음(잠깐 잠긴 파일 · NAS 복사 중 — 다음에 다시 읽게) · 까닭은 창에(검토 낮음)
+                        civilKey = cerr == null ? key : "";
+                        if (cerr != null) { civilError = "원인: " + cerr; Log.Line($"Civil 파일 다시 읽기 못 함\t{state.CivilFile}\t{cerr}"); }
+                    }
+                    civilChanged = civil != null && state.FileDiffers(civil);
+                }
+                else { civil = null; civilKey = ""; }
+                var win = new CoordWindow(state, heights, shared, status, kind, DefaultPath(doc), app.MainWindowHandle, dark, footprints, civil, civilChanged, civilExists, civilError);
                 win.ShowDialog();
                 state = win.State;
                 status = ""; kind = "";
@@ -74,20 +99,15 @@ public sealed class CoordCommand : IExternalCommand
                 if (fit == null || fit.Problem != null) break;   // 창이 막지만 한 번 더
                 zOff = heights.OffsetM + state.DzValue;
 
+                // 두 선분 길이가 달라도 묻지 않음(JACK 1110 인터뷰 «묻지 않고 늘 비율대로») — IFC 는 평면 비율 적용 · 공유 좌표는 옮김 · 돌림만 + 알림.
+                // 비율 · 거리 차는 창의 «확인» 줄과 미리보기(윤곽이 Civil 선에서 벗어나는지)로 본다.
                 if (win.Action == CoordWindow.Act.Export)
                 {
-                    if (Math.Abs(fit.DistanceError) > 0.10 &&
-                        !Dialogs.YesNo($"두 점 거리가 Revit과 Civil에서 {Math.Abs(fit.DistanceError):0.000} m 다릅니다", "찍은 점과 넣은 좌표가 같은 자리인지 확인하세요. 그래도 내보낼까요?"))
-                        continue;
                     (status, kind) = Exporter.Run(uidoc, state, fit, heights, win.ExportPath);
                     continue;
                 }
                 if (win.Action == CoordWindow.Act.Apply)
                 {
-                    // 적용의 검사는 같은 맞춤 값끼리라 점을 잘못 찍어도 «성공» — 내보내기와 같이 거리 차를 먼저 묻는다(설치 전 검토 낮음)
-                    if (Math.Abs(fit.DistanceError) > 0.10 &&
-                        !Dialogs.YesNo($"두 점 거리가 Revit과 Civil에서 {Math.Abs(fit.DistanceError):0.000} m 다릅니다", "찍은 점과 넣은 좌표가 같은 자리인지 확인하세요. 그래도 적용할까요?"))
-                        continue;
                     if (!Dialogs.YesNo("Revit 공유 좌표를 Civil 좌표로 바꿀까요?", "프로젝트 기준점 · 측량점 값이 바뀝니다. Ctrl+Z로 되돌릴 수 있습니다."))
                         continue;
                     var snapshot = state.Clone();

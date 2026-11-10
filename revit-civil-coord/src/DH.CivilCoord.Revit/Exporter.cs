@@ -72,7 +72,15 @@ internal static class Exporter
             AppVersion = typeof(Exporter).Assembly.GetName().Version?.ToString(3) ?? "1.0.0",
             Time = DateTime.Now,
             Tx = t.X, Ty = t.Y, Tz = heights.OffsetM + dz, Angle = fit.Angle,
+            Scale = fit.Scale,   // 평면 비율(JACK 1110 — 두 선분 길이가 다르면 그 비율로 X · Y 만 · 높이 그대로)
         };
+        // 맞춤 기록(IfcSite 의 DH_CivilFit — 나비스웍스 속성 창에서 보임)
+        job.SiteProps.Add(("Civil 좌표 출처", state.FileMode ? "Civil 파일 " + Path.GetFileName(state.CivilFile) : "직접 입력"));
+        if (state.FileMode && state.CivilSummary.Length > 0) job.SiteProps.Add(("Civil 기준점", state.CivilSummary));
+        job.SiteProps.Add(("두 점 거리 Revit · Civil (m)", $"{fit.RevitDistance:0.0000} · {fit.CivilDistance:0.0000}"));
+        job.SiteProps.Add(("평면 비율", fit.Scale.ToString("0.00000000", System.Globalization.CultureInfo.InvariantCulture)));
+        job.SiteProps.Add(("회전 (°)", fit.AngleDegrees.ToString("0.000000", System.Globalization.CultureInfo.InvariantCulture)));
+        job.SiteProps.Add(("높이 더함 (m)", (heights.OffsetM + dz).ToString("0.0000", System.Globalization.CultureInfo.InvariantCulture)));
         job.Storeys.AddRange(storeys.Values);
         job.Parts.AddRange(parts);
 
@@ -106,13 +114,50 @@ internal static class Exporter
         return (string.Join("\n", lines), "Good");
     }
 
-    private static List<MeshPart> Collect(Document doc, View3D view, LevelHeights heights, Stats st, Dictionary<long, StoreyInfo> storeys)
+    /// <summary>
+    /// 미리보기용 Revit 부재 윤곽(내부 좌표 m · 부재마다 평면 볼록 껍질) — IFC 와 같은 부재(지금 3D 뷰에 보이는 것 · 지형 뺌).
+    /// 명령 한 번에 한 번만 셈(창을 다시 열 때는 그대로 씀).
+    /// </summary>
+    public static List<P2[]> Footprints(UIDocument uidoc, LevelHeights heights)
+    {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var res = new List<P2[]>();
+        try
+        {
+            var view = PickView(uidoc, out _);
+            if (view == null) return res;
+            // 큰 모델이면 창이 오래 멈추지 않게 미리보기 윤곽을 건너뜀(검토 확인 필요 — 명령 켤 때마다 셈)
+            int count = new FilteredElementCollector(uidoc.Document, view.Id).WhereElementIsNotElementType().GetElementCount();
+            if (count > MaxPreviewElements)
+            {
+                Log.Line($"미리보기 윤곽 건너뜀\t뷰 «{view.Name}» 요소 {count} > {MaxPreviewElements}");
+                return res;
+            }
+            var st = new Stats();
+            var parts = Collect(uidoc.Document, view, heights, st, new Dictionary<long, StoreyInfo>(), preview: true);
+            foreach (var p in parts)
+            {
+                if (p.Entity == "IFCGEOGRAPHICELEMENT") continue;   // 지형은 구조물 윤곽을 덮음
+                var hull = Hull.Convex(p.Shells.SelectMany(s => s.V).Select(v => new P2(v.X, v.Y)));
+                if (hull.Count >= 3 && Math.Abs(Hull.Area(hull)) > 1e-4) res.Add(hull.ToArray());
+            }
+            Log.Line($"미리보기 윤곽\t뷰 «{view.Name}»\t부재 {parts.Count}\t윤곽 {res.Count}\t{sw.ElapsedMilliseconds} ms");
+        }
+        catch (Exception ex) { Log.Line("미리보기 윤곽 못 셈\t" + ex.Message); }
+        return res;
+    }
+
+    /// <summary>미리보기 윤곽을 셀 요소 수 한도(넘으면 미리보기에 Revit 윤곽 없이).</summary>
+    private const int MaxPreviewElements = 8000;
+
+    private static List<MeshPart> Collect(Document doc, View3D view, LevelHeights heights, Stats st, Dictionary<long, StoreyInfo> storeys, bool preview = false)
     {
         var parts = new List<MeshPart>();
         // 형상은 늘 «정밀»로 읽는다(설치 전 검토 높음 — 뷰의 상세 수준이 거침 · 중간이면 관 · 덕트 · 보가 선으로만 와서 빠짐).
         // 뷰는 «어떤 부재를 넣을지»(숨긴 범주 · 숨긴 부재 · 단면 상자)만 정한다.
-        var opt = new Options { DetailLevel = ViewDetailLevel.Fine, ComputeReferences = false, IncludeNonVisibleObjects = false };
-        var ctl = new SolidOrShellTessellationControls { LevelOfDetail = 0.5 };
+        // 미리보기 윤곽(preview)은 평면 볼록 껍질만 쓰므로 «중간» · 가장 거친 세모로 가볍게(관이 선으로 와 빠져도 미리보기엔 괜찮음).
+        var opt = new Options { DetailLevel = preview ? ViewDetailLevel.Medium : ViewDetailLevel.Fine, ComputeReferences = false, IncludeNonVisibleObjects = false };
+        var ctl = new SolidOrShellTessellationControls { LevelOfDetail = preview ? 0 : 0.5 };
         var collector = new FilteredElementCollector(doc, view.Id).WhereElementIsNotElementType();
         // 단면 상자를 켠 뷰: 상자에 걸치는 부재만(뷰 수집기는 상자 밖 부재도 통과시킬 수 있음 — 검토 확인 필요 1) · 부재는 자르지 않고 통째로
         if (view.IsSectionBoxActive && SectionOutline(view) is { } box)
