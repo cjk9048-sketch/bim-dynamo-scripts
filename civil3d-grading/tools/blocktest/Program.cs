@@ -207,6 +207,14 @@ if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "wline")
     return fails == 0 ? 0 : 1;
 }
 
+// ★[v117.0 0단계 · 계획 2026-11-10_옹벽추가_안쪽소단] BLOCKTEST_ONLY=winw — 부지 안쪽 계단(S243 WI ⓪ 재기 · ★[1단계] 짓기 BuildIn 엄격 · 턱 규칙)만
+if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "winw")
+{
+    WallInwardCheck.Run(Check);
+    Console.WriteLine(fails == 0 ? "\n== 전부 통과 ==" : $"\n== 실패 {fails}건 ==");
+    return fails == 0 ? 0 : 1;
+}
+
 // ★[v113.1] BLOCKTEST_ONLY=flip — 종단 방향 바꾸기 · 축척 H · V(S210 PF · S211 PS)만
 if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "flip")
 {
@@ -369,6 +377,7 @@ RoadPaveCheck.Run(Check);       // ★[v116.8 · JACK 1110 포장 종류] S237 P
 RoadWallRingCheck.Run(Check);   // ★[v116.7 · JACK 1110 «어디든 폴리선»] S239 RG — 고리 면 위 선 옹벽(곧은 성토 · 절토 · 90° 굽이 · 헤어핀 골 · 끝 마구리)
 RoadWallCheck.Run(Check);       // ★[v114.3 · JACK 1105 진입도로 옹벽 추가] S218 RL — 진입도로 선 옹벽(굽은 S자 · 안쪽 · 바깥 · 절토 · 섞임 · 데이라잇 곁 · 넓은 소단 · 벽 둘 · 옛 길 · 호 · 맞은편 다리 · 막음 · 쉼 · 스위치)
 StructPointsCheck.Run(Check);   // ★[v116.9 · JACK 1110 구조물 좌표계 내보내기] S242 SP — Civil → Revit 기준점 파일
+WallInwardCheck.Run(Check);     // ★[v117.0 0단계 · 1단계] S243 WI — 부지 안쪽 계단 미리 재기(Survey) ⓪ + 짓기(BuildIn · 엄격 · 턱 규칙 · 합성은 2단계)
 StructCheck.Run(Check);         // ★[v115 · JACK 1105 Revit 구조물] S220~S234 — 구조물 커튼 자르기 · 평면 외곽 · 목록 · 단위
 IfcCheck.Run(Check);            // ★[v116.5 · JACK 1110 구조물 IFC] S238 — IFC 읽기(돌출 · 구멍 면 · 반복 부재 · 지도 변환 · I형 · 호 단면 · 모르는 형상 · 한글 이름)
 
