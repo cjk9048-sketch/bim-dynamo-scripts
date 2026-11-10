@@ -21,7 +21,7 @@ namespace DH.Grading.Core;
 /// ④ 줄 = 선에서 거리 0 · f · f+T · 2f+T …(줄마다 높이 하나) · 부분 끝과 바깥 끝은 vEps 띠로 원지반에 내린다.
 /// ⑤ <b>바꿀 자리 Zone = 벽이 원지반 위(성토) · 아래(절토)인 자리 가운데 L에 붙은 이어진 성분</b>(critic 2차 1 — 광선의 «처음 닿음» 아님). 테두리는 늘 W = G라 이어진다.</para>
 /// <para>계산은 «절토 꼴»로 한다 — 성토는 z′ = −z로 뒤집어 같은 셈(절토 ×1 · 성토 ×−1은 정확).</para></summary>
-public static class WallByLine
+public static partial class WallByLine
 {
     /// <summary>★[v114.0 · 계획 2절 «기능 스위치»] 켜면 [옹벽 추가]의 선 길이 숨고 종류 2 기록은 쉰다(지우지 않음 · ⚠) — Civil <c>GradingSettings.WallLineOff</c>가 옮겨 준다.</summary>
     public static bool Off;
@@ -57,7 +57,22 @@ public static class WallByLine
         public bool TopStep;
         /// <summary>계단 블록 길이(m · 선 위 호 길이) — 0 이하면 9.</summary>
         public double BlockLen = 9;
+        /// <summary>★[v117.0 1단계 · 계획 `2026-11-10_옹벽추가_안쪽소단.md` · 검토 H2] 모양 — 기본 <see cref="WallShape.Out"/>(옛 바깥 계단 · 비트 같음).
+        /// <see cref="WallShape.In"/>(선 안쪽 계단)은 부르는 쪽이 명시해야 <see cref="BuildIn"/>로 간다.</summary>
+        public WallShape Shape = WallShape.Out;
+        /// <summary>★[v117.0 1단계] 새 모양의 첫 소단 · 단 수 규칙 — 기본 <see cref="InwardRule.Strict"/>(JACK 1110 18시 결정).</summary>
+        public InwardRule InRule = InwardRule.Strict;
+        /// <summary>★[v117.0 1단계] <see cref="InwardRule.Ledge"/> 규칙의 턱 한도(m · 첫 소단이 선 위 원지반보다 높은(절토) · 낮은(성토) 양) — 계획 «1단계 결과» 제안값 1.0 m(JACK이 정함).</summary>
+        public double LedgeMax = 1.0;
     }
+
+    /// <summary>★[v117.0 1단계] 선 옹벽 모양 — 0 = 옛 바깥 계단(v114~v116) · 1 = 선 안쪽 계단(새).</summary>
+    public enum WallShape { Out = 0, In = 1 }
+
+    /// <summary>★[v117.0 1단계 · 0단계 M1 뒤] 새 모양의 단 수 n 규칙.
+    /// <para><see cref="Strict"/> — 선 어디서도 첫 소단이 원지반 위로 뜨지 않는 가장 높은 기준(절토 · 성토 거울) · 바깥 벽이 어디서든 단높이를 넘으면 거절(JACK 1110 18시).</para>
+    /// <para><see cref="Ledge"/> — 바깥 벽이 어디서도 단높이를 넘지 않는 가장 낮은 n(엄격 n부터 올림) · 땅이 낮은 자리는 첫 소단이 원지반보다 높게 선다(선 위 작은 턱 = Z_n − G) · 턱이 <see cref="Input.LedgeMax"/>를 넘으면 거절.</para></summary>
+    public enum InwardRule { Strict = 0, Ledge = 1 }
 
     /// <summary>★[v114.3 · JACK 1105 소단 높이] 벽 소단 높이 방식 — 선기준(부분마다 선 위 P0 최저 · 최고에서 H씩 수평) · 옛소단(옛 사면 소단 높이 — 바닥이 기울면 따라 기욺).</summary>
     public enum LevelKind { Line = 0, OldBench = 1 }
@@ -146,6 +161,41 @@ public static class WallByLine
         public string Log = "";
         /// <summary>표시용 최댓값 — 기하를 정하지 않는다.</summary>
         public double HMax => Faces.Count == 0 ? 0 : Faces.Max(f => f.HMax);
+
+        // ══ ★[v117.0 1단계 · 계획 1-11 · 검토 M3 · M6] 새 모양(선 안쪽 계단 · <see cref="BuildIn"/>)만 채운다 — 옛 Build는 손대지 않음(Shape 0) ══
+        /// <summary>0 = 옛 바깥 계단 · 1 = 선 안쪽 계단.</summary>
+        public int Shape;
+        /// <summary>방향 +1 절토 · −1 성토 · 0 섞임(2 = 같음 · 거절) · 단 규칙(0 엄격 · 1 턱) · 단 수 n · 엄격 규칙의 n(턱 규칙 비교용).</summary>
+        public int Dir = 2, Rule, Tiers = -1, TiersStrict = -1;
+        /// <summary>안쪽 깊이 D_tot(가장 안쪽 벽 발 줄의 선에서 거리).</summary>
+        public double Depth;
+        /// <summary>바깥 벽 h = G′ − Z′_n(P_n) — 표본 · 넘음 · 음수(−1 mm 아래) · 범위 · 가장 높은 자리 · 한도 H_{n+1}.</summary>
+        public int OuterN, OuterOver, OuterNeg; public double OuterMin = double.NaN, OuterMax = double.NaN, OuterLim = double.NaN; public (double X, double Y) OuterAt;
+        /// <summary>턱(첫 소단이 선 위 원지반보다 높은(절토) · 낮은(성토) 양 = −h · 0 아래는 0) 최대 · 자리 · 턱 표본 수(1 mm 넘음) · 한도(턱 규칙).</summary>
+        public double LedgeMax, LedgeLim; public int LedgeN; public (double X, double Y) LedgeAt;
+        /// <summary>자리 — 벽 줄(가장 안쪽 포함) ↔ 바닥 가장 짧은 거리 · 자리.</summary>
+        public double RoomMin = double.NaN; public (double X, double Y) RoomAt;
+        /// <summary>줄 — 수 · 한 줄이 아닌 줄 · d ± 1 µm 어긋난 꼭짓점 · 0.25 mm 안이라 합친 점.</summary>
+        public int RowN, RowPieceBad, RowDistBad, RowMerged;
+        /// <summary>둥근 이음 부채(가장 가까운 늘인 L 점 = 꼭짓점)의 8분할 현 위 줄 꼭짓점 수 — 거리 d·cos(π/32) ~ d(평면 모양만 · 계획 1-5) · RowDistBad에 안 셈.</summary>
+        public int RowChord;
+        /// <summary>끝 — 끝 각 θ(°) · 날개벽(가로대마다 |W − P0|) 최대 · 자리 · 가로대 수 · 날개 길이(E′) · 날개 넓이(∫|W − P0| · E 따라) · 끝 A · B에서 G − P0(경계가 데이라잇이면 0).</summary>
+        public double EndAngleA = double.NaN, EndAngleB = double.NaN, EndMaxA, EndMaxB, WingLenA, WingLenB, WingAreaA, WingAreaB, EndStepA, EndStepB;
+        public (double X, double Y) EndAtA, EndAtB; public int EndRungs;
+        /// <summary>바닥 호 |Z0 − P0| 최대(정의상 0) · 줄 · 띠 Z0 끊김 수 · 벽 안쪽 메움(벽 세모를 0.5 m 안 작은 세모로 나눠 무게중심 W′ − G′ &gt; 1 cm인 넓이 · 최대 — 절토 꼴) · 바닥 넓힘(평평한 띠 넓이 · 최대 폭).</summary>
+        public double FloorStep, InnerFillArea, InnerFillMax, BandArea, BandMaxW; public int Z0Jump; public (double X, double Y) Z0JumpAt;
+        /// <summary>M2 — 가장 안쪽 면(Z_1 − Z0 · 절토 꼴) 범위.</summary>
+        public double Z1Min = double.NaN, Z1Max = double.NaN;
+        /// <summary>★[검토 M3] 벽 세모 변 가운데 0.25 mm 미만 수 · 끝 쐐기(A · B를 꼭짓점으로 가진 벽 세모) 최소 높이.</summary>
+        public int ShortEdges; public double WedgeMin = double.NaN;
+        /// <summary>표본 · 띠 표본 수(소단 관문 Kind 0 가운데 띠 몫).</summary>
+        public int BandN, BandBad;
+        /// <summary>미리 재기 한 줄(<see cref="Survey"/> 같은 셈 · 같은 규칙).</summary>
+        public string SurveyText = "";
+        /// <summary>★[계획 1-7 · 2단계 합성용] R_out 고리(첫 점 반복 없음 · z = 0) — L 몫을 바꿀 자리 고리와 같은 L 점 배열로(두 고리가 L을 같은 꼭짓점으로 나눠 가짐).</summary>
+        public List<Point3> OutRing = new();
+        /// <summary>자가검증 한 줄(계획 4절).</summary>
+        public string SelfCheck = "";
     }
 
     static readonly CultureInfo Ci = CultureInfo.InvariantCulture;
@@ -685,6 +735,8 @@ public static class WallByLine
     /// <summary>★[v114.0] 기하를 짓는다 — 못 지으면 Ok = 거짓 · 까닭(코드 · 글 · 자리). 아무것도 안 바꾼다(순수 셈).</summary>
     public static Built Build(Input inp)
     {
+        // ★[v117.0 1단계 · 검토 H2] 새 모양은 부르는 쪽이 명시할 때만 — 기본(Out)은 아래 옛 몸통 그대로(비트 같음)
+        if (inp.Shape == WallShape.In) return BuildIn(inp);
         var R = new Built();
         var log = new System.Text.StringBuilder();
         // ★[v115 · 설치 전 검토 S2] 옛 소단 높이 읽기 수 · 시간(이번 짓기 몫 — 링 단 표는 여러 짓기가 함께 씀)
