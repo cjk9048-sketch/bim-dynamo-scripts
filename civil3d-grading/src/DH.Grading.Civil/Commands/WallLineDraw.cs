@@ -65,15 +65,11 @@ internal static class WallLineDraw
     /// <param name="floor">바닥(계획선 · 도로 띠) — 회색으로.</param>
     internal static Got? Run(Document doc, string tag, IReadOnlyList<Point3> bd, IReadOnlyList<Point3>? floor, System.Func<List<Point3>, BoundaryCut.Result> classify)
     {
-        // ★★[v113.0 · JACK 1104 · 1104 화면 없는 시험 «340 m»] 찍는 동안은 우리 경계 붙이기가 스냅이다 — AutoCAD 객체 스냅(OSMODE)을 끄고 어느 길로 나가든(Esc · 오류 포함) 되돌린다.
-        //   기운 3D 화면에서 객체 스냅이 켜져 있으면 클릭이 지표면 같은 3D 객체로 붙어 평면 자리가 수백 m 어긋났다(시험 도면: OSMODE 16383 · 3D 화면 · 338~346 m).
-        object? osm = null;
-        try { osm = AcadApp.GetSystemVariable("OSMODE"); AcadApp.SetSystemVariable("OSMODE", 0); } catch { osm = null; }
-        try { return RunCore(doc, tag, bd, floor, classify); }
-        finally
-        {
-            if (osm != null) try { AcadApp.SetSystemVariable("OSMODE", osm); } catch (System.Exception ex) { try { DiagLog.Append($"\n[{tag}] ⚠객체 스냅(OSMODE) 되돌리기 실패 — {ex.Message}"); } catch { } }
-        }
+        // ★★[v116.11 · JACK 1110 «옹벽 추가할 때 스냅 좀 잡혔으면 — 스냅이 안 잡혀»] 객체 스냅(OSMODE)을 끄지 않는다.
+        //   v113.0은 찍는 동안 OSMODE를 0으로 껐다 — 기운 3D 화면에서 높이 있는 객체(지표면 등)에 붙은 점을 «시선 따라 Z = 0 평면으로 내림»(Flat)이
+        //   높이 × 기울기만큼 옮겨 평면 자리가 수백 m 어긋났기 때문(1104 화면 없는 시험 338~346 m). 원인은 스냅이 아니라 내림이었다 —
+        //   객체에 붙은 점은 그 X · Y가 곧 평면 자리이므로 내리지 않는다(<see cref="RunCore"/>의 Plan). 스냅 안 된 커서 점만 지금처럼 내린다.
+        return RunCore(doc, tag, bd, floor, classify);
     }
 
     /// <summary>화면 시선 방향으로 경계 평면(Z = 0)에 내린 점 — 기운 3D 화면에서 커서가 가리키는 평면 자리(위에서 본 화면이면 X · Y 그대로).</summary>
@@ -85,10 +81,38 @@ internal static class WallLineDraw
 
     static Got? RunCore(Document doc, string tag, IReadOnlyList<Point3> bd, IReadOnlyList<Point3>? floor, System.Func<List<Point3>, BoundaryCut.Result> classify)
     {
+        // ★[v116.11] 객체 스냅이 잡힌 점인가 — AutoCAD가 알려 주는 «객체 스냅됨»(PointMonitor) · 지그는 지금 커서 점마다 이 값을 새로 받는다
+        var edS = doc.Editor;
+        bool snapNow = false; Point3d snapAt = Point3d.Origin;
+        PointMonitorEventHandler onPm = (_, e) =>
+        {
+            try { snapNow = (e.Context.History & PointHistoryBits.ObjectSnapped) != 0; snapAt = e.Context.ObjectSnappedPoint; }
+            catch { snapNow = false; }
+        };
+        edS.PointMonitor += onPm;
+        try { return RunCore2(doc, tag, bd, floor, classify, () => (snapNow, snapAt)); }
+        finally { try { edS.PointMonitor -= onPm; } catch { } }
+    }
+
+    static Got? RunCore2(Document doc, string tag, IReadOnlyList<Point3> bd, IReadOnlyList<Point3>? floor, System.Func<List<Point3>, BoundaryCut.Result> classify,
+        System.Func<(bool On, Point3d At)> snapState)
+    {
         var ed = doc.Editor; var db = doc.Database;
         var ucs = ed.CurrentUserCoordinateSystem;
         Vector3d vdir = Vector3d.ZAxis;
         try { vdir = ed.GetCurrentView().ViewDirection; } catch { }
+        double elev = 0; try { elev = System.Convert.ToDouble(AcadApp.GetSystemVariable("ELEVATION")); } catch { }
+        // ★[v116.11] 찍은 점(WCS) → 평면 자리. 객체에 붙은 점(«객체 스냅됨»이 이 점 · 또는 작도 평면 밖 — 높이 있는 객체에 붙었거나 X,Y,Z를 친 점)은 X · Y 그대로,
+        //   커서가 작도 평면에 찍은 점만 시선 따라 Z = 0으로 내린다(기운 3D 화면에서 커서가 가리키는 평면 자리 — 종전 그대로).
+        Point3d Plan(Point3d wcs, out bool snapped)
+        {
+            var (on, at) = snapState();
+            bool bySnap = on && at.DistanceTo(wcs) <= 1e-6;
+            bool offPlane = false;
+            try { offPlane = System.Math.Abs(wcs.TransformBy(ucs.Inverse()).Z - elev) > 1e-6; } catch { }
+            snapped = bySnap || offPlane;
+            return snapped ? new Point3d(wcs.X, wcs.Y, 0) : Flat(wcs, vdir);
+        }
         // ★[설치 전 검토 4] 경계 · 바닥 다각형은 한 번만 짓는다(지그가 화면마다 다시 짓지 않게) · 붙이기는 그 고친 고리에(Classify와 같은 고리)
         var geo = BoundaryDraw.Prepare(bd, floor);
         if (geo == null) { ed.WriteMessage($"\n[{tag}] 경계를 다각형으로 못 만들었습니다 — 아무것도 안 바꿨습니다."); return null; }
@@ -155,7 +179,7 @@ internal static class WallLineDraw
                     for (int i = 0; i + 1 < drawn.Count; i++) wd.Geometry.WorldLine(new Point3d(drawn[i].X, drawn[i].Y, 0), new Point3d(drawn[i + 1].X, drawn[i + 1].Y, 0));
                     if (!has) return;
                     BoundaryDraw.Step st;
-                    var cf = Flat(cur, vdir);
+                    var cf = Plan(cur, out _);   // ★[v116.11] 스냅 잡힌 점은 그 자리로(미리보기 안내선도)
                     try { st = Try(cf.X, cf.Y); } catch { return; }
                     if (!st.Ok) why = st.Why;
                     if (drawn.Count == 0)
@@ -202,7 +226,8 @@ internal static class WallLineDraw
                     continue;
                 }
                 if (lr.Status != PromptStatus.OK) { ed.WriteMessage($"\n[{tag}] 아무것도 안 바꿨습니다."); return null; }
-                var w = Flat(lr.Value.TransformBy(ucs), vdir);   // UCS → WCS → 시선 따라 경계 평면(Z = 0)
+                var w = Plan(lr.Value.TransformBy(ucs), out bool snapped);   // UCS → WCS → 스냅 잡힌 점은 X · Y 그대로 · 아니면 시선 따라 경계 평면(Z = 0)
+                try { DiagLog.AppendCarry($"\n  [{tag}] 점 {pts.Count + 1} ({w.X:F4}, {w.Y:F4}){(snapped ? " · 객체 스냅" : "")}"); } catch { }
                 var stp = Try(w.X, w.Y);
                 if (!stp.Ok)
                 {

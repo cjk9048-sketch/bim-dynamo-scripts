@@ -455,7 +455,7 @@ public sealed class WallCompositeCommand
         }
         summary += $" · 전체 {sw.ElapsedMilliseconds / 1000.0:F1}초";
         // ★[v111.8 · 계획 4장] 합성이 정지면_DH를 바꿨으면 — 진입도로가 있을 때만 한 줄(도로 없는 도면은 글 그대로)
-        if (_lastOk) { string rn = FinalSurfaceBuilder.SiteChangedNote(db); if (rn.Length > 0) summary += " · " + rn; }
+        if (_lastOk) { string rn = FinalSurfaceBuilder.SiteChangedNote(db, auto: true); if (rn.Length > 0) summary += " · " + rn; }   // ★[v116.12] 합성 단추 · 이어 태운 합성 = 끝에서 · 관문 합성 = 관문이 · «이어서» = 정지면 생성 끝에서 저절로
         // ★[v102.2 · 계획 검토 중간 8] 옹벽 변환이 이어서 태운 합성이 못 했으면 알림창 — 버튼이 없어져 명령줄 한 줄로는 묻힌다
         // ★[v103.1.12 · 4판 낮음 4] 관문이 부른 합성은 옹벽 변환이 이어 태운 표시를 안 꺼낸다(관문 뒤에 줄 선 합성이 쓴다)
         bool auto = !_quiet && GradingSettings.AutoCompDoc.Length > 0 && GradingSettings.AutoCompDoc == doc.Name;

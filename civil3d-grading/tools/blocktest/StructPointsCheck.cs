@@ -49,5 +49,31 @@ static class StructPointsCheck
         // ⑧ 파일 이름
         Check(" ⑧ 파일 이름 — 못 쓰는 글자 «_» · 빈 이름 = 구조물", StructPoints.SafeFileName("A/B:C*?") == "A_B_C__" && StructPoints.SafeFileName("  ") == "구조물" && StructPoints.SafeFileName("배수 구조물 1") == "배수 구조물 1",
             StructPoints.SafeFileName("A/B:C*?"));
+        // ⑨ ★[v116.13 · 약속 §3 «sketch»] 미리보기 선 — 없으면 칸 자체가 없음 · 있으면 center · radius · lines(kind · layer · closed · pts [[x, y]])
+        Check(" ⑨ sketch 없음 = 칸 없음(선택 칸)", !r.TryGetProperty("sketch", out _), "");
+        var sk = new StructPoints.Sketch(123472.73, 234567.36, StructPoints.SketchRadius(31.9), new[]
+        {
+            new StructPoints.SketchLine("site", "가상-경계", true, new[] { (123400.0, 234500.0), (123550.0, 234500.0), (123550.0, 234650.0) }),
+            new StructPoints.SketchLine("wall", "DH-옹벽선", false, new[] { (123410.1234, 234510.5678), (123420.0, 234520.0) }),
+        });
+        using var js2 = JsonDocument.Parse(StructPoints.Json(info, p1, p2, sk));
+        var s2 = js2.RootElement.GetProperty("sketch");
+        bool skOk = s2.GetProperty("radius").GetDouble() == 95.7 && s2.GetProperty("center").GetArrayLength() == 2 && s2.GetProperty("lines").GetArrayLength() == 2
+                    && s2.GetProperty("lines")[0].GetProperty("kind").GetString() == "site" && s2.GetProperty("lines")[0].GetProperty("closed").GetBoolean()
+                    && s2.GetProperty("lines")[1].GetProperty("pts")[0][0].GetDouble() == 123410.123 && s2.GetProperty("lines")[1].GetProperty("layer").GetString() == "DH-옹벽선"
+                    && js2.RootElement.GetProperty("points")[0].GetProperty("x").GetDouble() == p1.X;   // 점 좌표는 그대로(미리보기만 1 mm)
+        Check(" ⑨-b sketch 꼴 — center · radius(80 m와 거리 3배 중 큰 값) · lines kind · closed · pts(1 mm) · 점 좌표 그대로", skOk, s2.GetRawText().Length.ToString());
+        // ⑩ 5만 점 넘으면 other → contour → bench … 차례로 뺌 · 2점 미만 · 숫자 아닌 선도 뺌
+        var many = new List<StructPoints.SketchLine>
+        {
+            new("other", "a", false, Enumerable.Range(0, 30000).Select(k => ((double)k, 0.0)).ToList()),
+            new("bench", "b", false, Enumerable.Range(0, 15000).Select(k => ((double)k, 1.0)).ToList()),
+            new("wall", "c", false, Enumerable.Range(0, 10000).Select(k => ((double)k, 2.0)).ToList()),
+            new("site", "d", false, new[] { (0.0, 0.0) }),
+            new("road", "e", false, new[] { (0.0, 0.0), (double.NaN, 1.0) }),
+        };
+        var (kept, dropped) = StructPoints.Trim(many);
+        Check(" ⑩ 꼭짓점 5만 한도 — other부터 뺌 · 1점 · NaN 선 뺌", kept.Count == 2 && kept.All(l => l.Kind is "bench" or "wall") && dropped == 3 && kept.Sum(l => l.Pts.Count) == 25000,
+            $"남김 {kept.Count}({string.Join(",", kept.Select(l => l.Kind))}) · 뺌 {dropped}");
     }
 }

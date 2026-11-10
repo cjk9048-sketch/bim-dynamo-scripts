@@ -3956,7 +3956,7 @@ public sealed class CreateGradingCommand
             if (!gradeOk)
                 box.AppendLine("\n자세한 내용은 진단 로그를 확인하세요:\n" + DiagLog.FilePath);
             // ★[v111.8 · 계획 4장] 진입도로가 있으면 한 줄(도로 없는 도면은 글 그대로)
-            if (gradeOk) { string rn = FinalSurfaceBuilder.SiteChangedNote(db); if (rn.Length > 0) { box.AppendLine(); box.AppendLine(rn); } }
+            if (gradeOk) { string rn = FinalSurfaceBuilder.SiteChangedNote(db, auto: true); if (rn.Length > 0) { box.AppendLine(); box.AppendLine(rn); } }   // ★[v116.12] 명령 끝(또는 이어 태운 합성 끝)에서 저절로
             string msg = box.ToString().TrimEnd();
 
             // ★★[JACK 0807 'DH정지면에 스냅샷 재작성 느낌표가 뜬 상태로 작성됨'] **맨 마지막에 한 번 더** 재작성한다.

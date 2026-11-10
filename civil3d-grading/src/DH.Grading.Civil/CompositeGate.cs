@@ -77,6 +77,10 @@ internal static class CompositeGate
                 // ★[v105.1.1 · JACK 1023] 합성 동안 로딩 창(종단이 띄운 창이 있으면 그 창을 그대로 쓴다)
                 using (BusyPopup.Scope(Commands.CreateGradingCommand.BusyText))
                     (ok, sum) = Commands.WallCompositeCommand.RunFor(doc, caller);
+                // ★[v116.12 · 설치 전 검토 중간] 관문 합성도 정지면_DH를 바꿔 진입도로 면 · 최종지표면이 옛것(«결과만 보기»가 숨김) — 진입도로를 이어서 다시
+                //   («이어서»는 정지면 생성이 끝에서 한다 · 부지 종단 · 횡단은 이 관문 뒤 그 명령이 그린다)
+                if (ok && caller != "이어서")
+                    try { Commands.SiteSheetsRefresh.RefreshRoads(doc, $"옹벽 합성(관문 — {caller})"); } catch (System.Exception rx) { Log(caller, $"진입도로 갱신 예외 — {rx.GetType().Name}: {rx.Message}"); }
                 ran = (ok ? "합성 됨 — " : "합성 못 함 — ") + SelfCheckLog.Clean(sum);
                 // ★[4판 재검토 새 높음 1] 그 합성이 옹벽을 버렸거나(대기) 뺐으면(면이 없어진 넣음) 목록에서 사라져 «빠짐»에 안 잡힌다 — 그래도 묻는다(명령줄 한 줄로 묻히지 않게)
                 lost = Commands.WallCompositeCommand.LastLost;
