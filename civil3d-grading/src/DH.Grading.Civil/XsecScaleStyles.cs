@@ -205,35 +205,74 @@ internal static class XsecScaleStyles
         return $"주석 1:{a0:0} → 1:{a1:0} · ×{k:0.###} — 뷰 스타일 {nView} · 밴드 복사본 {nBand} · 크기 칸 {nProp} · 라벨 칸 {nLabel}";
     }
 
-    /// <summary>횡단 뷰 스타일의 축 눈금 · 축 제목 · 그래프 제목 · 격자 오프셋(종이 값)을 k배 — 축 · 눈금 객체 이름이 판마다 다를 수 있어 이름으로 읽는다(없으면 건너뜀).</summary>
+    /// <summary>횡단 뷰 스타일의 축 눈금 · 축 제목 · 그래프 제목 · 격자 오프셋(종이 값)을 k배 — 축 · 눈금 객체 이름이 판마다 다를 수 있어 이름으로 읽는다(없으면 건너뜀).
+    /// <para>★[v117.8 · 화면 없는 시험 xvslot 실측] 중심축 눈금(주 · 보조)의 OffsetX · OffsetY는 왼쪽축과 <b>같은 칸</b>이다(한 칸에만 쓰면 다른 칸도 같은 값 — DHTICKDIAG 0828과 같은 Autodesk 래퍼).
+    /// 축마다 «읽고 곱하기»를 하면 그 칸만 k²배였다(pvx1: 종이 0.9 → 22.5 mm). → 스타일 <b>모든 칸의 원래 값을 먼저</b> 읽고 각각 «원래 × k»로 쓴다 — 같은 칸에 같은 값을 두 번 써도 한 번 곱한 것과 같다.</para></summary>
     static int ScaleView(CivilDb.Styles.SectionViewStyle vs, double k)
     {
-        int c = 0;
+        var parts = new List<(string[] Path, HashSet<string> Names)>();
         foreach (var axName in new[] { "CenterAxis", "LeftAxis", "RightAxis", "TopAxis", "BottomAxis" })
         {
-            object? ax = Get(vs, axName);
-            if (ax == null) continue;
             foreach (var tn in new[] { "MajorTickStyle", "MinorTickStyle", "HorizontalGeometryTickStyle" })
-                c += ScaleChild(ax, tn, ProfileScaleStyles.TickProps, k);
-            c += ScaleChild(ax, "TitleStyle", ProfileScaleStyles.TitleProps, k);
-            (ax as IDisposable)?.Dispose();
+                parts.Add((new[] { axName, tn }, ProfileScaleStyles.TickProps));
+            parts.Add((new[] { axName, "TitleStyle" }, ProfileScaleStyles.TitleProps));
         }
-        c += ScaleChild(vs, "GridStyle", ProfileScaleStyles.GridProps, k);
-        object? gr = Get(vs, "GraphStyle");
-        if (gr != null) { c += ScaleChild(gr, "TitleStyle", ProfileScaleStyles.TitleProps, k); (gr as IDisposable)?.Dispose(); }
+        parts.Add((new[] { "GridStyle" }, ProfileScaleStyles.GridProps));
+        parts.Add((new[] { "GraphStyle", "TitleStyle" }, ProfileScaleStyles.TitleProps));
+        // ① 원래 값 모두(곱하기 전)
+        var want = new List<(string[] Path, List<(System.Reflection.PropertyInfo P, double V)> Props)>();
+        foreach (var (path, names) in parts)
+        {
+            var props = new List<(System.Reflection.PropertyInfo P, double V)>();
+            At(vs, path, o =>
+            {
+                foreach (var pi in o.GetType().GetProperties())
+                {
+                    if (!names.Contains(pi.Name) || pi.PropertyType != typeof(double) || !pi.CanWrite || !pi.CanRead) continue;
+                    try { double v = (double)pi.GetValue(o)!; if (double.IsFinite(v) && v != 0) props.Add((pi, v * k)); } catch { }
+                }
+            });
+            if (props.Count > 0) want.Add((path, props));
+        }
+        // ② «원래 × k» 쓰기 · ③ 다시 읽어 어긋난 칸 다시 쓰기(두 번까지)
+        int c = 0;
+        foreach (var (path, props) in want)
+            At(vs, path, o => { foreach (var (pi, v) in props) try { pi.SetValue(o, v); c++; } catch { } });
+        for (int pass = 0; pass < 2; pass++)
+        {
+            bool again = false;
+            foreach (var (path, props) in want)
+                At(vs, path, o =>
+                {
+                    foreach (var (pi, v) in props)
+                        try
+                        {
+                            double now = (double)pi.GetValue(o)!;
+                            if (Math.Abs(now - v) > 1e-9 * Math.Max(1.0, Math.Abs(v))) { pi.SetValue(o, v); again = true; }
+                        }
+                        catch { }
+                });
+            if (!again) break;
+        }
         return c;
     }
 
-    static object? Get(object o, string prop)
+    /// <summary>스타일에서 이름 길(«LeftAxis» → «MajorTickStyle»)을 따라 간 객체에 <paramref name="act"/> — 길에서 얻은 래퍼는 끝에 버린다(없거나 예외면 건너뜀).</summary>
+    static void At(object root, string[] path, Action<object> act)
     {
-        try { return o.GetType().GetProperty(prop)?.GetValue(o); } catch { return null; }
-    }
-
-    static int ScaleChild(object o, string prop, HashSet<string> names, double k)
-    {
-        object? ch = Get(o, prop);
-        if (ch == null) return 0;
-        try { return ProfileScaleStyles.ScaleProps(ch, names, k); }
-        finally { (ch as IDisposable)?.Dispose(); }
+        var held = new List<object>();
+        try
+        {
+            object? o = root;
+            foreach (var n in path)
+            {
+                o = o.GetType().GetProperty(n)?.GetValue(o);
+                if (o == null) return;
+                held.Add(o);
+            }
+            act(o);
+        }
+        catch { }
+        finally { for (int i = held.Count - 1; i >= 0; i--) (held[i] as IDisposable)?.Dispose(); }
     }
 }

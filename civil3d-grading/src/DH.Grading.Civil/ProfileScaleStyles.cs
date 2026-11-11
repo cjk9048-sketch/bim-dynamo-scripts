@@ -116,8 +116,9 @@ internal static class ProfileScaleStyles
     }
 
     /// <summary>값이 있는 double 속성(get/set)을 k배 — 이름표에 든 것만.
-    /// <para>★[v117.7.1 · 화면 없는 시험 pvx1 · pvx2] 원래 값을 <b>모두 먼저</b> 읽고 각각 «원래 × k»로 쓴 뒤 다시 읽어 어긋난 것을 다시 쓴다(차례와 무관).
-    /// 한 칸씩 읽고 곱하던 때 횡단 축 눈금 OffsetX가 k²배였다(k = 5: 종이 0.9 → 22.5 mm · 글자 · 눈금 크기는 맞음) — 앞 칸(Size · TextHeight)을 쓰면 Civil이 OffsetX를 같이 바꾸는 것으로 보인다.</para></summary>
+    /// <para>★[v117.7.1] 원래 값을 <b>모두 먼저</b> 읽고 각각 «원래 × k»로 쓴 뒤 다시 읽어 어긋난 것을 다시 쓴다(차례와 무관).
+    /// ★[v117.8 · xvslot 실측] 횡단 축 눈금 OffsetX k²배의 원인은 차례가 아니었다 — 한 객체 안 칸끼리는 서로 안 바뀐다(진입도로 종단 스타일 칸 공유 0).
+    /// 중심축 · 왼쪽축이 띄우기 칸을 함께 써서 두 번 곱한 것 → <see cref="XsecScaleStyles"/>.ScaleView가 스타일 전체를 먼저 읽는다.</para></summary>
     internal static int ScaleProps(object o, HashSet<string> names, double k)
     {
         var want = new List<(System.Reflection.PropertyInfo P, double V)>();
