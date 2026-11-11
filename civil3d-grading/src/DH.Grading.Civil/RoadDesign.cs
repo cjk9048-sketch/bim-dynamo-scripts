@@ -213,6 +213,13 @@ internal sealed class RoadDesign
         public double Tc = 1, Tf = 1, Reach = 40;
         /// <summary>★[v116.3 · JACK 1109 옹벽 천단 선택] 계단 천단 · 블록 길이(0 = 9 m). 판(CurVer)은 안 올림 — 옛 기록은 끔으로 읽고 해시도 그대로(계획 2판 L11).</summary>
         public bool TopStep; public double BlockLen;
+        /// <summary>★★[v117.x · JACK 1111 «옹벽 추가는 부지나 진입도로나 똑같은 로직» · 계획 `2026-11-12_진입도로_옹벽추가_부지로직.md` 3절] 모양 — 0 = 옛(바깥 계단) · 2 = 수직 · 3 = 다단(부지 목록 WallRec.Shape와 같은 값) ·
+        /// 다단 단높이 · 소단 폭(쓴 값) · 첫 소단(손으로 넣은 값만 · null = 자동 — 다시 지을 때마다 지금 면에서 다시 셈 · 코디네이터 결정 1112).
+        /// 모두 기본값이면 JSON에 안 씀 · 판(CurVer) 안 올림(올리면 옛 판 2 기록이 지워짐) · 해시는 Shape ≠ 0일 때만 늘어남(옛 기록 해시 그대로 · <see cref="RoadGrade.ShapeSig"/>).
+        /// 옛 애드인은 모르는 칸을 <see cref="Extra"/>로 남기고 해시가 안 맞아 쉰다(엉뚱한 옛 모양으로 짓지 않음).</summary>
+        [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] public int Shape;
+        [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] public double TierH, TierB;
+        [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] public double? TierZ1;
         public string SrcHandle = "";
         /// <summary>칸 전부의 해시(<see cref="SigNow"/>) — 없거나 안 맞으면 쉰다.</summary>
         public string Sig = "";
@@ -228,6 +235,7 @@ internal sealed class RoadDesign
             foreach (var a in new[] { X, Y, SrcX, SrcY }) { foreach (var v in a ?? System.Array.Empty<double>()) D(v); sb.Append('|'); }
             sb.Append(Side).Append('|'); D(Tc); D(Tf); D(Reach); sb.Append('|').Append(SrcHandle ?? "");
             if (TopStep) { sb.Append("|계단"); D(BlockLen); }   // ★[v116.3] 켰을 때만(옛 기록 해시 그대로)
+            sb.Append(RoadGrade.ShapeSig(Shape, TierH, TierB, TierZ1));   // ★[v117.x] 새 모양일 때만 늘어남(모양 0 = 빈 글 — 옛 기록 해시 그대로)
             return Convert.ToHexString(System.Security.Cryptography.SHA1.HashData(System.Text.Encoding.UTF8.GetBytes(sb.ToString())))[..16];
         }
     }
@@ -248,7 +256,10 @@ internal sealed class RoadDesign
             if (b.Ver < BoundWallRec.CurVer) continue;   // 판 1은 Read가 이미 뺌
             if (string.IsNullOrEmpty(b.Sig) || b.Sig != b.SigNow()) { sigBad.Add(b.No); continue; }
             if (b.SrcX == null || b.SrcY == null || b.SrcX.Length < 2 || b.SrcX.Length != b.SrcY.Length) continue;
-            o.Add(new RoadGrade.LineWall(b.No, b.SrcX, b.SrcY, Math.Max(0, b.Tc), Math.Max(0, b.Tf), Pos(b.Reach, 40), b.TopStep, b.TopStep ? (b.BlockLen > 0 ? b.BlockLen : 9) : 0));
+            // ★[v117.x · 계획 3절 · 검토 HIGH 2] 모양 · 다단 값까지 Core로(한 곳 — RoadGrade.LineWallOf) · 모르는 모양 · 숫자 아닌 다단 값 = 쉼 ⚠(엉뚱하게 짓지 않음)
+            var lw = RoadGrade.LineWallOf(b.No, b.SrcX, b.SrcY, Math.Max(0, b.Tc), Math.Max(0, b.Tf), Pos(b.Reach, 40), b.TopStep, b.BlockLen, b.Shape, b.TierH, b.TierB, b.TierZ1);
+            if (lw == null) { tooNew.Add(b.No); continue; }
+            o.Add(lw);
         }
         return o;
     }
