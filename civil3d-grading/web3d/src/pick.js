@@ -1,5 +1,6 @@
 // 누르면 정보 · 재기 · 두 번 누르면 가운데로.
 import * as THREE from 'three';
+import { describeUDitch } from './uditch.js';
 
 const fmt = (v, d = 2) => Number.isFinite(v) ? v.toLocaleString('ko-KR', { minimumFractionDigits: d, maximumFractionDigits: d }) : '—';
 const slopeText = (g) => {   // g = 높이/수평(무차원)
@@ -73,7 +74,7 @@ export class Picker {
     const ndc = new THREE.Vector2(((cx - rect.left) / rect.width) * 2 - 1, -((cy - rect.top) / rect.height) * 2 + 1);
     this.ray.setFromCamera(ndc, this.view.camera);
     const objs = [];
-    for (const k of ['drain', 'terrain', 'ground', 'excav', 'wall', 'pattern', 'struct']) {
+    for (const k of ['drain', 'terrain', 'ground', 'excav', 'wall', 'pattern', 'struct', 'uditch']) {
       const l = this.L[k];
       if (l && l.obj && l.obj.visible) objs.push(l.obj);
     }
@@ -252,6 +253,13 @@ export class Picker {
       // ★[JACK 1111] 불러온 구조물 — 이름
       title = u.name || '구조물';
       rows.push(['종류', '불러온 구조물']);
+      rows.push(['표고', fmt(p.z, 3) + ' m']);
+      go = { x: X, y: Y, r: 20 };
+    } else if (u.layer === 'uditch') {
+      // ★[배수지 U형 측구] 이름 · 규격 · 경사 · 수리 판정(C# 줄 그대로)
+      const d = describeUDitch(u);
+      title = d.title;
+      rows.push(...d.rows);
       rows.push(['표고', fmt(p.z, 3) + ' m']);
       go = { x: X, y: Y, r: 20 };
     }

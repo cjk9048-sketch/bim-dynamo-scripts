@@ -30,6 +30,8 @@
     <Compile Include="SheetBookShot.cs" />
     <Compile Include="..\..\src\DH.Grading.Civil\StructExportDialog.cs" />
     <Compile Include="StructExportShot.cs" />
+    <Compile Include="..\..\src\DH.Grading.Civil\UDitchDialog.cs" />
+    <Compile Include="UDitchShot.cs" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\DH.Grading.Core\DH.Grading.Core.csproj" />
