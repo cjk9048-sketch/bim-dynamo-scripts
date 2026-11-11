@@ -288,7 +288,7 @@ internal static class WallLineFlow
         var rec = new WallRec
         {
             // ★[v114.0] 종류 2 — 하나뿐인 Up · HeadZ는 표시용(절토가 있으면 절토 · 머리 = 가장 높은 면 머리) · 기하는 Faces · 바꿀 자리 고리
-            No = no, State = defer && blk.Length == 0 ? 1 : 0, Up = b.HasCut, Bench = -1, H = b.HasCut ? hc : hf, T = b.HasCut ? tc : tf, T0 = 0, T1 = 0,
+            No = no, State = defer && blk.Length == 0 ? 1 : 0, Up = b.Shape == 3 ? b.Dir > 0 : b.HasCut, Bench = -1, H = b.HasCut ? hc : hf, T = b.HasCut ? tc : tf, T0 = 0, T1 = 0,
             HeadZ = b.Faces.Count > 0 ? b.Faces.Max(f => f.Top.Count > 0 ? f.Top.Max(q => q.Z) : f.Level) : 0,
             Seg = cut.Line.ToList(), Poly = b.Poly, IsWall = b.IsWall, WallHandle = wh, Block = blk, Stamp = System.DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
             P0Handle = blk.Length == 0 ? p0h : "", SlopeW = slopeW, FaceRun = faceRun, Grid = grid, RulerKind = 2,
@@ -310,7 +310,7 @@ internal static class WallLineFlow
         tr.Commit();
         if (vert && b.Shape == 3)
             log.Append(string.Format(System.Globalization.CultureInfo.InvariantCulture, "  ★다단 옹벽 {0}({1}) — {2}단 · 단높이 {3:0.##} · 소단 {4:0.##} · 첫 소단 {5:F3} · 바깥 최고 {6:F2} m · 안쪽 최고 {7:F2} m · 끊김 {8}곳 — {9}{10}{11} · 목록 {12}\n",
-                no, b.HasCut ? "절토" : "성토", b.TierN, b.TierH, b.TierB, b.TierZ1, b.OuterHMax, b.InnerHMax, b.BreakN, note,
+                no, b.Dir > 0 ? "절토" : "성토", b.TierN, b.TierH, b.TierB, b.TierZ1, b.OuterHMax, b.InnerHMax, b.BreakN, note,
                 b.Warn.Count > 0 ? " · ⚠" + string.Join(" · ⚠", b.Warn) : "", blk.Length > 0 ? $" · ⚠합성 막음: {blk}" : "", rec.State == 1 ? "미룬 옹벽(넣음)" : "«대기»"));
         else if (vert)
             log.Append(string.Format(System.Globalization.CultureInfo.InvariantCulture, "  ★수직 옹벽 {0}({1}) — 길이 {2:F2} m(절토 {3:F2} · 성토 {4:F2}) · 최고 {5:F2} m · 면적 {6:F1} ㎡ · 바깥 {7} · 쌍 {8} · 바늘 {9} — {10}{11}{12} · 목록 {13}\n",

@@ -222,7 +222,8 @@ public static class WallList
         if (ver >= 9)
             foreach (var w in walls) { if (w.Kind != 2) continue; v.Add(('I', w.Shape)); }
         if (ver >= 10)
-            foreach (var w in walls) { if (w.Kind != 2) continue; v.Add(('D', w.TierH)); v.Add(('D', w.TierB)); v.Add(('D', w.TierZ1)); }
+            // ★[v117.4 · 설치 전 검토] 모양 3이 아닌 칸은 0(Xrecord에 NaN 실수를 넣지 않는다) — 읽을 때 모양 ≠ 3이면 NaN으로 되돌린다
+            foreach (var w in walls) { if (w.Kind != 2) continue; bool t = w.Shape == 3; v.Add(('D', t ? w.TierH : 0.0)); v.Add(('D', t ? w.TierB : 0.0)); v.Add(('D', t ? w.TierZ1 : 0.0)); }
         return v;
     }
 
@@ -343,7 +344,12 @@ public static class WallList
                     if (w.Shape != 0 && w.Shape != 2 && w.Shape != 3) throw new FormatException($"옹벽 {w.No} 모양 {w.Shape}(이 애드인은 0 · 2 · 3만 안다)");
                 }
             if (ver >= 10)
-                foreach (var w in walls) { if (w.Kind != 2) continue; w.TierH = D(); w.TierB = D(); w.TierZ1 = D(); }
+                foreach (var w in walls)
+                {
+                    if (w.Kind != 2) continue;
+                    w.TierH = D(); w.TierB = D(); w.TierZ1 = D();
+                    if (w.Shape != 3) w.TierH = w.TierB = w.TierZ1 = double.NaN;   // ★[v117.4] 0으로 쓴 칸(또는 d3d0a72가 쓴 NaN) → NaN
+                }
             if (i != v.Count) { why = $"옹벽 목록 끝에 값 {v.Count - i}개가 남았다"; return false; }
             // ★[v114.0 · 설치 전 검토 6] 굳은 종류 1은 지우지 않는다 — 앞 구역 면에 이미 든 v113 옹벽이라 다시 지을 수 없다.
             //   종류 2 «앞면 길이 0»(반영 몫 없음)으로 남긴다(막을 다각형 · 측점 가리기는 Poly 그대로). 지우는 것은 지금 목록의 종류 1뿐
