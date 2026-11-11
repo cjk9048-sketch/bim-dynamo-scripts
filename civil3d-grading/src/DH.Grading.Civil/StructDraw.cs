@@ -227,6 +227,8 @@ internal static class StructDraw
         {
             // ★ 지적도 해치(ImportGisCommand — 화면 없는 Civil에서 됨)와 같은 차례: 붙이고 → 무늬 → 축척(무늬를 다시 걸어야 먹음) → 고리(겹친 끝점 없이 닫음) → 계산 → 꼬리표
             h = new Hatch { LayerId = c.L.Patt, Associative = false };
+            // ★[v117.3 · JACK 1111 «구조물 내부 해치가 빨간색이라 너무 헷갈려 · 주황색 같은 거»] 구조물 단면 해치만 주황(ACI 30) — 레이어(CR/CC-PATT · 다른 해치와 같이 씀) 색은 안 바꿈
+            h.ColorIndex = 30;
             c.Ms.AppendEntity(h); c.Tr.AddNewlyCreatedDBObject(h, true);
             step = "pattern";
             h.SetHatchPattern(HatchPatternType.PreDefined, "ANSI31");
