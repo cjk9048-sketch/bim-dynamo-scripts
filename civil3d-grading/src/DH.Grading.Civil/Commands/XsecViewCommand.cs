@@ -175,7 +175,7 @@ public sealed partial class XsecViewCommand
              + $" · 축척 {(GradingSettings.XsecScale > 0 ? $"고정 1:{GradingSettings.XsecScale:F0}" : "자동")}");
         else
             X9($"진입도로 횡단 시작 — {t.AlignName} · 배치 {GradingSettings.XsecLayoutRoadC}×{GradingSettings.XsecLayoutRoadR}"
-             + $" · 축척 {(t.Pin > 0 ? $"고정 1:{t.Pin:F0}" : "자동")}");
+             + $" · 축척 {(t.Pin > 0 ? $"{(t.Kept ? "그린 축척" : "고정")} 1:{t.Pin:F0}" : "자동")}");
         log.AppendLine($"\n[{(t == null ? "횡단도" : "진입도로 횡단도")}] {System.DateTime.Now:yyyy-MM-dd HH:mm:ss}  [DH.Grading {GradingSettings.Version}]");
 
         // ── ① 선형 — 종단도가 만든 것.
@@ -734,7 +734,7 @@ public sealed partial class XsecViewCommand
         double sheetW = SheetCommand.SheetW * sc, sheetH = SheetCommand.SheetH * sc;
         double innerW = SheetCommand.InnerW * sc, innerH = XsecInnerH * sc;
         double cellW = cellWmm * sc, cellH = cellHmm * sc;
-        log.AppendLine($"  ★축척 1:{scale:F0}({(fixedScale ? "도면설정에서 고정" : "자동 — 칸에 맞춤")})"
+        log.AppendLine($"  ★축척 1:{scale:F0}({(fixedScale ? (t != null && t.Kept ? "자동 — 그린 축척 그대로" : "도면설정에서 고정") : "자동 — 칸에 맞춤")})"
                      + $" · 표는 {(tableRight ? "그림 오른쪽" : "그림 아래")}"
                      + $" (필요 가로 1:{mv.W * 1000.0 / graphWmm:F0} · 세로 1:{mv.H * 1000.0 / graphHmm:F0}"
                      + $" · 오른쪽 1:{sRight:F0} vs 아래 1:{sBelow:F0})");
@@ -833,7 +833,9 @@ public sealed partial class XsecViewCommand
                      + (mv.W > fitW || mv.H > fitH
                         ? $"  ⚠넘친다(가로 {mv.W / System.Math.Max(fitW, 1e-9):F2}배 · 세로 {mv.H / System.Math.Max(fitH, 1e-9):F2}배)"
                           + (fixedScale
-                             ? $" — 축척을 1:{scale:F0}으로 <b>고정</b>하셨기 때문이다. 자동이면 1:{autoScale:F0}이 된다."
+                             ? (t != null && t.Kept
+                                ? $" — 그린 축척 1:{scale:F0}을 지켰기 때문이다(다시 고르면 1:{autoScale:F0}). 도면설정 진입도로 횡단도 축척을 고정했다가 자동으로 되돌리면 다시 고른다."
+                                : $" — 축척을 1:{scale:F0}으로 <b>고정</b>하셨기 때문이다. 자동이면 1:{autoScale:F0}이 된다.")
                              : " — 사다리 끝까지 맞는 값이 없다")
                         : mv.W < fitW * WarnFill && mv.H < fitH * WarnFill
                           ? $"  → 칸에 들어가지만 <b>헐겁다</b>(가로 {mv.W / fitW * 100:F0}% · 세로 {mv.H / fitH * 100:F0}%만 씀)"
@@ -914,7 +916,7 @@ public sealed partial class XsecViewCommand
         // ★[v111.5] 진입도로 — 결과 한 줄은 부르는 쪽(RoadXsec)이 명령창에 · 수량 경고는 여기서 그대로
         if (t != null)
         {
-            t.Msg = $"횡단면도 {nView}장(1:{scale:F0}{(fixedScale ? " 고정" : " 자동")}) · 검토선 {slIds.Count}개 · 배치 {cols}×{rows} · 도곽 {nPages}장";
+            t.Msg = $"횡단면도 {nView}장(1:{scale:F0}{(fixedScale ? (t.Kept ? " 그린 축척" : " 고정") : " 자동")}) · 검토선 {slIds.Count}개 · 배치 {cols}×{rows} · 도곽 {nPages}장";
             if (!string.IsNullOrEmpty(qty.Warn)) ed.WriteMessage(qty.Warn);
         }
         else

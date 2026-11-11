@@ -124,7 +124,9 @@ internal static class RoadXsec
         ObjectId aid = s.AlignId;
         string an = s.Name, me = aid.Handle.ToString();
         double pin = RoadDrawingSettings.Read(db).Xsec;
-        log.AppendLine($"[진입도로 횡단도] {an} — 축척 {(pin > 0 ? $"고정 1:{pin:0}" : "자동")}");
+        // ★★[v117.7.1 · JACK 1104 · 1111] 자동이라도 한 번 그린 횡단도는 그린 축척 그대로(계획부지 다시 생성 → 1:150이 1:500으로 바뀌던 것) — 이 도로 설정(축척 칸 · 배치)이 바뀌었을 때만 다시 고름
+        double kept = RoadXsecRules.KeptScale(pin, d.XsecPin, d.XsecScale, d.XsecViews.Count, d.XsecLayout, GradingSettings.XsecLayoutRoad);
+        log.AppendLine($"[진입도로 횡단도] {an} — 축척 {(pin > 0 ? $"고정 1:{pin:0}" : kept > 0 ? $"자동 · 그린 축척 1:{kept:0} 그대로" : "자동")}");
 
         // ① 측점 · 면 · 폭
         List<(double St, string Label)> stations; string gname;
@@ -226,7 +228,7 @@ internal static class RoadXsec
         {
             AlignId = aid, AlignName = an, RoadHandle = me, Stations = stations, Surfs = surfs,
             RoadSurfId = roadSurf, BaseSurfId = s.BaseSurfId, BaseIsPad = baseIsPad, MainSurfIds = mainIds, Width = (w.L, w.R),
-            GroupBase = an + "-횡단", Pin = pin, OldGroup = d.XsecGroup, OldViews = new List<string>(d.XsecViews), OwnAlign = ours,
+            GroupBase = an + "-횡단", Pin = pin > 0 ? pin : kept, Kept = kept > 0, OldGroup = d.XsecGroup, OldViews = new List<string>(d.XsecViews), OwnAlign = ours,
         };
         bool ok = false;
         try { ok = XsecViewCommand.BuildRoad(doc, t, at); }
