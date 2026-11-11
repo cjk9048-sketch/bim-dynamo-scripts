@@ -281,6 +281,13 @@ if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "wprof")
     Console.WriteLine(fails == 0 ? "\n== 전부 통과 ==" : $"\n== 실패 {fails}건 ==");
     return fails == 0 ? 0 : 1;
 }
+// ★[로드맵 F · 선 옹벽 3D 몸통 · 터파기] BLOCKTEST_ONLY=wlbody — 선 옹벽 면 토막 → 구간 옹벽과 같은 재기 · 단면 · 띠 · 몸통(S259 LB)만
+if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "wlbody")
+{
+    WallLineBodyCheck.Run(Check);
+    Console.WriteLine(fails == 0 ? "\n== 전부 통과 ==" : $"\n== 실패 {fails}건 ==");
+    return fails == 0 ? 0 : 1;
+}
 // ★[v117.0] BLOCKTEST_ONLY=wvrepro — 수직 옹벽 오프라인 재현(키트 HLWVD 덤프 · WV_REPRO_DIR · WV_REPRO_TAGS — 전체 목록에는 안 넣음)
 if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "wvrepro") { WallVerticalRepro.Run(Check); return fails == 0 ? 0 : 1; }
 
@@ -467,6 +474,7 @@ StructQtyCheck.Run(Check);      // ★[v117.4 · JACK 1111] S250 SQ — 구조�
 StepPairCheck.Run(Check);       // ★[JACK 1111 «수직부»] S255 VS — 계획선 수직부 짝 잇기(위–위 · 아래–아래 선 · 평지 링이 두 점 지킴 · 면 높이 ±1 mm) · 완전 수직 띄움 · 짝 없음/못 이음 ⚠ 종전대로 · 벽 둘
 StructAxisCheck.Run(Check);     // ★[JACK 1111 «종단선을 구조물 축에 맞춤»] S254 SA — 구조물 주축(최소 넓이 네모) · 축 따라 종단선(부지 경계 + 5 m) · 비스듬 각
 UDitchCheck.Run(Check);         // ★[배수지 U형 측구 1단계] S260 UD — 설정 · 기록 · 부지 대표점 · 강우 CSV · 종단 · 수리 · 3D 덩어리 · 보고서
+WallLineBodyCheck.Run(Check);   // ★[로드맵 F] S259 LB — 선 옹벽(수직 · 다단) 3D 몸통 · 터파기 = 구간 옹벽과 같은 길(바닥 줄 · 단면 · 띠 · 몸통 부피 · 단마다 몸통)
 
 const double W = 0.46, H = 0.2, STEP = 5.0, HW = W / 2;
 const double D = 0.5, FS = D / 2; // 깊이·전면 돌출(벽 중심=링, JACK 0720 Z-파이팅 해소): 절토 +FS(안쪽), 성토 −FS
