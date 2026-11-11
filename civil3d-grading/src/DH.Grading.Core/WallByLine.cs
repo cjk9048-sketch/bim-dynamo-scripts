@@ -69,6 +69,12 @@ public static partial class WallByLine
         /// <summary>★[v117.5 · 키트 wtfill] 다단 2차 수직만 — 세계 좌표 (x, y)에서 P0′ = 원지반이 짓기상 정확한가(소단이 땅 높이에서 잘린 자리 · 바깥 벽 높이 0).
         /// 그 자리 P0 읽기 = 원지반 그대로(합성 삼각망의 근사값 대신) · 두 L′ 끝이 다 그 자리인 칸 = 높이 0 칸(부호 대신 |W − G| ≤ 1 mm). null = v117 그대로(비트 같음).</summary>
         public Func<double, double, bool>? ZeroAt;
+        /// <summary>★[v117.x A · 로드맵 D2 ③] 다단 구간(선 위 호 길이 S0~S1 · 첫 소단 Z1 실제 z · NaN = 그 구간 자동 · NoTier = 그 구간 단 없음).
+        /// null 또는 1개 이하 = 선 전체 한 구간(옛 길 비트 같음).</summary>
+        public List<TierSec>? TierSecs;
+        /// <summary>★[v117.x B · 로드맵 D3 ②] 끝 비탈 — 선 양 끝(벽 끝 꼭대기)에서 원뿔 비탈(1:<see cref="EndRatioC"/> · 성토 <see cref="EndRatioF"/>)로 옛 면까지 · 검토 높이를 넘으면 단 높이마다 소단. 거짓 = 단별 자연 종료(옛 길 비트 같음).</summary>
+        public bool TierEndSlope;
+        public double EndRatioC = 1.0, EndRatioF = 1.5;
         /// <summary>★[로드맵 2-2 · D4 ①] 검토 높이(m · 절토 · 성토) — 도면의 소단 생성 기준 높이(Civil BuildGeom이 구역 제원 <c>BenchHeightOf</c>로 채움 · 기록의 Hc/Hf 아님 — 수직 기록은 0).
         /// 벽이 넘으면 ⚠만(거절 아님 · 구조 안전 판정 아님). NaN = 안 잼.</summary>
         public double ReviewHc = double.NaN, ReviewHf = double.NaN;
@@ -83,6 +89,15 @@ public static partial class WallByLine
     /// <summary>★[v117.0 · JACK 1111 · 계획 `2026-11-11_옹벽추가_수직옹벽.md`] 2 = 수직 옹벽(그은 선에서 옛 사면을 1:s로 두부 자르듯 · <see cref="BuildVertical"/>).</summary>
     /// <summary>★[v117.3 · JACK 1111 «경계 중심 방향으로 소단»] 3 = 부지 다단(수직 옹벽 + 선 안쪽 소단 · <see cref="BuildTiered"/>).</summary>
     public enum WallShape { Out = 0, In = 1, Vertical = 2, Tiered = 3 }
+
+    /// <summary>★[v117.x A] 다단 구간 하나 — 선 위 호 길이 [S0, S1] · 첫 소단 Z1(실제 z · NaN = 자동) · 단 없음(수직만) · 단 수(지은 값 · 제안은 어림).</summary>
+    public sealed class TierSec
+    {
+        public double S0, S1, Z1 = double.NaN; public bool NoTier; public int N;
+        /// <summary>★[조정자 결정 1111] 손으로 친 Z1인가 — 아니면(자동) 다시 짓기마다 지금 면으로 다시 셈(기록엔 쓴 값을 남기되 다시 지을 때 NaN으로 넘김).</summary>
+        public bool Hand;
+        public TierSec Copy() => (TierSec)MemberwiseClone();
+    }
 
     /// <summary>★[v117.0 1단계 · 0단계 M1 뒤] 새 모양의 단 수 n 규칙.
     /// <para><see cref="Strict"/> — 선 어디서도 첫 소단이 원지반 위로 뜨지 않는 가장 높은 기준(절토 · 성토 거울) · 바깥 벽이 어디서든 단높이를 넘으면 거절(JACK 1110 18시).</para>
@@ -234,6 +249,17 @@ public static partial class WallByLine
         public List<List<Point3>> TierRows = new();
         /// <summary>★[v117.4 설치 전 검토 중간 1] 테라스 T 세모(합성 전 · 하네스가 소단 높이를 바로 잰다).</summary>
         internal List<Tri> TierT = new();
+        /// <summary>★[v117.x A] 지은 구간(2개 이상일 때만 · Z1 실제 z) · 구간 경계 자리(L 위 · 미리보기) · 옆벽(구간 경계 1:s 면) 최고.</summary>
+        public List<TierSec> TierSecsUsed = new();
+        public List<(double X, double Y)> TierSecMarks = new();
+        public double TierSideHMax;
+        /// <summary>★[v117.x A] 한 구간이 안 맞을 때(바깥 단 끊김) 구간 나눔 제안(2개 이상 · Z1 실제 z · N = 어림) · 한 줄씩 글 · 경계 자리 · 제안 뒤 남는 끊김(어림).</summary>
+        public List<TierSec>? TierPropose;
+        public List<string> TierProposeText = new();
+        public List<(double X, double Y)> TierProposeMarks = new();
+        public int TierProposeBreaks;
+        /// <summary>★[v117.x B] 끝 비탈 — 썼는가 · 판정(GAP/CONTACT) · 한 줄 · 끝마다 비탈 높이 · 소단 수.</summary>
+        public bool TierEnd; public string TierEndText = "";
 
         // ══ ★[로드맵 2-2 · 2-3 — 보고만] 수직(Shape 2) · 다단(Shape 3 = 2차 수직의 것) — 측점 높이표 · 분류 · 검토 높이 · 기초 재기(기하 · 기록 · 자가검증 줄은 안 바뀜) ══
         public WallProfile.Result? Profile;
@@ -2488,7 +2514,7 @@ public static partial class WallByLine
     public static (BoundaryCut.Result Cut, Built? Built) Make(IReadOnlyList<Point3> src, IReadOnlyList<Point3> bd, IReadOnlyList<Point3> plan,
         IEnumerable<(string Name, IReadOnlyList<Point3> Ring)>? blockers, double hc, double tc, double hf, double tf, double slopeW, double faceRun, double grid, double reach,
         Func<double, double, double?> ground, Func<double, double, double?> p0, IReadOnlyList<Tri>? p0Tris, IReadOnlyList<Tri>? groundTris = null, WallShape shape = WallShape.Out,
-        double tierZ1 = double.NaN)
+        double tierZ1 = double.NaN, List<TierSec>? tierSecs = null, bool tierEnd = false, double endRatio = 1.5)
     {
         var bl = blockers?.ToList();
         var cut = BoundaryCut.Classify(src, bd, plan, bl);
@@ -2497,6 +2523,7 @@ public static partial class WallByLine
         {
             Line = cut.Line, Bd = bd, NewRing = cut.NewRing, CutRing = cut.CutRing, Plan = plan, Hc = hc, Tc = tc, Hf = hf, Tf = tf, SlopeW = slopeW, FaceRun = faceRun, Grid = grid, Reach = reach,
             Ground = ground, P0 = p0, P0Tris = p0Tris, GroundTris = groundTris, Blockers = bl, Shape = shape, TierZ1 = tierZ1,
+            TierSecs = tierSecs, TierEndSlope = tierEnd, EndRatioC = endRatio, EndRatioF = endRatio,
         });
         return (cut, b);
     }

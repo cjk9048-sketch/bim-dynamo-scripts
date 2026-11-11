@@ -71,6 +71,13 @@ public sealed class WallRec
     /// <summary>★[v117.3 · 판 10 · 계획 `2026-11-11_부지_다단옹벽.md` 4절] Kind 2 · 모양 3(다단) — 단높이 H · 소단 폭 b · 첫 소단 Z1(실제 z — 자동이어도 쓴 값 · 다시 지어도 같은 높이).
     /// 판 10은 모양 3인 칸이 하나라도 있을 때만 쓴다(없으면 판 9 이하 바이트 그대로).</summary>
     public double TierH = double.NaN, TierB = double.NaN, TierZ1 = double.NaN;
+    /// <summary>★[v117.x A · B · 판 11] Kind 2 · 모양 3 — 구간(2개 이상 · Z1 실제 z — 자동이어도 쓴 값 · 단 없음) · 끝 비탈(켬).
+    /// 판 11은 구간이 2개 이상이거나 끝 비탈이 켜진 모양 3 칸이 하나라도 있을 때만 쓴다(없으면 판 10 이하 바이트 그대로).</summary>
+    public List<WallByLine.TierSec> TierSecs = new();
+    public bool TierEnd;
+    /// <summary>★[조정자 결정 1111 · 판 11] 첫 소단 Z1이 자동(손으로 안 침)이면 참 — 다시 짓기마다 지금 면으로 다시 셈(TierZ1 = 지난 짓기 값 · 표시용).
+    /// 판 10 이하 옛 기록 = 거짓(손 값으로 봄 — 이미 지은 옹벽 결과 그대로).</summary>
+    public bool TierZ1Auto;
     /// <summary>Kind 2 — 선 바깥 점유 최대(지표면 · m)와 그 자리(계획 1-7 · 늘 보인다).</summary>
     public double FootMax, FootAtX, FootAtY;
     /// <summary>Kind 2 — 바꿀 자리 바깥 고리(성토 · 절토) — 합성이 가상옹벽 삼각형을 이 고리로 성토 · 절토에 나눈다.</summary>
@@ -126,7 +133,7 @@ public sealed class FrozenWall
 public static class WallList
 {
     public const string Sign = "DH_WALLS";
-    public const int Version = 10;
+    public const int Version = 11;
 
     /// <summary>(종류, 값) — 'S' 글 · 'I' 정수 · 'D' 실수. Civil이 DxfCode.Text · Int32 · Real로 옮긴다.
     /// <para>★[v103.1.14] 판 3 칸(ReplaceNo2 · KeepNo)은 <b>이어 짓기가 걸려 있을 때만</b> 쓴다 — 둘 다 0인 목록은 판 2 그대로(바이트까지 같음 · 옛 판 애드인도 읽는다).</para>
@@ -142,7 +149,9 @@ public static class WallList
         // ★[v117.0 · JACK 1111] 판 9 = 모양(Shape ≠ 0 — 수직 옹벽)인 종류 2가 하나라도 있을 때만 — 판 8 칸 뒤에 종류 2마다 (모양). 없으면 판 8 이하 바이트 그대로
         // ★[v117.3] 판 10 = 모양 3(다단)인 종류 2가 하나라도 있을 때만 — 판 9 칸 뒤에 종류 2마다 (H, b, Z1). 없으면 판 9 이하 바이트 그대로
         if (walls.Any(w => w.Kind == 2 && w.Shape != 0 && w.Shape != 2 && w.Shape != 3)) throw new ArgumentException("옹벽 목록에 이 애드인이 쓰지 않는 모양이 있다(0 · 2 · 3만)");
-        int ver = walls.Any(w => w.Kind == 2 && w.Shape == 3) ? 10
+        // ★[v117.x A · B] 판 11 = 모양 3 칸에 구간(2개 이상) · 끝 비탈이 하나라도 있을 때만 — 판 10 칸 뒤에 종류 2마다 (끝 비탈, 구간 수, 구간마다 S0 · S1 · Z1 · 단 없음 · N). 없으면 판 10 이하 바이트 그대로
+        int ver = walls.Any(w => w.Kind == 2 && w.Shape == 3 && (w.TierSecs.Count >= 2 || w.TierEnd || w.TierZ1Auto)) ? 11
+                : walls.Any(w => w.Kind == 2 && w.Shape == 3) ? 10
                 : walls.Any(w => w.Kind == 2 && w.Shape != 0) ? 9
                 : walls.Any(w => w.Kind == 2 && w.TopStep) ? 8
                 : walls.Any(w => w.Kind != 0) || head.Frozen.Any(f => f.Kind != 0) ? 7
@@ -224,6 +233,15 @@ public static class WallList
         if (ver >= 10)
             // ★[v117.4 · 설치 전 검토] 모양 3이 아닌 칸은 0(Xrecord에 NaN 실수를 넣지 않는다) — 읽을 때 모양 ≠ 3이면 NaN으로 되돌린다
             foreach (var w in walls) { if (w.Kind != 2) continue; bool t = w.Shape == 3; v.Add(('D', t ? w.TierH : 0.0)); v.Add(('D', t ? w.TierB : 0.0)); v.Add(('D', t ? w.TierZ1 : 0.0)); }
+        if (ver >= 11)
+            foreach (var w in walls)
+            {
+                if (w.Kind != 2) continue;
+                bool t = w.Shape == 3;
+                var ss = t && w.TierSecs.Count >= 2 ? w.TierSecs : new List<WallByLine.TierSec>();
+                v.Add(('I', (t && w.TierEnd ? 1 : 0) | (t && w.TierZ1Auto ? 2 : 0))); v.Add(('I', ss.Count));
+                foreach (var q in ss) { v.Add(('D', q.S0)); v.Add(('D', q.S1)); v.Add(('D', q.NoTier || double.IsNaN(q.Z1) ? 0.0 : q.Z1)); v.Add(('I', (q.NoTier ? 1 : 0) | (q.Hand ? 2 : 0))); v.Add(('I', q.N)); }
+            }
         return v;
     }
 
@@ -349,6 +367,21 @@ public static class WallList
                     if (w.Kind != 2) continue;
                     w.TierH = D(); w.TierB = D(); w.TierZ1 = D();
                     if (w.Shape != 3) w.TierH = w.TierB = w.TierZ1 = double.NaN;   // ★[v117.4] 0으로 쓴 칸(또는 d3d0a72가 쓴 NaN) → NaN
+                }
+            if (ver >= 11)
+                foreach (var w in walls)
+                {
+                    if (w.Kind != 2) continue;
+                    int fl = I(); w.TierEnd = (fl & 1) != 0; w.TierZ1Auto = (fl & 2) != 0;
+                    int ns = I(); if (ns < 0 || ns > 10_000) throw new FormatException($"옹벽 {w.No} 구간 수 {ns}");
+                    for (int q = 0; q < ns; q++)
+                    {
+                        var ts = new WallByLine.TierSec { S0 = D(), S1 = D(), Z1 = D() };
+                        int sf = I(); ts.NoTier = (sf & 1) != 0; ts.Hand = (sf & 2) != 0; ts.N = I();
+                        if (ts.NoTier) ts.Z1 = double.NaN;
+                        w.TierSecs.Add(ts);
+                    }
+                    if (w.Shape != 3) { w.TierEnd = false; w.TierZ1Auto = false; w.TierSecs.Clear(); }
                 }
             if (i != v.Count) { why = $"옹벽 목록 끝에 값 {v.Count - i}개가 남았다"; return false; }
             // ★[v114.0 · 설치 전 검토 6] 굳은 종류 1은 지우지 않는다 — 앞 구역 면에 이미 든 v113 옹벽이라 다시 지을 수 없다.
