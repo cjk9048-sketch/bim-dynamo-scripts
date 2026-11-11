@@ -27,7 +27,9 @@ public sealed class SheetSettingsCommand
         int lay0 = GradingSettings.XsecLayout, layR0 = GradingSettings.XsecLayoutRoad;
         var (cm0, cM0) = ContourInterval.Read(doc.Database);
         // ★[v113.1] 진입도로 종단 H · V — 판 2 기록이 없으면(옛 도면) 지금 그리는 축척(옛 규칙)을 고정 H로 · V = H와 같게(그대로 [저장]하면 같은 그림)
-        var rs = RoadSheets.Setting(doc.Database, "");
+        //   ★[설치 전 검토 5] 진입도로가 열려 있으면 그 도로가 그린 H(옛 설정은 부지 축척을 안 따름 — 그린 H 그대로 다시 그림)
+        double drawnH = RoadSession.Of(doc) is RoadSession road ? road.Design.SheetScale : 0;
+        var rs = RoadSheets.Setting(doc.Database, "", drawnH);
         double rh0 = rs.Plan.PinH, rv0 = rs.V2 ? rs.Plan.PinV : DH.Grading.Core.ProfileScaleFit.SameAsH;
         var dlg = new SheetDialog("저장", rp0, rx0, cm0, cM0, rh0, rv0);
         AcadApp.ShowModalWindow(dlg);

@@ -182,8 +182,7 @@ internal sealed class UDitchDialog : Window
         _rev.Click += (_, __) =>
         {
             if (Cur is not UDitch.Ditch d) return;
-            d.Pts.Reverse();
-            (d.StartInvert, d.EndInvert) = (d.EndInvert, d.StartInvert);
+            UDitch.Reverse(d);   // ★[설치 전 검토 1] 방향을 기록에 기억 — [모델 생성]이 원 선을 다시 읽어도 유지
             UDitch.ApplyAuto(d, _v.S);
             Dirty = true;
             LoadDitch();

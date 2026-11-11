@@ -340,7 +340,7 @@ internal static class RoadSheets
                 try { if (Autodesk.AutoCAD.ApplicationServices.Core.Application.DocumentManager.GetDocument(db) is { } doc && RoadSession.Of(doc) is RoadSession s && s.AlignId == aid) s.Design.SheetAnno = a1; } catch { }
                 log.AppendLine($"  진입도로 종단도 꼴 그대로 — {name} 1:{h:0} · {msg}");
             }
-            catch (Exception ex) { log.AppendLine($"  ⚠진입도로 종단도 꼴 지키기 실패 — {name}: {ex.Message}"); }
+            catch (Exception ex) { log.AppendLine($"  ⚠진입도로 종단도 꼴 지키기 실패 — {name}: {ex.Message}(SheetAnno 그대로 → 진입도로 창 «축척이 바뀌었습니다»)"); }
         }
     }
 
