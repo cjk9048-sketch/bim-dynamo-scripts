@@ -472,7 +472,7 @@ public sealed class ProfileCommand
         else
         {
             BusyPopup.Pause();
-            routeId = DrawRoute(db, ed, out nPts, out routeLen);
+            routeId = DrawRoute(db, ed, out nPts, out routeLen, log);
             if (routeId.IsNull) { LoseCarry(); return false; }        // 취소
             BusyPopup.Show(BusyText);
         }
@@ -485,6 +485,8 @@ public sealed class ProfileCommand
         }
         log.AppendLine($"노선 직접 그리기: 점 {nPts}개 · 길이 {routeLen:F1}m (레이어 {LayerRoute}, 노랑)");
         ed.WriteMessage($"\n[종단도] 노선 {routeLen:F1}m · 점 {nPts}개");
+        // ★[JACK 1111] 노선이 구조물을 비스듬히 지나면 한 줄(막지 않음) — 횡단은 노선에 직각이라 벽이 두껍게 보인다
+        foreach (var w in ProfileStructAxis.Oblique(db, routeId, log)) Say(ed, "\n[종단도] ⚠" + w);
 
         // ── ④ 선형 ───────────────────────────────────────────────────────────
         //   선형 생성 API는 원본 폴리선을 지워버린다 → **사본**을 만들어 그것을 소모시키고
@@ -2772,14 +2774,23 @@ public sealed class ProfileCommand
     /// 덤으로 <b>그 폴리선이 곧 결과물</b>이라 마지막에 다시 만들 필요가 없다(취소하면 지운다).
     /// 반환 <see cref="ObjectId.Null"/> = 취소.
     /// </summary>
-    private static ObjectId DrawRoute(Database db, Editor ed, out int nPts, out double len)
+    private static ObjectId DrawRoute(Database db, Editor ed, out int nPts, out double len, System.Text.StringBuilder log)
     {
         nPts = 0; len = 0;
         ObjectId layerId;
         using (var tr = db.TransactionManager.StartTransaction())
         { layerId = SectionCommand.EnsureLayer(db, tr, LayerRoute, YellowIndex); tr.Commit(); }
 
-        var first = ed.GetPoint("\n[종단도] 노선 시작점 클릭 (Esc=취소): ");
+        // ★[JACK 1111 «종단선을 구조물 축에 맞춤»] 불러온 구조물이 있으면 [구조물 축(T)] — 구조물 주축 따라 부지를 가로지르는 두 점 노선
+        bool hasStruct = StructImport.Any(db);
+        var fo = new PromptPointOptions(hasStruct ? "\n[종단도] 노선 시작점 클릭 (Esc=취소)" : "\n[종단도] 노선 시작점 클릭 (Esc=취소): ");
+        if (hasStruct) fo.Keywords.Add("T", "T", "구조물 축(T)");
+        var first = ed.GetPoint(fo);
+        if (first.Status == PromptStatus.Keyword)
+        {
+            var axPts = ProfileStructAxis.Pick(db, ed, log);
+            return axPts == null ? ObjectId.Null : MakeRoutePolyline(db, axPts, out nPts, out len);
+        }
         if (first.Status != PromptStatus.OK) return ObjectId.Null;
         // ★[검토단 0807] 클릭 좌표는 **사용자 좌표계(UCS)** 값이고 폴리선 정점은 도면 좌표계(WCS)다.
         //   종전엔 종단도 놓을 자리만 변환하고 노선 점은 변환 없이 썼다 — UCS를 돌려 쓰는 도면에서는
