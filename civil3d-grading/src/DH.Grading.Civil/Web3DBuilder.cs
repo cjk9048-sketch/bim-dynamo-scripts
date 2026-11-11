@@ -429,6 +429,10 @@ internal static class Web3DBuilder
                 structHead = ss.Select(s => (object)new Dictionary<string, object> { ["name"] = s.Name, ["pos"] = sc.F32(s.Pos), ["idx"] = sc.U32(s.Idx) }).ToList();
         }
         catch (System.Exception sx) { c.Warn.Add("구조물을 3D에 못 넣었습니다 — " + sx.Message); log.AppendLine("  구조물: 실패 — " + sx); }
+        // ④h ★[배수지 U형 측구 · JACK 1111 «3D 보기에도 반영»] U형 측구 — 측구마다 메시 · 없으면 열쇠를 안 넣는다(옛 장면 바이트 그대로)
+        List<object>? udHead = null;
+        try { udHead = UDitchStore.Web3DHead(db, ox, oy, sc, log); }
+        catch (System.Exception ux) { c.Warn.Add("U형 측구를 3D에 못 넣었습니다 — " + ux.Message); log.AppendLine("  U형 측구: 실패 — " + ux); }
         Lap("빗물 · 지적 · 측점", skipSat ? null : "건물 받는 중");
 
         // ④c ★★[v111.7 · JACK 1102 «3D 보기에 건물 · 층수로 높이 · 켜고 끄기»] 건물 — VWorld 건물정보
@@ -589,6 +593,7 @@ internal static class Web3DBuilder
         if (roadAlignHead != null) H["roadAlign"] = roadAlignHead;
         if (forestHead != null) H["forest"] = forestHead;   // ★[v115] 수목(꺼짐이면 열쇠 없음)
         if (structHead != null) H["structs"] = structHead;   // ★[JACK 1111] 불러온 구조물이 있을 때만
+        if (udHead != null) H["uditch"] = udHead;   // ★[배수지 U형 측구] 측구 기록이 있을 때만
         if (c.Ground != null && c.GroundOfName.Length > 0 && c.GroundOfName != c.GroundName)
             c.Warn.Add($"원지반이 둘입니다 — 토공량 · 절성토 색은 «{c.GroundName}», 옹벽 변환 자리 · 단면은 «{c.GroundOfName}»");
         H["warn"] = c.Warn.Select(NoPath).Distinct().ToList();

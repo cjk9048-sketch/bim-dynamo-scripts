@@ -52,6 +52,7 @@ using AcadApp = Autodesk.AutoCAD.ApplicationServices.Application;
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.ProfileFlipCommand))]        // ★[v113.1] DHPROFILEREV · DHROADREV(종단 시점 ↔ 종점 바꾸기)
 [assembly: CommandClass(typeof(DH.Grading.Civil.UndoGuard))]                          // ★[v114.2] DHUNDOCLR(명령 뒤 되돌리기 기록 비움 — Civil 결함 회피)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.StructCommand))]             // ★[v115 · JACK 1105] DHSTRUCT · DHSTRUCTPTS(v116.9 좌표계 내보내기) · DHSTRUCTOFF(Revit 구조물)
+[assembly: CommandClass(typeof(DH.Grading.Civil.Commands.UDitchCommand))]             // ★[배수지 U형 측구 1단계] DHUDITCH(창) · -DHUDITCH(명령줄)
 
 namespace DH.Grading.Civil;
 
@@ -909,6 +910,15 @@ public sealed class RibbonApp : IExtensionApplication
             //     도킹창의 단추도 결국 그 명령을 부른다. 리본에서만 뺀다.
             pGrade.Items.Add(splitView);
             pGrade.Items.Add(Spacer());
+            // ★★[배수지 U형 측구 1단계] 부지 배수 — 강우 · 측구 선 · 규격 · 수리검토 · 3D 모델
+            var btnUDitch = MakeButton("U형\n측구", "DHUDITCH ", "측구 선을 따라 U형 측구 — 강우 · 규격 · 바닥고 · 수리검토 · 3D 모델", "U형측구");
+            btnUDitch.ToolTip = MakeTip("U형 측구 (DHUDITCH)",
+                "**U형 측구 창**이 열립니다.\n" +
+                "· 강우(수동 · CSV) · 측구 선(고르기 · 그리기) · 규격 · 바닥고 · 집수면적\n" +
+                "· [모델 생성] = 솔리드(레이어 DH-U형측구) · 보고서(도면 옆 _U형측구.txt)\n" +
+                "· 수리검토는 모델과 따로 — 부족 = 빨강 · 주의 = 노랑", null);
+            pGrade.Items.Add(btnUDitch);
+            pGrade.Items.Add(Spacer());
 
             // ★★[v111.6 · JACK 1102] [진입도로] = 노선 고르기 · 창 · 종단도 · 횡단도
             tab.Panels.Add(new RibbonPanel { Source = pRoad });
@@ -1341,6 +1351,14 @@ public sealed class RibbonApp : IExtensionApplication
                         var cut = P(0xd8, 0x5a, 0x4a);
                         cut.DashStyle = new DashStyle(new double[] { 2.2, 1.8 }, 0);
                         dc.DrawRectangle(null, cut, new Rect(8, 8, 15, 15));
+                        break;
+
+                    case "U형측구": // ★[배수지 U형 측구] 지반선 아래 U자 콘크리트(회색) + 물(파랑)
+                        dc.DrawLine(P(0x8d, 0x6e, 0x48), new Point(3, 10), new Point(29, 10));   // 지반선
+                        var ug = P(0x9a, 0xa8, 0xb8);
+                        dc.DrawLine(ug, new Point(8, 10), new Point(8, 26)); dc.DrawLine(ug, new Point(8, 26), new Point(24, 26)); dc.DrawLine(ug, new Point(24, 26), new Point(24, 10));
+                        dc.DrawLine(ug, new Point(12, 10), new Point(12, 22)); dc.DrawLine(ug, new Point(12, 22), new Point(20, 22)); dc.DrawLine(ug, new Point(20, 22), new Point(20, 10));
+                        dc.DrawLine(P(0x3f, 0x8f, 0xd8), new Point(13.5, 18), new Point(18.5, 18));   // 물
                         break;
 
                     case "구조물": // ★[v115] 땅 위아래로 걸친 상자(회색) + 빈칸 — 자른 구조물
