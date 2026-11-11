@@ -171,7 +171,10 @@ public sealed partial class StructCommand
             }
             catch { rel = ""; }
             if (xb.XrefStatus != XrefStatus.Resolved) { tr.Abort(); try { db.DetachXref(btrId); } catch { } Done(ed, log, $"⚠xref를 못 풀었습니다({xb.XrefStatus})"); return; }
+            bool xrefLayNew = !((LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead)).Has(StructImport.LayXref);
             var lay = SectionCommand.EnsureLayer(db, tr, StructImport.LayXref, 8);
+            // ★[v117.3 · JACK 1111 «외부참조가 불러져서 도면이 지저분»] 원본 xref(세모 메시) 레이어는 처음 만들 때 꺼 둠 — 자르기 · 수량은 xref 블록 정의를 읽어 그대로 · 켜면 보임(이미 있는 레이어는 안 건드림)
+            if (xrefLayNew) { try { ((LayerTableRecord)tr.GetObject(lay, OpenMode.ForWrite)).IsOff = true; } catch { } }
             var ms = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForWrite);
             var br = new BlockReference(Point3d.Origin, btrId) { ScaleFactors = new Scale3d(f) };
             br.SetDatabaseDefaults(db); br.LayerId = lay;

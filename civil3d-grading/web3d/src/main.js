@@ -107,14 +107,13 @@ async function main() {
   section = new Section(view, L, head, ui);
   picker.clip = () => (section.on ? section.plane : null);
   section.onEnd = () => { if (dock.kind === 'cut') dock.close(); };
-  const modeBtns = { info: 'modeInfo', measure: 'modeMeasure' };
+  // ★[v117.3 · JACK 1111 «정보 단추는 뭔지 모르겠어 · 눌러도 바뀌는 게 없어»] [정보] 단추 없앰 — 기본(재기 꺼짐) = 누르면 정보 · [재기]는 켜고 끄는 단추 하나
   const setMode = (m) => {
     picker.setMode(m);
-    for (const [k, id] of Object.entries(modeBtns)) document.getElementById(id).classList.toggle('on', k === m);
+    document.getElementById('modeMeasure').classList.toggle('on', m === 'measure');
     ui.hideMeasure();
   };
-  document.getElementById('modeInfo').onclick = () => setMode('info');
-  document.getElementById('modeMeasure').onclick = () => setMode('measure');
+  document.getElementById('modeMeasure').onclick = () => setMode(picker.mode === 'measure' ? 'info' : 'measure');
   document.getElementById('measX').onclick = () => { picker.endMeasure(); };
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') { if (picker.mode === 'measure' && picker.pts.length) picker.endMeasure(); else { setMode('info'); ui.hideInfo(); picker.clearMarks(); view.request(); } }
