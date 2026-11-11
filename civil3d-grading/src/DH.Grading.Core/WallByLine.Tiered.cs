@@ -634,6 +634,33 @@ public static partial class WallByLine
         foreach (var r in rows) foreach (var p in r.Pieces) tLines.Add(p.Select(c => Pz(c, r.Z)).ToList());
         foreach (var (a, za, b, zb) in rungLines) tLines.Add(new List<Point3> { Pz(a, za), Pz(b, zb) });
         foreach (var (_, v) in crossLines) tLines.Add(v.Select(q => Pz(q.C, q.Z)).ToList());
+        // ★[계측 · 키트 wmig «다듬기 못 함 — 못 푼 쌍 1»] T 선 꼭짓점끼리 0.1 mm(네모 · Civil 합침) 안 쌍 — 갈래(R 고리 · W 줄 · U 사다리 · X 옆벽 선)와 자리
+        {
+            int nRows = rows.Sum(r => r.Pieces.Count);
+            string TgT(int li) => li == 0 ? "R" : li <= nRows ? "W" : li <= nRows + rungLines.Count ? "U" : "X";
+            var cellT = new Dictionary<(long, long), List<(double X, double Y, string T)>>();
+            var seenT = new HashSet<(double, double)>();
+            for (int li = 0; li < tLines.Count; li++)
+                foreach (var q in tLines[li])
+                {
+                    if (!seenT.Add((q.X, q.Y))) continue;
+                    var k = ((long)Math.Floor((q.X - ox) / CivilSafeMesh.Gap), (long)Math.Floor((q.Y - oy) / CivilSafeMesh.Gap));
+                    if (!cellT.TryGetValue(k, out var l)) cellT[k] = l = new();
+                    l.Add((q.X, q.Y, TgT(li)));
+                }
+            var pairT = new List<string>(); int pairTN = 0;
+            foreach (var (k, l) in cellT)
+                foreach (var p in l)
+                    for (long a = -1; a <= 1; a++) for (long b = -1; b <= 1; b++)
+                            if (cellT.TryGetValue((k.Item1 + a, k.Item2 + b), out var l2))
+                                foreach (var q in l2)
+                                    if ((q.X, q.Y).CompareTo((p.X, p.Y)) > 0 && Math.Max(Math.Abs(q.X - p.X), Math.Abs(q.Y - p.Y)) < CivilSafeMesh.Gap)
+                                    {
+                                        pairTN++;
+                                        if (pairT.Count < 6) pairT.Add(string.Format(ci, "{0}({1:F4}, {2:F4})–{3}({4:F4}, {5:F4}) {6:F1} µm", p.T, p.X, p.Y, q.T, q.X, q.Y, Math.Sqrt((q.X - p.X) * (q.X - p.X) + (q.Y - p.Y) * (q.Y - p.Y)) * 1e6));
+                                    }
+            if (pairTN > 0) log.Append(string.Format(ci, "  [다단] T 선 0.1 mm 안 쌍 {0} — {1}\n", pairTN, string.Join(" · ", pairT)));
+        }
         var tAll = MeshLines(tLines, ox, oy);
         var prepZt = PreparedGeometryFactory.Prepare(zt);
         var tT = new List<Tri>(); double tArea = 0;
@@ -720,6 +747,25 @@ public static partial class WallByLine
         var pieces = new List<(List<Point3> P, Tri Src)>();
         var prepBd = PreparedGeometryFactory.Prepare(bdAll);
         int clipMiss = 0, clipped = 0, dropSide = 0, dropBd = 0, dropBad = 0;
+        // ★[바늘 0 · 하네스 S248 t8(큰 좌표) 잰 것: 바늘 높이 1.4e-11 m · 꼭짓점 = L′ 꼭짓점 · L′ 위 자른 점 · MeshLines 교점] L′ 위 자른 점이 L′ 꼭짓점이 아니면(0.25 mm 밖)
+        //   그 점은 소단 자리 세모 변에만 있고 L′을 지나는 다른 선(2차 수직 부분 고리 · 소단 자리 고리)에는 없다 — 세계 좌표로 옮기며 L′ 변에서 부동소수만큼(큰 좌표 ~1e-11 m) 떨어져
+        //   MeshLines가 거기 마디를 못 짓고 L′ 변 · 두 자른 변이 0 높이 바늘 세모를 만들었다. 그 점을 L′ 토막(qL[i] → qL[i+1])마다 모아 ⑫에서 L′을 지나는 선마다 같은 점으로 끼운다
+        var qIns = new Dictionary<int, List<(double T, Point3 P)>>();
+        void AddQIns(Coordinate v, Point3 p3)
+        {
+            int si = -1; double sd = 1e-6, st = 0;
+            for (int i = 0; i + 1 < qn; i++)
+            {
+                var a0 = qL[i]; double ex = qL[i + 1].X - a0.X, ey = qL[i + 1].Y - a0.Y, l2 = ex * ex + ey * ey;
+                if (l2 < 1e-24) continue;
+                double t = Math.Clamp(((v.X - a0.X) * ex + (v.Y - a0.Y) * ey) / l2, 0, 1);
+                double dd = Math.Sqrt((v.X - a0.X - ex * t) * (v.X - a0.X - ex * t) + (v.Y - a0.Y - ey * t) * (v.Y - a0.Y - ey * t));
+                if (dd < sd) { sd = dd; si = i; st = t; }
+            }
+            if (si < 0 || st <= 0 || st >= 1) return;
+            if (!qIns.TryGetValue(si, out var l)) qIns[si] = l = new();
+            if (!l.Any(q => q.P.X == p3.X && q.P.Y == p3.Y)) l.Add((st, p3));
+        }
         // ★[v117.x B] 끝 비탈이 면을 바꿨으면 바꿀 자리 = 다단 구역 ∪ 끝 비탈 자리(마지막 P0″ 세모 · 무게중심으로 — 두 테두리 모두 세모 변)
         var zoneTris = comp.Zone;
         if (endQ.Count > 0)
@@ -758,7 +804,7 @@ public static partial class WallByLine
                 var o = new List<Point3>();
                 foreach (var v in f)
                 {
-                    Coordinate w = v; double z;
+                    Coordinate w = v; double z; bool onQ = false;
                     bool corner = v.Equals2D(a) || v.Equals2D(b) || v.Equals2D(c);
                     if (qZ.TryGetValue((v.X, v.Y), out double zq)) z = zq;
                     else if (!corner)
@@ -766,10 +812,11 @@ public static partial class WallByLine
                         int bi = -1; double bd = MinSp;
                         foreach (int i in qTree.Query(new Envelope(v.X - MinSp, v.X + MinSp, v.Y - MinSp, v.Y + MinSp))) { double dd = qL[i].Distance(v); if (dd < bd) { bd = dd; bi = i; } }
                         if (bi >= 0) { w = qL[bi]; z = qW[bi].Z; }
-                        else { z = ZT(v); if (qCore.Distance(gf.CreatePoint(v)) < 1e-6) clipMiss++; }
+                        else { z = ZT(v); if (qCore.Distance(gf.CreatePoint(v)) < 1e-6) { clipMiss++; onQ = true; } }
                     }
                     else z = ZT(v);
                     var p3 = new Point3(w.X + ox, w.Y + oy, z);
+                    if (onQ) AddQIns(w, p3);
                     if (o.Count == 0 || o[^1].X != p3.X || o[^1].Y != p3.Y) o.Add(p3);
                 }
                 while (o.Count > 1 && o[0].X == o[^1].X && o[0].Y == o[^1].Y) o.RemoveAt(o.Count - 1);
@@ -889,6 +936,26 @@ public static partial class WallByLine
         var lines = new List<List<Point3>> { new List<Point3>(polyZ) { polyZ[0] } };
         foreach (var z in R.ZoneC.Concat(R.ZoneF)) lines.Add(new List<Point3>(z) { z[0] });
         lines.AddRange(b2.Lines.Skip(1 + b2.ZoneC.Count + b2.ZoneF.Count));
+        int nLinesB2 = lines.Count;   // 계측 — 이 앞 = 둘레 · 바꿀 자리 고리 · 2차 수직 선 / 이 뒤 = 소단 자리 세모 변
+        // ★[바늘 0] L′ 위 자른 점(⑩ qIns)을 L′ 이웃 꼭짓점 쌍(qW[i] → qW[i+1] · 거꾸로도)을 지나는 선마다 끼운다 — 세모 변과 같은 점(비트 같음 · 높이 = 그 세모 평면)
+        int qInsN = 0;
+        if (qIns.Count > 0)
+        {
+            var qIdx = new Dictionary<(double, double), int>();
+            for (int i = 0; i < qn; i++) qIdx.TryAdd((qW[i].X, qW[i].Y), i);
+            foreach (var l in qIns.Values) l.Sort((p, q) => p.T.CompareTo(q.T));
+            for (int li = 0; li < lines.Count; li++)
+            {
+                var l = lines[li]; var o = new List<Point3>(l.Count) { l[0] }; bool got = false;
+                for (int i = 0; i + 1 < l.Count; i++)
+                {
+                    if (qIdx.TryGetValue((l[i].X, l[i].Y), out int ia) && qIdx.TryGetValue((l[i + 1].X, l[i + 1].Y), out int ib) && Math.Abs(ia - ib) == 1 && qIns.TryGetValue(Math.Min(ia, ib), out var ins))
+                        foreach (var (_, p) in ia < ib ? ins : Enumerable.Reverse(ins)) { if (o[^1].X != p.X || o[^1].Y != p.Y) { o.Add(p); qInsN++; got = true; } }
+                    o.Add(l[i + 1]);
+                }
+                if (got) lines[li] = o;
+            }
+        }
         // 소단 자리 세모 변 — 같은 변 하나 · 이어 긴 선으로(같은 꼭짓점을 두 번 안 지나는 길)
         {
             var adj = new Dictionary<(double, double), List<(double, double)>>();
@@ -1071,6 +1138,35 @@ public static partial class WallByLine
                             foreach (var q in l) if (!(q.X == p.Item1 && q.Y == p.Item2) && Math.Max(Math.Abs(q.X - p.Item1), Math.Abs(q.Y - p.Item2)) < CivilSafeMesh.Gap && (q.X, q.Y).CompareTo(p) > 0) R.PairsUnder01++;
             }
             var seen = new HashSet<((double, double), (double, double))>();
+            // ★[계측 · 키트 wtcut 바늘 3] 나쁜 세모(바늘 · 짧은 변)마다 자리 · 높이 · 꼭짓점이 든 선 갈래(P 둘레 · Z 바꿀 자리 고리 · V 2차 수직 선 · E 소단 자리 세모 변 · q L′ 위)
+            //   꼭짓점 찾기는 0.1 µm 칸(MeshLines가 지역 좌표를 거쳐 돌려준 세계 좌표는 반올림만큼 다를 수 있다) · 세 꼭짓점이 한 소단 자리 조각에 다 있으면 «조각»(합성 세모 · 자름에서 온 것)
+            (long, long) TK(double x, double y) => ((long)Math.Round((x - ox) * 1e7), (long)Math.Round((y - oy) * 1e7));
+            var tagOf = new Dictionary<(long, long), string>();
+            for (int li = 0; li < lines.Count; li++)
+            {
+                string tg = li == 0 ? "P" : li <= R.ZoneC.Count + R.ZoneF.Count ? "Z" : li < nLinesB2 ? "V" : "E";
+                foreach (var q in lines[li]) { var k = TK(q.X, q.Y); tagOf[k] = tagOf.TryGetValue(k, out var o) ? (o.Contains(tg) ? o : o + tg) : tg; }
+            }
+            var pieceOf = new Dictionary<(long, long), List<int>>();
+            for (int pi = 0; pi < pieces.Count; pi++) foreach (var q in pieces[pi].P) { var k = TK(q.X, q.Y); if (!pieceOf.TryGetValue(k, out var l)) pieceOf[k] = l = new(); l.Add(pi); }
+            bool OnePiece(Tri t) => pieceOf.TryGetValue(TK(t.A.X, t.A.Y), out var la) && pieceOf.TryGetValue(TK(t.B.X, t.B.Y), out var lb) && pieceOf.TryGetValue(TK(t.C.X, t.C.Y), out var lc) && la.Intersect(lb).Intersect(lc).Any();
+            // 선 꼭짓점이 아니면(MeshLines 교점) 1 µm 안을 지나는 선 갈래를 소문자로
+            string Tag(Point3 q)
+            {
+                string on = qCore.Distance(gf.CreatePoint(new Coordinate(q.X - ox, q.Y - oy))) <= 1e-6 ? "q" : "";
+                if (tagOf.TryGetValue(TK(q.X, q.Y), out var ts)) return ts + on;
+                var near = new SortedSet<char>();
+                for (int li = 0; li < lines.Count; li++)
+                    for (int i = 0; i + 1 < lines[li].Count; i++)
+                    {
+                        var a = lines[li][i]; var b = lines[li][i + 1]; double ex = b.X - a.X, ey = b.Y - a.Y, l2 = ex * ex + ey * ey;
+                        double t = l2 < 1e-24 ? 0 : Math.Clamp(((q.X - a.X) * ex + (q.Y - a.Y) * ey) / l2, 0, 1);
+                        double dx = q.X - a.X - ex * t, dy = q.Y - a.Y - ey * t;
+                        if (dx * dx + dy * dy <= 1e-12) near.Add(li == 0 ? 'p' : li <= R.ZoneC.Count + R.ZoneF.Count ? 'z' : li < nLinesB2 ? 'v' : 'e');
+                    }
+                return "x" + string.Concat(near) + on;
+            }
+            var badLog = new List<string>();
             foreach (var t in R.WallTrisC.Concat(R.WallTrisF))
             {
                 foreach (var (u, v) in new[] { (t.A, t.B), (t.B, t.C), (t.C, t.A) })
@@ -1078,15 +1174,27 @@ public static partial class WallByLine
                     var ku = (u.X, u.Y); var kv = (v.X, v.Y); var key = ku.CompareTo(kv) < 0 ? (ku, kv) : (kv, ku);
                     if (!seen.Add(key)) continue;
                     double l2 = Math.Sqrt((u.X - v.X) * (u.X - v.X) + (u.Y - v.Y) * (u.Y - v.Y));
-                    if (l2 > 0 && l2 < MinSp - 1e-9) R.ShortEdges++;
+                    if (l2 > 0 && l2 < MinSp - 1e-9)
+                    {
+                        R.ShortEdges++;
+                        if (badLog.Count < 12) badLog.Add(string.Format(ci, "짧은 변 {0:F1} µm @({1:F4}, {2:F4}) {3}–{4}", l2 * 1e6, u.X, u.Y, Tag(u), Tag(v)));
+                    }
                 }
                 double ar = Math.Abs((t.B.X - t.A.X) * (t.C.Y - t.A.Y) - (t.B.Y - t.A.Y) * (t.C.X - t.A.X));
                 double lm = Math.Sqrt(Math.Max((t.A.X - t.B.X) * (t.A.X - t.B.X) + (t.A.Y - t.B.Y) * (t.A.Y - t.B.Y), Math.Max((t.B.X - t.C.X) * (t.B.X - t.C.X) + (t.B.Y - t.C.Y) * (t.B.Y - t.C.Y), (t.C.X - t.A.X) * (t.C.X - t.A.X) + (t.C.Y - t.A.Y) * (t.C.Y - t.A.Y))));
-                if (lm > 0 && ar / lm < 1.22e-4) R.Needles++;
+                if (lm > 0 && ar / lm < 1.22e-4)
+                {
+                    R.Needles++;
+                    if (badLog.Count < 12)
+                        badLog.Add(string.Format(ci, "바늘 높이 {0:G3} µm · 긴 변 {1:F2} mm @({2:F4}, {3:F4}) 꼭짓점 {4} · {5} · {6} · z {7:F4}/{8:F4}/{9:F4}{10}",
+                            ar / lm * 1e6, lm * 1000, (t.A.X + t.B.X + t.C.X) / 3, (t.A.Y + t.B.Y + t.C.Y) / 3, Tag(t.A), Tag(t.B), Tag(t.C), t.A.Z, t.B.Z, t.C.Z, OnePiece(t) ? " · 조각" : ""));
+                }
             }
+            foreach (var bl in badLog) log.Append("  [다단] 나쁜 세모 — " + bl + "\n");
         }
-        log.Append(string.Format(ci, "  [다단] 소단 자리 — 세모 {0}(L′로 자름 {1} · 자른 점이 L′ 꼭짓점 아님 {2}) · 조각 {3}(주머니 {4} · 고리 {5}) · 넓이 {6:F3}㎡ · 안쪽 테두리 {7}점 · 선 {8} · 벽 세모 절 {9} · 성 {10}\n",
-            zoneTris.Count, clipped, clipMiss, pieces.Count, pocketPieces.Count, pocketRings.Count, trP.Area, inner.Count, lines.Count, R.WallTrisC.Count, R.WallTrisF.Count));
+        log.Append(string.Format(ci, "  [다단] 소단 자리 — 세모 {0}(L′로 자름 {1} · 자른 점이 L′ 꼭짓점 아님 {2}) · 조각 {3}(주머니 {4} · 고리 {5}) · 넓이 {6:F3}㎡ · 안쪽 테두리 {7}점 · 선 {8} · 벽 세모 절 {9} · 성 {10}{11}\n",
+            zoneTris.Count, clipped, clipMiss, pieces.Count, pocketPieces.Count, pocketRings.Count, trP.Area, inner.Count, lines.Count, R.WallTrisC.Count, R.WallTrisF.Count,
+            qInsN > 0 ? $" · L′ 지나는 선에 자른 점 끼움 {qInsN}" : ""));
         log.Append(string.Format(ci, "  [다단] 면 — 바깥 최고 {0:F3} m · 안쪽 {1}토막 최고 {2:F3} m · 끊김 {3}곳 · 땅 위 {4}(최대 {5:F1} µm) · 바깥 {6} · 쌍 {7} · 짧은 변 {8} · 바늘 {9}\n",
             R.OuterHMax, R.Faces.Count(f => f.Tier >= 2), R.InnerHMax, R.BreakN, R.AboveN, R.AboveMax * 1e6, R.OutsideN, R.PairsUnder01, R.ShortEdges, R.Needles));
         if (R.OuterHMax > H + 1e-3) R.Warn.Add(string.Format(ci, "바깥 벽 최고 {0:F3} m가 단높이 {1:F2} m보다 1 mm 넘게 높음", R.OuterHMax, H));
