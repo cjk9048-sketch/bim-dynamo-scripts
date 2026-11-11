@@ -18,7 +18,8 @@ internal static class StructSolids
     {
         if (tr.GetObject(L.Insert, OpenMode.ForRead) is not BlockReference br) return (0, 0);
         // 열쇠 = 원본 해시 + 삽입 변환의 해시(XData 글 255자 한도 · 검토 L) · 뒤에 «#솔리드 수»(사람이 지운 솔리드는 다시 — 검토 L)
-        string key = Hash(StructImport.KeyOf(L.Rec, br));
+        // ★[v117.4] «|면1» = 같은 평면 세모를 면 하나로 만든 솔리드(MeshFaces) — 옛 판 솔리드(대각선)는 한 번 다시 만듦(핸들 바뀜)
+        string key = Hash(StructImport.KeyOf(L.Rec, br) + "|면1");
         var mine = StructDraw.FindTagged(db, tr, (k, _, id) => k == StructDraw.KindSolid && id == L.Rec.Id);
         if (mine.Count > 0 && mine.All(m => m.View == key + "#" + mine.Count))
         {
@@ -73,13 +74,41 @@ internal static class StructSolids
                 catch { }
             }
         }
+        Solid3d? TryBoth(Point3dCollection v, Int32Collection f)
+        {
+            var s = Try(v, f); if (s != null) return s;
+            var g = new Int32Collection(); foreach (int k in f) g.Add(k); Flip(g);
+            return Try(v, g);
+        }
+        int nMerged = 0, facesIn = 0, facesOut = 0, mergeFail = 0, volBad = 0; double maxRes = 0;
         Solid3d? FromMesh(Point3dCollection v, Int32Collection f)
         {
             int nf = 0; for (int i = 0; i < f.Count; i += f[i] + 1) nf++;
             if (nf > MaxFaces) { heavy++; return null; }
-            var s = Try(v, f); if (s != null) return s;
-            var g = new Int32Collection(); foreach (int k in f) g.Add(k); Flip(g);
-            return Try(v, g);
+            // ★★[v117.4 · JACK 1111 «벽 솔리드 한 면에 대각선»] 같은 평면 세모를 n각 면 하나로(Core MeshFaces 주석 — 세계 좌표 반올림 3e-9 m가 ConvertToSolid 합침을 막던 것) ·
+            //   n각 면으로 안 되면 지금처럼 세모로
+            try
+            {
+                var pv = new List<DH.Grading.Core.Point3>(v.Count); foreach (Point3d p in v) pv.Add(new DH.Grading.Core.Point3(p.X, p.Y, p.Z));
+                var fl = new List<int[]>(nf);
+                for (int i = 0; i < f.Count; i += f[i] + 1) { var a = new int[f[i]]; for (int k = 0; k < a.Length; k++) a[k] = f[i + 1 + k]; fl.Add(a); }
+                var mr = DH.Grading.Core.MeshFaces.MergeCoplanar(pv, fl);
+                if (!mr.Bail && mr.Faces.Count < fl.Count)
+                {
+                    var v2 = new Point3dCollection(); foreach (int k in mr.Verts) v2.Add(v[k]);
+                    var f2 = new Int32Collection(); foreach (var a in mr.Faces) { f2.Add(a.Length); foreach (int k in a) f2.Add(k); }
+                    var s2 = TryBoth(v2, f2);
+                    // ★[계획 검토 MEDIUM 5] 만든 솔리드 부피 = 메시 부피(1e-6)여야 씀 — 다르면 이 부재는 세모로
+                    double want = System.Math.Abs(DH.Grading.Core.MeshFaces.Volume(pv, fl)), got = 0;
+                    if (s2 != null) { try { got = s2.MassProperties.Volume; } catch { } }
+                    if (s2 != null && System.Math.Abs(got - want) <= want * 1e-6 + 1e-9)
+                    { nMerged++; facesIn += fl.Count; facesOut += mr.Faces.Count; maxRes = System.Math.Max(maxRes, mr.MaxRes); return s2; }
+                    if (s2 != null) { s2.Dispose(); volBad++; }
+                    mergeFail++;
+                }
+            }
+            catch { mergeFail++; }
+            return TryBoth(v, f);
         }
         void Walk(ObjectId btrId, Matrix3d M, int depth)
         {
@@ -138,7 +167,9 @@ internal static class StructSolids
         // 만든 수를 꼬리표에(다음 [다시 반영]이 «그대로»를 가를 때 · 지운 솔리드가 있으면 다시 만듦)
         foreach (var (sid, _) in StructDraw.FindTagged(db, tr, (k, v, id) => k == StructDraw.KindSolid && id == L.Rec.Id && v == key))
             try { if (tr.GetObject(sid, OpenMode.ForWrite) is Entity se) StructDraw.TagSolid(db, tr, se, L.Rec.Id, key + "#" + made); } catch { }
-        log?.AppendLine($"  [구조물] {L.Rec.Name} Civil 투영용 솔리드 {made}" + (failed > 0 ? $" · ⚠솔리드로 못 바꾼 메시 {failed}(열린 메시 등 — Civil 투영에서 빠짐)" : "")
+        log?.AppendLine($"  [구조물] {L.Rec.Name} Civil 투영용 솔리드 {made}"
+                        + (nMerged > 0 ? $" · 같은 평면 = 면 하나 {nMerged}개(면 {facesIn:N0} → {facesOut:N0} · 평면 어긋남 최대 {maxRes:0.#E+0} m)" : "")
+                        + (mergeFail > 0 ? $" · ⚠면 합친 메시로 못 바꿔 세모 그대로 {mergeFail}" + (volBad > 0 ? $"(그중 부피 다름 {volBad})" : "") : "") + (failed > 0 ? $" · ⚠솔리드로 못 바꾼 메시 {failed}(열린 메시 등 — Civil 투영에서 빠짐)" : "")
                         + (heavy > 0 ? $" · ⚠세모 {MaxFaces:N0}개 넘는 무거운 부재 {heavy}는 솔리드로 안 바꿈(Civil 투영에서 빠짐)" : ""));
         return (made, failed + heavy);
     }
