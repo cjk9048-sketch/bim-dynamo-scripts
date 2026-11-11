@@ -266,13 +266,13 @@ static class WallTierSecCheck
             slopeOk = nSlope > 0 && worst <= 1e-3; bermOk = nBerm > 0;
             det = $"원뿔 자리 표본 비탈 {nSlope} · 소단 {nBerm} · |F − S| 최대 {worst * 1000:F3} mm · 소단 높이 {string.Join(",", lv.Select(z => z.ToString("F2")))}" + det;
         }
-        Check("(e1) 끝 비탈 켬 — 짓기 · GAP/CONTACT · 바뀐 자리 F = 원뿔 1:1.5(±1 mm) · 소단이 끝을 돌아 이어짐(소단 표본 > 0) · 바깥 · 땅 위 · 쌍 0(바늘 ≤ 2 — 알려진 것: 옛 소단 꺾임선 곁 높이 0.12 mm · 설치 전 다듬기)",
-            b1 != null && b1.Ok && b1.OutsideN == 0 && b1.AboveN == 0 && b1.PairsUnder01 == 0 && b1.Needles <= 2 && b1.TierEnd && (b1.TierEndText.Contains("GAP") || b1.TierEndText.Contains("CONTACT")) && slopeOk && bermOk && !det.Contains("≠"), NeedleAt(b1) + det + " · " + b1?.TierEndText + " · " + Brief(b1, c1));
+        Check("(e1) 끝 비탈 켬 — 짓기 · GAP/CONTACT · 바뀐 자리 F = 원뿔 1:1.5(±1 mm) · 소단이 끝을 돌아 이어짐(소단 표본 > 0) · 바깥 · 땅 위 · 쌍 · 짧은 변 · 바늘 0",
+            Clean(b1) && b1!.TierEnd && (b1.TierEndText.Contains("GAP") || b1.TierEndText.Contains("CONTACT")) && slopeOk && bermOk && !det.Contains("≠"), NeedleAt(b1) + det + " · " + b1?.TierEndText + " · " + Brief(b1, c1));
         Comp("(e1)", b1, gT, pT, Check);
         // (e2) 짧은 U(두 끝 10 m) — 두 끝이 바꾸는 자리는 U의 남 · 북 바깥(R_out을 사이에 둠) → GAP · 지음
         var Us = new List<Point3> { new(80, -5, 0), new(49.6, -5, 0), new(49.6, 5, 0), new(80, 5, 0) };
         var (c2, b2) = Make(Us, pT, gT, GB, PBf, bd, plan, end: true, ratio: 1.5);
-        Check("(e2) 짧은 U — 두 끝 비탈 GAP(R_out 사이) · 지음", b2 != null && b2.Ok && b2.TierEndText.Contains("GAP"), NeedleAt(b2) + b2?.TierEndText + " · " + Brief(b2, c2));
+        Check("(e2) 짧은 U — 두 끝 비탈 GAP(R_out 사이) · 지음 · 쌍 · 짧은 변 · 바늘 0", Clean(b2) && b2!.TierEndText.Contains("GAP"), NeedleAt(b2) + b2?.TierEndText + " · " + Brief(b2, c2));
         // (e3) 끝 비탈이 바꾸는 자리 안에 다른 옹벽(막을 다각형) → «끝 비탈 겹침»(OVERLAP · 이름 · 자리) — V자 골 · 덮어쓰기 없음
         var blk = new List<(string, IReadOnlyList<Point3>)> { ("옹벽 9", Rect(56.5, -30, 58.5, -28.6)) };
         var (c3, b3) = Make(Uw, pT, gT, GB, PBf, bd, plan, end: true, ratio: 1.5, bl: blk);
