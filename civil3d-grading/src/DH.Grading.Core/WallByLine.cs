@@ -69,6 +69,12 @@ public static partial class WallByLine
         /// <summary>★[v117.5 · 키트 wtfill] 다단 2차 수직만 — 세계 좌표 (x, y)에서 P0′ = 원지반이 짓기상 정확한가(소단이 땅 높이에서 잘린 자리 · 바깥 벽 높이 0).
         /// 그 자리 P0 읽기 = 원지반 그대로(합성 삼각망의 근사값 대신) · 두 L′ 끝이 다 그 자리인 칸 = 높이 0 칸(부호 대신 |W − G| ≤ 1 mm). null = v117 그대로(비트 같음).</summary>
         public Func<double, double, bool>? ZeroAt;
+        /// <summary>★[로드맵 2-2 · D4 ①] 검토 높이(m · 절토 · 성토) — 도면의 소단 생성 기준 높이(Civil BuildGeom이 구역 제원 <c>BenchHeightOf</c>로 채움 · 기록의 Hc/Hf 아님 — 수직 기록은 0).
+        /// 벽이 넘으면 ⚠만(거절 아님 · 구조 안전 판정 아님). NaN = 안 잼.</summary>
+        public double ReviewHc = double.NaN, ReviewHf = double.NaN;
+        /// <summary>★[로드맵 2-3 · 재기만] 기초 재기에 쓸 형식 단면 표(절토 · 성토)와 공통 칸 — null이면 안 잼.</summary>
+        public WallSection.Table? FootCut, FootFill;
+        public WallSection.Common? FootCommon;
         /// <summary>★[v117.3] 얕은 복사(다단 2차 수직 짓기가 P0만 바꿔 부른다).</summary>
         internal Input Copy() => (Input)MemberwiseClone();
     }
@@ -226,6 +232,11 @@ public static partial class WallByLine
         /// <summary>첫 합성(P0′) 한 줄 · 단 머리 줄(미리보기 초록).</summary>
         public string TierCompText = "";
         public List<List<Point3>> TierRows = new();
+        /// <summary>★[v117.4 설치 전 검토 중간 1] 테라스 T 세모(합성 전 · 하네스가 소단 높이를 바로 잰다).</summary>
+        internal List<Tri> TierT = new();
+
+        // ══ ★[로드맵 2-2 · 2-3 — 보고만] 수직(Shape 2) · 다단(Shape 3 = 2차 수직의 것) — 측점 높이표 · 분류 · 검토 높이 · 기초 재기(기하 · 기록 · 자가검증 줄은 안 바뀜) ══
+        public WallProfile.Result? Profile;
     }
 
     static readonly CultureInfo Ci = CultureInfo.InvariantCulture;
