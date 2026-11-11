@@ -444,6 +444,7 @@ internal sealed class GradingPanel : UserControl
         _toWall = WBtn("사면→옹벽", "DHWALL", "고른 계단선부터 바깥 단을 옹벽으로 바꿉니다.");
         _toSlope = WBtn("옹벽→사면", "DHSLOPE", "옹벽선을 골라 다시 사면으로 되돌립니다. 추가한 옹벽은 W로 지웁니다.");
         _addWall = WBtn("옹벽 추가", "DHWALLADD", "경계에서 경계까지 폴리선을 그려 옹벽을 추가합니다.");
+        WBtn("용지 경계", "DHLANDBOUND", "닫힌 폴리선으로 용지 경계를 고르거나 지웁니다.\n[옹벽 추가]는 옹벽 기초 외곽이 이 경계 밖이면 알립니다(없으면 그은 선 기준).");   // ★[v117.3 · JACK D1 ③]
         // ★[v102.2 · JACK 0930 «옹벽합성 버튼은 없애고 노선 선정과정이 끝나면 자동으로 진행되게»] [옹벽 합성] 버튼 없앰 —
         //   옹벽 변환(부분 지정)이 옹벽을 끝까지 지으면 합성이 이어서 돈다(ZoneEditCommon). DHWALLCOMP 명령은 남는다(손으로 다시 합성 · 복구용)
         secFix.Children.Add(wRow);
