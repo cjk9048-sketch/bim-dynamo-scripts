@@ -543,6 +543,22 @@ static class Web3DCheck
                       && r.Pats.Count >= 3 && r.Foot != null && !r.Foot.IsEmpty && r.NegVolume == 0 && r.OpenEdges == 0 && r.Fails + r.CornerFails + r.PieceFails + r.PatLineFails == 0
                       && r.Walls[0].Sta[0] == 0f && r.Walls[0].Sta[1] == 0f;
             check("S175 ⑦ 옹벽 층 — 줄마다 몸통 · 무늬 · 정거장 표(5칸) · 발자국 · 뒤집힘 0 · 열린 변 0 · 실패 0 · 원점 뺌", ok, r.Text);
+            // ★[JACK 1111 «옹벽 표면을 옹벽처럼»] 무늬 좌표(fuv) — 점마다 셋 · w는 겉 1 또는 몸통 쪽(≤ 0) · Z ≈ 점 높이(선 면 · 내밀기 × 기울기 안) · u는 줄 길이 안
+            int nV = 0, badLen = 0, badW = 0, badZ = 0, badU = 0;
+            foreach (var p in r.Pats)
+            {
+                if (p.Fuv.Length != p.Pos.Length) { badLen++; continue; }
+                double len = r.Walls[p.Wall - 1].Len;
+                for (int v = 0; v < p.Pos.Length / 3; v++, nV++)
+                {
+                    float u = p.Fuv[v * 3], z = p.Fuv[v * 3 + 1], w = p.Fuv[v * 3 + 2];
+                    if (!(Math.Abs(w - 1) < 1e-4 || w < 1e-4)) badW++;
+                    if (!(Math.Abs(z - p.Pos[v * 3 + 2]) < 0.05)) badZ++;
+                    if (!(Math.Abs(u) < len + 3)) badU++;                     // u 방향 = 보는 사람 오른쪽(줄 방향과 반대면 음수)
+                }
+            }
+            check("S175 ⑦b 무늬 좌표(fuv) — 점마다 셋 · w = 겉 1 / 몸통 쪽 ≤ 0 · Z ≈ 점 높이 · u = 줄 길이 안", nV > 0 && badLen + badW + badZ + badU == 0,
+                $"점 {nV:N0} · 길이 틀림 {badLen} · w {badW} · Z {badZ} · u {badU}");
         }
 
         // ⑫ ★★[JACK 1103] 지층 격자(자르기 뷰) — 가짜 좌표(X ≈ 200,000 · Y ≈ 550,000) · 층 상단 셋 + 지하수위 · 범위 밖 NaN · 위 층보다 높은 마디 누름 · 높이 없는 층 뺌 · 되읽기
