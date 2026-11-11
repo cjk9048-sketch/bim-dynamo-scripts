@@ -43,6 +43,8 @@ internal sealed class GradingPanel : UserControl
     // ── ★[5b] 대상 ────────────────────────────────────────────────────────
     private readonly Button _pickPlan, _pickGround, _build;
     private readonly Button _toWall, _toSlope, _addWall;
+    /// <summary>★[v117.x] [옛 옹벽 옮기기](DHWALLMIGRATE) — 옛 모양 선 옹벽이 있을 때만 보인다(<see cref="RefreshComposite"/>).</summary>
+    private readonly Button _migrate;
     /// <summary>★[v111.10 · JACK 1103] [계획지표면 초기화](주황 · 창 맨 끝 — <see cref="RefreshReset"/>). 옛 ■ 도면([종단도] · [횡단도])은 없앰(리본에 있음).</summary>
     private readonly Button _resetBtn;
     private readonly TextBlock _planWhat, _groundWhat;
@@ -444,6 +446,8 @@ internal sealed class GradingPanel : UserControl
         _toWall = WBtn("사면→옹벽", "DHWALL", "고른 계단선부터 바깥 단을 옹벽으로 바꿉니다.");
         _toSlope = WBtn("옹벽→사면", "DHSLOPE", "옹벽선을 골라 다시 사면으로 되돌립니다. 추가한 옹벽은 W로 지웁니다.");
         _addWall = WBtn("옹벽 추가", "DHWALLADD", "경계에서 경계까지 폴리선을 그려 옹벽을 추가합니다.");
+        _migrate = WBtn("옛 옹벽 옮기기", "DHWALLMIGRATE", "옛 모양(선 바깥 계단) 선 옹벽을 같은 선으로 새 모양(다단 · 수직)으로 다시 짓습니다.");   // ★[v117.x] 옛 모양이 있을 때만 보임
+        _migrate.Visibility = Visibility.Collapsed;
         WBtn("용지 경계", "DHLANDBOUND", "닫힌 폴리선으로 용지 경계를 고르거나 지웁니다.\n[옹벽 추가]는 옹벽 기초 외곽이 이 경계 밖이면 알립니다(없으면 그은 선 기준).");   // ★[v117.3 · JACK D1 ③]
         // ★[v102.2 · JACK 0930 «옹벽합성 버튼은 없애고 노선 선정과정이 끝나면 자동으로 진행되게»] [옹벽 합성] 버튼 없앰 —
         //   옹벽 변환(부분 지정)이 옹벽을 끝까지 지으면 합성이 이어서 돈다(ZoneEditCommon). DHWALLCOMP 명령은 남는다(손으로 다시 합성 · 복구용)
@@ -830,6 +834,7 @@ internal sealed class GradingPanel : UserControl
             if (_toWall != null) _toWall.IsEnabled = _fixOk && _valOk;
             if (_toSlope != null) _toSlope.IsEnabled = _fixOk && _valOk;
             if (_addWall != null) _addWall.IsEnabled = _fixOk && _valOk;
+            if (_migrate != null) _migrate.IsEnabled = _fixOk && _valOk;
         }
         catch { }
     }
@@ -981,8 +986,10 @@ internal sealed class GradingPanel : UserControl
             var doc = Doc;
             bool on = doc != null && WallListStore.DeferOf(doc.Database);
             DH.Grading.Core.WallList.CompState? st = null;
+            int oldN = 0;
             if (doc != null)
-                try { using var tr = doc.Database.TransactionManager.StartTransaction(); st = Commands.WallCompositeCommand.StateNow(doc.Database, tr, out _); tr.Commit(); } catch { }
+                try { using var tr = doc.Database.TransactionManager.StartTransaction(); st = Commands.WallCompositeCommand.StateNow(doc.Database, tr, out _, out _, out _, out var ws); oldN = ws.Count(DH.Grading.Core.WallMigrate.IsOld); tr.Commit(); } catch { }
+            _migrate.Visibility = oldN > 0 ? Visibility.Visible : Visibility.Collapsed;   // ★[v117.x] 옛 모양 선 옹벽이 있을 때만
             _loading = true;
             try { _defer.IsChecked = on; } finally { _loading = false; }
             int wait = st?.Pending.Count ?? 0, held = st?.HeldMoved.Count + st?.HeldRetry.Count ?? 0;

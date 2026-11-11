@@ -275,6 +275,13 @@ if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "wvert")
     Console.WriteLine(fails == 0 ? "\n== 전부 통과 ==" : $"\n== 실패 {fails}건 ==");
     return fails == 0 ? 0 : 1;
 }
+// ★[v117.x · 옛 옹벽 옮기기 DHWALLMIGRATE] BLOCKTEST_ONLY=wmig — 옛 모양(Shape 0) 부지 선 옹벽 → 새 모양(S263 WM — 하나 옮김 · 하나 까닭 · 이웃 둘 · 진짜 겹침 · 판)만
+if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "wmig")
+{
+    WallMigrateCheck.Run(Check);
+    Console.WriteLine(fails == 0 ? "\n== 전부 통과 ==" : $"\n== 실패 {fails}건 ==");
+    return fails == 0 ? 0 : 1;
+}
 // ★[v117.3 · 계획 2026-11-11_부지_다단옹벽] BLOCKTEST_ONLY=wtier — 부지 다단 옹벽(S248 WT — 짓기 · 합성 왕복 · R_out = 원지반 세모 · 목록 판 10)만
 if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "wtier")
 {
@@ -490,6 +497,7 @@ StructPointsCheck.Run(Check);   // ★[v116.9 · JACK 1110 구조물 좌표계 �
 StructRegionCheck.Run(Check);   // ★[v117.1 · JACK 1111 구조물 3D 영역] S247 R3 — 네모 · 세모 자르기 · 선 자르기 · 높이 입히기 · 3D 파일 · 점 파일 region3d
 WallInwardCheck.Run(Check);     // ★[v117.0 0단계 · 1단계] S243 WI — 부지 안쪽 계단 미리 재기(Survey) ⓪ + 짓기(BuildIn · 엄격 · 턱 규칙 · 합성은 2단계)
 WallVerticalCheck.Run(Check);   // ★[v117.0 · JACK 1111] S244 WV — 부지 수직 옹벽(두부 자르기 · 짓기 · 합성 왕복 · 목록 판 9)
+WallMigrateCheck.Run(Check);    // ★[v117.x · 옛 옹벽 옮기기] S263 WM — 옛 모양(Shape 0) → 다단 · 수직(옮김 = 새로 그은 것 · 못 옮김 = 바이트 같음 · 이웃은 저장 뒤 판정)
 WallProfileCheck.Run(Check);    // ★[로드맵 2-2 · 2-3] S244 WP — 측점 높이표 · 절/성/0 · 검토 높이 ⚠ · 기초 재기(보고만 · 기하 그대로)
 WallLandCheck.Run(Check);       // ★[v117.3 · JACK D1 ③] S261 WLB — 구조물 외곽 · 용지 경계(없으면 그은 선) · 경고만
 StructCheck.Run(Check);        // ★[v115 · JACK 1105 Revit 구조물] S220~S234 — 구조물 커튼 자르기 · 평면 외곽 · 목록 · 단위

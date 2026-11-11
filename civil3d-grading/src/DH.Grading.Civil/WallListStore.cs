@@ -14,6 +14,8 @@ public static class WallListStore
     /// <summary>목록을 읽는다 — 없으면 빈 목록(참) · 못 읽으면 거짓과 까닭(쓰는 쪽은 옛 목록을 덮지 말고 멈춘다).</summary>
     /// <summary>★[v114.0] 옛 종류 1을 지웠다는 한 줄은 도면 · 수마다 한 번만(목록을 읽는 곳이 많다).</summary>
     static readonly HashSet<string> _droppedSaid = new();
+    /// <summary>★[v117.x] 옛 모양 선 옹벽 알림은 도면마다 한 번.</summary>
+    static readonly HashSet<string> _oldSaid = new();
 
     public static bool TryLoad(Database db, Transaction tr, out WallListHead head, out List<WallRec> walls, out string why)
     {
@@ -43,6 +45,14 @@ public static class WallListStore
             if (ok && dropped > 0 && _droppedSaid.Add(db.Filename + "|" + dropped))
             {
                 string msg = $"옛 방식 폴리선 옹벽 {dropped}개를 지웠습니다(v114 새 방식으로 다시 그리세요)" + (cleared > 0 ? $" · ⚠그 번호를 가리키던 바꿈 · 물려받을 번호 {cleared}칸을 비웠습니다" : "");
+                try { Autodesk.AutoCAD.ApplicationServices.Core.Application.DocumentManager.MdiActiveDocument?.Editor.WriteMessage("\n[옹벽 목록] " + msg); } catch { }
+                try { DiagLog.AppendCarry("\n[옹벽 목록] " + msg); } catch { }
+            }
+            // ★[v117.x · 옛 옹벽 옮기기] 옛 모양(Shape 0) 부지 선 옹벽이 있으면 도면마다 한 번 알림 — 저절로 옮기지 않는다(DHWALLMIGRATE를 쳐야 옮김)
+            int oldN = ok ? walls.Count(WallMigrate.IsOld) : 0;
+            if (oldN > 0 && _oldSaid.Add(db.Filename))
+            {
+                string msg = WallMigrate.Notice(oldN);
                 try { Autodesk.AutoCAD.ApplicationServices.Core.Application.DocumentManager.MdiActiveDocument?.Editor.WriteMessage("\n[옹벽 목록] " + msg); } catch { }
                 try { DiagLog.AppendCarry("\n[옹벽 목록] " + msg); } catch { }
             }
