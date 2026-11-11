@@ -48,6 +48,20 @@ public sealed class CivilPoints
     public int SketchDropped;
     public const int MaxSketchVertices = 50000;
 
+    /// <summary>
+    /// 짝 3D 영역 파일 이름(«region3d.file» — 같은 폴더 · 없으면 빈 글 · JACK 1111 Civil 과 합의). 경로는 <see cref="Region3DPath"/>.
+    /// </summary>
+    public string Region3DFile = "";
+
+    /// <summary>짝 3D 영역 파일의 전체 경로(이 기준점 파일 폴더 기준 · 없으면 빈 글). 폴더 밖을 가리키는 이름은 받지 않음.</summary>
+    public static string Region3DPath(string pointsPath, string file)
+    {
+        if (file.Length == 0 || pointsPath.Length == 0) return "";
+        string name = Path.GetFileName(file);   // «..\» · 다른 폴더를 가리키지 않게 이름만
+        if (name.Length == 0) return "";
+        return Path.Combine(Path.GetDirectoryName(pointsPath) ?? "", name);
+    }
+
     /// <summary>창 한 줄: «이름» · 도면 · EPSG.</summary>
     public string Summary
     {
@@ -94,8 +108,9 @@ public sealed class CivilPoints
             if (Str(root, "format") != Format) { error = $"Civil 기준점 파일이 아님(format ≠ {Format})"; return r; }
             var v = Num(root, "version");
             if (v is not double vv || vv != Math.Floor(vv) || vv < 1) { error = "version이 없음"; return r; }
+            // int 로 바꾸기 전에 견줌(1e10 같은 값이 int 로 넘쳐 음수가 되면 판 검사를 지나감 — 설치 전 검토 낮음)
+            if (vv > MaxVersion) { error = $"파일 판 {vv} — 이 애드인은 {MaxVersion}판까지 읽음(Revit 애드인을 새로)"; return r; }
             r.Version = (int)vv;
-            if (r.Version > MaxVersion) { error = $"파일 판 {r.Version} — 이 애드인은 {MaxVersion}판까지 읽음(Revit 애드인을 새로)"; return r; }
 
             // 단위: 길이는 m 만(Civil 이 m 로 바꿔 씀 — 약속)
             if (!root.TryGetProperty("units", out var units) || units.ValueKind != JsonValueKind.Object) { error = "units가 없음"; return r; }
@@ -162,6 +177,9 @@ public sealed class CivilPoints
                 }
             }
 
+            // region3d(선택): 짝 3D 영역 파일 이름
+            if (root.TryGetProperty("region3d", out var rg) && rg.ValueKind == JsonValueKind.Object) r.Region3DFile = Str(rg, "file");
+
             // check: x · y 로 다시 셈한 거리 · 방향과 같아야(손으로 고친 파일 막기)
             if (root.TryGetProperty("check", out var ck) && ck.ValueKind == JsonValueKind.Object)
             {
@@ -185,14 +203,14 @@ public sealed class CivilPoints
         return (Num(e, "elevation"), Str(e, "surface"));
     }
 
-    private static string Str(JsonElement o, string name) =>
+    internal static string Str(JsonElement o, string name) =>
         o.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() ?? "" : "";
 
-    private static bool? Bool(JsonElement o, string name) =>
+    internal static bool? Bool(JsonElement o, string name) =>
         o.TryGetProperty(name, out var v) ? v.ValueKind switch { JsonValueKind.True => true, JsonValueKind.False => false, _ => null } : null;
 
     /// <summary>숫자(또는 숫자 글 «200123.45») · 없거나 null 이면 null.</summary>
-    private static double? Num(JsonElement o, string name)
+    internal static double? Num(JsonElement o, string name)
     {
         if (!o.TryGetProperty(name, out var v)) return null;
         if (v.ValueKind == JsonValueKind.Number && v.TryGetDouble(out double d) && double.IsFinite(d)) return d;

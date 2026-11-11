@@ -9,7 +9,7 @@
     <PlatformTarget>x64</PlatformTarget>
     <AssemblyName>DH.CivilCoord.Revit</AssemblyName>
     <RootNamespace>DH.CivilCoord.Revit</RootNamespace>
-    <Version>1.1.0</Version>
+    <Version>1.2.0</Version>
   </PropertyGroup>
 
   <!-- Revit 2026 API: NuGet 빌드타임 참조(런타임 DLL 미복사). 판은 수량산출 애드인과 같이 2026.3.0 으로 못 박는다

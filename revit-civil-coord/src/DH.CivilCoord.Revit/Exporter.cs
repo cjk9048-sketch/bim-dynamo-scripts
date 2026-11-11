@@ -16,7 +16,7 @@ internal static class Exporter
 
     private sealed class Stats
     {
-        public int Elements, Links, Imports, Groups, StairsAsParts, StairComponentsSkipped, NoBody, FallbackFaces, MeshObjects;
+        public int Elements, Links, Imports, Groups, StairsAsParts, StairComponentsSkipped, NoBody, FallbackFaces, MeshObjects, CivilMade;
         public bool SectionBox;
         public readonly Dictionary<string, int> NoBodyByCat = new();
         public readonly Dictionary<string, int> ByEntity = new();
@@ -54,7 +54,7 @@ internal static class Exporter
         var st = new Stats();
         var storeys = new Dictionary<long, StoreyInfo>();
         var parts = Collect(doc, view, heights, st, storeys);
-        Log.Line($"모으기\t뷰 «{view.Name}»{(st.SectionBox ? "(단면 상자)" : "")}\t부재 {parts.Count}/{st.Elements}\t형상 없음 {st.NoBody}\t링크 {st.Links}\tCAD {st.Imports}\t그룹 {st.Groups}" +
+        Log.Line($"모으기\t뷰 «{view.Name}»{(st.SectionBox ? "(단면 상자)" : "")}\t부재 {parts.Count}/{st.Elements}\t형상 없음 {st.NoBody}\t링크 {st.Links}\tCAD {st.Imports}\t그룹 {st.Groups}\t넣은 Civil {st.CivilMade}" +
                  $"\t계단(부품으로) {st.StairsAsParts}\t계단 부품 건너뜀 {st.StairComponentsSkipped}\t면별 세모 {st.FallbackFaces}\t메시 {st.MeshObjects}");
         if (st.NoBodyByCat.Count > 0) Log.Line("형상 없음\t" + string.Join(", ", st.NoBodyByCat.Select(k => $"{k.Key} {k.Value}")));
         if (parts.Count == 0) return ($"원인: «{view.Name}»에 보이는 부재에 형상이 없습니다", "Bad");
@@ -80,6 +80,9 @@ internal static class Exporter
         job.SiteProps.Add(("두 점 거리 Revit · Civil (m)", $"{fit.RevitDistance:0.0000} · {fit.CivilDistance:0.0000}"));
         job.SiteProps.Add(("평면 비율", fit.Scale.ToString("0.00000000", System.Globalization.CultureInfo.InvariantCulture)));
         job.SiteProps.Add(("회전 (°)", fit.AngleDegrees.ToString("0.000000", System.Globalization.CultureInfo.InvariantCulture)));
+        if (fit.HasHand)
+            job.SiteProps.Add(("손 맞춤 동 · 북 (m) · 돌림 (°)", string.Format(System.Globalization.CultureInfo.InvariantCulture,
+                "{0:0.0000} · {1:0.0000} · {2:0.000000}", fit.Hand.X, fit.Hand.Y, fit.HandAngle * 180 / Math.PI)));
         job.SiteProps.Add(("높이 더함 (m)", (heights.OffsetM + dz).ToString("0.0000", System.Globalization.CultureInfo.InvariantCulture)));
         job.Storeys.AddRange(storeys.Values);
         job.Parts.AddRange(parts);
@@ -101,6 +104,7 @@ internal static class Exporter
         int tris = parts.Sum(p => p.TriangleCount);
         var box = job.WorldBox();
         Log.Line($"IFC\t{path}\t부재 {parts.Count}\t세모 {tris}\t돌림 {fit.AngleDegrees:0.0000}°\t옮김 {t.X:0.000},{t.Y:0.000},{job.Tz:0.000}\t거리 차 {fit.DistanceError * 1000:0.0} mm\t" +
+                 (fit.HasHand ? $"손 맞춤 {fit.Hand.X:0.0000},{fit.Hand.Y:0.0000} m {fit.HandAngle * 180 / Math.PI:0.0000}°\t" : "") +
                  string.Join(", ", st.ByEntity.OrderByDescending(k => k.Value).Select(k => $"{k.Key} {k.Value}")));
         var lines = new List<string> { $"IFC 저장 — {Path.GetFileName(path)} · 부재 {parts.Count} · 세모 {tris:N0}" };
         if (box is { } b) lines.Add($"범위 X {b.X0:#,0.0}~{b.X1:#,0.0} · Y {b.Y0:#,0.0}~{b.Y1:#,0.0} · 높이 {b.Z0:0.00}~{b.Z1:0.00} m");
@@ -118,10 +122,10 @@ internal static class Exporter
     /// 미리보기용 Revit 부재 윤곽(내부 좌표 m · 부재마다 평면 볼록 껍질) — IFC 와 같은 부재(지금 3D 뷰에 보이는 것 · 지형 뺌).
     /// 명령 한 번에 한 번만 셈(창을 다시 열 때는 그대로 씀).
     /// </summary>
-    public static List<P2[]> Footprints(UIDocument uidoc, LevelHeights heights)
+    public static PreviewModel Preview(UIDocument uidoc, LevelHeights heights)
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
-        var res = new List<P2[]>();
+        var res = new PreviewModel();
         try
         {
             var view = PickView(uidoc, out _);
@@ -131,17 +135,23 @@ internal static class Exporter
             if (count > MaxPreviewElements)
             {
                 Log.Line($"미리보기 윤곽 건너뜀\t뷰 «{view.Name}» 요소 {count} > {MaxPreviewElements}");
+                res.Note = $"3D 뷰 «{view.Name}»의 요소가 {count:N0}개라 미리보기에 Revit 부재를 그리지 않음(손 맞춤 안 됨) — 단면 상자로 줄이면 보입니다";
                 return res;
             }
             var st = new Stats();
             var parts = Collect(uidoc.Document, view, heights, st, new Dictionary<long, StoreyInfo>(), preview: true);
+            int tris = 0, boxed = 0;
             foreach (var p in parts)
             {
                 if (p.Entity == "IFCGEOGRAPHICELEMENT") continue;   // 지형은 구조물 윤곽을 덮음
                 var hull = Hull.Convex(p.Shells.SelectMany(s => s.V).Select(v => new P2(v.X, v.Y)));
-                if (hull.Count >= 3 && Math.Abs(Hull.Area(hull)) > 1e-4) res.Add(hull.ToArray());
+                if (hull.Count >= 3 && Math.Abs(Hull.Area(hull)) > 1e-4) res.Footprints.Add(hull.ToArray());
+                // 3D 미리보기(JACK 1111): 세모 한도까지는 그대로 · 넘으면 부재 상자로(소프트웨어 그리기가 멈추지 않게)
+                int n = p.TriangleCount;
+                if (tris + n <= MaxPreviewTriangles) { res.Shells.AddRange(p.Shells); tris += n; }
+                else if (BoxOf(p) is { } box) { res.Shells.Add(box); tris += 12; boxed++; }
             }
-            Log.Line($"미리보기 윤곽\t뷰 «{view.Name}»\t부재 {parts.Count}\t윤곽 {res.Count}\t{sw.ElapsedMilliseconds} ms");
+            Log.Line($"미리보기 윤곽\t뷰 «{view.Name}»\t부재 {parts.Count}\t윤곽 {res.Footprints.Count}\t3D 세모 {tris:N0}{(boxed > 0 ? $"(상자로 {boxed})" : "")}\t{sw.ElapsedMilliseconds} ms");
         }
         catch (Exception ex) { Log.Line("미리보기 윤곽 못 셈\t" + ex.Message); }
         return res;
@@ -149,6 +159,21 @@ internal static class Exporter
 
     /// <summary>미리보기 윤곽을 셀 요소 수 한도(넘으면 미리보기에 Revit 윤곽 없이).</summary>
     private const int MaxPreviewElements = 8000;
+
+    /// <summary>3D 미리보기 Revit 세모 한도(넘는 부재는 상자 하나로).</summary>
+    private const int MaxPreviewTriangles = 250_000;
+
+    private static MeshShell? BoxOf(MeshPart p)
+    {
+        var v = p.Shells.SelectMany(s => s.V).ToList();
+        if (v.Count == 0) return null;
+        double x0 = v.Min(q => q.X), y0 = v.Min(q => q.Y), z0 = v.Min(q => q.Z), x1 = v.Max(q => q.X), y1 = v.Max(q => q.Y), z1 = v.Max(q => q.Z);
+        var s = new MeshShell { Closed = true };
+        for (int i = 0; i < 8; i++) s.V.Add(((i & 1) == 0 ? x0 : x1, (i & 2) == 0 ? y0 : y1, (i & 4) == 0 ? z0 : z1));
+        int[][] q4 = { new[] { 0, 2, 3, 1 }, new[] { 4, 5, 7, 6 }, new[] { 0, 1, 5, 4 }, new[] { 2, 6, 7, 3 }, new[] { 0, 4, 6, 2 }, new[] { 1, 3, 7, 5 } };
+        foreach (var f in q4) { s.T.Add((f[0], f[1], f[2])); s.T.Add((f[0], f[2], f[3])); }
+        return s;
+    }
 
     private static List<MeshPart> Collect(Document doc, View3D view, LevelHeights heights, Stats st, Dictionary<long, StoreyInfo> storeys, bool preview = false)
     {
@@ -169,8 +194,11 @@ internal static class Exporter
         // 자체 형상이 없으면 부품이 따로 들어감
         var elements = collector.ToElements().OrderBy(x => x is Stairs ? 0 : 1).ToList();
         var skip = new HashSet<long>();
+        // [모델에 넣기]로 넣은 Civil 지표면 · 3D 선은 구조물이 아님 — IFC 로 Civil 에 되돌아가거나 미리보기 · 끌기 대상에 섞이지 않게 뺌(설치 전 검토 중간)
+        var made = CivilSurface.MadeIds(doc);
         foreach (var e in elements)
         {
+            if (made.Contains(e.Id.Value)) { st.CivilMade++; continue; }
             if (skip.Contains(e.Id.Value)) { st.StairComponentsSkipped++; continue; }
             if (e is RevitLinkInstance) { st.Links++; continue; }
             if (e is ImportInstance) { st.Imports++; continue; }

@@ -118,7 +118,8 @@ internal static class SharedCoords
     {
         var loc = doc.ActiveProjectLocation;
         var before = loc.GetProjectPosition(XYZ.Zero);
-        var rm = P2.Mid(fit.R1, fit.R2); var cm = P2.Mid(fit.C1, fit.C2);
+        // Revit 두 점 가운데 → Civil 두 점 가운데 + 손 맞춤(fit.Anchor — 손 맞춤이 없으면 Civil 가운데)
+        var rm = P2.Mid(fit.R1, fit.R2); var cm = fit.Anchor;
         var at = new XYZ(rm.X / Ft, rm.Y / Ft, 0);
         using var t = new Transaction(doc, "DH 공유 좌표 = Civil 좌표");
         var fo = t.GetFailureHandlingOptions();
@@ -157,7 +158,9 @@ internal static class SharedCoords
                  $"\t후 동 {after.EastWest * Ft:0.000} 북 {after.NorthSouth * Ft:0.000} 높이 {after.Elevation * Ft:0.000} 각 {after.Angle * 180 / Math.PI:0.0000}°\t평면 비율 {fit.Scale:0.000000}(공유 좌표엔 안 들어감)");
         string msg = "공유 좌표를 Civil 좌표로 바꿈 — Revit IFC · DWG · NWC를 «공유 좌표»로 내보내면 맞습니다";
         // Revit 공유 좌표는 비율을 못 담음(옮김 · 돌림만 — JACK 1110 인터뷰) → 두 점 가운데가 맞고 끝점은 거리 차의 반씩 어긋남을 알림
-        if (Math.Abs(fit.DistanceError) >= 0.0005)
+        if (fit.HasHand)
+            msg += $"\n손 맞춤 포함(동 {fit.Hand.X:+0.000;-0.000;0.000} · 북 {fit.Hand.Y:+0.000;-0.000;0.000} m · 돌림 {fit.HandAngle * 180 / Math.PI:+0.00;-0.00;0.00}°)";
+        else if (Math.Abs(fit.DistanceError) >= 0.0005)
             msg += $"\n두 선분 길이 차 {fit.DistanceError * 1000:+0;-0} mm(비율 {fit.Scale:0.000000})는 공유 좌표에 넣을 수 없어, 끝점이 Civil과 {Math.Abs(fit.DistanceError) / 2 * 1000:0.0} mm씩 어긋남(IFC 내보내기는 비율 적용)";
         return (true, msg);
     }
@@ -177,7 +180,7 @@ internal static class SharedCoords
     }
 
     /// <summary>경고만 지움(오류는 그대로 — Revit 이 되돌린다).</summary>
-    private sealed class WarningSwallower : IFailuresPreprocessor
+    internal sealed class WarningSwallower : IFailuresPreprocessor
     {
         public FailureProcessingResult PreprocessFailures(FailuresAccessor a)
         {
