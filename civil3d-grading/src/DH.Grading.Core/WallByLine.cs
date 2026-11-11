@@ -66,6 +66,9 @@ public static partial class WallByLine
         public double LedgeMax = 1.0;
         /// <summary>★[v117.3 · 계획 `2026-11-11_부지_다단옹벽.md` 2절] 다단(<see cref="WallShape.Tiered"/>) — 단높이 H · 소단 폭 b(NaN = 방향의 Hc/Hf · Tc/Tf) · 첫 소단 Z1(실제 z · NaN = 자동).</summary>
         public double TierH = double.NaN, TierB = double.NaN, TierZ1 = double.NaN;
+        /// <summary>★[v117.5 · 키트 wtfill] 다단 2차 수직만 — 세계 좌표 (x, y)에서 P0′ = 원지반이 짓기상 정확한가(소단이 땅 높이에서 잘린 자리 · 바깥 벽 높이 0).
+        /// 그 자리 P0 읽기 = 원지반 그대로(합성 삼각망의 근사값 대신) · 두 L′ 끝이 다 그 자리인 칸 = 높이 0 칸(부호 대신 |W − G| ≤ 1 mm). null = v117 그대로(비트 같음).</summary>
+        public Func<double, double, bool>? ZeroAt;
         /// <summary>★[v117.3] 얕은 복사(다단 2차 수직 짓기가 P0만 바꿔 부른다).</summary>
         internal Input Copy() => (Input)MemberwiseClone();
     }
