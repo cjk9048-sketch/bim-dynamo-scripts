@@ -39,6 +39,10 @@ internal static class PureWithWallsBuilder
         public int Kind;
         /// <summary>★[v114.0] Kind 2 — 앞면 토막 길이 합(Faces · 대안 옹벽 길이).</summary>
         public double LineLen;
+        /// <summary>★[로드맵 F · 선 옹벽 3D 몸통 · 터파기] Kind 2 — 면 토막(짓기가 적은 머리 · 발) · 모양(2 수직 · 3 다단 — 이 둘만 터파기 · 3D로) · 다단 소단 폭. 굳은 칸은 빈 값.</summary>
+        public System.Collections.Generic.List<WallByLine.FaceSeg> Faces = new();
+        public int Shape;
+        public double TierB = double.NaN;
     }
 
     /// <summary>★[v113.0 · JACK 1104 «옹벽 폴리선»] 열린 선 2D 길이.</summary>
@@ -383,7 +387,7 @@ internal static class PureWithWallsBuilder
                         {
                             var w = walls.FirstOrDefault(x => x.No == no);
                             if (w == null || w.CompNonce != nonce || w.Cap == null) continue;
-                            res.Add(new ReflWall { No = w.No, Up = w.Up, Poly = w.Poly, SlopeW = w.SlopeW, FaceRun = w.FaceRun, H = w.H, IsWall = w.IsWall, T = w.T, HeadZ = w.HeadZ, Kind = w.Kind, LineLen = w.FaceLen });
+                            res.Add(new ReflWall { No = w.No, Up = w.Up, Poly = w.Poly, SlopeW = w.SlopeW, FaceRun = w.FaceRun, H = w.H, IsWall = w.IsWall, T = w.T, HeadZ = w.HeadZ, Kind = w.Kind, LineLen = w.FaceLen, Faces = w.Faces, Shape = w.Shape, TierB = w.TierB });
                         }
                 }
             }
@@ -478,7 +482,7 @@ internal static class PureWithWallsBuilder
                 if (string.IsNullOrEmpty(nonce) || w.CompNonce != nonce || w.Cap == null) { old.Add(no); continue; }
                 caps.Add((no, w.Cap));
                 polys[no] = w.Poly;
-                R.Walls.Add(new ReflWall { No = w.No, Up = w.Up, Poly = w.Poly, SlopeW = w.SlopeW, FaceRun = w.FaceRun, H = w.H, IsWall = w.IsWall, T = w.T, HeadZ = w.HeadZ, Kind = w.Kind, LineLen = w.FaceLen });
+                R.Walls.Add(new ReflWall { No = w.No, Up = w.Up, Poly = w.Poly, SlopeW = w.SlopeW, FaceRun = w.FaceRun, H = w.H, IsWall = w.IsWall, T = w.T, HeadZ = w.HeadZ, Kind = w.Kind, LineLen = w.FaceLen, Faces = w.Faces, Shape = w.Shape, TierB = w.TierB });
             }
             if (old.Count + gone.Count > 0)
             {
