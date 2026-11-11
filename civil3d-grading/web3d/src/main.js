@@ -17,7 +17,8 @@ import { inHost, post, onHost } from './host.js';
 // ★[JACK 1103] 'align' = 부지 측점 · 'ralign' = 진입도로 측점(도로가 있을 때만)
 // ★[v115 · JACK 1105 임상도] 'tree' = 수목(임상도) — 건물 다음
 // ★[JACK 1111] 'struct' = 불러온 구조물(있을 때만)
-const ORDER = ['terrain', 'sat', 'cutfill', 'ground', 'wall', 'pattern', 'struct', 'ditch', 'excav', 'drain', 'slope', 'cad', 'bldg', 'tree', 'align', 'ralign'];
+// ★[배수지 U형 측구] 'uditch' = 부지 U형 측구(있을 때만)
+const ORDER = ['terrain', 'sat', 'cutfill', 'ground', 'wall', 'pattern', 'struct', 'uditch', 'ditch', 'excav', 'drain', 'slope', 'cad', 'bldg', 'tree', 'align', 'ralign'];
 const KEEP = 'dh3d.layers.v1';
 
 function loadKeep() { try { return JSON.parse(localStorage.getItem(KEEP) || '{}'); } catch { return {}; } }
@@ -290,6 +291,7 @@ async function main() {
       struct: L.struct ? { n: L.struct.n } : null,
       // ★[JACK 1111 옹벽 겉모습] 무늬 메시마다 옹벽 번호 · 층 · 겉모습(null = 옛 한 색) · 조각 수 — 시험(키트)이 형식별 겉모습을 확인
       faces: L.pattern ? L.pattern.obj.children.map(m => ({ wall: m.userData.wall, pat: m.userData.pat, face: m.userData.face || null, pieces: m.userData.pieces || 0 })) : [],
+      uditch: L.uditch ? { n: L.uditch.n } : null,
       forest: L.tree ? (L.tree.missing ? { missing: L.tree.missing, quiet: !!L.tree.quiet } : { n: L.tree.n, note: L.tree.note, legend: L.tree.legend }) : null,
       align: L.align ? { name: L.align.name, st: L.align.st.length, views: L.align.views } : null, build: !!head.build, geo: head.geo || null,
       ralign: L.ralign ? L.ralign.roads.map(a => ({ name: a.name, st: a.st.length, views: a.views })) : null,

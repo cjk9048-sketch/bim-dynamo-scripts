@@ -60,6 +60,7 @@
         <Command Global="DHSTRUCT" Local="DHSTRUCT" />
         <Command Global="DHSTRUCTPTS" Local="DHSTRUCTPTS" />
         <Command Global="DHSTRUCTOFF" Local="DHSTRUCTOFF" />
+        <Command Global="DHUDITCH" Local="DHUDITCH" />
         <Command Global="DHPICKCLEAR" Local="DHPICKCLEAR" />
         <Command Global="DHPICKSTATUS" Local="DHPICKSTATUS" />
         <Command Global="DHPROFILE" Local="DHPROFILE" />
