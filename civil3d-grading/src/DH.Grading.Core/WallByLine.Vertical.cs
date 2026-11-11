@@ -1209,10 +1209,20 @@ public static partial class WallByLine
                     // 가름점 C · 뒤에 더한 L 점(고른 간격 · L′ 위 P0 변 수선) — 두 면이 처음 L 점 사이에서 1차(변 건넘이 모두 처음 L 점)
                     int a = i - 1; while (a >= 0 && !dzOf.ContainsKey(sp[a])) a--;
                     int b = i + 1; while (b < sp.Count && !dzOf.ContainsKey(sp[b])) b++;
-                    if (a < 0 || b >= sp.Count) throw new InvalidOperationException($"측점 {p.S:F3} m의 이웃 L 점이 없음");
-                    var va = dzOf[sp[a]]; var vb = dzOf[sp[b]];
-                    double t = sp[b].S - sp[a].S > 0 ? (p.S - sp[a].S) / (sp[b].S - sp[a].S) : 0;
-                    v = (va.G + (vb.G - va.G) * t, va.P + (vb.P - va.P) * t);
+                    // ★[키트 wmeast 1111 «측점 36.144 m의 이웃 L 점이 없음»] ④-c L′ P0 가로대는 L 발 = L′ 점을 L에 내린 가장 가까운 점이라 끝 B 곁(L′ 끝 토막이 B 법선 너머)이면
+                    //   발이 끝에 눌려 S = 선 길이(시작 쪽은 0) — 같은 측점의 끝 점 뒤에 서서 이웃이 한쪽뿐이다. 같은 측점(같은 L 점)이면 그 값 그대로 · 아니면 못 셈
+                    if (a < 0 || b >= sp.Count)
+                    {
+                        var nb = a >= 0 ? sp[a] : b < sp.Count ? sp[b] : null;
+                        if (nb == null || Math.Abs(nb.S - p.S) > 1e-9) throw new InvalidOperationException($"측점 {p.S:F3} m의 이웃 L 점이 없음");
+                        v = dzOf[nb];
+                    }
+                    else
+                    {
+                        var va = dzOf[sp[a]]; var vb = dzOf[sp[b]];
+                        double t = sp[b].S - sp[a].S > 0 ? (p.S - sp[a].S) / (sp[b].S - sp[a].S) : 0;
+                        v = (va.G + (vb.G - va.G) * t, va.P + (vb.P - va.P) * t);
+                    }
                 }
                 rungAt.TryGetValue(p, out var rg);
                 st.Add(new WallProfile.Station { S = p.S, X = p.C.X + ox, Y = p.C.Y + oy, EG = v.G, FG = v.P, H = v.G - v.P, Wh = rg?.H ?? double.NaN, W = rg?.W ?? double.NaN, Kind = p.Kind, NoData = p0FbAt.Contains(p) });
