@@ -147,6 +147,10 @@ public static partial class WallByLine
     {
         why = "";
         var g = given.Select(q => q.Copy()).OrderBy(q => q.S0).ToList();
+        // ★[v117.9 · 설치 전 검토 LOW] 경계를 고쳐 선이 짧아지면 선 밖이 된 구간 경계는 버림(앞 구간에 합침) — ⚠ 한 줄(옹벽이 보류되지 않게)
+        int drop = 0;
+        for (int k = g.Count - 1; k >= 1; k--) if (!(g[k].S0 < len - 1e-6)) { g.RemoveAt(k); drop++; }
+        if (g.Count < 2) { why = string.Format(CultureInfo.InvariantCulture, "구간 경계가 모두 선(0~{0:F2}) 밖입니다 — 한 구간(O) 또는 구간을 다시 나누세요", len); return null; }
         g[0].S0 = 0; g[^1].S1 = len;
         for (int k = 0; k + 1 < g.Count; k++)
         {
@@ -161,6 +165,7 @@ public static partial class WallByLine
             if (double.IsNaN(s.Z1)) { s.Z1 = Z1Of(RungsIn(r, s.S0, s.S1), H); s.NoTier = double.IsNegativeInfinity(s.Z1); s.Hand = false; }
             else { s.Z1 = sg * s.Z1; s.Hand = true; }
         }
+        if (drop > 0) why = string.Format(CultureInfo.InvariantCulture, "구간 경계 {0}개가 선(0~{1:F2}) 밖이라 버림(앞 구간에 합침)", drop, len);   // 성공 때 why = ⚠ 한 줄
         return g;
     }
 }
