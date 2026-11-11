@@ -28,6 +28,8 @@
     <Compile Include="..\..\src\DH.Grading.Civil\DhBrand.cs" />
     <Compile Include="..\..\src\DH.Grading.Civil\SheetBookPanel.cs" />
     <Compile Include="SheetBookShot.cs" />
+    <Compile Include="..\..\src\DH.Grading.Civil\StructExportDialog.cs" />
+    <Compile Include="StructExportShot.cs" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\DH.Grading.Core\DH.Grading.Core.csproj" />

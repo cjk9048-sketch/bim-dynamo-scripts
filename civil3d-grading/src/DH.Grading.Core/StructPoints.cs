@@ -60,10 +60,12 @@ public static class StructPoints
     }
 
     /// <summary>★[v116.13 · JACK 1110 저녁 «Civil 평면뷰를 개략적으로 같이 내보내 Revit 팝업에서 미리보기처럼» · 약속 §3 «sketch»(선택 칸 · version 1 그대로)]
-    /// 미리보기 선 하나 — <paramref name="Kind"/> = site · wall · road · struct · bench · contour · other(Revit 미리보기 색) · 원래 레이어 · 닫힘 · 점(m · WCS · XY).</summary>
+    /// 미리보기 선 하나 — <paramref name="Kind"/> = site · wall · road · struct · bench · slope(★v117.1 Revit 확인 1111) · contour · other(Revit 미리보기 색) · 원래 레이어 · 닫힘 · 점(m · WCS · XY).</summary>
     public sealed record SketchLine(string Kind, string Layer, bool Closed, IReadOnlyList<(double X, double Y)> Pts);
-    /// <summary>미리보기 선 묶음 — 가운데 · 반지름(m · 기록용) · 선들.</summary>
-    public sealed record Sketch(double Cx, double Cy, double Radius, IReadOnlyList<SketchLine> Lines);
+    /// <summary>미리보기 선 묶음 — 가운데 · 반지름(m · 기록용) · 선들. ★[v117.1] <paramref name="Box"/> = 고른 네모(있을 때만 «sketch».«box» — 선은 네모로 자른 것 · 가운데 = 네모 가운데 · 반지름 = 대각선 절반).</summary>
+    public sealed record Sketch(double Cx, double Cy, double Radius, IReadOnlyList<SketchLine> Lines, GroundCrop.Box? Box = null);
+    /// <summary>★[v117.1 · JACK 1111] 점 파일이 가리키는 3D 영역 파일 — «region3d» 칸(네모를 골랐을 때만): 파일 이름(폴더 없이) · 네모 · 세모 수 · 선 수.</summary>
+    public sealed record Region3DRef(string File, GroundCrop.Box Box, int Tris, int Lines);
     /// <summary>미리보기 꼭짓점 합계 한도(약속 §2-6 — 넘는 선은 Revit이 버림) — 넘치면 <see cref="Trim"/>가 뒤 종류부터 뺀다.</summary>
     public const int SketchMaxPts = 50000;
     /// <summary>미리보기 반지름(m) — 80 m와 두 점 거리 3배 중 큰 값(약속 §2-6 제안).</summary>
@@ -75,7 +77,7 @@ public static class StructPoints
     {
         var ok = lines.Where(l => l.Pts.Count >= 2 && l.Pts.All(p => double.IsFinite(p.X) && double.IsFinite(p.Y))).ToList();
         int dropped = lines.Count() - ok.Count;
-        string[] order = { "other", "contour", "bench", "road", "wall", "site", "struct" };
+        string[] order = { "other", "slope", "contour", "bench", "road", "wall", "site", "struct" };   // ★[v117.1] slope = 옛 other 자리(사면선)
         foreach (var k in order)
         {
             if (ok.Sum(l => l.Pts.Count) <= max) break;
@@ -87,10 +89,39 @@ public static class StructPoints
         return (ok, dropped);
     }
 
-    /// <summary>JSON 글(UTF-8로 쓸 것). 점은 정확히 둘(찍은 순서). <paramref name="sketch"/>가 있으면 «sketch» 칸(선택)을 끝에 붙인다.</summary>
-    public static string Json(Info i, Pt p1, Pt p2, Sketch? sketch = null)
+    /// <summary>★[v117.1] 파일 머리(units · axes · crs · drawing · app · created) — 점 파일과 3D 영역 파일이 같은 함수로 써서 값이 글자까지 같다(계획 2절).</summary>
+    public static void WriteHead(Utf8JsonWriter w, Info i)
     {
         TryToMeter(i.Insunits, out _, out bool assumed);
+        w.WriteStartObject("units"); w.WriteString("length", "m"); w.WriteNumber("toMeter", 1.0); w.WriteString("angle", "deg"); w.WriteEndObject();
+        w.WriteString("axes", "X=동(Easting) · Y=북(Northing) · Z=표고 — 도면 WCS");
+        w.WriteStartObject("crs");
+        if (i.Epsg > 0) w.WriteNumber("epsg", i.Epsg); else w.WriteNull("epsg");
+        w.WriteString("name", i.Epsg > 0 ? EpsgName(i.Epsg) : "");
+        w.WriteString("civilCode", i.CivilCode ?? "");
+        w.WriteString("source", i.CrsSource ?? "none");
+        w.WriteEndObject();
+        w.WriteStartObject("drawing");
+        w.WriteString("file", i.File ?? ""); w.WriteString("path", i.Path ?? "");
+        w.WriteNumber("insunits", i.Insunits); w.WriteString("insunitsName", UnitName(i.Insunits));
+        w.WriteBoolean("unitAssumed", assumed); w.WriteBoolean("ucsWasWorld", i.UcsWasWorld);
+        w.WriteEndObject();
+        w.WriteStartObject("app"); w.WriteString("civil", i.Civil ?? ""); w.WriteString("addin", i.Addin ?? ""); w.WriteEndObject();
+        w.WriteString("created", i.Created.ToString("yyyy-MM-dd'T'HH:mm:sszzz", CultureInfo.InvariantCulture));
+    }
+
+    /// <summary>★[v117.1] 네모 칸 — 객체 {x0, y0, x1, y1}(m · 1 mm).</summary>
+    public static void WriteBox(Utf8JsonWriter w, string key, GroundCrop.Box b)
+    {
+        w.WriteStartObject(key);
+        w.WriteNumber("x0", Math.Round(b.X0, 3)); w.WriteNumber("y0", Math.Round(b.Y0, 3)); w.WriteNumber("x1", Math.Round(b.X1, 3)); w.WriteNumber("y1", Math.Round(b.Y1, 3));
+        w.WriteEndObject();
+    }
+
+    /// <summary>JSON 글(UTF-8로 쓸 것). 점은 정확히 둘(찍은 순서). <paramref name="sketch"/>가 있으면 «sketch» 칸(선택)을 끝에 붙인다.
+    /// ★[v117.1] <paramref name="region"/>이 있으면 «region3d» 칸(check 뒤) · sketch에 네모가 있으면 «sketch».«box» — 둘 다 없으면 v116.13과 글자 하나 안 다름(S247 정답 글).</summary>
+    public static string Json(Info i, Pt p1, Pt p2, Sketch? sketch = null, Region3DRef? region = null)
+    {
         var (dist, brg) = Check(p1, p2);
         using var ms = new MemoryStream();
         using (var w = new Utf8JsonWriter(ms, new JsonWriterOptions { Indented = true, Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping }))
@@ -99,21 +130,7 @@ public static class StructPoints
             w.WriteString("format", Format);
             w.WriteNumber("version", FormatVersion);
             w.WriteStartObject("structure"); w.WriteString("name", i.Name); w.WriteString("note", ""); w.WriteEndObject();
-            w.WriteStartObject("units"); w.WriteString("length", "m"); w.WriteNumber("toMeter", 1.0); w.WriteString("angle", "deg"); w.WriteEndObject();
-            w.WriteString("axes", "X=동(Easting) · Y=북(Northing) · Z=표고 — 도면 WCS");
-            w.WriteStartObject("crs");
-            if (i.Epsg > 0) w.WriteNumber("epsg", i.Epsg); else w.WriteNull("epsg");
-            w.WriteString("name", i.Epsg > 0 ? EpsgName(i.Epsg) : "");
-            w.WriteString("civilCode", i.CivilCode ?? "");
-            w.WriteString("source", i.CrsSource ?? "none");
-            w.WriteEndObject();
-            w.WriteStartObject("drawing");
-            w.WriteString("file", i.File ?? ""); w.WriteString("path", i.Path ?? "");
-            w.WriteNumber("insunits", i.Insunits); w.WriteString("insunitsName", UnitName(i.Insunits));
-            w.WriteBoolean("unitAssumed", assumed); w.WriteBoolean("ucsWasWorld", i.UcsWasWorld);
-            w.WriteEndObject();
-            w.WriteStartObject("app"); w.WriteString("civil", i.Civil ?? ""); w.WriteString("addin", i.Addin ?? ""); w.WriteEndObject();
-            w.WriteString("created", i.Created.ToString("yyyy-MM-dd'T'HH:mm:sszzz", CultureInfo.InvariantCulture));
+            WriteHead(w, i);
             w.WriteStartArray("points");
             int no = 0;
             foreach (var p in new[] { p1, p2 })
@@ -126,11 +143,20 @@ public static class StructPoints
             }
             w.WriteEndArray();
             w.WriteStartObject("check"); w.WriteNumber("distance", Math.Round(dist, 6)); w.WriteNumber("bearingDeg", Math.Round(brg, 6)); w.WriteEndObject();
+            if (region != null)
+            {
+                w.WriteStartObject("region3d");
+                w.WriteString("file", region.File ?? "");
+                WriteBox(w, "box", region.Box);
+                w.WriteNumber("tris", region.Tris); w.WriteNumber("lines", region.Lines);
+                w.WriteEndObject();
+            }
             if (sketch != null)
             {
                 w.WriteStartObject("sketch");
                 w.WriteStartArray("center"); w.WriteNumberValue(Math.Round(sketch.Cx, 3)); w.WriteNumberValue(Math.Round(sketch.Cy, 3)); w.WriteEndArray();
                 w.WriteNumber("radius", Math.Round(sketch.Radius, 3));
+                if (sketch.Box is GroundCrop.Box sb) WriteBox(w, "box", sb);
                 w.WriteStartArray("lines");
                 foreach (var l in sketch.Lines)
                 {
