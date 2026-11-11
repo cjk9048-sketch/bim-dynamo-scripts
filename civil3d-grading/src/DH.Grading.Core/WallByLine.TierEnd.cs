@@ -160,12 +160,25 @@ public static partial class WallByLine
             int nAng = Math.Max(2, (int)Math.Ceiling((a1 - a0) / (Math.PI / 180)));
             var rs = new List<double> { rLo }; rs.AddRange(prof[e].Select(q => q.R).Where(r => r > rLo + 1e-9 && r < rHi - 1e-9)); rs.Add(rHi); rs = rs.Distinct().ToList();
             Point3 W(double x, double y) => new(x + ox, y + oy, sg * Se(e, x, y));
+            // ★[바늘 0 · S269 e1 (57, 30.567) 잰 것] 반지름 선 R이 P0′ 변(옛 소단 꺾임선 x 57)을 S = P0′ 교선 Z가 그 변을 지르는 점 C 곁(0.36 mm)에서 지르면
+            //   R · 변 · Z 세 선이 0.4 mm 세모를 만들고 다듬기 뒤 바늘(높이 0.12 mm)이 남았다. 반지름 선은 근사용(자리를 골라도 됨)이라
+            //   R이 C에서 BendD 안으로 지나면 C를 R의 꼭짓점으로 넣어 세 선을 C 한 점에서 만나게 한다(C 높이 = S 그대로 · 원뿔 근사 오차는 µm)
+            var bend = BendPoints(e, cur, cx0, cy0, rLo, rHi, a0, a1, nAng, sg, ox, oy, Se);
             var lines = new List<List<Point3>>();
             for (int k = 0; k <= nAng; k++)
             {
                 double th = a0 + (a1 - a0) * k / nAng, ux = Math.Cos(th), uy = Math.Sin(th);
-                lines.Add(rs.Select(r => W(cx0 + ux * r, cy0 + uy * r)).ToList());
+                var rl = rs.Select(r => (R: r, P: W(cx0 + ux * r, cy0 + uy * r))).ToList();
+                if (bend.TryGetValue(k, out var bk))
+                    foreach (var c in bk)
+                    {
+                        double rc = (c.X - cx0) * ux + (c.Y - cy0) * uy;
+                        if (rl.Any(q => Math.Abs(q.R - rc) < MinSp)) continue;   // 꺾임 원 꼭짓점이 곁 — 그 점이 이미 있다
+                        rl.Add((rc, W(c.X, c.Y)));
+                    }
+                lines.Add(rl.OrderBy(q => q.R).Select(q => q.P).ToList());
             }
+            int bentN = bend.Values.Sum(v => v.Count);
             foreach (var r in rs)
             {
                 if (r <= 1e-9) continue;
@@ -187,11 +200,220 @@ public static partial class WallByLine
             var cr = WallDaylight.BuildComposite(polyW, sTris, inp.GroundTris!, cur, !up);
             log.Append($"  [다단 끝 비탈 {(e == 0 ? "A" : "B")}] 합성 — {cr.Summary}\n");
             if (cr.Zone == null) return ("끝 비탈 합성", "끝 비탈을 정지면에 못 합쳤습니다 — " + cr.Fail, new[] { (X[e].X + ox, X[e].Y + oy) }, p0All);
-            cur = cr.Zone.Concat(cr.Untouched).ToList();
+            // ★[바늘 0 · S269 e1 (59, 26.05) 잰 것] 원뿔 소단 Z1이 다단 벽 2 앞면(1:0.01) 머리 곁까지 메우면 Z가 머리선에서 0.38°로 갈라진다(쐐기) —
+            //   쐐기 끝에서 2.4 cm인 P0′ 꼭짓점(옛 격자 x 59가 머리선에 남긴 가짜 점)이 Z와 0.16 mm 짧은 변을 만들었다(MinSp/sin α = 3.8 cm 안).
+            //   나쁜 세모(바늘 · 짧은 변)의 꼭짓점 중 둘레 세모가 평면 하나 · 또는 곧은 꺾임선을 사이에 둔 평면 둘에만 있는 가짜 점을 뺀다(높이 그대로 — 정확)
+            var fixedV = new HashSet<(double, double)>();
+            foreach (var t in cr.Untouched) { fixedV.Add((t.A.X, t.A.Y)); fixedV.Add((t.B.X, t.B.Y)); fixedV.Add((t.C.X, t.C.Y)); }
+            var zone = DropFakeAtSlivers(cr.Zone, fixedV, gf, out int dropN, out int badLeft);
+            log.Append(string.Format(ci, "  [다단 끝 비탈 {0}] 반지름 선 꺾음(Z × P0′ 변 곁) {1} · 가짜 점 뺌(바늘 · 짧은 변 곁) {2} · 남은 바늘 · 짧은 변 세모 {3}\n", e == 0 ? "A" : "B", bentN, dropN, badLeft));
+            cur = zone.Concat(cr.Untouched).ToList();
             endQ.Add(qp); used.Add(e);
         }
         var ue = used.ToArray();
         endS = (x, y) => { double v = double.NegativeInfinity; foreach (int e in ue) v = Math.Max(v, Se(e, x - ox, y - oy)); return v; };
         return ("", "", Array.Empty<(double, double)>(), cur);
+    }
+
+    /// <summary>반지름 선을 꺾을 거리 — R이 P0′ 변을 지르는 점과 Z(S = P0′)가 그 변을 지르는 점이 이만큼 안이면 R을 Z 점으로 꺾는다.</summary>
+    const double BendD = 0.02;
+
+    /// <summary>반지름 선 k(부채꼴 두 끝 선은 자리 고리와 같아야 해서 뺌)마다 꺾어 지날 점(지역 좌표) — P0′ 변 위 Z 점 C(S − sg·P0′ = 0)가
+    /// R이 그 변을 지르는 점에서 <see cref="BendD"/> 안일 때. 꺾음 폭은 그 반지름에서 이웃 선 간격의 1/4 안만.</summary>
+    static Dictionary<int, List<Coordinate>> BendPoints(int e, List<Tri> cur, double cx, double cy, double rLo, double rHi, double a0, double a1, int nAng,
+        double sg, double ox, double oy, Func<int, double, double, double> Se)
+    {
+        var res = new Dictionary<int, List<Coordinate>>();
+        double bx0 = cx - rHi - 1, bx1 = cx + rHi + 1, by0 = cy - rHi - 1, by1 = cy + rHi + 1;
+        var seen = new HashSet<((double, double), (double, double))>();
+        var edges = new List<(double AX, double AY, double AZ, double BX, double BY, double BZ)>();
+        var tree = new NetTopologySuite.Index.Strtree.STRtree<int>();
+        foreach (var t in cur)
+        {
+            double mx = Math.Min(t.A.X, Math.Min(t.B.X, t.C.X)) - ox, Mx = Math.Max(t.A.X, Math.Max(t.B.X, t.C.X)) - ox;
+            double my = Math.Min(t.A.Y, Math.Min(t.B.Y, t.C.Y)) - oy, My = Math.Max(t.A.Y, Math.Max(t.B.Y, t.C.Y)) - oy;
+            if (Mx < bx0 || mx > bx1 || My < by0 || my > by1) continue;
+            foreach (var (p, q) in new[] { (t.A, t.B), (t.B, t.C), (t.C, t.A) })
+            {
+                var kp = (p.X, p.Y); var kq = (q.X, q.Y);
+                if (!seen.Add(kp.CompareTo(kq) <= 0 ? (kp, kq) : (kq, kp))) continue;
+                tree.Insert(new Envelope(p.X - ox, q.X - ox, p.Y - oy, q.Y - oy), edges.Count);
+                edges.Add((p.X - ox, p.Y - oy, p.Z, q.X - ox, q.Y - oy, q.Z));
+            }
+        }
+        if (edges.Count == 0) return res;
+        tree.Build();
+        double dAng = (a1 - a0) / nAng;
+        for (int k = 1; k < nAng; k++)
+        {
+            double th = a0 + dAng * k, ux = Math.Cos(th), uy = Math.Sin(th);
+            double px = cx + ux * rLo, py = cy + uy * rLo, dx = ux * (rHi - rLo), dy = uy * (rHi - rLo);
+            foreach (int i in tree.Query(new Envelope(px, px + dx, py, py + dy)))
+            {
+                var (ax, ay, az, bx, by, bz) = edges[i];
+                double ex = bx - ax, ey = by - ay, den = dx * ey - dy * ex, L = Math.Sqrt(ex * ex + ey * ey);
+                if (L <= 0 || Math.Abs(den) < 1e-12 * L * (rHi - rLo)) continue;
+                double s = ((ax - px) * ey - (ay - py) * ex) / den, tX = ((ax - px) * dy - (ay - py) * dx) / den;
+                if (s < 0 || s > 1 || tX < 0 || tX > 1) continue;
+                double F(double u) => Se(e, ax + ex * u, ay + ey * u) - sg * (az + (bz - az) * u);
+                double u0 = Math.Max(0, tX - BendD / L), u1 = Math.Min(1, tX + BendD / L), fa = F(u0);
+                const int n = 16;
+                for (int j = 1; j <= n; j++)
+                {
+                    double ub = u0 + (u1 - u0) * j / n, fb = F(ub), ua = u0 + (u1 - u0) * (j - 1) / n;
+                    if (fa * fb < 0 && Math.Abs(fa) > 1e-9 && Math.Abs(fb) > 1e-9)
+                    {
+                        double lo = ua, hi = ub, flo = fa;
+                        for (int it = 0; it < 60; it++) { double m = (lo + hi) / 2, fm = F(m); if (fm * flo > 0) { lo = m; flo = fm; } else hi = m; }
+                        double uc = (lo + hi) / 2, x = ax + ex * uc, y = ay + ey * uc;
+                        double rc = (x - cx) * ux + (y - cy) * uy, off = Math.Abs((x - cx) * uy - (y - cy) * ux);
+                        if (off > 1e-6 && rc > rLo && rc < rHi && off <= 0.25 * rc * dAng)
+                        {
+                            if (!res.TryGetValue(k, out var l)) res[k] = l = new();
+                            l.Add(new Coordinate(x, y));
+                        }
+                    }
+                    fa = fb;
+                }
+            }
+        }
+        return res;
+    }
+
+    /// <summary>나쁜 세모(바늘 높이 &lt; 0.122 mm · 변 &lt; <see cref="MinSp"/>)의 꼭짓점 가운데 <b>가짜 점</b>을 뺀다 — 둘레 세모가 평면 하나에 있거나,
+    /// 그 점을 지나는 곧은 꺾임선(둘레 두 이웃)을 사이에 둔 평면 둘에만 있는 점. 고정 점(손 안 댄 세모와 나누는 점) · 테두리 점은 안 뺀다.
+    /// 둘레 고리를 (꺾임선으로 갈라) 다시 세모로 나누고, 새 세모가 바늘 · 새 짧은 변이 아니고 넓이 · 그 점 높이(1 µm)가 그대로일 때만 받는다(높이 그대로 — 정확).</summary>
+    static List<Tri> DropFakeAtSlivers(List<Tri> zone, HashSet<(double, double)> fixedV, GeometryFactory gf, out int dropN, out int badLeft)
+    {
+        dropN = 0;
+        static double Len((double X, double Y) a, (double X, double Y) b) => Math.Sqrt((a.X - b.X) * (a.X - b.X) + (a.Y - b.Y) * (a.Y - b.Y));
+        static double H(Tri t)
+        {
+            double ar = Math.Abs((t.B.X - t.A.X) * (t.C.Y - t.A.Y) - (t.B.Y - t.A.Y) * (t.C.X - t.A.X));
+            double lm = Math.Max(Len((t.A.X, t.A.Y), (t.B.X, t.B.Y)), Math.Max(Len((t.B.X, t.B.Y), (t.C.X, t.C.Y)), Len((t.C.X, t.C.Y), (t.A.X, t.A.Y))));
+            return lm > 0 ? ar / lm : 0;
+        }
+        static bool Short(Point3 a, Point3 b) { double l = Len((a.X, a.Y), (b.X, b.Y)); return l > 0 && l < MinSp - 1e-9; }
+        static bool Bad(Tri t) => H(t) < 1.22e-4 || Short(t.A, t.B) || Short(t.B, t.C) || Short(t.C, t.A);
+        var cur = zone;
+        for (int pass = 0; pass < 8; pass++)
+        {
+            var vt = new Dictionary<(double, double), List<int>>();
+            for (int i = 0; i < cur.Count; i++)
+                foreach (var p in new[] { cur[i].A, cur[i].B, cur[i].C }) { if (!vt.TryGetValue((p.X, p.Y), out var l)) vt[(p.X, p.Y)] = l = new(); l.Add(i); }
+            var cand = new List<(double, double)>(); var cs = new HashSet<(double, double)>();
+            foreach (var t in cur) if (Bad(t)) foreach (var p in new[] { t.A, t.B, t.C }) if (cs.Add((p.X, p.Y))) cand.Add((p.X, p.Y));
+            if (cand.Count == 0) break;
+            var gone = new HashSet<int>(); var add = new List<Tri>();
+            foreach (var v in cand)
+            {
+                if (fixedV.Contains(v)) continue;
+                var star = vt[v];
+                if (star.Any(gone.Contains)) continue;
+                var nt = Retri(v, star.Select(i => cur[i]).ToList());
+                if (nt == null) continue;
+                gone.UnionWith(star); add.AddRange(nt); dropN++;
+            }
+            if (gone.Count == 0) break;
+            cur = cur.Where((_, i) => !gone.Contains(i)).Concat(add).ToList();
+        }
+        badLeft = cur.Count(Bad);
+        return cur;
+
+        List<Tri>? Retri((double X, double Y) v, List<Tri> star)
+        {
+            // v를 돌아 (v, a, b) 반시계 — 둘레 고리 a → b
+            var next = new Dictionary<(double, double), (double, double)>();
+            var pt = new Dictionary<(double, double), Point3>();
+            var triOf = new Dictionary<(double, double), Tri>();   // 고리 변 a → b를 가진 세모
+            Point3 vp = default;
+            foreach (var t in star)
+            {
+                Point3 a, b;
+                if (t.A.X == v.X && t.A.Y == v.Y) { vp = t.A; a = t.B; b = t.C; }
+                else if (t.B.X == v.X && t.B.Y == v.Y) { vp = t.B; a = t.C; b = t.A; }
+                else { vp = t.C; a = t.A; b = t.B; }
+                if ((a.X - v.X) * (b.Y - v.Y) - (a.Y - v.Y) * (b.X - v.X) < 0) (a, b) = (b, a);
+                if (!next.TryAdd((a.X, a.Y), (b.X, b.Y))) return null;
+                pt[(a.X, a.Y)] = a; pt[(b.X, b.Y)] = b; triOf[(a.X, a.Y)] = t;
+            }
+            var ring = new List<(double, double)>();
+            var s0 = next.Keys.First(); var c = s0;
+            do { ring.Add(c); if (!next.TryGetValue(c, out c)) return null; } while (c != s0 && ring.Count <= star.Count);
+            if (c != s0 || ring.Count != star.Count) return null;   // 테두리 · 겹친 부채꼴
+            // 평면 무리 — 높이 허용 = 1 µm + 평면 기울기 × 2 µm(꼭짓점은 1 µm 격자 잇기 자리 — 1:0.01 앞면이면 0.2 mm · 잰 것: S269 e1 앞면 세모 기울기 99.68 ~ 99.74)
+            static double Tol(double p, double q) => 1e-6 + 2e-6 * Math.Sqrt(p * p + q * q);
+            var pl = new List<(double P, double Q, double C)>(); var grp = new Dictionary<(double, double), int>();
+            foreach (var a in ring)
+            {
+                var t = triOf[a];
+                int g = -1;
+                for (int j = 0; j < pl.Count && g < 0; j++)
+                {
+                    var (pp, qq, cc) = pl[j];
+                    if (new[] { t.A, t.B, t.C }.All(q => Math.Abs(pp * (q.X - v.X) + qq * (q.Y - v.Y) + cc - q.Z) <= Tol(pp, qq))) g = j;
+                }
+                if (g < 0)
+                {
+                    double x1 = t.B.X - t.A.X, y1 = t.B.Y - t.A.Y, z1 = t.B.Z - t.A.Z, x2 = t.C.X - t.A.X, y2 = t.C.Y - t.A.Y, z2 = t.C.Z - t.A.Z, d = x1 * y2 - x2 * y1;
+                    if (Math.Abs(d) < 1e-14) return null;
+                    double pp = (z1 * y2 - z2 * y1) / d, qq = (x1 * z2 - x2 * z1) / d;
+                    pl.Add((pp, qq, t.A.Z - pp * (t.A.X - v.X) - qq * (t.A.Y - v.Y))); g = pl.Count - 1;
+                    if (pl.Count > 2) return null;
+                }
+                grp[a] = g;
+            }
+            var polys = new List<List<(double, double)>>();
+            if (pl.Count == 1) polys.Add(ring);
+            else
+            {
+                // 꺾임 = 고리 점 w에서 앞 세모(… → w)와 뒤 세모(w → …)의 무리가 다름 — 꼭 둘
+                var cr = new List<int>();
+                for (int i = 0; i < ring.Count; i++) if (grp[ring[(i - 1 + ring.Count) % ring.Count]] != grp[ring[i]]) cr.Add(i);
+                if (cr.Count != 2) return null;
+                var p1 = new List<(double, double)>(); for (int i = cr[0]; ; i = (i + 1) % ring.Count) { p1.Add(ring[i]); if (i == cr[1]) break; }
+                var p2 = new List<(double, double)>(); for (int i = cr[1]; ; i = (i + 1) % ring.Count) { p2.Add(ring[i]); if (i == cr[0]) break; }
+                polys.Add(p1); polys.Add(p2);
+            }
+            var outT = new List<Tri>(); double aOld = star.Sum(t => Math.Abs((t.B.X - t.A.X) * (t.C.Y - t.A.Y) - (t.B.Y - t.A.Y) * (t.C.X - t.A.X))), aNew = 0;
+            var linkE = new HashSet<((double, double), (double, double))>();
+            foreach (var a in ring) { var b = next[a]; linkE.Add(a.CompareTo(b) <= 0 ? (a, b) : (b, a)); }
+            foreach (var poly in polys)
+            {
+                if (poly.Count < 3) continue;
+                var loc = new Dictionary<(double, double), Point3>();
+                var cs = poly.Select(q => { var lc = new Coordinate(q.Item1 - v.X, q.Item2 - v.Y); loc[(lc.X, lc.Y)] = pt[q]; return lc; }).ToList();
+                cs.Add(cs[0].Copy());
+                Geometry tr;
+                try { tr = NetTopologySuite.Triangulate.Polygon.ConstrainedDelaunayTriangulator.Triangulate(gf.CreatePolygon(cs.ToArray())); } catch { return null; }
+                for (int i = 0; i < tr.NumGeometries; i++)
+                {
+                    if (tr.GetGeometryN(i) is not Polygon tp || tp.Area <= 0) continue;
+                    var k = tp.ExteriorRing.Coordinates;
+                    if (!loc.TryGetValue((k[0].X, k[0].Y), out var A) || !loc.TryGetValue((k[1].X, k[1].Y), out var B) || !loc.TryGetValue((k[2].X, k[2].Y), out var C)) return null;
+                    var t = new Tri(A, B, C);
+                    if (H(t) < 1.22e-4) return null;
+                    foreach (var (p, q) in new[] { (A, B), (B, C), (C, A) })
+                    {
+                        var kp = (p.X, p.Y); var kq = (q.X, q.Y);
+                        if (Short(p, q) && !linkE.Contains(kp.CompareTo(kq) <= 0 ? (kp, kq) : (kq, kp))) return null;
+                    }
+                    aNew += Math.Abs((B.X - A.X) * (C.Y - A.Y) - (B.Y - A.Y) * (C.X - A.X));
+                    outT.Add(t);
+                }
+            }
+            if (Math.Abs(aNew - aOld) > 1e-9 * aOld + 1e-14) return null;
+            // 뺀 점 자리 높이가 새 세모에서 그대로(평면 무리와 같은 허용) — 꺾임선이 그 점을 곧게 지나는지도 이것이 잰다
+            foreach (var t in outT)
+            {
+                double d = (t.B.X - t.A.X) * (t.C.Y - t.A.Y) - (t.B.Y - t.A.Y) * (t.C.X - t.A.X);
+                double l1 = ((t.B.X - v.X) * (t.C.Y - v.Y) - (t.B.Y - v.Y) * (t.C.X - v.X)) / d, l2 = ((t.C.X - v.X) * (t.A.Y - v.Y) - (t.C.Y - v.Y) * (t.A.X - v.X)) / d, l3 = 1 - l1 - l2;
+                if (l1 < -1e-9 || l2 < -1e-9 || l3 < -1e-9) continue;
+                double x1 = t.B.X - t.A.X, y1 = t.B.Y - t.A.Y, z1 = t.B.Z - t.A.Z, x2 = t.C.X - t.A.X, y2 = t.C.Y - t.A.Y, z2 = t.C.Z - t.A.Z;
+                if (Math.Abs(l1 * t.A.Z + l2 * t.B.Z + l3 * t.C.Z - vp.Z) > Tol((z1 * y2 - z2 * y1) / d, (x1 * z2 - x2 * z1) / d)) return null;
+                return outT;
+            }
+            return null;
+        }
     }
 }
