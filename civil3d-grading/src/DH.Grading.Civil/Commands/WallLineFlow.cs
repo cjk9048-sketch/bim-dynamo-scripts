@@ -131,7 +131,7 @@ internal static class WallLineFlow
     internal static WallByLine.Built BuildGeom(BoundaryCut.Result cut, IReadOnlyList<Point3> bd, GradingBundle region, List<(string, IReadOnlyList<Point3>)> bl,
         double hc, double tc, double hf, double tf, double slopeW, double faceRun, double grid, double reach, CachedGroundSurface g, CachedGroundSurface p0, bool topStep = false, double blockLen = 9,
         WallByLine.WallShape shape = WallByLine.WallShape.Out, double tierH = double.NaN, double tierB = double.NaN, double tierZ1 = double.NaN,
-        List<WallByLine.TierSec>? tierSecs = null, bool tierEnd = false)
+        List<WallByLine.TierSec>? tierSecs = null, bool tierEnd = false, bool blockWarnOnly = false)
     {
         // ★[v117.3 · 계획 4절] 다단 — 소단 구역(깊이 D_T)이 선 안쪽으로 들어가므로 상자를 10 m 더(모자라면 Core가 «상자»로 거절)
         double box = reach + 5 + (shape == WallByLine.WallShape.Tiered ? 10 : 0);
@@ -160,7 +160,7 @@ internal static class WallLineFlow
                 Ground = gAt, GroundTris = gTris, P0 = pAt, P0Tris = p0Tris, Blockers = bl, Shape = shape,
                 Hc = hc, Tc = tc, Hf = hf, Tf = tf, TierH = tierH, TierB = tierB, TierZ1 = tierZ1,
                 ReviewHc = region.Params.BenchHeightOf(true), ReviewHf = region.Params.BenchHeightOf(false), FootCut = fCut, FootFill = fFill, FootCommon = fCom,
-                TierSecs = tierSecs, TierEndSlope = tierEnd, EndRatioC = region.Params.CutSlope, EndRatioF = region.Params.FillSlope,   // ★[v117.x A · B] 구간 · 끝 비탈(사면 기울기 = 정지 제원)
+                TierSecs = tierSecs, TierEndSlope = tierEnd, EndRatioC = region.Params.CutSlope, EndRatioF = region.Params.FillSlope, BlockersWarnOnly = blockWarnOnly,   // ★[v117.9 · 검토 MED] 다시 짓기 = 겹침 ⚠만   // ★[v117.x A · B] 구간 · 끝 비탈(사면 기울기 = 정지 제원)
             });
 
             WallProfile.LandCheck(vb, cut.CutRing, land, landNote);   // ★[v117.3 · D1 ③] 로그 ⑨-c · ⚠ · 미리보기 · 외곽선(기하 · 기록 그대로)
@@ -439,7 +439,7 @@ internal static class WallLineFlow
                 if (tierUi || canO) { pk.Keywords.Add("H", "H", "단높이(H)"); pk.Keywords.Add("B", "B", "소단폭(B)"); pk.Keywords.Add("Z", "Z", "첫소단(Z)"); pk.Keywords.Add("V", "V", "수직만(V)"); pk.Keywords.Add("M", "M", "수동구간(M)"); pk.Keywords.Add("E", "E", "끝비탈(E)"); }
                 if (canP) pk.Keywords.Add("P", "P", "구간나눔(P)");
                 if (canO) pk.Keywords.Add("O", "O", "한구간(O)");
-                else pk.Keywords.Add("V", "V", "수직만(V)", false, true);   // 숨김 — 스크립트의 V 한 줄이 단이 필요 없는 선에서도 그대로 지나가게
+                if (!(tierUi || canO)) pk.Keywords.Add("V", "V", "수직만(V)", false, true);   // ★[v117.9 · 설치 전 검토 HIGH] 위에서 V를 안 넣었을 때만(두 번 넣으면 GetKeywords 예외) · 숨김 — 스크립트의 V 한 줄이 단이 필요 없는 선에서도 그대로 지나가게
                 if (!tierMode) pk.Keywords.Add("T", "T", "다단(T)");
                 pk.AllowNone = true; pk.AppendKeywordsToMessage = false;
                 r = ed.GetKeywords(pk);
@@ -582,8 +582,8 @@ internal static class WallLineFlow
         //   ★[v117.3] 다단(모양 3)은 저장한 단높이 · 소단 · 첫 소단 그대로(같은 높이) — 단높이 · 소단은 이 칸 값(TierH · TierB)으로
         var shape = w.Shape == 3 ? WallByLine.WallShape.Tiered : w.Shape == 2 ? WallByLine.WallShape.Vertical : WallByLine.WallShape.Out;
         var b = BuildGeom(cut, bd, reg, bl, w.Hc, w.Tc, w.Hf, w.Tf, sW, fR, gr, w.Reach, new CachedGroundSurface(gTin), new CachedGroundSurface(p0), w.TopStep, w.BlockLen, shape,
-            w.Shape == 3 ? w.TierH : double.NaN, w.Shape == 3 ? w.TierB : double.NaN, w.Shape == 3 && !w.TierZ1Auto ? w.TierZ1 : double.NaN,   // ★[조정자 결정 1111] 자동 Z1은 지금 면으로 다시 셈(옛 판 10 기록 = 손 값 그대로)
-            w.Shape == 3 && w.TierSecs.Count >= 2 ? w.TierSecs.Select(q => new WallByLine.TierSec { S0 = q.S0, S1 = q.S1, Z1 = q.Hand ? q.Z1 : double.NaN }).ToList() : null, w.Shape == 3 && w.TierEnd);
+            w.Shape == 3 ? w.TierH : double.NaN, w.Shape == 3 ? w.TierB : double.NaN, w.Shape == 3 && !w.TierZ1Auto && w.TierSecs.Count < 2 ? w.TierZ1 : double.NaN,   /* ★[v117.9 · 검토 LOW] 구간이 있으면 Z1은 구간 값 — 헛 «손 입력 낮음» ⚠ 막음 */   // ★[조정자 결정 1111] 자동 Z1은 지금 면으로 다시 셈(옛 판 10 기록 = 손 값 그대로)
+            w.Shape == 3 && w.TierSecs.Count >= 2 ? w.TierSecs.Select(q => new WallByLine.TierSec { S0 = q.S0, S1 = q.S1, Z1 = q.Hand ? q.Z1 : double.NaN }).ToList() : null, w.Shape == 3 && w.TierEnd, blockWarnOnly: true);
         if (shape is WallByLine.WallShape.Vertical or WallByLine.WallShape.Tiered) SelfCheckLog.Line(Tag, b.Ok, "다시 짓기 " + b.SelfCheck, "");
         if (!b.Ok) return $"폴리선 옹벽 — 새 정지면에서 못 지음: {b.Why}";
         string drift = WallByLine.Drift(w, b);   // ★[v114.0 · 설치 전 검토 7] 저장 값과 10 % 넘게 다르면 ⚠(막지 않음)

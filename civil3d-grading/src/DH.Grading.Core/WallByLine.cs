@@ -74,6 +74,8 @@ public static partial class WallByLine
         public List<TierSec>? TierSecs;
         /// <summary>★[v117.x B · 로드맵 D3 ②] 끝 비탈 — 선 양 끝(벽 끝 꼭대기)에서 원뿔 비탈(1:<see cref="EndRatioC"/> · 성토 <see cref="EndRatioF"/>)로 옛 면까지 · 검토 높이를 넘으면 단 높이마다 소단. 거짓 = 단별 자연 종료(옛 길 비트 같음).</summary>
         public bool TierEndSlope;
+        /// <summary>★[v117.9 · 설치 전 검토 MED] 참 = 다시 짓기 — 소단 자리 ↔ 막을 다각형 겹침을 거절 대신 ⚠만(이미 지은 옹벽이 새 규칙으로 최종면에서 빠지지 않게). 새로 그을 때 · 옮기기는 거짓(거절).</summary>
+        public bool BlockersWarnOnly;
         public double EndRatioC = 1.0, EndRatioF = 1.5;
         /// <summary>★[로드맵 2-2 · D4 ①] 검토 높이(m · 절토 · 성토) — 도면의 소단 생성 기준 높이(Civil BuildGeom이 구역 제원 <c>BenchHeightOf</c>로 채움 · 기록의 Hc/Hf 아님 — 수직 기록은 0).
         /// 벽이 넘으면 ⚠만(거절 아님 · 구조 안전 판정 아님). NaN = 안 잼.</summary>

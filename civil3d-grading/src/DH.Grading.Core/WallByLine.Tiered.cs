@@ -147,6 +147,7 @@ public static partial class WallByLine
         {
             secs = ResolveTierSecs(inp.TierSecs, rungsT, H, sg, pl.Len, out string sw);
             if (secs == null) return No("구간", sw, (b1.A.X, b1.A.Y));
+            if (sw.Length > 0) R.Warn.Add(sw);   // ★[v117.9 · 검토 LOW] 선 밖 경계 버림 ⚠
             if (secs.All(q => q.NoTier)) return No("구간", "모든 구간이 단 없이 됩니다 — 한 구간(O) 또는 수직만(V)", (b1.A.X, b1.A.Y));
             z1p = secs.Where(q => !q.NoTier).Max(q => q.Z1);
             R.TierZ1 = R.TierZ1Auto = sg * z1p;
@@ -803,7 +804,8 @@ public static partial class WallByLine
                 var bp2 = BoundaryCutPoly(gf, br, ox, oy);
                 if (bp2 == null) continue;
                 Geometry? og = null; try { og = trP.Intersection(bp2); } catch { try { og = trP.Buffer(0).Intersection(bp2.Buffer(0)); } catch { } }
-                if (og == null) return No("겹침", $"다단 소단 자리와 {name}의 겹침을 못 쟀습니다 — 막습니다", (b1.A.X, b1.A.Y));
+                if (og == null) { if (inp.BlockersWarnOnly) { R.Warn.Add($"다단 소단 자리와 {name}의 겹침을 못 쟀습니다(다시 짓기 — 그대로 지음)"); continue; } return No("겹침", $"다단 소단 자리와 {name}의 겹침을 못 쟀습니다 — 막습니다", (b1.A.X, b1.A.Y)); }
+                if (og.Area > 1e-2 && inp.BlockersWarnOnly) { R.Warn.Add(string.Format(ci, "다단 소단 자리가 {0}과 겹칩니다({1:F2}㎡) — 다시 짓기라 그대로 지음(새로 그으면 거절)", name, og.Area)); continue; }   // ★[v117.9 · 설치 전 검토 MED]
                 if (og.Area > 1e-2) return No("겹침", string.Format(ci, "다단 소단 자리가 {0}과 겹칩니다({1:F2}㎡) — 수직만(V) 또는 선을 옮기세요", name, og.Area), Wd(og.InteriorPoint.Coordinate));
             }
         // 안쪽 길(X_A → X_B · L′ 아닌 쪽)
