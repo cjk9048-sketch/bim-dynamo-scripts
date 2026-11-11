@@ -288,6 +288,8 @@ async function main() {
       drain: L.drain ? L.drain.summary : null, slope: L.slope ? { n: L.slope.n, step: L.slope.step } : null, cad: L.cad ? (L.cad.missing ? 'missing' : (head.cad.labels || []).length) : null,
       bldg: L.bldg ? (L.bldg.missing ? { missing: L.bldg.missing, quiet: !!L.bldg.quiet } : { n: L.bldg.n, hit: L.bldg.hit }) : null,
       struct: L.struct ? { n: L.struct.n } : null,
+      // ★[JACK 1111 옹벽 겉모습] 무늬 메시마다 옹벽 번호 · 층 · 겉모습(null = 옛 한 색) · 조각 수 — 시험(키트)이 형식별 겉모습을 확인
+      faces: L.pattern ? L.pattern.obj.children.map(m => ({ wall: m.userData.wall, pat: m.userData.pat, face: m.userData.face || null, pieces: m.userData.pieces || 0 })) : [],
       forest: L.tree ? (L.tree.missing ? { missing: L.tree.missing, quiet: !!L.tree.quiet } : { n: L.tree.n, note: L.tree.note, legend: L.tree.legend }) : null,
       align: L.align ? { name: L.align.name, st: L.align.st.length, views: L.align.views } : null, build: !!head.build, geo: head.geo || null,
       ralign: L.ralign ? L.ralign.roads.map(a => ({ name: a.name, st: a.st.length, views: a.views })) : null,
