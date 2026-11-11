@@ -316,8 +316,8 @@ public class RoadCommand
             double[] last = s.Fresh().SheetAt;
             bool hasLast = again && !mustMove && last.Length >= 2 && double.IsFinite(last[0]) && double.IsFinite(last[1]);
             // ★[v113.1] 도면설정 «2. 진입도로» H · V(판 2 — 자동 H는 1:1000으로 넓게 짐작 · 실제는 그릴 때 정함) · 옛 설정 = 옛 규칙
-            var (scale, veP) = RoadSheets.PlannedScale(db);
-            string scNote = RoadSheets.Setting(db, "").Note;
+            var (scale, veP) = RoadSheets.PlannedScale(db, s.Design.SheetScale);   // ★[v117.5.1] 옛 설정 — 그린 H 그대로
+            string scNote = RoadSheets.Setting(db, "", s.Design.SheetScale).Note;
             int n = RoadSheets.SheetCount(db, s.AlignId, scale);
             ed.WriteMessage($"\n[진입도로] 종단도 1:{scale:0} · {n}장 — {scNote}");
             while (true)

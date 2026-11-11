@@ -80,6 +80,7 @@ internal static class ProfileScaleStyles
         ObjectId id = FindByName(tr, cdoc.Styles.ProfileViewStyles, want);
         bool made = false;
         if (id.IsNull) { id = src.CopyAsSibling(want); made = true; }
+        if (id.IsNull) throw new InvalidOperationException($"축척 복사본 «{want}»을 못 만듦(같은 이름?)");
         var vs = (CivilDb.Styles.ProfileViewStyle)tr.GetObject(id, OpenMode.ForWrite);
         double ve = h / v, was;
         using (var gs = vs.GraphStyle) { was = gs.VerticalExaggeration; if (Math.Abs(was - ve) > 1e-12) gs.VerticalExaggeration = ve; }
@@ -98,14 +99,14 @@ internal static class ProfileScaleStyles
         {
             var all = ProfileStyleTemplate.CollectAll(db, CivilApp.CivilDocument.GetCivilDocument(db));
             using var tr = db.TransactionManager.StartTransaction();
+            int q = 0;
             foreach (var (id, name) in all)
             {
                 if (!ProfileScaleFit.IsRoadClone(name, handle)) continue;
-                try { tr.GetObject(id, OpenMode.ForWrite).Erase(); n++; }
-                catch
-                {
-                    try { ((CivilDb.Styles.StyleBase)tr.GetObject(id, OpenMode.ForWrite)).Name = name.Replace(" #" + handle + ")", $" #{handle} 옛{DateTime.Now:MMddHHmmss})"); moved++; } catch { }
-                }
+                // ★[v117.5.1] 이름부터 비킨다(지운 스타일이 이름을 쥐고 있으면 다음 판의 같은 이름 CopyAsSibling이 빈 Id — st1 · st2 실측) — 못 지우면 이 이름으로 남음
+                var sb = (CivilDb.Styles.StyleBase)tr.GetObject(id, OpenMode.ForWrite);
+                try { sb.Name = name.Replace(" #" + handle + ")", $" #{handle} 옛{DateTime.Now:MMddHHmmss}_{++q})"); } catch { }
+                try { sb.Erase(); n++; } catch { moved++; }
             }
             tr.Commit();
         }
@@ -201,20 +202,71 @@ internal static class ProfileScaleStyles
     internal static string BakeRatio(Database db, IReadOnlyList<ObjectId> pvIds, double h, double v, double anno, string tag, double k, System.Text.StringBuilder log)
     {
         if (!(k > 0) || Math.Abs(k - 1) < 1e-9 || pvIds.Count == 0) return "";
+        var (nView, nBand, nProp, nLabel) = Bake(db, pvIds, ProfileScaleFit.CloneSuffix(h, v, anno, tag), tag, k, log);
+        string msg = $"주석 비율 ×{k:0.###}(1:{h:0} ÷ 부지 1:{anno:0}) — 뷰 스타일 {nView} · 밴드 복사본 {nBand} · 크기 칸 {nProp} · 라벨 칸 {nLabel}";
+        log.AppendLine("  " + msg);
+        return msg;
+    }
+
+    /// <summary>★★[v117.5.1 · JACK 1111 «진입도로 종단을 PVI 수정 · [업데이트] 뒤 부지 종단을 만들거나 고치면 진입도로 종단 축척이 이상하게 변함»]
+    /// 그려 둔 진입도로 종단뷰들을 주석 축척 <paramref name="a0"/>(그린 때) → <paramref name="a1"/>(지금)에서 같은 꼴로 — 이 도로 복사본 스타일(없으면 지금 쓰는 스타일에서 복사)에 a0 ÷ a1을 곱한다.
+    /// <para>실측(pvs1 · pvs2): 부지 [종단도]가 도면 주석 축척을 1:500 → 1:100으로 걸면 1:500으로 그린 도로 종단뷰의 밴드 칸 · 밴드 글자 · 축 눈금 글자가 모두 1/5로 줄었다(CANNOSCALE을 따름) — 도곽 · 표고바는 그대로.</para>
+    /// 돌려줌 = 한 줄(비율이 1이거나 뷰가 없으면 빈 글).</summary>
+    internal static string Rebake(Database db, IReadOnlyList<ObjectId> pvIds, double h, double v, double a0, double a1, string tag, System.Text.StringBuilder log)
+    {
+        if (!(a0 > 0) || !(a1 > 0) || Math.Abs(a0 - a1) < 1e-6 || pvIds.Count == 0) return "";
+        double k = a0 / a1;
+        var (nView, nBand, nProp, nLabel) = Bake(db, pvIds, ProfileScaleFit.CloneSuffix(h, v, a1, tag), tag, k, log);
+        return $"주석 1:{a0:0} → 1:{a1:0} · ×{k:0.###} — 뷰 스타일 {nView} · 밴드 복사본 {nBand} · 크기 칸 {nProp} · 라벨 칸 {nLabel}";
+    }
+
+    /// <summary>비율 굽기 본체 — 뷰 스타일: 이 도로 복사본이면 그 자리에서 k배(이름 꼬리를 <paramref name="suffix"/>로) · 아니면(부지와 함께 쓰는 스타일) 이 도로 복사본을 만들어 걸고 k배.
+    /// 밴드 스타일: 늘 새 복사본(라벨까지 깊은 복사)에 k배 · 밴드 칸 간격도 k배 · 갈아 낀 지난 판 이 도로 복사본은 끝에 지운다. 같은 이름이 남아 있으면 «옛»을 붙여 비켜 둔다.</summary>
+    static (int View, int Band, int Prop, int Label) Bake(Database db, IReadOnlyList<ObjectId> pvIds, string suffix, string tag, double k, System.Text.StringBuilder log)
+    {
         int nView = 0, nBand = 0, nProp = 0, nLabel = 0;
         var doneStyle = new HashSet<ObjectId>(); var doneLabel = new HashSet<ObjectId>();
         var bandMap = new Dictionary<ObjectId, ObjectId>();
-        string suffix = ProfileScaleFit.CloneSuffix(h, v, anno, tag);
-        using var tr = db.TransactionManager.StartTransaction();
+        var viewMap = new Dictionary<ObjectId, ObjectId>();
+        var replaced = new HashSet<ObjectId>();
+        var mine = new Dictionary<string, ObjectId>(StringComparer.Ordinal);   // 이 도로 복사본 이름 → id(같은 이름 비키기)
         var cdoc = CivilApp.CivilDocument.GetCivilDocument(db);
+        try { foreach (var (sid0, nm0) in ProfileStyleTemplate.CollectAll(db, cdoc)) if (ProfileScaleFit.IsRoadClone(nm0, tag)) mine[nm0] = sid0; } catch { }
+        using var tr = db.TransactionManager.StartTransaction();
+        // 새로 지을 이름이 이미 있으면(지난 판 찌꺼기) 비켜 둠 — CopyAsSibling · 이름 바꾸기가 같은 이름에서 실패하지 않게
+        void MakeRoom(string want, ObjectId keep)
+        {
+            if (!mine.TryGetValue(want, out var old) || old == keep || old.IsErased) return;
+            try { ((CivilDb.Styles.StyleBase)tr.GetObject(old, OpenMode.ForWrite)).Name = want.Replace(" #" + tag + ")", $" #{tag} 옛{DateTime.Now:MMddHHmmss})"); } catch { }
+            mine.Remove(want);
+        }
         foreach (var pvId in pvIds)
         {
             if (pvId.IsNull || pvId.IsErased || tr.GetObject(pvId, OpenMode.ForWrite) is not CivilDb.ProfileView pv) continue;
-            // 뷰 스타일 — 이 도로 복사본이어야 함(아니면 부지 것을 키우게 되므로 안 씀)
-            var vsName = ((CivilDb.Styles.StyleBase)tr.GetObject(pv.StyleId, OpenMode.ForRead)).Name ?? "";
-            if (ProfileScaleFit.IsRoadClone(vsName, tag) && doneStyle.Add(pv.StyleId))
-            { nProp += ScaleView((CivilDb.Styles.ProfileViewStyle)tr.GetObject(pv.StyleId, OpenMode.ForWrite), k); nView++; }
-            else if (!ProfileScaleFit.IsRoadClone(vsName, tag)) log.AppendLine($"   ⚠뷰 스타일 «{vsName}»이 이 도로 복사본이 아니라 비율을 안 씀");
+            // 뷰 스타일 — 이 도로 복사본만 키운다(부지와 함께 쓰던 것이면 복사본을 만들어 건다 — 부지 것을 키우지 않게)
+            var vs0 = (CivilDb.Styles.StyleBase)tr.GetObject(pv.StyleId, OpenMode.ForRead);
+            string vsName = vs0.Name ?? "", vWant = ProfileScaleFit.BaseName(vsName) + suffix;
+            if (ProfileScaleFit.IsRoadClone(vsName, tag))
+            {
+                if (doneStyle.Add(pv.StyleId))
+                {
+                    var vsw = (CivilDb.Styles.ProfileViewStyle)tr.GetObject(pv.StyleId, OpenMode.ForWrite);
+                    nProp += ScaleView(vsw, k); nView++;
+                    if (vsName != vWant) { MakeRoom(vWant, pv.StyleId); try { vsw.Name = vWant; mine[vWant] = pv.StyleId; } catch { } }
+                }
+            }
+            else
+            {
+                if (!viewMap.TryGetValue(pv.StyleId, out var vc))
+                {
+                    MakeRoom(vWant, ObjectId.Null);
+                    vc = vs0.CopyAsSibling(vWant); mine[vWant] = vc;
+                    if (vc.IsNull) throw new InvalidOperationException($"뷰 스타일 복사본 «{vWant}»을 못 만듦(같은 이름?)");
+                    nProp += ScaleView((CivilDb.Styles.ProfileViewStyle)tr.GetObject(vc, OpenMode.ForWrite), k); nView++;
+                    viewMap[pv.StyleId] = vc; doneStyle.Add(vc);
+                }
+                pv.StyleId = vc;
+            }
             using var items = pv.Bands.GetBottomBandItems();
             for (int i = 0; i < items.Count; i++)
             {
@@ -225,7 +277,10 @@ internal static class ProfileScaleStyles
                 {
                     var src = (CivilDb.Styles.StyleBase)tr.GetObject(sid, OpenMode.ForRead);
                     string want = ProfileScaleFit.BaseName(src.Name) + suffix;
-                    cid = src.CopyAsSibling(want);
+                    if (ProfileScaleFit.IsRoadClone(src.Name, tag)) replaced.Add(sid);
+                    MakeRoom(want, ObjectId.Null);
+                    cid = src.CopyAsSibling(want); mine[want] = cid;
+                    if (cid.IsNull) throw new InvalidOperationException($"밴드 스타일 복사본 «{want}»을 못 만듦(같은 이름?)");
                     var cp = tr.GetObject(cid, OpenMode.ForWrite);
                     nProp += ScaleProps(cp, BandProps, k);
                     foreach (var pi in cp.GetType().GetProperties().Where(p => p.PropertyType == typeof(ObjectId) && p.Name.EndsWith("LabelStyleId", StringComparison.Ordinal)))
@@ -248,8 +303,25 @@ internal static class ProfileScaleStyles
             pv.Bands.SetBottomBandItems(items);
         }
         tr.Commit();
-        string msg = $"주석 비율 ×{k:0.###}(1:{h:0} ÷ 부지 1:{anno:0}) — 뷰 스타일 {nView} · 밴드 복사본 {nBand} · 크기 칸 {nProp} · 라벨 칸 {nLabel}";
-        log.AppendLine("  " + msg);
-        return msg;
+        // 갈아 낀 지난 판 이 도로 밴드 복사본 — 이 도로 뷰들만 쓰던 것이라 이제 아무도 안 씀
+        if (replaced.Count > 0)
+            try
+            {
+                using var trE = db.TransactionManager.StartTransaction();
+                int nE = 0;
+                int q = 0;
+                foreach (var id in replaced)
+                    try
+                    {
+                        var sb = (CivilDb.Styles.StyleBase)trE.GetObject(id, OpenMode.ForWrite);   // 이름부터 비킴(DropRoadClones와 같은 까닭)
+                        try { sb.Name = (sb.Name ?? "").Replace(" #" + tag + ")", $" #{tag} 옛{DateTime.Now:MMddHHmmss}_{++q})"); } catch { }
+                        sb.Erase(); nE++;
+                    }
+                    catch { }
+                trE.Commit();
+                log.AppendLine($"   갈아 낀 지난 판 밴드 복사본 지움 {nE}/{replaced.Count}");
+            }
+            catch (Exception ex) { log.AppendLine("   지난 판 밴드 복사본 지우기 실패 — " + ex.Message); }
+        return (nView, nBand, nProp, nLabel);
     }
 }
