@@ -14,6 +14,7 @@ import gravelSUrl from '../tex/gravel_s.jpg';
 import asphaltSUrl from '../tex/asphalt_s.jpg';
 import concreteSUrl from '../tex/concrete_s.jpg';
 import { SURFACE, surfaceFromPixels, patchGround } from './groundtex.js';
+import { faceStyle, pieceAttrs, faceUniforms, FACE, patchWallFace } from './wallface.js';
 
 const srgb = (hex) => new THREE.Color(hex);
 const rgb = (a) => new THREE.Color().setRGB(a[0] / 255, a[1] / 255, a[2] / 255, THREE.SRGBColorSpace);
@@ -25,8 +26,9 @@ export const CLASS_STYLE = {
   bench: { color: '#ffffff', label: '소단', tex: 'gravel', tile: 2.5 },
   slopeCut: { color: '#f2f6ea', label: '사면(절토)', tex: 'grass', tile: 4 },
   slopeFill: { color: '#ffffff', label: '사면(성토)', tex: 'grass', tile: 4 },
-  wallZone: { color: '#b9b7af', label: '옹벽 자리' },
-  wallFace: { color: '#b9b7af', label: '옹벽 면' },
+  // ★[JACK 1111 «옹벽이 밋밋»] 3D 몸통이 없는 옹벽 자리 · 면(지형 세모)도 3D 옹벽과 같은 콘크리트 질감(상자 투영 · 한 장 3 m)
+  wallZone: { color: '#b9b7af', label: '옹벽 자리', tex: 'concrete', tile: 3, box: true },
+  wallFace: { color: '#b9b7af', label: '옹벽 면', tex: 'concrete', tile: 3, box: true },
   other: { color: '#d8c9b0', label: '정지', tex: 'soil', tile: 6 },
   // ★[계획_v111_8 6장 · JACK 1102] 진입도로 — 차로 = 아스팔트 · 길어깨 = 콘크리트(도로 사면 · 소단 · 옹벽 자리는 위 구분 그대로)
   road: { color: '#ffffff', label: '진입도로', tex: 'asphalt', tile: 4 },
@@ -242,7 +244,7 @@ export async function buildLayers(view, head) {
       let m;
       if (cls.key === 'ground' && satTex) m = satMaterial(base, detail);
       else if (cls.key === 'ground') m = surfMaterial(view, 'meadow', MEADOW_TILE, '#ffffff');   // ★[1110] 위성이 없을 때 — 한 색 대신 풀밭(위성 길은 그대로)
-      else if (st.tex) m = surfMaterial(view, st.tex, st.tile, st.color);
+      else if (st.tex) m = surfMaterial(view, st.tex, st.tile, st.color, !!st.box);
       else m = new THREE.MeshStandardMaterial({ color: srgb(st.color) });
       m.userData.key = cls.key;
       g.addGroup(start * 3, count * 3, mats.length);
@@ -337,12 +339,36 @@ export async function buildLayers(view, head) {
       wallGrp.add(mesh);
     }
   }
+  // ★[JACK 1111 «옹벽 표면을 옹벽처럼»] 무늬 좌표(fuv)가 있으면 조각마다 색 얼룩 · 모서리 깎임 · 줄눈 그늘(wallface.js) — 없으면(옛 장면 · 모르는 층) 옛 한 색
+  const faceMats = new Map();
+  const faceMat = (style, color) => {
+    const key = style + ':' + color.getHexString();
+    if (!faceMats.has(key)) {
+      const m = new THREE.MeshStandardMaterial({ color, flatShading: true, vertexColors: true, roughness: FACE[style].rough });
+      const u = faceUniforms(style);
+      const uni = { wfA: { value: new THREE.Vector4(...u.wfA) }, wfB: { value: new THREE.Vector4(...u.wfB) } };
+      m.onBeforeCompile = (sh) => { Object.assign(sh.uniforms, uni); patchWallFace(sh); };
+      m.customProgramCacheKey = () => 'dh3d-wallface';
+      faceMats.set(key, m);
+    }
+    return faceMats.get(key);
+  };
   for (const p of head.patterns || []) {
     if (!p.pos || !p.idx || p.idx.length === 0) continue;
     const g = flat(geom(p.pos, p.idx));
-    const mesh = new THREE.Mesh(g, matOf('p:' + p.layer, rgb(p.color)));
+    const style = p.fuv && p.fuv.length === p.pos.length ? faceStyle(p.layer) : null;
+    let pm, pieces = 0;
+    if (style) {
+      const a = pieceAttrs(p.idx, p.fuv, style, p.wall | 0);
+      g.setAttribute('fuv', new THREE.BufferAttribute(p.fuv, 3));
+      g.setAttribute('fpc', new THREE.BufferAttribute(a.fpc, 4));
+      g.setAttribute('color', new THREE.BufferAttribute(a.col, 3));
+      pm = faceMat(style, rgb(p.color));
+      pieces = a.pieces;
+    } else pm = matOf('p:' + p.layer, rgb(p.color));
+    const mesh = new THREE.Mesh(g, pm);
     mesh.castShadow = true; mesh.receiveShadow = true;
-    mesh.userData = { layer: 'pattern', wall: p.wall, pat: p.layer };
+    mesh.userData = { layer: 'pattern', wall: p.wall, pat: p.layer, face: style, pieces };
     patGrp.add(mesh);
   }
   if (wallGrp.children.length) { scene.add(wallGrp); L.wall = { obj: wallGrp, label: '옹벽', on: true, fixed: true }; }   // ★[JACK 1028] 옹벽은 늘 보임 — 층 목록에 단추 없음

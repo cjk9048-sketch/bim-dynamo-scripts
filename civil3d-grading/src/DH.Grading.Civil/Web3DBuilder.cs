@@ -570,9 +570,12 @@ internal static class Web3DBuilder
             ["box"] = w.Box.Select(v => Web3DScene.Num(v, 2)).ToArray(), ["sta"] = sc.F32(w.Sta),
             ["parts"] = w.Parts.Select(p => (object)new Dictionary<string, object> { ["mat"] = p.Mat, ["pos"] = sc.F32(p.Pos), ["idx"] = sc.U32(p.Idx) }).ToList(),
         }).ToList();
-        H["patterns"] = walls == null ? new List<object>() : walls.Pats.Select(p => (object)new Dictionary<string, object>
+        // ★[JACK 1111 «옹벽 표면을 옹벽처럼»] 무늬마다 점별 무늬 좌표(fuv — u · Z · w) — 뷰어가 조각마다 모서리 깎임 · 색 얼룩 · 줄눈 그늘(없으면 옛 한 색)
+        H["patterns"] = walls == null ? new List<object>() : walls.Pats.Select(p =>
         {
-            ["wall"] = p.Wall, ["layer"] = p.Layer, ["color"] = new[] { (int)p.Rgb.R, p.Rgb.G, p.Rgb.B }, ["pos"] = sc.F32(p.Pos), ["idx"] = sc.U32(p.Idx),
+            var d = new Dictionary<string, object> { ["wall"] = p.Wall, ["layer"] = p.Layer, ["color"] = new[] { (int)p.Rgb.R, p.Rgb.G, p.Rgb.B }, ["pos"] = sc.F32(p.Pos), ["idx"] = sc.U32(p.Idx) };
+            if (p.Fuv.Length == p.Pos.Length) d["fuv"] = sc.F32(p.Fuv);
+            return (object)d;
         }).ToList();
         H["earth"] = double.IsFinite(c.Cut) && double.IsFinite(c.Fill)
             ? new Dictionary<string, object> { ["cut"] = Web3DScene.Num(c.Cut, 1), ["fill"] = Web3DScene.Num(c.Fill, 1), ["area"] = Web3DScene.Num(c.PlanArea, 1), ["ground"] = c.GroundName }

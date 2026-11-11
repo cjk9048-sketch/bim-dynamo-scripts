@@ -8,7 +8,9 @@ namespace DH.Grading.Core;
 public static class WallScene
 {
     public sealed class Part { public string Mat = ""; public float[] Pos = Array.Empty<float>(); public int[] Idx = Array.Empty<int>(); }
-    public sealed class Pat { public int Wall; public string Layer = ""; public (byte R, byte G, byte B) Rgb; public float[] Pos = Array.Empty<float>(); public int[] Idx = Array.Empty<int>(); }
+    /// <summary>무늬 메시 — ★[JACK 1111 «옹벽 표면을 옹벽처럼»] <see cref="Fuv"/> = 점마다 무늬 좌표 셋(u = 줄 앞면 길이 · Z = 절대 높이 · w = 판에서 공기 쪽 거리 ÷ 내밀기 — 겉 1 · 몸통 면 0)
+    /// — 뷰어가 조각마다 모서리 깎임 · 색 얼룩 · 줄눈 그늘을 그린다(무늬 조각 모양은 그대로).</summary>
+    public sealed class Pat { public int Wall; public string Layer = ""; public (byte R, byte G, byte B) Rgb; public float[] Pos = Array.Empty<float>(); public int[] Idx = Array.Empty<int>(); public float[] Fuv = Array.Empty<float>(); }
 
     public sealed class Wall
     {
@@ -43,12 +45,23 @@ public static class WallScene
 
     sealed class Acc
     {
-        public readonly List<float> P = new(); public readonly List<int> I = new();
+        public readonly List<float> P = new(); public readonly List<int> I = new(); public readonly List<float> F = new();
         public void Add(WallMesh.Mesh m, double ox, double oy)
         {
             int b = P.Count / 3;
             foreach (var v in m.V) { P.Add((float)(v.X - ox)); P.Add((float)(v.Y - oy)); P.Add((float)v.Z); }
             foreach (int i in m.T) I.Add(b + i);
+        }
+        /// <summary>무늬 조각 — 점마다 무늬 좌표(<see cref="WallFacePattern"/>의 ToLocal 거꾸로: u = UG0 + 판 U · Z = O.Z + 판 V × V.z · w = 판 W ÷ 내밀기).</summary>
+        public void Add(WallMesh.Mesh m, double ox, double oy, WallFacePattern.Sheet sh, double relief)
+        {
+            Add(m, ox, oy);
+            foreach (var v in m.V)
+            {
+                double dx = v.X - sh.O.X, dy = v.Y - sh.O.Y, dz = v.Z - sh.O.Z;
+                double lu = dx * sh.U.X + dy * sh.U.Y + dz * sh.U.Z, lv = dx * sh.V.X + dy * sh.V.Y + dz * sh.V.Z, lw = dx * sh.W.X + dy * sh.W.Y + dz * sh.W.Z;
+                F.Add((float)(sh.UG0 + lu)); F.Add((float)(sh.O.Z + lv * sh.V.Z)); F.Add((float)(relief > 1e-9 ? lw / relief : 0));
+            }
         }
     }
 
@@ -146,7 +159,7 @@ public static class WallScene
                         if (m.T.Count == 0) { r.PieceFails++; continue; }
                         r.FanFallback += m.FanFallback;
                         if (!byLay.TryGetValue(pc.Layer, out var acc)) byLay[pc.Layer] = acc = new Acc();
-                        acc.Add(m, ox, oy);
+                        acc.Add(m, ox, oy, lay.Sheets[pc.Sheet], pc.Relief);
                         r.Pieces++; r.Tris += m.T.Count / 3;
                     }
                     catch { r.PieceFails++; }
@@ -154,7 +167,7 @@ public static class WallScene
                 foreach (var kv in byLay)
                 {
                     var (cr, cg, cb) = WallFacePattern.ColorOf(kv.Key);
-                    r.Pats.Add(new Pat { Wall = w.Id, Layer = kv.Key, Rgb = ((byte)cr, (byte)cg, (byte)cb), Pos = kv.Value.P.ToArray(), Idx = kv.Value.I.ToArray() });
+                    r.Pats.Add(new Pat { Wall = w.Id, Layer = kv.Key, Rgb = ((byte)cr, (byte)cg, (byte)cb), Pos = kv.Value.P.ToArray(), Idx = kv.Value.I.ToArray(), Fuv = kv.Value.F.ToArray() });
                 }
             }
             catch { r.PatLineFails++; }
