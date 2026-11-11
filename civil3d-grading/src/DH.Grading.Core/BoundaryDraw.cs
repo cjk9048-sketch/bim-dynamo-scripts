@@ -121,6 +121,45 @@ public static class BoundaryDraw
         return r;
     }
 
+    /// <summary>★[v117.2 · JACK 1111 13:5x 진입도로 [옹벽 추가] «폴리선의 끝 점이 경계 안» — 원인: 경계가 뾰족한(V) 자리에서 끝 토막을 1 m 눈감고 늘이면 경계 안으로 다시 들어감]
+    /// <see cref="Extend"/>와 같되 끝마다 <b>늘인 점이 경계 밖(경계 위도 아님)이고 늘인 토막이 경계 고리에 그 끝 점(0.1 mm 안)에서만 닿을 때만</b> 늘인다 —
+    /// 아니면 경계 위 클릭 점을 그대로 끝으로 둔다(<see cref="BoundaryCut.Classify"/>가 경계 1 mm 안 끝을 고리 위로 정확히 옮겨 교점으로 친다 · v114 L11).
+    /// 늘이는 끝은 <see cref="Extend"/>와 같은 점(같은 셈)이다. <paramref name="extA"/> · <paramref name="extB"/> = 첫 · 끝을 늘였나.</summary>
+    public static List<Point3> ExtendSafe(Ctx g, IReadOnlyList<(double X, double Y)> pts, double ext, out bool extA, out bool extB)
+    {
+        extA = extB = false;
+        var r = new List<Point3>();
+        if (pts == null || pts.Count < 2) { if (pts != null) foreach (var p in pts) r.Add(new Point3(p.X, p.Y, 0)); return r; }
+        const double allow = 1e-4;   // 경계 위 클릭 자리(Next의 붙인 점 자리와 같음)
+        var li = new RobustLineIntersector();
+        (double X, double Y) Out((double X, double Y) a, (double X, double Y) b)
+        {
+            double dx = a.X - b.X, dy = a.Y - b.Y, l = Math.Sqrt(dx * dx + dy * dy);
+            return l < 1e-12 ? a : (a.X + dx / l * ext, a.Y + dy / l * ext);
+        }
+        bool Clear((double X, double Y) a, (double X, double Y) e)
+        {
+            if (a == e) return false;
+            var ca = g.C(a.X, a.Y); var ce = g.C(e.X, e.Y);
+            if (g.Bd.Intersects(g.Gf.CreatePoint(ce))) return false;   // 늘인 점이 경계 안 · 위
+            var env = new Envelope(ca, ce); env.ExpandBy(allow);
+            var ring = g.Ring;
+            for (int j = 0; j + 1 < ring.Length; j++)
+            {
+                if (!env.Intersects(new Envelope(ring[j], ring[j + 1]))) continue;
+                li.ComputeIntersection(ca, ce, ring[j], ring[j + 1]);
+                for (int q = 0; q < li.IntersectionNum; q++) if (li.GetIntersection(q).Distance(ca) > allow) return false;   // 클릭 점 말고 다른 자리에서 경계에 닿음
+            }
+            return true;
+        }
+        var s = Out(pts[0], pts[1]); var e = Out(pts[^1], pts[^2]);
+        extA = Clear(pts[0], s); extB = Clear(pts[^1], e);
+        if (extA) r.Add(new Point3(s.X, s.Y, 0));
+        foreach (var p in pts) r.Add(new Point3(p.X, p.Y, 0));
+        if (extB) r.Add(new Point3(e.X, e.Y, 0));
+        return r;
+    }
+
     /// <summary>첫 점(다각형을 그 자리에서 지음 — 시험 · 한 번 쓰기용).</summary>
     public static Step First(IReadOnlyList<Point3> bd, IReadOnlyList<Point3>? floor, double x, double y, double snap)
     {
