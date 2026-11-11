@@ -160,6 +160,14 @@ if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "rwall")
     return fails == 0 ? 0 : 1;
 }
 
+// ★[v117.x · JACK 1111 «옹벽 추가는 부지나 진입도로나 똑같은 로직»] BLOCKTEST_ONLY=rwvert — 진입도로 [옹벽 추가] 수직 · 다단(S262 RV — 부지 Core · 고리 면 P0)만
+if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "rwvert")
+{
+    RoadWallSiteCheck.Run(Check);
+    Console.WriteLine(fails == 0 ? "\n== 전부 통과 ==" : $"\n== 실패 {fails}건 ==");
+    return fails == 0 ? 0 : 1;
+}
+
 // ★[JACK 1111 «진입도로 고를 선 — 부지 때처럼 · 같은 단이면 쭉»] BLOCKTEST_ONLY=rpick — 진입도로 [사면→옹벽] · [옹벽→사면] 고를 선(S256 PK)만
 if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "rpick")
 {
@@ -468,7 +476,8 @@ RoadWedgeCheck.Run(Check);      // ★[v114.3 · JACK 1105 오목부] S217 RW �
 MicroNeedleCheck.Run(Check);    // ★[v116.9 · JACK 1110 부지 옹벽 합성 실패] S241 MN — Civil이 뒤집을 짧은 변 바늘(118 µm · 짧은 변 0.27 mm · 11.8 mm)
 RoadPaveCheck.Run(Check);       // ★[v116.8 · JACK 1110 포장 종류] S237 PV — 층 · 고리 · 도장 · 줄눈 · 지형 가르기
 RoadWallRingCheck.Run(Check);   // ★[v116.7 · JACK 1110 «어디든 폴리선»] S239 RG — 고리 면 위 선 옹벽(곧은 성토 · 절토 · 90° 굽이 · 헤어핀 골 · 끝 마구리)
-RoadPickCheck.Run(Check);       // ★[JACK 1111 «진입도로 고를 선 — 부지 때처럼 · 같은 단이면 쭉»] S256 PK — 단마다 시작선 하나(절토 아랫선 · 성토 윗선 · 1단 = 도로 가장자리) · 같은 단 조각 잇기(맞닿음 · 1 m 안 곧은 틈 · 다른 다리 · 진짜 틈은 그대로)
+RoadWallSiteCheck.Run(Check);   // ★[v117.x · JACK 1111 «부지나 진입도로나 똑같은 로직»] S262 RV — 진입도로 [옹벽 추가] 수직 · 다단(부지 Core · 선 밖 0 · L = 바탕 · 지문)
+RoadPickCheck.Run(Check);      // ★[JACK 1111 «진입도로 고를 선 — 부지 때처럼 · 같은 단이면 쭉»] S256 PK — 단마다 시작선 하나(절토 아랫선 · 성토 윗선 · 1단 = 도로 가장자리) · 같은 단 조각 잇기(맞닿음 · 1 m 안 곧은 틈 · 다른 다리 · 진짜 틈은 그대로)
 RoadWallCheck.Run(Check);       // ★[v114.3 · JACK 1105 진입도로 옹벽 추가] S218 RL — 진입도로 선 옹벽(굽은 S자 · 안쪽 · 바깥 · 절토 · 섞임 · 데이라잇 곁 · 넓은 소단 · 벽 둘 · 옛 길 · 호 · 맞은편 다리 · 막음 · 쉼 · 스위치)
 StructPointsCheck.Run(Check);   // ★[v116.9 · JACK 1110 구조물 좌표계 내보내기] S242 SP — Civil → Revit 기준점 파일
 StructRegionCheck.Run(Check);   // ★[v117.1 · JACK 1111 구조물 3D 영역] S247 R3 — 네모 · 세모 자르기 · 선 자르기 · 높이 입히기 · 3D 파일 · 점 파일 region3d
