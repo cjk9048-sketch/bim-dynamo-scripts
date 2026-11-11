@@ -227,6 +227,42 @@ static class WallTieredCheck
                 $"높이 0 칸 {zN} · |W − G| 최대 {zMax} µm · {Brief(b12, c12)}");
         }
 
+        // (t13) ★[v117.4 설치 전 검토 중간 1 · 굽은 곳 소단 «혹»] U자 선 꺾은점 (49.6, 5)의 벽 3 발 줄(d 2.15 · 둥근 이음 8분할 현) — 바닥(계획선) 뾰족 끝 꼭짓점 p*를
+        //   현과 참 호 사이(φ 50.625° · r 2.1448 — 현 2.13965 · 호 2.15)에 둔다. 옛: 고리 꼭짓점 높이 = Tc(정확 거리) = 벽 기울기 값 101.72(소단 3 = 101.2보다 0.52 m 혹)
+        //   새: 줄 다각형(현)으로 가름 → 소단 3 = 101.2. 잼: 테라스 T 세모(합성 전)를 p* · 반지름 위 앞뒤(현 안쪽 2.1415 · 호 밖 2.16 · 2.20)에서 읽어 101.2 ±1 mm · 짓고 깨끗
+        {
+            const double Phi = 50.625 * Math.PI / 180, Rs = 2.1448, Z3 = 101.2;
+            Coordinate At(double r) => new(49.6 - r * Math.Cos(Phi), 5 + r * Math.Sin(Phi));
+            var ps = At(Rs);
+            var gfu = new GeometryFactory();
+            var uLine = gfu.CreateLineString(U.Select(q => new Coordinate(q.X, q.Y)).ToArray());
+            var bufP = new NetTopologySuite.Operation.Buffer.BufferParameters { QuadrantSegments = 8, SimplifyFactor = 0, JoinStyle = NetTopologySuite.Operation.Buffer.JoinStyle.Round, EndCapStyle = NetTopologySuite.Operation.Buffer.EndCapStyle.Round };
+            var foot3 = uLine.Buffer(2.15, bufP);
+            double dTrue = uLine.Distance(gfu.CreatePoint(ps));
+            bool sliver = !foot3.Covers(gfu.CreatePoint(ps)) && dTrue < 2.15 - 1e-4;
+            var plan13 = new List<Point3> { new(0, -60, 100), new(40, -60, 100), new(40, 6.4, 100), new(ps.X, ps.Y, 100), new(40, 6.9, 100), new(40, 60, 100), new(0, 60, 100) };
+            var (c13, b13) = Make(U, pT, gT, plan: plan13);
+            var rd = new List<string>(); double worst = double.NaN;
+            if (b13 != null && b13.Ok)
+            {
+                var tAt = WallByLine.TriLookup(b13.TierT);
+                worst = 0;
+                foreach (double r in new[] { Rs, 2.1415, 2.16, 2.20 })
+                {
+                    var c = At(r); var z = tAt(c.X, c.Y);
+                    rd.Add($"r {r:F4} → {(z == null ? "못 읽음" : z.Value.ToString("F4"))}");
+                    worst = z == null ? double.PositiveInfinity : Math.Max(worst, Math.Abs(z.Value - Z3));
+                }
+            }
+            var rl = b13?.Log.Split('\n').FirstOrDefault(l => l.Contains("고리 꼭짓점 높이 = 줄 다각형"))?.Trim() ?? "";
+            var mv = System.Text.RegularExpressions.Regex.Match(rl, @"높이 바뀜\(1 µm 넘음\) (\d+) · SD 값과 차 최대 ([0-9.]+) m");
+            // 옛 셈(정확 거리)이었으면 p*가 받았을 높이와의 차 = 0.52 m(106.2 − (2.1448 − 2.10)/0.01 − 101.2) — 고친 꼭짓점이 1개 이상 · 그 차가 0.5 m 넘음
+            bool moved = mv.Success && int.Parse(mv.Groups[1].Value) >= 1 && double.Parse(mv.Groups[2].Value, System.Globalization.CultureInfo.InvariantCulture) > 0.5;
+            Check("(t13) U자 꺾은점 · 바닥 꼭짓점이 벽 3 발 줄 현·호 사이 — 소단 3 높이 그대로(T 101.2 ±1 mm · 혹 없음 · 옛 셈 혹 0.52 m) · 짓고 깨끗",
+                sliver && Clean(b13) && b13!.TierN == 3 && worst <= 1e-3 && moved,
+                $"p* ({ps.X:F4}, {ps.Y:F4}) 참 거리 {dTrue:F4}(현 밖 {sliver}) · {string.Join(" · ", rd)} · 최대 차 {worst:F4} m · {rl} · {Brief(b13, c13)}");
+        }
+
         // 합성 왕복(Core 세모 · 출하 길)
         Console.WriteLine("\n== S248 합성 왕복(exactG) ==");
         void Both(string nm, WallByLine.Built? b, BoundaryCut.Result c, List<Tri> g, List<Tri> p)

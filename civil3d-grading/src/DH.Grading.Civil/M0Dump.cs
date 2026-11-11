@@ -110,7 +110,8 @@ internal static class M0Dump
                             sb.AppendLine($"WALL {w.No} {(w.Up ? "절토" : "성토")} 상태 {w.State} 보류 «{w.Hold}» P0 {w.P0Handle}" + (w.Kind != 0 ? $" 종류 {w.Kind}(선 · 절 H {w.Hc:0.##} T {w.Tc:0.##} · 성 H {w.Hf:0.##} T {w.Tf:0.##} · 선 바깥 {w.FootMax:F3} · 자리 성 {w.ZoneF.Count} 절 {w.ZoneC.Count} · 면 토막 {w.Faces.Count} · 앞면 {w.FaceLen:F2} m)" : "")
                                 + (w.Kind == 2 && w.Shape is 2 or 3 ? string.Format(ci, (w.Shape == 3 ? string.Format(ci, " 모양 다단(H {0:0.##} · b {1:0.##} · Z1 {2:F3})", w.TierH, w.TierB, w.TierZ1) : " 모양 수직") + " · 길이 {0:F2} m · 최고 {1:F2} m · 면적 {2:F1} ㎡", w.FaceLen, w.Faces.Count == 0 ? 0 : w.Faces.Max(f => f.HMax),
                                     w.Faces.Where(f => f.Kind == 0).Sum(f => Enumerable.Range(0, System.Math.Max(0, f.Top.Count - 1)).Sum(i => (System.Math.Abs(f.Top[i].Z - f.Foot[i].Z) + System.Math.Abs(f.Top[i + 1].Z - f.Foot[i + 1].Z)) / 2
-                                        * System.Math.Sqrt((f.Top[i + 1].X - f.Top[i].X) * (f.Top[i + 1].X - f.Top[i].X) + (f.Top[i + 1].Y - f.Top[i].Y) * (f.Top[i + 1].Y - f.Top[i].Y))))) : ""));   // ★[v114.0] 판 7 종류 2 · ★[v117.0] 판 9 모양
+                                        * System.Math.Sqrt((f.Top[i + 1].X - f.Top[i].X) * (f.Top[i + 1].X - f.Top[i].X) + (f.Top[i + 1].Y - f.Top[i].Y) * (f.Top[i + 1].Y - f.Top[i].Y))))) : "")   // ★[v114.0] 판 7 종류 2 · ★[v117.0] 판 9 모양
+                                + (w.Kind == 2 && w.Shape is 2 or 3 ? ProfileOf(w) : ""));
                             if (w.Kind != 0) sb.AppendLine("LINE " + string.Join(" ", w.Line.Select(p => string.Format(ci, "{0:R},{1:R}", p.X, p.Y))) + " | SRC " + string.Join(" ", w.Src.Select(p => string.Format(ci, "{0:R},{1:R}", p.X, p.Y))));
                             if (w.Kind != 0)
                             {
@@ -192,5 +193,18 @@ internal static class M0Dump
             finally { t.Dispose(); }
         }
         return (n, (x0, y0, x1, y1), lost);
+    }
+
+    /// <summary>★[로드맵 2-2 · 보고만] WALL 줄 끝 — 기록의 바깥 벽 면 가로대로 다시 센 측점표(기록에는 측점표가 없음 · 판 9 · 10 바이트 그대로).
+    /// 가로대 기준이라 짓기 때 측점표(L 위 정지면)와 띠 폭만큼 다를 수 있다 · 검토 높이 · 기초 재기는 기록에 재료가 없어 안 적는다.</summary>
+    static string ProfileOf(WallRec w)
+    {
+        try
+        {
+            var r = WallProfile.FromFaces(w.Faces);
+            return string.Format(System.Globalization.CultureInfo.InvariantCulture, " · 측점(가로대) {0} · 절 {1:F2} · 성 {2:F2} · 0 {3:F2} m({4}곳) · 끝 0 {5:F2} m",
+                r.Stations.Count, r.LenC, r.LenF, r.LenZ, r.ZeroN, r.LenZEnd);
+        }
+        catch (System.Exception ex) { return " · 측점표 못 셈 — " + ex.GetType().Name; }
     }
 }

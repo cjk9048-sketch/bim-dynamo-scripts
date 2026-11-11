@@ -232,11 +232,14 @@ public static partial class WallByLine
         VStage = "②";
         // ② δ = P0 − G(L 점 사이 1차 — 두 면의 변 건넘이 모두 L 점) · 부분 · 가름점 C
         var dz = new List<(double S, double G, double P, double D)>();
+        var p0FbAt = new HashSet<VPt>();   // ★[로드맵 2-2] 측점표 «못 읽음» — 정지면을 못 읽어 원지반 값으로 메운 측점(기하는 그대로)
         foreach (var p in pts)
         {
             var g = OnL(GR, p.S, false);
             if (g == null) return No("원지반", string.Format(ci, "선 위 원지반을 못 읽었습니다 ({0:F1}, {1:F1}) — 측량 범위 밖?", p.C.X + ox, p.C.Y + oy), Wd(p.C));
+            int fb0 = p0Fb;
             var z = OnL(PR, p.S, true);
+            if (p0Fb > fb0) p0FbAt.Add(p);
             if (z == null) return No("정지면", string.Format(ci, "선 위 합성 전 면(정지면) 높이를 못 읽었습니다 ({0:F1}, {1:F1})", p.C.X + ox, p.C.Y + oy), Wd(p.C));
             dz.Add((p.S, g.Value, z.Value, z.Value - g.Value));
         }
@@ -249,6 +252,8 @@ public static partial class WallByLine
             if (pz == null || gz == null) return No("끝", string.Format(ci, "선 끝 {0}에서 정지면 · 원지반 높이를 못 읽었습니다 ({1:F2}, {2:F2}) — 끝 높이를 잴 수 없습니다", atA ? "A" : "B", c.X + ox, c.Y + oy), Wd(c));
             if (atA) R.EndStepA = Math.Abs(pz.Value - gz.Value); else R.EndStepB = Math.Abs(pz.Value - gz.Value);
         }
+        var dzOf = new Dictionary<VPt, (double G, double P)>();   // ★[로드맵 2-2] 측점표 재료(가름점 C를 넣기 전 L 점 — dz와 같은 차례)
+        for (int i = 0; i < pts.Count; i++) dzOf[pts[i]] = (dz[i].G, dz[i].P);
         const double Eps0 = 1e-4;
         var parts = new List<Part>();
         var cS = new List<double>();
@@ -1189,6 +1194,49 @@ public static partial class WallByLine
         if (R.EdgeP0Max > VEdgeMax) return No("턱", string.Format(ci, "벽 띠 안쪽 끝(L′) 위 벽 면이 정지면과 {0:F2} mm 어긋납니다 ({1:F2}, {2:F2}) — 사다리에 못 넣은 정지면 꺾임", R.EdgeP0Max * 1000, eP0At.X, eP0At.Y), eP0At);
         if (p0Fb > 0) R.Warn.Add($"정지면을 못 읽은 점 {p0Fb}개는 1 mm 옆(끝 · 테두리) 또는 원지반 값");
         if (goneN > 0) R.Warn.Add(string.Format(ci, "사다리에 못 넣은 꼭짓점 {0}(0.25 mm 안 부딪힘 · 엇갈림) — 그 자리 차 최대 {1:F1} µm", goneN, goneMax * 1e6));
+        // ⑨ ★[로드맵 2-2 · 2-3 — 보고만] 측점 높이표 · 절/성/0/못 읽음 · 검토 높이(⚠만) · 기초 재기 — 기하 · 자가검증 줄은 그대로 · 못 세도 짓기는 그대로
+        try
+        {
+            var rungAt = new Dictionary<VPt, VRung>();
+            foreach (var r in rungs) if (r.Pt != null) rungAt.TryAdd(r.Pt, r);
+            var sp = pts.OrderBy(p => p.S).ToList();
+            var st = new List<WallProfile.Station>();
+            for (int i = 0; i < sp.Count; i++)
+            {
+                var p = sp[i];
+                if (!dzOf.TryGetValue(p, out var v))
+                {
+                    // 가름점 C · 뒤에 더한 L 점(고른 간격 · L′ 위 P0 변 수선) — 두 면이 처음 L 점 사이에서 1차(변 건넘이 모두 처음 L 점)
+                    int a = i - 1; while (a >= 0 && !dzOf.ContainsKey(sp[a])) a--;
+                    int b = i + 1; while (b < sp.Count && !dzOf.ContainsKey(sp[b])) b++;
+                    if (a < 0 || b >= sp.Count) throw new InvalidOperationException($"측점 {p.S:F3} m의 이웃 L 점이 없음");
+                    var va = dzOf[sp[a]]; var vb = dzOf[sp[b]];
+                    double t = sp[b].S - sp[a].S > 0 ? (p.S - sp[a].S) / (sp[b].S - sp[a].S) : 0;
+                    v = (va.G + (vb.G - va.G) * t, va.P + (vb.P - va.P) * t);
+                }
+                rungAt.TryGetValue(p, out var rg);
+                st.Add(new WallProfile.Station { S = p.S, X = p.C.X + ox, Y = p.C.Y + oy, EG = v.G, FG = v.P, H = v.G - v.P, Wh = rg?.H ?? double.NaN, W = rg?.W ?? double.NaN, Kind = p.Kind, NoData = p0FbAt.Contains(p) });
+            }
+            // 가로대가 없는 측점(뺀 꼭짓점) — 벽 높이 · 띠 폭은 이웃 가로대 사이 1차
+            for (int i = 0; i < st.Count; i++)
+            {
+                if (!double.IsNaN(st[i].Wh)) continue;
+                int a = i - 1; while (a >= 0 && double.IsNaN(st[a].Wh)) a--;
+                int b = i + 1; while (b < st.Count && double.IsNaN(st[b].Wh)) b++;
+                if (a < 0 && b >= st.Count) continue;
+                if (a < 0) { st[i].Wh = st[b].Wh; st[i].W = st[b].W; continue; }
+                if (b >= st.Count) { st[i].Wh = st[a].Wh; st[i].W = st[a].W; continue; }
+                double t = st[b].S - st[a].S > 0 ? (st[i].S - st[a].S) / (st[b].S - st[a].S) : 0;
+                st[i].Wh = st[a].Wh + (st[b].Wh - st[a].Wh) * t; st[i].W = st[a].W + (st[b].W - st[a].W) * t;
+            }
+            var pf = WallProfile.Analyze(st, pl.Len, inp.ReviewHc, inp.ReviewHf);
+            WallProfile.Footing(pf, inp.FootCut, inp.FootFill, inp.FootCommon);
+            WallProfile.Texts(pf);
+            R.Profile = pf;
+            log.Append(pf.Text).Append(pf.FootText);
+            if (pf.OverWarn.Length > 0) R.Warn.Add(pf.OverWarn);
+        }
+        catch (Exception ex) { R.Profile = null; log.Append($"  ⑨ 측점표 못 셈 — {ex.GetType().Name}: {ex.Message}\n"); }
         R.Ok = true; R.Code = "통과";
         R.SelfCheck = SelfLineV(R);
         log.Append("  " + R.SelfCheck + "\n");
