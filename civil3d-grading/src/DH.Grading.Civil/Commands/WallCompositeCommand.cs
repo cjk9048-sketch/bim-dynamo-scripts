@@ -904,11 +904,14 @@ public sealed class WallCompositeCommand
                             foreach (var t in wallTris)
                             {
                                 double cx = (t.A.X + t.B.X + t.C.X) / 3, cy = (t.A.Y + t.B.Y + t.C.Y) / 3;
+                                // ★[v117.3 · 검토 HIGH 1] 다단(모양 3)은 소단 자리 안 반대쪽 주머니 고리가 포개진다 — 품는 고리 가운데 가장 작은 것의 쪽
+                                if (w.Shape == 3) { int zs = WallByLine.ZoneSideTiered(w.ZoneC, w.ZoneF, cx, cy); if (zs < 0) tf.Add(t); else if (zs > 0) tcL.Add(t); continue; }
                                 if (w.ZoneF.Any(r => GradingGeometry.PointInRing(r, cx, cy))) tf.Add(t);
                                 else if (w.ZoneC.Any(r => GradingGeometry.PointInRing(r, cx, cy))) tcL.Add(t);
                             }
                             wi.WallTrisF = tf; wi.WallTrisC = tcL;
-                            wi.NoZero = w.Shape == 2;   // ★[v117.0 · 계획 2절 대안] 수직 옹벽 — 벽 = 원지반 교선 생략(띠 부호는 짓기 관문이 보증 · 옛 모양은 그대로)
+                            wi.NoZero = w.Shape is 2 or 3;   // ★[v117.0 · 계획 2절 대안] 수직 옹벽 — 벽 = 원지반 교선 생략(띠 부호는 짓기 관문이 보증 · 옛 모양은 그대로) · ★[v117.3] 다단도
+                            wi.ExactG = w.Shape is 2 or 3;   // ★[v117.3 · JACK 1111 14:27] R_out = 원지반 세모 그대로(폴리곤 안 정지면 변 없음 · 원지반 변은 R_out에만)
                             log.AppendLine($"   선 옹벽 {w.No} — 가상옹벽 삼각형 {wallTris.Count} → 성토 자리 {tf.Count} · 절토 자리 {tcL.Count}");
                             if (tf.Count + tcL.Count == 0) bad = "선 옹벽의 바꿀 자리 안에 가상옹벽 삼각형이 없다";
                         }

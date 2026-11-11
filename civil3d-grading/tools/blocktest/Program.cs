@@ -232,6 +232,13 @@ if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "wvert")
     Console.WriteLine(fails == 0 ? "\n== 전부 통과 ==" : $"\n== 실패 {fails}건 ==");
     return fails == 0 ? 0 : 1;
 }
+// ★[v117.3 · 계획 2026-11-11_부지_다단옹벽] BLOCKTEST_ONLY=wtier — 부지 다단 옹벽(S248 WT — 짓기 · 합성 왕복 · R_out = 원지반 세모 · 목록 판 10)만
+if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "wtier")
+{
+    WallTieredCheck.Run(Check);
+    Console.WriteLine(fails == 0 ? "\n== 전부 통과 ==" : $"\n== 실패 {fails}건 ==");
+    return fails == 0 ? 0 : 1;
+}
 // ★[v117.0] BLOCKTEST_ONLY=wvrepro — 수직 옹벽 오프라인 재현(키트 HLWVD 덤프 · WV_REPRO_DIR · WV_REPRO_TAGS — 전체 목록에는 안 넣음)
 if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "wvrepro") { WallVerticalRepro.Run(Check); return fails == 0 ? 0 : 1; }
 
