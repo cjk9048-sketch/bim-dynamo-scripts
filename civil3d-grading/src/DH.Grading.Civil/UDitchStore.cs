@@ -188,7 +188,7 @@ internal static class UDitchStore
             if (!double.IsFinite(g)) { g = z3 ? p[2] : double.NaN; miss++; }
             p[2] = g;
         }
-        d.Pts = pts;
+        UDitch.SetLinePts(d, pts);   // ★[설치 전 검토 1] [방향 바꾸기]면 그린 차례를 뒤집어 씀
         d.Surface = sid.IsNull ? (z3 ? "(3D 선 Z)" : "(없음)") : name + (miss > 0 ? $" · 면 밖 {miss}점" : "");
     }
 
@@ -211,6 +211,7 @@ internal static class UDitchStore
     internal static int Erase(Database db, Transaction tr, string id)
     {
         int n = 0;
+        bool locked = SetLocked(db, tr, false);   // ★[설치 전 검토 3] 잠긴 레이어면 풀고 지운 뒤 되돌림(못 지운 채 새로 지어 겹치지 않게)
         var ms = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForRead);
         foreach (ObjectId eid in ms)
         {
@@ -225,7 +226,19 @@ internal static class UDitchStore
             }
             catch { }
         }
+        if (locked) SetLocked(db, tr, true);
         return n;
+    }
+
+    /// <summary>측구 레이어 잠금을 바꿈 — 돌려줌 = 바꾸기 전 잠겨 있었나(레이어 없음 = 거짓).</summary>
+    static bool SetLocked(Database db, Transaction tr, bool locked)
+    {
+        var lt = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
+        if (!lt.Has(Layer)) return false;
+        var l = (LayerTableRecord)tr.GetObject(lt[Layer], OpenMode.ForRead);
+        bool was = l.IsLocked;
+        if (was != locked) { l.UpgradeOpen(); l.IsLocked = locked; }
+        return was;
     }
 
     internal sealed class BuildStats
@@ -241,62 +254,81 @@ internal static class UDitchStore
     {
         var st = new BuildStats();
         using var tr = db.TransactionManager.StartTransaction();
+        bool locked = SetLocked(db, tr, false);   // ★[설치 전 검토 3] 잠긴 레이어 — 짓는 동안 풀고 끝에 되돌림
         st.Erased = Erase(db, tr, "");
         var lay = GradingBuilder.EnsureLayer(db, tr, Layer, 253);
         GradingBuilder.EnsureRegApp(db, tr, App);
         var ms = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForWrite);
         foreach (var d in rec.Ditches)
         {
-            Refresh(db, tr, d, s);
-            d.Solids.Clear();
-            var h = UDitch.Check(d, rec.Rain, s);
-            var sols = UDitch.Meshes(d, s, out string why);
-            if (sols.Count == 0) { st.Skipped++; if (st.FirstFail.Length == 0) st.FirstFail = $"{d.Id}: {why}"; log.AppendLine($"  {d.Id}: 못 지음 — {why}"); continue; }
-            short color = h.Verdict == UDitch.Verdict.Short ? (short)1 : h.Verdict == UDitch.Verdict.Caution ? (short)2 : (short)256;
-            foreach (var sol in sols)
+            // ★[설치 전 검토 2] 측구마다 따로 — 하나가 못 지어지면 그 측구만 «못 지음»(지은 조각은 지움) · 나머지는 짓는다
+            var built = new List<Entity>();
+            int nSol = 0, nMesh = 0;
+            try
             {
-                var o = sol.V[0];
-                var verts = new Point3dCollection();
-                foreach (var v in sol.V) verts.Add(new Point3d(v.X - o.X, v.Y - o.Y, v.Z - o.Z));   // 원점 가까이(대좌표 ACIS 오류 피함 — 옹벽 솔리드와 같은 법)
-                var fc = new Int32Collection();
-                foreach (var f in sol.F) { fc.Add(f.Length); foreach (int k in f) fc.Add(k); }
-                var mesh = new SubDMesh();
-                mesh.SetSubDMesh(verts, fc, 0);
-                mesh.LayerId = lay;
-                ms.AppendEntity(mesh); tr.AddNewlyCreatedDBObject(mesh, true);
-                var move = Matrix3d.Displacement(new Vector3d(o.X, o.Y, o.Z));
-                Entity made = mesh;
-                Solid3d? solid = null;
-                try
+                Refresh(db, tr, d, s);
+                d.Solids.Clear();
+                var h = UDitch.Check(d, rec.Rain, s);
+                var sols = UDitch.Meshes(d, s, out string why);
+                if (sols.Count == 0) { st.Skipped++; if (st.FirstFail.Length == 0) st.FirstFail = $"{d.Id}: {why}"; log.AppendLine($"  {d.Id}: 못 지음 — {why}"); continue; }
+                short color = h.Verdict == UDitch.Verdict.Short ? (short)1 : h.Verdict == UDitch.Verdict.Caution ? (short)2 : (short)256;
+                foreach (var sol in sols)
                 {
-                    solid = mesh.ConvertToSolid(false, false);
-                    bool live;
-                    try { live = solid.MassProperties.Volume > 1e-9; } catch { live = false; }
-                    if (live)
+                    var o = sol.V[0];
+                    var verts = new Point3dCollection();
+                    foreach (var v in sol.V) verts.Add(new Point3d(v.X - o.X, v.Y - o.Y, v.Z - o.Z));   // 원점 가까이(대좌표 ACIS 오류 피함 — 옹벽 솔리드와 같은 법)
+                    var fc = new Int32Collection();
+                    foreach (var f in sol.F) { fc.Add(f.Length); foreach (int k in f) fc.Add(k); }
+                    var mesh = new SubDMesh();
+                    try { mesh.SetSubDMesh(verts, fc, 0); } catch { mesh.Dispose(); throw; }
+                    mesh.LayerId = lay;
+                    ms.AppendEntity(mesh); tr.AddNewlyCreatedDBObject(mesh, true);
+                    built.Add(mesh);
+                    var move = Matrix3d.Displacement(new Vector3d(o.X, o.Y, o.Z));
+                    Entity made = mesh;
+                    Solid3d? solid = null;
+                    try
                     {
-                        solid.LayerId = lay;
-                        ms.AppendEntity(solid); tr.AddNewlyCreatedDBObject(solid, true);
-                        mesh.Erase();
-                        made = solid; solid = null;
-                        st.Solids++;
+                        solid = mesh.ConvertToSolid(false, false);
+                        bool live;
+                        try { live = solid.MassProperties.Volume > 1e-9; } catch { live = false; }
+                        if (live)
+                        {
+                            solid.LayerId = lay;
+                            ms.AppendEntity(solid); tr.AddNewlyCreatedDBObject(solid, true);
+                            built.Add(solid);
+                            mesh.Erase();
+                            made = solid; solid = null;
+                            nSol++;
+                        }
+                        else if (st.FirstFail.Length == 0) st.FirstFail = $"{d.Id} {sol.Part}: 빈 솔리드(메시로 남김)";
                     }
-                    else if (st.FirstFail.Length == 0) st.FirstFail = $"{d.Id} {sol.Part}: 빈 솔리드(메시로 남김)";
+                    catch (System.Exception ex) { if (st.FirstFail.Length == 0) st.FirstFail = $"{d.Id} {sol.Part}: {ex.Message}(메시로 남김)"; }
+                    finally { solid?.Dispose(); }
+                    if (made is SubDMesh) nMesh++;
+                    made.TransformBy(move);
+                    made.ColorIndex = color;
+                    using (var xd = new ResultBuffer(new TypedValue((int)DxfCode.ExtendedDataRegAppName, App), new TypedValue((int)DxfCode.ExtendedDataAsciiString, d.Id),
+                                                     new TypedValue((int)DxfCode.ExtendedDataAsciiString, sol.Part), new TypedValue((int)DxfCode.ExtendedDataAsciiString, h.Status)))
+                        made.XData = xd;
+                    d.Solids.Add(made.Handle.ToString());
                 }
-                catch (System.Exception ex) { if (st.FirstFail.Length == 0) st.FirstFail = $"{d.Id} {sol.Part}: {ex.Message}(메시로 남김)"; }
-                finally { solid?.Dispose(); }
-                if (made is SubDMesh) st.Meshes++;
-                made.TransformBy(move);
-                made.ColorIndex = color;
-                using (var xd = new ResultBuffer(new TypedValue((int)DxfCode.ExtendedDataRegAppName, App), new TypedValue((int)DxfCode.ExtendedDataAsciiString, d.Id),
-                                                 new TypedValue((int)DxfCode.ExtendedDataAsciiString, sol.Part), new TypedValue((int)DxfCode.ExtendedDataAsciiString, h.Status)))
-                    made.XData = xd;
-                d.Solids.Add(made.Handle.ToString());
+                var q = UDitch.Qty(d);
+                st.Solids += nSol; st.Meshes += nMesh;
+                st.BodyVol += q.BodyVol; st.FootVol += q.FootVol; st.Length += q.Length;
+                log.AppendLine(string.Format(System.Globalization.CultureInfo.InvariantCulture, "  {0}: U형 {1} · 길이 {2:F2} m · 경사 {3:0.###} % · 수리 {4} · 콘크리트 {5:F3} ㎥ · {6}",
+                               d.Id, d.Size.Label, q.Length, h.SlopePct, h.Status, q.BodyVol + q.FootVol, string.Join("/", sols.Select(x => $"{x.Part} 부피 {x.Volume:F3}"))));
             }
-            var q = UDitch.Qty(d);
-            st.BodyVol += q.BodyVol; st.FootVol += q.FootVol; st.Length += q.Length;
-            log.AppendLine(string.Format(System.Globalization.CultureInfo.InvariantCulture, "  {0}: U형 {1} · 길이 {2:F2} m · 경사 {3:0.###} % · 수리 {4} · 콘크리트 {5:F3} ㎥ · {6}",
-                           d.Id, d.Size.Label, q.Length, h.SlopePct, h.Status, q.BodyVol + q.FootVol, string.Join("/", sols.Select(x => $"{x.Part} 부피 {x.Volume:F3}"))));
+            catch (System.Exception ex)
+            {
+                foreach (var e in built) try { if (!e.IsErased) e.Erase(); } catch { }
+                d.Solids.Clear();
+                st.Skipped++;
+                if (st.FirstFail.Length == 0) st.FirstFail = $"{d.Id}: {ex.Message}";
+                log.AppendLine($"  {d.Id}: 못 지음 — {ex.Message}");
+            }
         }
+        if (locked) SetLocked(db, tr, true);
         rec.Updated = System.DateTime.Now.ToString("yyyy-MM-dd HH:mm");
         Save(db, tr, rec);
         tr.Commit();

@@ -156,6 +156,8 @@ public static partial class UDitch
         public double EndInvert { get; set; } = double.NaN;
         /// <summary>참 = 바닥고가 지표면 · 규격을 따라감(손으로 친 뒤엔 거짓).</summary>
         public bool InvertAuto { get; set; } = true;
+        /// <summary>참 = [방향 바꾸기] — 원 선(그린 차례)을 다시 읽어도 뒤집어 씀(<see cref="SetLinePts"/>). 옛 기록 = 거짓(옛 판은 모르는 칸을 버림 · 판 번호 그대로).</summary>
+        public bool Reversed { get; set; }
         public double AreaHa { get; set; }
         public double C { get; set; } = 0.9;
         /// <summary>지은 솔리드 핸들(16진) — 다시 지을 때 지움.</summary>
@@ -353,6 +355,21 @@ public static partial class UDitch
         if (p.Count < 2) return (double.NaN, double.NaN);
         double R(double g) => double.IsFinite(g) ? Math.Round(g - s.Cover - d.Size.H, 3) : double.NaN;
         return (R(p[0][2]), R(p[^1][2]));
+    }
+
+    /// <summary>[방향 바꾸기] — 점 · 시작/끝 바닥고를 뒤집고 <see cref="Ditch.Reversed"/>를 바꿔 기억(원 선을 다시 읽어도 유지).</summary>
+    public static void Reverse(Ditch d)
+    {
+        d.Reversed = !d.Reversed;
+        d.Pts.Reverse();
+        (d.StartInvert, d.EndInvert) = (d.EndInvert, d.StartInvert);
+    }
+
+    /// <summary>원 선에서 다시 읽은 점(그린 차례) → 측구 점(상류 → 하류) — <see cref="Ditch.Reversed"/>면 뒤집음.</summary>
+    public static void SetLinePts(Ditch d, List<double[]> drawn)
+    {
+        if (d.Reversed) drawn.Reverse();
+        d.Pts = drawn;
     }
 
     /// <summary>바닥고가 «자동»이면 지표면 · 규격을 따라 다시 정함.</summary>

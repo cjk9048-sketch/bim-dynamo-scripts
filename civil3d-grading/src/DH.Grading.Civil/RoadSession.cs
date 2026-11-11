@@ -610,6 +610,8 @@ internal sealed class RoadSession
                             else if (Design.SheetAnno is double an0 && Commands.SheetCommand.CurrentDrawingScale(db) is double anNow && anNow > 0 && Math.Abs(an0 - anNow) > 1e-6) sheetNote = "축척이 바뀌었습니다";
                         }
                         else if (want > 0 && Math.Abs(want - Design.SheetScale) > 1e-6) sheetNote = "축척이 바뀌었습니다";
+                        // ★[설치 전 검토 4] 옛 설정 — 그린 뒤 주석 축척(SheetAnno)이 지금과 다르면(부지 주석 축척 변경 뒤 KeepLook 굽기 실패) 판 2와 같은 알림
+                        else if (Design.SheetAnno is double an1 && Commands.SheetCommand.CurrentDrawingScale(db) is double anNow1 && anNow1 > 0 && Math.Abs(an1 - anNow1) > 1e-6) sheetNote = "축척이 바뀌었습니다";
                     }
                 }
                 catch { }

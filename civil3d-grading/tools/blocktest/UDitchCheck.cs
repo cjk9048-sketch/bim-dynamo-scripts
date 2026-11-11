@@ -185,6 +185,42 @@ static class UDitchCheck
                       && t0.Contains("자료 미확보 — 수리검토 안 함") && t0.Contains("강우자료 없음") && rows0.Any(r => r.K == "판정" && r.V == "강우자료 없음");
             check("S260 UD⑧ 보고서 · 풍선 — 출처 · 합리식 산근 · 부족 · 수량 산근(본체 18.000 · 합 26.000 ㎥) · 추천 · 자료 미확보면 «강우자료 없음»", ok, ok ? "" : t + "\n" + t0);
         }
+
+        // ⑨ ★[설치 전 검토 1] [방향 바꾸기] → [모델 생성](원 선을 그린 차례로 다시 읽음 = UDitchStore.Refresh · FillGround와 같은 길) — 시작 = 상류 끝 유지
+        //   그린 차례(x 0 → 100)는 오르막(지어낸 지표면) — 뒤집어야 내리막
+        {
+            var drawn = new[] { new[] { 0.0, 0.0 }, new[] { 100.0, 0.0 } };
+            double G(double x, double y) => 50 + 0.01 * x;
+            List<double[]> Reread() => drawn.Select(p => new[] { p[0], p[1], G(p[0], p[1]) }).ToList();
+            void Rebuild(UDitch.Ditch x) { UDitch.SetLinePts(x, Reread()); UDitch.ApplyAuto(x, S); }
+            // 자동 바닥고
+            var a = Line(drawn, G);
+            UDitch.Reverse(a); UDitch.ApplyAuto(a, S);
+            double a0 = a.StartInvert, a1 = a.EndInvert;
+            Rebuild(a);
+            bool okA = a.Reversed && a.Pts[0][0] == 100 && Math.Abs(a.StartInvert - a0) < 1e-9 && Math.Abs(a.EndInvert - a1) < 1e-9 && a.StartInvert > a.EndInvert
+                       && UDitch.ProfileOf(a, S).SlopePct > 0;
+            // 손 바닥고(그린 차례로 친 값 47.0 → 47.8) — 뒤집으면 47.8 → 47.0 · 다시 읽어도 x = 100 끝이 47.8
+            var m = Line(drawn, G);
+            m.InvertAuto = false; m.StartInvert = 47.0; m.EndInvert = 47.8;
+            UDitch.Reverse(m); UDitch.ApplyAuto(m, S);
+            Rebuild(m);
+            var pm = UDitch.ProfileOf(m, S);
+            bool okM = m.Pts[0][0] == 100 && m.StartInvert == 47.8 && m.EndInvert == 47.0 && Math.Abs(pm.Inv[0] - 47.8) < 1e-12 && pm.SlopePct > 0;
+            // 두 번 뒤집으면 그린 차례
+            var b = Line(drawn, G);
+            UDitch.Reverse(b); UDitch.Reverse(b); UDitch.ApplyAuto(b, S);
+            Rebuild(b);
+            bool okB = !b.Reversed && b.Pts[0][0] == 0 && b.StartInvert < b.EndInvert;
+            // 기록 왕복 · 옛 기록(칸 없음) = 거짓 · 모르는 칸은 버림(옛 판이 새 기록을 읽을 때와 같음)
+            var r = new UDitch.Record(); r.Ditches.Add(a);
+            string js = UDitch.ToJson(r);
+            bool okJ = js.Contains("\"Reversed\": true") && UDitch.TryParse(js, out var rb, out string wj) && rb.Ditches[0].Reversed
+                       && UDitch.TryParse("{\"Version\": 1, \"Ditches\": [ { \"Id\": \"D-001\", \"Nope\": 1 } ]}", out var ro, out _) && !ro.Ditches[0].Reversed;
+            check("S260 UD⑨ [방향 바꾸기] → 다시 읽기 — 자동 · 손 바닥고 모두 시작 = 상류(x 100) · 내리막 유지 · 두 번 = 그린 차례 · 기록 왕복 · 옛 기록 = 안 뒤집음",
+                  okA && okM && okB && okJ,
+                  string.Format(ci, "자동 {0} 손 {1}(첫 점 x {2} · {3:F3} → {4:F3}) 두 번 {5} 기록 {6}", okA, okM, m.Pts[0][0], m.StartInvert, m.EndInvert, okB, okJ));
+        }
     }
 
     /// <summary>닫힌 다양체 — 모든 변이 반대 방향으로 정확히 한 번씩.</summary>
