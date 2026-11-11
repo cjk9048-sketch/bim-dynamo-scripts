@@ -118,6 +118,10 @@ public static class GradingGeometry
         //   (링 브레이크라인 + 코너 능선 + DHXSEC 경계)에서는 오목부를 사선으로 깎는 부작용만 남아 미사용(JACK).
         //   성토 누락 재발 시 이 지점부터 재검토.
         IReadOnlyList<Point3> shape = boundary;
+        // ★[JACK 1111 «수직부»] 계획선의 수직부(위 점 · 아래 점이 평면으로 거의 붙은 변)를 부지 건너편 짝과 곧게 잇는다 —
+        //   짝이 하나도 없으면 null · 아무것도 안 바뀐다(종전과 비트 같음).
+        var stepLines = new List<List<Point3>>();
+        var stepKeep = PairSteps(ref shape, gf, dbg, stepLines);
         var basePoly = ToPolygon(shape, gf);
 
         // densify 간격(m) — 링을 이 간격으로 촘촘히 채워 삼각망을 곱게. 직선 구간에 점이 2개뿐이면 잘릴 때
@@ -125,7 +129,8 @@ public static class GradingGeometry
         double dens = Math.Max(0.3, Math.Min(p.VertexSpacing, 1.0));
 
         // 평지(계획 부지) 경계 링 — Z=경계 정점의 실제 계획고(3D 폴리선 그대로). 내부는 TIN이 보간.
-        var platform = Densify(Weed(PadRing(shape)), dens);
+        //   ★[JACK 1111 «수직부»] 짝 지은 수직부의 위 · 아래 점은 솎지 않는다 — 2 cm 단차의 둘째 점이 5 cm 솎기에 지워지면 그 자리 벽 꼭대기(Z)가 링에서 사라진다.
+        var platform = Densify(stepKeep == null ? Weed(PadRing(shape)) : Weed(PadRing(shape), stepKeep), dens);
         // ★[JACK 0911] <c>NoPlatform</c>이면 <b>안쪽 평지 링을 안 넣는다</b> —
         //   가상 폴리곤으로 벽만 칠 때 안쪽이 원지반(또는 앞 구역)으로 남게 하려는 것이다.
         //   바깥으로 쌓는 계단은 그대로다.
@@ -183,6 +188,8 @@ public static class GradingGeometry
                 }
             }
         }
+        // ★[JACK 1111 «수직부»] 짝 지은 수직부의 위선 · 아래선(플래토 직선과 같은 선은 PairSteps가 이미 뺐다)
+        foreach (var sl in stepLines) result.CornerLines.Add(sl);
 
         // [내부 전환사면 추출 — ralplan Phase F] 원 경계상 '실제 인접'(사이에 전환변 하나) 플래토 쌍 중
         // 둘 다 부지 안 직선으로 채택되고 Z가 다른 쌍 = 전환 띠 하나(리뷰 M-1: 탈락 run이 사이에 있으면
@@ -5069,6 +5076,173 @@ public static class GradingGeometry
         }
         outp.Add(pts[^1]);
         return outp;
+    }
+
+    /// <summary>★[JACK 1111 «수직부»] <see cref="Weed(List{Point3})"/>와 같되 <paramref name="keep"/>[i]인 점(PadRing 차례 = 경계 정점 차례)은 늘 남긴다.</summary>
+    private static List<Point3> Weed(List<Point3> pts, bool[] keep)
+    {
+        if (pts.Count <= 2) return pts;
+        var outp = new List<Point3> { pts[0] };
+        for (int i = 1; i < pts.Count - 1; i++)
+        {
+            var last = outp[^1];
+            double dx = pts[i].X - last.X, dy = pts[i].Y - last.Y;
+            if ((i < keep.Length && keep[i]) || dx * dx + dy * dy >= WeedDist * WeedDist) outp.Add(pts[i]);
+        }
+        outp.Add(pts[^1]);
+        return outp;
+    }
+
+    // ★[JACK 1111 «수직부»] 수직부 판정 — |Δz| ≥ 10 cm 이고 평면 거리 ≤ max(5 cm, 0.05·|Δz|).
+    //   5 cm = 평지 링 솎기 거리(WeedDist) — 이보다 짧은 단차는 지금 둘째 점이 통째로 지워진다(고칠 대상 전부).
+    //   0.05·|Δz| = 1:0.05(엔진의 옹벽 구배 한도)보다 가파른 변 — 높은 벽을 조금 넓게 띄워 그려도 수직부로 본다.
+    internal const double StepMinDz = 0.10, StepMaxRun = 0.05, StepRunRatio = 0.05;
+    /// <summary>이보다 가까우면 «완전 수직» — Civil TIN이 0.1 mm 안 점을 합치므로(여유 2.5배) 아래 점을 0.01·|Δz| 띄운다(1:0.01 벽과 같은 규칙).</summary>
+    internal const double StepExactRun = 2.5e-4, StepExactBatter = 0.01;
+    /// <summary>[하네스 전용 계측] 지금까지 이은 수직부 짝 수(누적) — 수직부 없는 시험이 안 건드려졌는지 세는 데 쓴다.</summary>
+    internal static int StepPairTotal;
+
+    /// <summary>★[JACK 1111 «수직부» · 짝 잇기 + 완전 수직 자동 띄움]
+    /// <para>계획선에 위 점 · 아래 점이 평면으로 거의 붙은 변(수직부)이 있으면, 위 · 아래 높이가 같고(1 mm) 순회 방향이 반대인(한쪽은 내려가고 한쪽은 올라가는)
+    /// 다른 수직부와 짝을 지어 부지 안쪽에 위–위 · 아래–아래 직선(플래토 직선과 같은 보조선)을 넣는다 — 위 점끼리의 거리가 짧은 짝부터(같으면 정점 번호 차례).
+    /// 선이 부지 밖을 지나거나 다른 선(플래토 직선 · 앞서 이은 짝 · 제 짝의 다른 선)과 엇갈리면 그 짝은 안 잇고 ⚠ 만 남긴다(종전대로).</para>
+    /// <para>평면 거리 &lt; <see cref="StepExactRun"/>인 «완전 수직» 짝은 아래 점을 낮은 쪽 변을 따라 0.01·|Δz| 옮긴다(경계 모양 그대로 · 같은 변 위).</para>
+    /// <para>짝이 하나도 없으면 <paramref name="shape"/>도 안 바꾸고 null — 종전과 비트 같다. 있으면 솎지 않을 정점 표(경계 차례).</para></summary>
+    private static bool[]? PairSteps(ref IReadOnlyList<Point3> shape, GeometryFactory gf, System.Text.StringBuilder dbg, List<List<Point3>> outLines)
+    {
+        int n = shape.Count;
+        var sh = shape;
+        var steps = new List<(int T, int B, bool Down, double H)>();
+        for (int i = 0; i < n; i++)
+        {
+            int j = (i + 1) % n;
+            var a = sh[i]; var b = sh[j];
+            double adz = Math.Abs(b.Z - a.Z);
+            if (adz < StepMinDz) continue;
+            double h = Math.Sqrt((b.X - a.X) * (b.X - a.X) + (b.Y - a.Y) * (b.Y - a.Y));
+            if (h > Math.Max(StepMaxRun, StepRunRatio * adz)) continue;
+            steps.Add(b.Z < a.Z ? (i, j, true, h) : (j, i, false, h));
+        }
+        if (steps.Count == 0) return null;
+        string P(int k) => $"({sh[k].X:F2},{sh[k].Y:F2})";
+        string Tag(int s) => $"정점[{steps[s].T}/{steps[s].B}] 위 {sh[steps[s].T].Z:F3} · 아래 {sh[steps[s].B].Z:F3} {P(steps[s].T)}";
+
+        // 플래토 직선 후보(같은 Z 연속 구간 양끝 — Build 플래토와 같은 규칙 · 부지 안 판정은 빼서 더 엄하게)
+        var chords = new List<(int S, int E)>();
+        {
+            int start = -1;
+            for (int i = 0; i < n; i++)
+                if (Math.Abs(sh[i].Z - sh[(i - 1 + n) % n].Z) > 0.005) { start = i; break; }
+            if (start >= 0)
+                for (int idx = start; idx < start + n; idx++)
+                {
+                    int rb = idx; double z0 = sh[rb % n].Z;
+                    while (idx + 1 < start + n && Math.Abs(sh[(idx + 1) % n].Z - z0) <= 0.005) idx++;
+                    if (idx > rb)
+                    {
+                        var s0 = sh[rb % n]; var e0 = sh[idx % n];
+                        if ((s0.X - e0.X) * (s0.X - e0.X) + (s0.Y - e0.Y) * (s0.Y - e0.Y) > 1e-6) chords.Add((rb % n, idx % n));
+                    }
+                }
+        }
+        bool IsChord(int a, int b) => chords.Exists(c => (c.S == a && c.E == b) || (c.S == b && c.E == a));
+
+        // 완전 수직이면 아래 점을 낮은 쪽(위 점 반대편 이웃 변)으로 0.01·|Δz| — 그 변 길이 절반을 넘지 않게
+        Point3 Bot(int s)
+        {
+            var (t, bI, down, h) = steps[s];
+            var b = sh[bI];
+            if (h >= StepExactRun) return b;
+            var o = sh[down ? (bI + 1) % n : (bI - 1 + n) % n];
+            double ex = o.X - b.X, ey = o.Y - b.Y, el = Math.Sqrt(ex * ex + ey * ey);
+            if (el < 1e-6) return b;
+            double d = Math.Min(StepExactBatter * Math.Abs(sh[t].Z - b.Z), 0.5 * el);
+            return new Point3(b.X + ex / el * d, b.Y + ey / el * d, b.Z);
+        }
+
+        var poly = ToPolygon(sh, gf);
+        // 부지 «안»을 건너야 한다 — 경계 변을 따라 눕는 선(예: 골 한쪽 변 위 두 벽 끝)은 Contains가 거짓(속이 부지 속과 안 닿음)
+        bool Inside(Point3 a, Point3 b)
+        {
+            try { return poly.Contains(gf.CreateLineString(new[] { new Coordinate(a.X, a.Y), new Coordinate(b.X, b.Y) })); }
+            catch { return false; }
+        }
+        // 벽 한 줄이면 각 끝에서 높은 쪽 이웃(위 점의 다른 이웃)과 아래 점이 위선의 서로 반대쪽에 있다
+        bool Splits(int s, Point3 l0, Point3 l1, Point3 bot)
+        {
+            var (t, bI, down, _) = steps[s];
+            var hN = sh[down ? (t - 1 + n) % n : (t + 1) % n];
+            double lx = l1.X - l0.X, ly = l1.Y - l0.Y;
+            double sh1 = lx * (hN.Y - l0.Y) - ly * (hN.X - l0.X), sb = lx * (bot.Y - l0.Y) - ly * (bot.X - l0.X);
+            return sh1 * sb < 0;
+        }
+        var cand = new List<(double D, int A, int B)>();
+        for (int a = 0; a < steps.Count; a++)
+            for (int b = a + 1; b < steps.Count; b++)
+            {
+                var sa = steps[a]; var sb = steps[b];
+                if (sa.Down == sb.Down || sa.T == sb.T || sa.B == sb.B) continue;
+                if (Math.Abs(sh[sa.T].Z - sh[sb.T].Z) > 1e-3 || Math.Abs(sh[sa.B].Z - sh[sb.B].Z) > 1e-3) continue;
+                double dx = sh[sa.T].X - sh[sb.T].X, dy = sh[sa.T].Y - sh[sb.T].Y;
+                cand.Add((Math.Sqrt(dx * dx + dy * dy), a, b));
+            }
+        cand.Sort((u, v) => u.D != v.D ? u.D.CompareTo(v.D) : u.A != v.A ? u.A.CompareTo(v.A) : u.B.CompareTo(v.B));
+
+        var used = new bool[steps.Count];
+        var keep = new bool[n];
+        var moved = new Dictionary<int, Point3>();
+        var made = new List<(Point3 A, Point3 B)>();   // 앞서 이은 짝 선(엇갈림 판정)
+        int pairs = 0;
+        foreach (var (dist, a, b) in cand)
+        {
+            if (used[a] || used[b] || dist < 1e-3) continue;
+            var sa = steps[a]; var sb = steps[b];
+            Point3 ta = sh[sa.T], tb = sh[sb.T], ba = Bot(a), bb = Bot(b);
+            string? why = null;
+            if (!Inside(ta, tb)) why = "위선이 부지 안을 건너지 않음(밖 · 경계 위)";
+            else if (!Inside(ba, bb)) why = "아래선이 부지 안을 건너지 않음(밖 · 경계 위)";
+            else if (!Splits(a, ta, tb, ba) || !Splits(b, ta, tb, bb)) why = "위선이 높은 쪽 · 낮은 쪽을 가르지 않음(벽 한 줄이 아님)";
+            else if (SegCross(ta, tb, ba, bb, out _, out _)) why = "위선 · 아래선이 엇갈림";
+            else
+                foreach (var (l0, l1, top) in new[] { (ta, tb, true), (ba, bb, false) })
+                {
+                    if (IsChord(top ? sa.T : sa.B, top ? sb.T : sb.B)) continue;   // 플래토 직선 그 자체
+                    foreach (var c in chords)
+                        if (SegCross(l0, l1, sh[c.S], sh[c.E], out double cx, out double cy)) { why = $"{(top ? "위선" : "아래선")}이 플래토 직선과 엇갈림 @({cx:F2},{cy:F2})"; break; }
+                    if (why == null)
+                        foreach (var m in made)
+                            if (SegCross(l0, l1, m.A, m.B, out double cx, out double cy)) { why = $"{(top ? "위선" : "아래선")}이 다른 짝 선과 엇갈림 @({cx:F2},{cy:F2})"; break; }
+                    if (why != null) break;
+                }
+            if (why != null)
+            {
+                dbg.AppendLine($"  ⚠ 수직부 짝을 못 이음 — {Tag(a)} ↔ {Tag(b)} · {why} — 종전대로");
+                continue;
+            }
+            used[a] = used[b] = true; pairs++;
+            keep[sa.T] = keep[sa.B] = keep[sb.T] = keep[sb.B] = true;
+            bool topIsChord = IsChord(sa.T, sb.T), botIsChord = IsChord(sa.B, sb.B);
+            if (!topIsChord) { outLines.Add(new List<Point3> { ta, tb }); made.Add((ta, tb)); }
+            if (!botIsChord) { outLines.Add(new List<Point3> { ba, bb }); made.Add((ba, bb)); }
+            foreach (var (s, bp) in new[] { (a, ba), (b, bb) })
+                if (steps[s].H < StepExactRun)
+                {
+                    moved[steps[s].B] = bp;
+                    dbg.AppendLine($"  수직부 완전 수직 {Tag(s)} → 아래 점을 낮은 쪽으로 {Math.Sqrt((bp.X - sh[steps[s].B].X) * (bp.X - sh[steps[s].B].X) + (bp.Y - sh[steps[s].B].Y) * (bp.Y - sh[steps[s].B].Y)) * 100:F1} cm 띄움 ({bp.X:F3},{bp.Y:F3})");
+                }
+            dbg.AppendLine($"  수직부 짝 {Tag(a)} ↔ {Tag(b)} · 위선 {dist:F2} m {(topIsChord ? "(플래토 직선과 같음)" : "추가")} · 아래선 {(botIsChord ? "(플래토 직선과 같음)" : "추가")}");
+        }
+        for (int s = 0; s < steps.Count; s++)
+            if (!used[s]) dbg.AppendLine($"  ⚠ 수직부 짝 없음 — {Tag(s)} (평면 {steps[s].H * 100:F1} cm) — 종전대로");
+        if (pairs == 0) return null;
+        System.Threading.Interlocked.Add(ref StepPairTotal, pairs);
+        if (moved.Count > 0)
+        {
+            var ns = new List<Point3>(n);
+            for (int i = 0; i < n; i++) ns.Add(moved.TryGetValue(i, out var q) ? q : sh[i]);
+            shape = ns;
+        }
+        return keep;
     }
 
     /// <summary>링을 maxSeg 간격으로 촘촘히 채운다 — 긴 직선 구간에 중간점을 선형보간(Z 포함)으로 삽입.
