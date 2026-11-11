@@ -540,12 +540,28 @@ public static partial class WallByLine
             Geometry u;
             try { u = NetTopologySuite.Operation.Union.CascadedPolygonUnion.Union(pocketPieces.Select(p => (Geometry)PolyL(p)).ToList()); }
             catch (Exception ex) { return No("다단 합성", $"반대쪽 주머니를 못 합쳤습니다({ex.GetType().Name})", (b1.A.X, b1.A.Y)); }
-            List<Point3> RingZ(LineString lr) => lr.Coordinates.Take(lr.NumPoints - 1).Select(c => new Point3(c.X + ox, c.Y + oy, qZ.TryGetValue((c.X, c.Y), out double zq) ? zq : PZ(c) ?? 0)).ToList();
+            // ★[v117.4 · 설치 전 검토] 높이를 못 읽은 점은 z = 0으로 쓰지 않고 거절(안쪽 테두리와 같은 규칙) — null = 못 읽음
+            List<Point3>? RingZ(LineString lr)
+            {
+                var o = new List<Point3>();
+                foreach (var c in lr.Coordinates.Take(lr.NumPoints - 1))
+                {
+                    double z = qZ.TryGetValue((c.X, c.Y), out double zq) ? zq : PZ(c) ?? double.NaN;
+                    if (double.IsNaN(z)) return null;
+                    o.Add(new Point3(c.X + ox, c.Y + oy, z));
+                }
+                return o;
+            }
             for (int i = 0; i < u.NumGeometries; i++)
                 if (u.GetGeometryN(i) is Polygon pg && pg.Area > 1e-9)
                 {
-                    pocketRings.Add(RingZ(pg.ExteriorRing));
-                    for (int h = 0; h < pg.NumInteriorRings; h++) holeRings.Add(RingZ(pg.GetInteriorRingN(h)));
+                    var er = RingZ(pg.ExteriorRing); if (er == null) return No("다단 합성", "주머니 고리 높이를 못 읽었습니다", Wd(pg.ExteriorRing.Coordinate));
+                    pocketRings.Add(er);
+                    for (int h = 0; h < pg.NumInteriorRings; h++)
+                    {
+                        var hr = RingZ(pg.GetInteriorRingN(h)); if (hr == null) return No("다단 합성", "주머니 고리 높이를 못 읽었습니다", Wd(pg.GetInteriorRingN(h).Coordinate));
+                        holeRings.Add(hr);
+                    }
                 }
         }
         R.PocketN = pocketRings.Count;
@@ -748,6 +764,7 @@ public static partial class WallByLine
         if (R.OuterHMax > H + 1e-3) R.Warn.Add(string.Format(ci, "바깥 벽 최고 {0:F3} m가 단높이 {1:F2} m보다 1 mm 넘게 높음", R.OuterHMax, H));
         if (R.BreakN > 0) R.Warn.Add($"바깥 단 끊김 {R.BreakN}곳 — 구간 나눔 권함(다음 판)");
         if (clipMiss > 0) R.Warn.Add($"L′로 자른 점 {clipMiss}개가 L′ 꼭짓점이 아님(0.25 mm 밖)");
+        if (R.PairsUnder01 + R.ShortEdges + R.Needles > 0) R.Warn.Add($"0.1 mm 안 점 쌍 {R.PairsUnder01} · 0.25 mm 미만 변 {R.ShortEdges} · 바늘 세모 {R.Needles}(Civil이 합치거나 뒤집을 수 있다)");
         if (R.OutsideN > 0) return No("자가검증", $"소단 자리 · 벽 세모 {R.OutsideN}개가 선 바깥(R_out)에 있습니다", (b1.A.X, b1.A.Y));
         if (R.AboveMax > 1e-2) return No("자가검증", string.Format(ci, "소단 자리가 원지반 · 옛 사면보다 {0:F1} mm 높은(절토 꼴) 자리 {1}점 — 낮은 땅을 메움", R.AboveMax * 1000, R.AboveN), (b1.A.X, b1.A.Y));
         R.Ok = true; R.Code = "통과";

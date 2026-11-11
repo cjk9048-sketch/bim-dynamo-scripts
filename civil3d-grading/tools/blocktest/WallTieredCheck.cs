@@ -250,6 +250,20 @@ static class WallTieredCheck
             bool dec = WallList.TryDecode(v10, out _, out var r10, out string why10);
             Check("(m) 목록 판 10 — 모양 2만이면 판 9 · 모양 3이면 판 10 · H · b · Z1 왕복", (int)v9[1].Value == 9 && (int)v10[1].Value == 10 && dec && r10.Count == 2 && r10[1].Shape == 3 && r10[1].TierH == 5 && r10[1].TierB == 1 && r10[1].TierZ1 == 111.2 && r10[0].Shape == 2,
                 $"판 {v9[1].Value} · {v10[1].Value} · {why10}");
+            // ★[v117.4 · 설치 전 검토] 섞인 목록(모양 0 · 2 · 3) — 판 10 칸에 NaN 없음(모양 ≠ 3 = 0) · 읽으면 NaN · d3d0a72가 쓴 NaN 목록도 읽힘
+            var w0 = new WallRec { No = 3, Kind = 2, Line = U.ToList(), Src = U.ToList(), Shape = 0 };
+            var vm = WallList.Encode(head, new[] { w0, w2, w3 });
+            int nm = vm.Count;
+            bool noNaN = vm.All(q => q.Value is not double d || !double.IsNaN(d)) && v9.All(q => q.Value is not double d || !double.IsNaN(d));
+            bool zeros = Enumerable.Range(nm - 9, 6).All(k => vm[k].Kind == 'D' && (double)vm[k].Value == 0);
+            bool decM = WallList.TryDecode(vm, out _, out var rm, out string whyM);
+            bool nanBack(WallRec w) => double.IsNaN(w.TierH) && double.IsNaN(w.TierB) && double.IsNaN(w.TierZ1);
+            var vOld = vm.ToList(); for (int k = nm - 9; k < nm - 3; k++) vOld[k] = ('D', double.NaN);
+            bool decO = WallList.TryDecode(vOld, out _, out var ro, out string whyO);
+            Check("(m2) 섞인 목록 판 10 — NaN 안 씀(모양 0 · 2 칸 = 0) · 읽으면 NaN · 모양 3 왕복 · 옛 NaN 목록도 읽힘",
+                (int)vm[1].Value == 10 && noNaN && zeros && decM && rm.Count == 3 && nanBack(rm[0]) && nanBack(rm[1]) && rm[2].TierH == 5 && rm[2].TierB == 1 && rm[2].TierZ1 == 111.2
+                && decO && ro.Count == 3 && nanBack(ro[0]) && nanBack(ro[1]) && ro[2].TierZ1 == 111.2,
+                $"판 {vm[1].Value} · NaN 없음 {noNaN} · 0 {zeros} · {whyM} · 옛 {decO} {whyO}");
         }
     }
 }
