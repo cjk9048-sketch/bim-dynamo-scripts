@@ -18,11 +18,15 @@ namespace DH.CivilCoord.Revit;
 /// </summary>
 internal sealed class CoordWindow : Window
 {
-    public enum Act { None, Pick1, Pick2, Export, Apply }
+    public enum Act { None, Pick1, Pick2, Export, Apply, Insert }
 
     public Act Action { get; private set; } = Act.None;
     public string ExportPath { get; private set; } = "";
     public FitState State { get; }
+    /// <summary>[모델에 넣기]에서 고른 것.</summary>
+    public InsertOptions? InsertOpts { get; private set; }
+    /// <summary>지금 쓰는 Civil 3D 영역(창에서 새로 불러왔을 수 있음).</summary>
+    public Region3D? Region => _region;
 
     private const double LabelW = 44;
     private readonly UiTheme _ui;
@@ -42,19 +46,43 @@ internal sealed class CoordWindow : Window
     private CivilPoints? _civil;          // 지금 파일(미리보기 선 · 바뀜 검사)
     private bool _civilChanged;
     private bool _civilExists;            // 창을 열 때 · 불러올 때만 확인(글자마다 NAS 를 묻지 않게 — 검토 낮음)
-    // 미리보기
+    // 미리보기 — [평면 | 3D](JACK 1111)
     private readonly PlanPreview _preview;
-    private readonly IReadOnlyList<P2[]> _footprints;   // Revit 부재 윤곽(내부 좌표 m)
+    private readonly Preview3D _preview3d;
+    private readonly RadioButton _segPlan, _seg3d;
+    private readonly System.Windows.Controls.Primitives.ToggleButton _translucent;
+    private readonly TextBlock _regionInfo = new();
+    private readonly Button _insert;
+    private readonly PreviewModel _model;                // Revit 부재 윤곽 · 3D 세모(내부 좌표 m)
+    private readonly IReadOnlyList<P2[]> _footprints;
+    private readonly LevelHeights _heights;
+    private Region3D? _region;                           // Civil 3D 영역(없으면 null)
+    private string _regionError = "";
+    private readonly int _madeCount;                     // 전에 [모델에 넣기]로 넣은 요소 수
+    private static bool s_mode3d;
+    private string? _dzBefore;                           // 높이 손잡이로 끄기 전 «더할 값» 글(취소 때 되돌림)
+    // 손 맞춤 줄 · 알림
+    private readonly StackPanel _handRow = Row();
+    private readonly TextBlock _handText = new();
+    private readonly Border _statusBox = new();
+    private readonly TextBlock _statusText = new();
+    private static readonly IReadOnlyList<CivilPoints.SketchLine> NoSketch = Array.Empty<CivilPoints.SketchLine>();
 
     private static double? s_left, s_top;   // 다시 열 때 같은 자리
 
     public CoordWindow(FitState state, LevelHeights heights, SharedCoords.Info shared, string status, string statusKind, string defaultPath, nint owner, bool dark,
-                       IReadOnlyList<P2[]> footprints, CivilPoints? civil, bool civilChanged, bool civilExists, string civilError)
+                       PreviewModel model, CivilPoints? civil, bool civilChanged, bool civilExists, string civilError,
+                       Region3D? region = null, string regionError = "", int madeCount = 0)
     {
         State = state.Clone();
         State.ResolveMode();
         _defaultPath = defaultPath;
-        _footprints = footprints;
+        _model = model;
+        _footprints = model.Footprints;
+        _heights = heights;
+        _region = region;
+        _regionError = regionError;
+        _madeCount = madeCount;
         _civil = civil;
         _civilChanged = civilChanged;
         _civilExists = civilExists;
@@ -62,25 +90,47 @@ internal sealed class CoordWindow : Window
         _ui = new UiTheme(dark);
 
         Title = Dialogs.Title;
-        Width = 940;
-        SizeToContent = SizeToContent.Height;
-        ResizeMode = ResizeMode.NoResize;
+        // 크게 + 크기 조절 · 최대화 · 크기 기억(JACK 1111 «미리보기 창 훨씬 크게» · 인터뷰) — 왼쪽 입력 칸은 그대로 폭 · 미리보기가 남는 자리 전부
+        var wa = SystemParameters.WorkArea;
+        var (winW, winH, smax) = Log.WindowSize;
+        MinWidth = 900; MinHeight = 560;
+        Width = Math.Max(MinWidth, Math.Min(winW > 0 ? winW : 1480, wa.Width));
+        Height = Math.Max(MinHeight, Math.Min(winH > 0 ? winH : 900, wa.Height));
+        ResizeMode = ResizeMode.CanResize;
         ShowInTaskbar = false;
-        if (s_left is double l && s_top is double t) { WindowStartupLocation = WindowStartupLocation.Manual; Left = l; Top = t; }
+        if (s_left is double l && s_top is double t)
+        {
+            WindowStartupLocation = WindowStartupLocation.Manual;
+            double vl = SystemParameters.VirtualScreenLeft, vt = SystemParameters.VirtualScreenTop;
+            Left = Math.Clamp(l, vl, Math.Max(vl, vl + SystemParameters.VirtualScreenWidth - 200));
+            Top = Math.Clamp(t, vt, Math.Max(vt, vt + SystemParameters.VirtualScreenHeight - 120));
+        }
         else WindowStartupLocation = WindowStartupLocation.CenterOwner;
+        if (smax) WindowState = WindowState.Maximized;
         _ = new WindowInteropHelper(this) { Owner = owner };
         if (dark) SourceInitialized += (_, _) => DarkTitleBar();
-        Closed += (_, _) => { s_left = Left; s_top = Top; };
-        PreviewKeyDown += (_, e) => { if (e.Key == Key.Escape) Close(); };
+        // 최소화 단추를 뺌 — 모달 창이라 최소화하면 작업 표시줄에도 없고 Revit 은 막혀 멈춘 것처럼 보임(설치 전 검토 중간)
+        SourceInitialized += (_, _) => NoMinimizeBox();
+        StateChanged += (_, _) => { if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal; };
+        Closing += (_, _) =>
+        {
+            var rb = WindowState == WindowState.Normal ? new Rect(Left, Top, Width, Height) : RestoreBounds;
+            if (rb.IsEmpty || !(rb.Width > 0)) return;
+            s_left = rb.Left; s_top = rb.Top;
+            Log.WindowSize = (rb.Width, rb.Height, WindowState == WindowState.Maximized);
+        };
+        // 끄는 중의 Esc = 끌기 취소(창은 그대로) · 아니면 닫기
+        PreviewKeyDown += (_, e) => { if (e.Key == Key.Escape) { e.Handled = true; if (_preview?.CancelDrag() != true && _preview3d?.CancelDrag() != true) Close(); } };
 
         var outer = new Grid { Margin = new Thickness(16, 14, 16, 14) };
-        outer.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(528) });
+        outer.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(540) });
         outer.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(12) });
         outer.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        outer.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
         outer.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-        outer.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-        var left = new StackPanel();
-        outer.Children.Add(left);
+        var left = new StackPanel { Margin = new Thickness(0, 0, 12, 0) };
+        // 창을 낮게 줄이면 왼쪽만 구름
+        outer.Children.Add(new ScrollViewer { Content = left, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled });
         var page = new Border { Background = _ui["Bg"], Child = outer };
         page.Resources.MergedDictionaries.Add(_ui.Resources);
         TextElement(page);
@@ -160,6 +210,18 @@ internal sealed class CoordWindow : Window
         _ui.Tip(check, "두 선분 길이가 다르면 그 비율로 IFC의 평면(X · Y)을 키우거나 줄여 두 점을 Civil 두 점에 꼭 맞춥니다(높이는 그대로). 공유 좌표에는 비율이 안 들어갑니다(옮김 · 돌림만).");
         left.Children.Add(check);
 
+        // ── 손 맞춤(미리보기에서 마우스로 옮기고 돌린 만큼 — 있을 때만)
+        _handRow.Margin = new Thickness(2, 8, 0, 0);
+        _handRow.Children.Add(Label("손 맞춤", 76));
+        _handText.VerticalAlignment = VerticalAlignment.Center; _handText.Foreground = _ui["Text"];
+        _handRow.Children.Add(_handText);
+        var handReset = _ui.Button("되돌리기", "BtnGhost", "손으로 옮기고 돌린 것을 지우고 두 점 맞춤 자리로", "handReset", "");
+        handReset.Margin = new Thickness(8, 0, 0, 0);
+        handReset.Click += (_, _) => { State.ClearHand(); Refresh(); };
+        _handRow.Children.Add(handReset);
+        _ui.Tip(_handText, "미리보기에서 구조물을 끌어 옮기고 손잡이로 돌린 만큼(두 점 맞춤 위에 더함) — IFC 내보내기 · 공유 좌표에 함께 들어갑니다.");
+        left.Children.Add(_handRow);
+
         // ── 지금 공유 좌표(보기만 — 단추와 떨어뜨림)
         var sh = Row(); sh.Margin = new Thickness(2, 8, 0, 0);
         sh.Children.Add(Label("공유 좌표", 76));
@@ -169,20 +231,49 @@ internal sealed class CoordWindow : Window
         left.Children.Add(sh);
 
         // ── 마지막 일의 결과
-        if (status.Length > 0)
-        {
-            var (bg, fg) = statusKind switch { "Good" => ("GoodBg", "GoodFg"), "Bad" => ("BadBg", "BadFg"), "Warn" => ("WarnBg", "WarnFg"), _ => ("NeutralBg", "NeutralFg") };
-            left.Children.Add(new Border
-            {
-                Background = _ui[bg], CornerRadius = new CornerRadius(8), Padding = new Thickness(12, 8, 12, 9), Margin = new Thickness(0, 12, 0, 0),
-                Child = new TextBlock { Text = status, TextWrapping = TextWrapping.Wrap, Foreground = _ui[fg] },
-            });
-        }
+        _statusBox.CornerRadius = new CornerRadius(8); _statusBox.Padding = new Thickness(12, 8, 12, 9); _statusBox.Margin = new Thickness(0, 12, 0, 0);
+        _statusText.TextWrapping = TextWrapping.Wrap;
+        _statusBox.Child = _statusText;
+        left.Children.Add(_statusBox);
+        // 미리보기를 못 그린 까닭(요소가 너무 많음)은 다른 알림이 없을 때 보임
+        if (status.Length == 0 && model.Note.Length > 0) SetStatus(model.Note, "Neutral");
+        else SetStatus(status, statusKind);
 
-        // ── 오른쪽: 미리보기
-        _preview = new PlanPreview(_ui) { MinHeight = 340 };
-        Grid.SetColumn(_preview, 2);
-        outer.Children.Add(_preview);
+        // ── 오른쪽: [평면 | 3D] + 미리보기
+        var right = new Grid();
+        right.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        right.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+        Grid.SetColumn(right, 2);
+        outer.Children.Add(right);
+        var tools = new DockPanel { Margin = new Thickness(0, 0, 0, 8), LastChildFill = true };
+        _segPlan = _ui.Segment("평면", "위에서 본 평면 — Civil 개략 선 · 두 점 · Revit 부재 윤곽", "viewPlan");
+        _seg3d = _ui.Segment("3D", "Civil 3D 영역(최종지표면 · 3D 선) + Revit 구조물 입체", "view3d");
+        var segs = _ui.Segments(_segPlan, _seg3d);
+        DockPanel.SetDock(segs, Dock.Left);
+        tools.Children.Add(segs);
+        _translucent = _ui.Toggle("지표면 반투명", "지표면에 묻힌 구조물이 보이게 지표면을 비치게 합니다.", "translucent", "");
+        _translucent.Margin = new Thickness(8, 0, 0, 0);
+        DockPanel.SetDock(_translucent, Dock.Right);
+        tools.Children.Add(_translucent);
+        _regionInfo.Margin = new Thickness(10, 0, 0, 0); _regionInfo.VerticalAlignment = VerticalAlignment.Center;
+        _regionInfo.TextTrimming = TextTrimming.CharacterEllipsis; _regionInfo.Foreground = _ui["Sub"];
+        tools.Children.Add(_regionInfo);
+        right.Children.Add(tools);
+        _preview = new PlanPreview(_ui) { MinHeight = 300 };
+        _preview3d = new Preview3D(_ui) { MinHeight = 300 };
+        Grid.SetRow(_preview, 1); Grid.SetRow(_preview3d, 1);
+        right.Children.Add(_preview);
+        right.Children.Add(_preview3d);
+        _preview.HandChanged += (f, final) => OnHand(f, final, _preview);
+        _preview3d.HandChanged += (f, final) => OnHand(f, final, _preview3d);
+        _preview3d.DzChanged += (dz, final) =>
+        {
+            // 위아래 손잡이 → «더할 값» 칸(칸이 바뀌면 Refresh 가 돎 · 3D 는 끄는 동안 스스로 그림). 취소(null)면 끌기 전 글 그대로
+            if (dz is not double v) { if (_dzBefore != null) _dz.Text = _dzBefore; _dzBefore = null; return; }
+            if (!final && _dzBefore == null) _dzBefore = _dz.Text;
+            _dz.Text = Math.Round(v, 6).ToString("0.######", System.Globalization.CultureInfo.InvariantCulture);
+            if (final) _dzBefore = null;
+        };
 
         // ── 단추(아래 한 줄)
         var bar = new DockPanel { Margin = new Thickness(0, 16, 0, 0), LastChildFill = false };
@@ -192,6 +283,12 @@ internal sealed class CoordWindow : Window
         _apply.Click += (_, _) => { if (Ready()) { Action = Act.Apply; Close(); } };
         DockPanel.SetDock(_apply, Dock.Left);
         bar.Children.Add(_apply);
+        _insert = _ui.Button("모델에 넣기", "BtnSecondary",
+            "Civil 3D 영역의 최종지표면(정확한 면 · 지형 솔리드)과 3D 선을 미리보기와 같은 자리로 Revit 모델에 넣습니다. 다시 넣으면 지난 것을 바꿉니다. Ctrl+Z로 되돌림.", "insert", "");
+        _insert.Margin = new Thickness(8, 0, 0, 0);
+        _insert.Click += (_, _) => OnInsert();
+        DockPanel.SetDock(_insert, Dock.Left);
+        bar.Children.Add(_insert);
         var close = _ui.Button("닫기", "BtnGhost", "", "close");
         close.Click += (_, _) => Close();
         DockPanel.SetDock(close, Dock.Right);
@@ -209,7 +306,49 @@ internal sealed class CoordWindow : Window
         _segFile.Checked += (_, _) => { State.Mode = "file"; Refresh(); };
         _segManual.Checked += (_, _) => { State.Mode = "manual"; Refresh(); };
         foreach (var box in new[] { _c1x, _c1y, _c2x, _c2y, _dz }) box.TextChanged += (_, _) => Refresh();
+        // [평면 | 3D] — 마지막에 본 쪽(창을 다시 열어도)
+        _segPlan.IsChecked = !s_mode3d;
+        _seg3d.IsChecked = s_mode3d;
+        _segPlan.Checked += (_, _) => { s_mode3d = false; ShowMode(); };
+        _seg3d.Checked += (_, _) => { s_mode3d = true; ShowMode(); };
+        _translucent.Checked += (_, _) => _preview3d.Translucent = true;
+        _translucent.Unchecked += (_, _) => _preview3d.Translucent = false;
+        ShowMode();
         Refresh();
+    }
+
+    private void ShowMode()
+    {
+        _preview.Visibility = s_mode3d ? Visibility.Collapsed : Visibility.Visible;
+        _preview3d.Visibility = s_mode3d ? Visibility.Visible : Visibility.Collapsed;
+        _translucent.Visibility = s_mode3d && _region is { Meshes.Count: > 0 } ? Visibility.Visible : Visibility.Collapsed;
+        RefreshRegionInfo();
+    }
+
+    private void RefreshRegionInfo()
+    {
+        if (_regionError.Length > 0) { _regionInfo.Text = "3D 영역 못 읽음 — " + _regionError; _regionInfo.Foreground = _ui["BadFg"]; }
+        else if (_region != null) { _regionInfo.Text = "3D 영역 " + _region.Summary; _regionInfo.Foreground = _ui["Sub"]; }
+        else { _regionInfo.Text = s_mode3d ? "3D 영역 없음 — Civil에서 영역을 골라 내보내면 지표면이 보입니다" : ""; _regionInfo.Foreground = _ui["Sub"]; }
+        _ui.Tip(_regionInfo, State.RegionFile);
+    }
+
+    /// <summary>미리보기 하나에서 손 맞춤이 바뀜 — 값을 적고 글 줄을 고침(놓을 때는 다른 미리보기도 맞춤).</summary>
+    private void OnHand(Fit2D f, bool final, FrameworkElement from)
+    {
+        State.SetHand(f);
+        Refresh(fromPreview: true);
+        if (final) RefreshPreview(State.Fit() is { Problem: null } g ? g : null, except: from);
+    }
+
+    private void OnInsert()
+    {
+        if (!Ready() || _region == null) return;
+        var dlg = new InsertDialog(_ui, _region, _madeCount) { Owner = this };
+        if (dlg.ShowDialog() != true || dlg.Options == null) return;
+        InsertOpts = dlg.Options;
+        Action = Act.Insert;
+        Close();
     }
 
     // ── 값 · 확인 ──────────────────────────────────────────────────────────────
@@ -219,13 +358,30 @@ internal sealed class CoordWindow : Window
         State.C1X = _c1x.Text; State.C1Y = _c1y.Text; State.C2X = _c2x.Text; State.C2Y = _c2y.Text; State.Dz = _dz.Text;
     }
 
-    private void Refresh()
+    private void SetStatus(string text, string kind)
+    {
+        if (text.Length == 0) { _statusBox.Visibility = Visibility.Collapsed; return; }
+        var (bg, fg) = kind switch { "Good" => ("GoodBg", "GoodFg"), "Bad" => ("BadBg", "BadFg"), "Warn" => ("WarnBg", "WarnFg"), _ => ("NeutralBg", "NeutralFg") };
+        _statusBox.Visibility = Visibility.Visible;
+        _statusBox.Background = _ui[bg];
+        _statusText.Text = text;
+        _statusText.Foreground = _ui[fg];
+    }
+
+    /// <param name="fromPreview">미리보기에서 끄는 중 — 미리보기는 스스로 그렸으니 다시 넘기지 않음.</param>
+    private void Refresh(bool fromPreview = false)
     {
         Capture();
         _filePanel.Visibility = State.FileMode ? Visibility.Visible : Visibility.Collapsed;
         _manualPanel.Visibility = State.FileMode ? Visibility.Collapsed : Visibility.Visible;
         RefreshCivil();
         var fit = State.Fit();
+        if (fit is { HasHand: true })
+        {
+            _handRow.Visibility = Visibility.Visible;
+            _handText.Text = $"동 {fit.Hand.X:+0.000;-0.000;0.000} · 북 {fit.Hand.Y:+0.000;-0.000;0.000} m · 돌림 {fit.HandAngle * 180 / Math.PI:+0.00;-0.00;0.00}°";
+        }
+        else _handRow.Visibility = Visibility.Collapsed;
         string? problem = !State.DzValid ? "높이 칸이 숫자가 아닙니다" : fit?.Problem;
         if (fit == null && problem == null)
         {
@@ -250,20 +406,34 @@ internal sealed class CoordWindow : Window
         bool blocked = State.FileMode && _civilError.Length > 0;
         _export.IsEnabled = ok && !blocked;
         _apply.IsEnabled = ok && !blocked;
-        RefreshPreview(ok ? fit : null);
+        _insert.IsEnabled = ok && !blocked && _region != null && (_region.Meshes.Count > 0 || _region.Lines.Count > 0);
+        _insert.Visibility = _region != null ? Visibility.Visible : Visibility.Collapsed;
+        if (!fromPreview) RefreshPreview(ok ? fit : null);
     }
 
-    private void RefreshPreview(Fit2D? fit)
+    /// <param name="except">이 미리보기는 건너뜀(방금 스스로 그린 쪽).</param>
+    private void RefreshPreview(Fit2D? fit, FrameworkElement? except = null)
     {
-        // Civil 두 점 = 고른 탭의 값(없으면 안 그림) · Revit 윤곽 = 맞춤이 있을 때만(IFC 와 같은 식 — 비율 포함)
+        // Civil 두 점 = 고른 탭의 값(없으면 안 그림) · Revit 윤곽 = 맞춤이 있을 때만(IFC 와 같은 식 — 비율 · 손 맞춤 포함)
         P2? c1 = null, c2 = null;
         var (a, b, c, d) = State.FileMode ? State.FileValues : (State.C1X, State.C1Y, State.C2X, State.C2Y);
         double x1 = FitState.Num(a), y1 = FitState.Num(b), x2 = FitState.Num(c), y2 = FitState.Num(d);
         if (!double.IsNaN(x1) && !double.IsNaN(y1)) c1 = new P2(x1, y1);
         if (!double.IsNaN(x2) && !double.IsNaN(y2)) c2 = new P2(x2, y2);
-        var foot = fit == null ? Array.Empty<P2[]>() : _footprints.Select(f => f.Select(fit.Apply).ToArray()).ToArray();
-        var sketch = State.FileMode && _civil != null ? _civil.Sketch : (IReadOnlyList<CivilPoints.SketchLine>)Array.Empty<CivilPoints.SketchLine>();
-        _preview.Show(sketch, foot, c1, c2);
+        var sketch = State.FileMode && _civil != null ? _civil.Sketch : NoSketch;
+        if (!ReferenceEquals(except, _preview)) _preview.Show(sketch, _footprints, fit, c1, c2);
+        if (!ReferenceEquals(except, _preview3d))
+        {
+            // 3D 의 Civil 점 높이 = 계획(최종) 높이 → 없으면 지반 → 파일 z(파일 탭만 · 직접 입력은 높이를 모름 → 구조물 바닥 높이 대신 레벨 맞춤 높이)
+            (double, double, double)? P3(P2? p, int i)
+            {
+                if (p is not P2 q) return null;
+                double z = _heights.OffsetM + State.DzValue;
+                if (State.FileMode && _civil != null) { var cp = _civil.Points[i]; z = cp.Final ?? cp.Ground ?? cp.Z; }
+                return (q.X, q.Y, z);
+            }
+            _preview3d.Show(_region, _model, fit, _heights.OffsetM + State.DzValue, State.DzValue, P3(c1, 0), P3(c2, 1));
+        }
     }
 
     private void RefreshCivil()
@@ -304,8 +474,8 @@ internal sealed class CoordWindow : Window
             string last = Log.LastCivilFolder;
             var dlg = new Microsoft.Win32.OpenFileDialog
             {
-                Title = "Civil 기준점 파일 불러오기",
-                Filter = "Civil 기준점 (*.json)|*.json|모든 파일 (*.*)|*.*",
+                Title = "Civil 기준점 · 3D 영역 파일 불러오기",
+                Filter = "Civil 기준점 · 3D 영역 (*.json)|*.json|모든 파일 (*.*)|*.*",
                 CheckFileExists = true,
             };
             string dir = last.Length > 0 && Directory.Exists(last) ? last : Path.GetDirectoryName(State.CivilFile) ?? "";
@@ -313,6 +483,28 @@ internal sealed class CoordWindow : Window
             if (dlg.ShowDialog(this) != true) return;
             path = dlg.FileName;
             Log.LastCivilFolder = Path.GetDirectoryName(path) ?? "";
+        }
+        // 3D 영역 파일을 직접 골랐으면 짝 기준점 파일(pointsFile · 같은 폴더)을 찾아 함께(JACK 1111 Civil 과 합의)
+        string regionPath = "";
+        if (Region3D.PeekFormat(path) == Region3D.Format)
+        {
+            var rr = RegionCache.Get(path, out string rerr);
+            if (rr == null)
+            {
+                _civilError = "원인: 3D 영역 파일을 못 읽음 — " + rerr;
+                Refresh();
+                return;
+            }
+            string pts = CivilPoints.Region3DPath(path, rr.PointsFile);
+            if (pts.Length == 0 || !File.Exists(pts))
+            {
+                _civilError = $"원인: 짝 기준점 파일({(rr.PointsFile.Length > 0 ? rr.PointsFile : "이름 없음")})이 같은 폴더에 없음";
+                Log.Line($"3D 영역의 짝 기준점 없음\t{path}\t{rr.PointsFile}");
+                Refresh();
+                return;
+            }
+            regionPath = path;
+            path = pts;
         }
         var cp = CivilPoints.Read(path, out string? err);
         if (err != null)
@@ -326,7 +518,18 @@ internal sealed class CoordWindow : Window
         _civil = cp;
         _civilChanged = false;
         _civilExists = true;
+        string oldRegion = State.RegionFile;
         State.ApplyCivil(cp, path);
+        // 3D 영역: 직접 고른 것 → 기준점 파일의 region3d → (다시 읽기에서) 전에 쓰던 같은 폴더 파일
+        bool direct = regionPath.Length > 0;
+        if (!direct) { regionPath = RegionCache.Resolve(path, cp, oldRegion, State.RegionDirect); direct = State.RegionDirect && regionPath == oldRegion; }
+        State.RegionFile = regionPath;
+        State.RegionDirect = direct;
+        _region = RegionCache.Get(regionPath, out _regionError);
+        if (_region == null && _regionError.Length == 0 && cp.Region3DFile.Length > 0) _regionError = $"짝 파일 {cp.Region3DFile} 없음";
+        ShowMode();
+        // 두 점 값이 바뀌었으면 그 위에서 만든 손 맞춤은 뜻이 없어짐 → 지우고 알림
+        if (State.ClearStaleHand()) SetStatus("Civil 두 점이 바뀌어 손 맞춤을 지웠습니다", "Warn");
         _segFile.IsChecked = true;   // 파일을 읽으면 파일 탭(Checked → Refresh)
         Log.Line($"Civil 파일\t{path}\t{cp.Summary}\t점1 {cp.Points[0].X:0.0000},{cp.Points[0].Y:0.0000}\t점2 {cp.Points[1].X:0.0000},{cp.Points[1].Y:0.0000}" +
                  $"\t단위 m(도면 INSUNITS {cp.Insunits?.ToString() ?? "?"}{(cp.UnitAssumed ? " · 단위 없음 → m로 봄" : "")})\tUCS=WCS {cp.UcsWasWorld?.ToString() ?? "?"}" +
@@ -465,6 +668,23 @@ internal sealed class CoordWindow : Window
 
     [System.Runtime.InteropServices.DllImport("dwmapi.dll")]
     private static extern int DwmSetWindowAttribute(nint hwnd, int attr, ref int value, int size);
+
+    [System.Runtime.InteropServices.DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")]
+    private static extern nint GetWindowLongPtr(nint hwnd, int index);
+
+    [System.Runtime.InteropServices.DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW")]
+    private static extern nint SetWindowLongPtr(nint hwnd, int index, nint value);
+
+    private void NoMinimizeBox()
+    {
+        try
+        {
+            const int GwlStyle = -16; const long WsMinimizeBox = 0x00020000;
+            var h = new WindowInteropHelper(this).Handle;
+            SetWindowLongPtr(h, GwlStyle, (nint)((long)GetWindowLongPtr(h, GwlStyle) & ~WsMinimizeBox));
+        }
+        catch { }
+    }
 
     private void DarkTitleBar()
     {

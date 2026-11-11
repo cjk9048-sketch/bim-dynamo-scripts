@@ -9,6 +9,15 @@ public sealed class MeshShell
     public bool Closed;
 }
 
+/// <summary>창 미리보기용 Revit 모양(내부 좌표 m): 평면 윤곽(부재마다 볼록 껍질) · 3D 세모 껍질.</summary>
+public sealed class PreviewModel
+{
+    public readonly List<P2[]> Footprints = new();
+    public readonly List<MeshShell> Shells = new();
+    /// <summary>못 그린 까닭(요소가 너무 많음 등 · 없으면 빈 글).</summary>
+    public string Note = "";
+}
+
 /// <summary>부재 하나 → IFC 부재 하나.</summary>
 public sealed class MeshPart
 {

@@ -51,6 +51,12 @@ internal static class Log
     {
         public string LastFolder { get; set; } = "";
         public string LastCivilFolder { get; set; } = "";
+        public double WinW { get; set; }
+        public double WinH { get; set; }
+        public bool WinMax { get; set; }
+        public bool InsExact { get; set; } = true;
+        public bool InsTopo { get; set; }
+        public bool InsLines { get; set; } = true;
     }
 
     private static Settings LoadSettings()
@@ -76,6 +82,20 @@ internal static class Log
 
     /// <summary>마지막으로 Civil 기준점 파일을 연 폴더.</summary>
     public static string LastCivilFolder { get => LoadSettings().LastCivilFolder; set => SaveSettings(s => s.LastCivilFolder = value); }
+
+    /// <summary>[모델에 넣기]에서 마지막에 고른 것(처음 = 정확한 면 + 3D 선).</summary>
+    public static (bool Exact, bool Topo, bool Lines) InsertChoice
+    {
+        get { var s = LoadSettings(); return (s.InsExact, s.InsTopo, s.InsLines); }
+        set => SaveSettings(s => { s.InsExact = value.Exact; s.InsTopo = value.Topo; s.InsLines = value.Lines; });
+    }
+
+    /// <summary>맞춤 창 크기(0 = 처음) · 최대화.</summary>
+    public static (double W, double H, bool Max) WindowSize
+    {
+        get { var s = LoadSettings(); return (double.IsFinite(s.WinW) ? s.WinW : 0, double.IsFinite(s.WinH) ? s.WinH : 0, s.WinMax); }
+        set => SaveSettings(s => { s.WinW = value.W; s.WinH = value.H; s.WinMax = value.Max; });
+    }
 }
 
 /// <summary>

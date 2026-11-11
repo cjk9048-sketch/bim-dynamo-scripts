@@ -61,6 +61,7 @@ public class CivilPointsTests
     [Theory]
     [InlineData("\"DH.CivilStructPoints\"", "\"Other\"", "format")]
     [InlineData("\"version\": 1", "\"version\": 2", "판 2")]
+    [InlineData("\"version\": 1", "\"version\": 1e10", "판 1")]
     [InlineData("\"length\": \"m\"", "\"length\": \"mm\"", "m가 아님")]
     [InlineData("\"toMeter\": 1.0", "\"toMeter\": 0.001", "toMeter")]
     [InlineData("\"x\": 200123.45", "\"x\": \"abc\"", "숫자가 아님")]

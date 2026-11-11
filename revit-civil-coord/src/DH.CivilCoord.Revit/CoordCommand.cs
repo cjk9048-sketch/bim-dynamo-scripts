@@ -40,7 +40,7 @@ public sealed class CoordCommand : IExternalCommand
         // 비교 기준도 같은 규칙으로(모드 정하기) — 아니면 열고 닫기만 해도 «저장» 트랜잭션이 생김(검토 중간)
         var baseline = (saved ?? new FitState()).Clone();
         baseline.ResolveMode();
-        string savedJson = baseline.ToJson();
+        string savedJson = Cmp(baseline);
         var heights = LevelHeights.Read(doc);
         bool dark = false;
         try { dark = UIThemeManager.CurrentTheme == UITheme.Dark; } catch { }
@@ -48,7 +48,7 @@ public sealed class CoordCommand : IExternalCommand
 
         state.ResolveMode();
         // 미리보기: Revit 부재 윤곽(명령 한 번에 한 번) · Civil 파일(바뀐 때만 다시 읽음 — 선 · 바뀜 검사)
-        var footprints = Exporter.Footprints(uidoc, heights);
+        var model = Exporter.Preview(uidoc, heights);
         CivilPoints? civil = null; string civilKey = "";
 
         string status = "", kind = "";
@@ -76,7 +76,14 @@ public sealed class CoordCommand : IExternalCommand
                     civilChanged = civil != null && state.FileDiffers(civil);
                 }
                 else { civil = null; civilKey = ""; }
-                var win = new CoordWindow(state, heights, shared, status, kind, DefaultPath(doc), app.MainWindowHandle, dark, footprints, civil, civilChanged, civilExists, civilError);
+                // Civil 3D 영역(JACK 1111): 기준점 파일의 region3d → 전에 쓰던 파일 · 파일 시각이 바뀌면 다시 읽음(RegionCache)
+                string prevRegion = state.RegionFile;
+                state.RegionFile = RegionCache.Resolve(state.CivilFile, civil, prevRegion, state.RegionDirect);
+                state.RegionDirect = state.RegionDirect && state.RegionFile == prevRegion;
+                var region = RegionCache.Get(state.RegionFile, out string regionError);
+                if (region == null && regionError.Length == 0 && civil is { Region3DFile.Length: > 0 }) regionError = $"짝 파일 {civil.Region3DFile} 없음";
+                var win = new CoordWindow(state, heights, shared, status, kind, DefaultPath(doc), app.MainWindowHandle, dark, model, civil, civilChanged, civilExists, civilError,
+                                          region, regionError, CivilSurface.CountMade(doc));
                 win.ShowDialog();
                 state = win.State;
                 status = ""; kind = "";
@@ -90,6 +97,8 @@ public sealed class CoordCommand : IExternalCommand
                         var xy = new[] { p.X * Ft, p.Y * Ft };
                         if (n == 1) state.R1 = xy; else state.R2 = xy;
                         Log.Line($"점 {n}\t내부 {xy[0]:0.0000}, {xy[1]:0.0000} m\t뷰 «{uidoc.ActiveView?.Name}»");
+                        // 두 점이 바뀌면 그 위에서 만든 손 맞춤은 뜻이 없어짐 → 지우고 알림(같은 자리를 다시 찍었으면 그대로)
+                        if (state.ClearStaleHand()) { status = "Revit 점이 바뀌어 손 맞춤을 지웠습니다"; kind = "Warn"; }
                     }
                     else if (err.Length > 0) { status = err; kind = "Bad"; }
                     continue;
@@ -104,6 +113,15 @@ public sealed class CoordCommand : IExternalCommand
                 if (win.Action == CoordWindow.Act.Export)
                 {
                     (status, kind) = Exporter.Run(uidoc, state, fit, heights, win.ExportPath);
+                    continue;
+                }
+                if (win.Action == CoordWindow.Act.Insert)
+                {
+                    // [모델에 넣기](JACK 1111): 미리보기와 같은 자리 — 구조물 맞춤의 거꾸로(비율 · 손 맞춤 · 높이)
+                    if (win.InsertOpts is { } io && win.Region is { } rg)
+                    {
+                        (kind, status) = CivilSurface.Insert(doc, rg, fit, zOff, io);
+                    }
                     continue;
                 }
                 if (win.Action == CoordWindow.Act.Apply)
@@ -123,7 +141,7 @@ public sealed class CoordCommand : IExternalCommand
                     if (ok)
                     {
                         state = snapshot;
-                        savedJson = snapshot.ToJson();
+                        savedJson = Cmp(snapshot);
                         heights = LevelHeights.Read(doc);
                         if (dzIntoLevels) msg += $"\n레벨 높이 기준이 측량점이라 더할 값 {dz:0.000} m가 레벨 높이에 들어감 → 더할 값 0";
                     }
@@ -135,7 +153,8 @@ public sealed class CoordCommand : IExternalCommand
         }
         finally
         {
-            if (state.ToJson() != savedJson)
+            state.ClearStaleHand();   // 닫을 때 쓰지 않는(두 점이 바뀐) 손 맞춤은 남기지 않음
+            if (Cmp(state) != savedJson)
             {
                 string? err = FitStore.Save(doc, state);
                 Log.Line(err == null ? "맞춤 값 저장" : "맞춤 값 저장 못 함\t" + err);
@@ -143,6 +162,16 @@ public sealed class CoordCommand : IExternalCommand
                 if (err != null) try { Dialogs.Show("맞춘 값을 rvt에 저장하지 못했습니다", "원인: " + err + "\n다음에 열면 다시 넣어야 합니다."); } catch { }
             }
         }
+    }
+
+    /// <summary>
+    /// 저장할지 견줄 글: 3D 영역 경로는 뺌 — 기준점 파일의 region3d 로 늘 다시 찾는 값이라, 열고 닫기만 해도 저장 트랜잭션이 생기지 않게(설치 전 검토 낮음).
+    /// </summary>
+    private static string Cmp(FitState s)
+    {
+        var c = s.Clone();
+        c.RegionFile = ""; c.RegionDirect = false;
+        return c.ToJson();
     }
 
     /// <summary>점 하나 찍기(평면 XY 만 씀). 그만두면 null.</summary>

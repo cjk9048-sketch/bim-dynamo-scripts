@@ -68,6 +68,103 @@ namespace DH.CivilCoord.Tests
             Assert.Equal(11.0, back.R2![0]);
             Assert.Null(new FitState { R1 = new[] { 1.0, 2.0 } }.Fit());
         }
+
+        static Fit2D Scaled() =>
+            // 가짜 값: 비율 1.0021 · 돌림 −120° 쯤
+            new(new P2(-3, 4), new P2(18, -2), new P2(200100, 450650), new P2(200100 - 21.8395 * 0.5, 450650 - 21.8395 * 0.866));
+
+        [Fact]
+        public void Hand_Move_ShiftsEveryPoint_ScaleAndBaseUnchanged()
+        {
+            var f = Scaled();
+            var g = f.Moved(0.25, -0.1);
+            Assert.True(g.HasHand);
+            Assert.Equal(f.Scale, g.Scale, 12);
+            Assert.Equal(f.Angle, g.Angle, 12);
+            foreach (var p in new[] { new P2(0, 0), f.R1, f.R2, new P2(40, 30) })
+            {
+                var a = f.Apply(p); var b = g.Apply(p);
+                Assert.Equal(a.X + 0.25, b.X, 9); Assert.Equal(a.Y - 0.1, b.Y, 9);
+                var ra = f.ApplyRigid(p); var rb = g.ApplyRigid(p);
+                Assert.Equal(ra.X + 0.25, rb.X, 9); Assert.Equal(ra.Y - 0.1, rb.Y, 9);
+            }
+            Assert.False(g.Base.HasHand);
+            Assert.Equal(f.Apply(new P2(7, 7)).X, g.Base.Apply(new P2(7, 7)).X, 9);
+        }
+
+        [Fact]
+        public void Hand_RotateAboutPivot_IsRigidTurnOfWorld()
+        {
+            var f = Scaled().Moved(1.5, 2.5);
+            var pivot = f.Apply(new P2(8, 1));
+            double d = 7.3 * Math.PI / 180;
+            var g = f.RotatedAbout(pivot, d);
+            Assert.Equal(Fit2D.Normalize(f.Angle + d), g.Angle, 12);
+            foreach (var p in new[] { new P2(0, 0), f.R1, f.R2, new P2(40, 30), new P2(8, 1) })
+            {
+                var w = f.Apply(p);
+                double c = Math.Cos(d), s = Math.Sin(d);
+                var want = new P2(pivot.X + c * (w.X - pivot.X) - s * (w.Y - pivot.Y), pivot.Y + s * (w.X - pivot.X) + c * (w.Y - pivot.Y));
+                var got = g.Apply(p);
+                Assert.Equal(want.X, got.X, 8); Assert.Equal(want.Y, got.Y, 8);
+            }
+            // IFC 식(k·R·p + T)도 같은 자리
+            var t = g.Translation; double cc = Math.Cos(g.Angle), ss = Math.Sin(g.Angle), k = g.Scale;
+            var q = new P2(12, -6); var gq = g.Apply(q);
+            Assert.Equal(gq.X, k * (cc * q.X - ss * q.Y) + t.X, 8); Assert.Equal(gq.Y, k * (ss * q.X + cc * q.Y) + t.Y, 8);
+            // 거꾸로
+            var back = g.Inverse(gq);
+            Assert.Equal(q.X, back.X, 8); Assert.Equal(q.Y, back.Y, 8);
+        }
+
+        [Fact]
+        public void State_Hand_RoundTrips_AndIsDroppedWhenPointsChange()
+        {
+            var st = new FitState { Mode = "manual", R1 = new[] { 1.0, 2.0 }, R2 = new[] { 21.0, 2.0 }, C1X = "200,100", C1Y = "450,600", C2X = "200120", C2Y = "450600", Dz = "0" };
+            var f = st.Fit()!;
+            var g = f.RotatedAbout(f.Apply(new P2(5, 5)), 0.02).Moved(0.3, -0.2);
+            st.SetHand(g);
+            Assert.True(st.HandValid);
+            var h = st.Fit()!;
+            Assert.Equal(g.Apply(new P2(9, 9)).X, h.Apply(new P2(9, 9)).X, 9);
+            Assert.Equal(g.Apply(new P2(9, 9)).Y, h.Apply(new P2(9, 9)).Y, 9);
+            // 저장 · 복제해도 그대로
+            var back = FitState.FromJson(st.ToJson())!;
+            Assert.True(back.HandValid);
+            Assert.Equal(h.Apply(new P2(9, 9)).X, back.Fit()!.Apply(new P2(9, 9)).X, 9);
+            Assert.True(st.Clone().HandValid);
+            // 쉼표만 다른 같은 값 → 그대로
+            st.C1X = "200100.000";
+            Assert.True(st.HandValid);
+            // 두 점이 바뀌면 안 씀 · 지우면 true
+            st.R2 = new[] { 21.5, 2.0 };
+            Assert.False(st.HandValid);
+            Assert.False(st.Fit()!.HasHand);
+            Assert.True(st.ClearStaleHand());
+            Assert.False(st.HasHand);
+            Assert.False(st.ClearStaleHand());
+        }
+
+        [Fact]
+        public void State_Hand_SurvivesLookingAtOtherTab()
+        {
+            // 파일 탭에서 손 맞춤 → 직접 입력 탭을 잠깐 봄(그 탭에선 안 씀) → 닫을 때 지우지 않음 → 파일 탭으로 오면 다시 씀(설치 전 검토 낮음)
+            var st = new FitState { Mode = "file", R1 = new[] { 0.0, 0.0 }, R2 = new[] { 20.0, 0.0 }, CivilLoaded = "200,100.0|450,600.0|200,120.0|450,600.0", C1X = "1", C1Y = "2", C2X = "30", C2Y = "2" };
+            st.SetHand(st.Fit()!.Moved(0.5, 0.25));
+            Assert.True(st.HandValid);
+            st.Mode = "manual";
+            Assert.False(st.HandValid);
+            Assert.False(st.Fit()!.HasHand);
+            Assert.False(st.ClearStaleHand());
+            st.Mode = "file";
+            Assert.True(st.HandValid);
+            Assert.Equal(0.5, st.Fit()!.Hand.X, 12);
+            // 그 탭의 값이 바뀌면(다시 찍기) 지움 — 다른 탭을 보고 있어도
+            st.Mode = "manual";
+            st.R1 = new[] { 0.1, 0.0 };
+            Assert.True(st.ClearStaleHand());
+            Assert.False(st.HasHand);
+        }
     }
 
     public class GuidTests
@@ -206,6 +303,29 @@ namespace DH.CivilCoord.Tests
             // 쓴 값이 ToWorld 와 같음
             foreach (var w in p.Shells[0].V.Select(job.ToWorld))
                 Assert.Contains(v, q => Math.Abs(q.X - w.X) < 1e-6 && Math.Abs(q.Y - w.Y) < 1e-6 && Math.Abs(q.Z - w.Z) < 1e-9);
+        }
+
+        [Fact]
+        public void CivilReader_HandFit_PutsEveryVertexWhereFitSays()
+        {
+            // 손 맞춤(옮김 + 돌림)이 든 맞춤으로 쓴 IFC 를 Civil 이 읽으면 모든 꼭짓점이 fit.Apply 자리(높이는 그대로)
+            var r1 = new P2(-12.0, -8.0); var r2 = new P2(20.0, 5.0);
+            double d = P2.Dist(r1, r2) * 1.002, a0 = Math.Atan2(r2.Y - r1.Y, r2.X - r1.X) + 0.9;
+            var c1 = new P2(200123.45, 450678.9); var c2 = new P2(c1.X + d * Math.Cos(a0), c1.Y + d * Math.Sin(a0));
+            var fit = new Fit2D(r1, r2, c1, c2).Moved(0.8, -1.25);
+            fit = fit.RotatedAbout(fit.Apply(new P2(4, -1.5)), -2.5 * Math.PI / 180);
+            var t = fit.Translation;
+            var job = new IfcJob { FileName = "h.ifc", ProjectName = "h", Tx = t.X, Ty = t.Y, Tz = 0.5, Angle = fit.Angle, Scale = fit.Scale };
+            var p = new MeshPart { Entity = "IFCSLAB", Name = "바닥", Tag = "1" };
+            p.Shells.Add(Box(r1.X, r1.Y, 49.4, r2.X, r2.Y, 50.0));
+            job.Parts.Add(p);
+            var r = IfcMesh.Parse(Text(job));
+            var v = r.Parts[0].V;
+            foreach (var q in p.Shells[0].V)
+            {
+                var w = fit.Apply(new P2(q.X, q.Y));
+                Assert.Contains(v, g => Math.Abs(g.X - w.X) < 1e-6 && Math.Abs(g.Y - w.Y) < 1e-6 && Math.Abs(g.Z - (q.Z + 0.5)) < 1e-9);
+            }
         }
 
         [Fact]
