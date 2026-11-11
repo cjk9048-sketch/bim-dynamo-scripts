@@ -128,14 +128,17 @@ public static partial class WallDaylight
     /// 벽 삼각형은 바꿀 자리 안에만 있다(Core <see cref="WallByLine.Built.WallTrisF"/> · Civil은 가상옹벽 면을 목록의 바꿀 자리 고리로 나눈다). 넓은 소단은 옛 사면으로 덮지 않는다(JACK 답 3).
     /// 미리 맞추기 · 높이 예산 · 옹벽이 안 드러남 관문 · 앞 옹벽 건드림 불변식은 손 폴리곤과 같다.</summary>
     /// <param name="edgeFree">★[v114.3 · JACK 1105 진입도로 옹벽 추가 · 계획 2판 3절] 테두리 턱 관문에서 뺄 자리(세계 좌표) — 진입도로: R_out∖Zone 바깥 호(그 세모는 합성 뒤 도로 면에서 빼므로 바깥과 이어질 필요가 없다 · 그 자리 최종면 = 바탕). null = 모두 잼(부지 · 옛 판 그대로).</param>
+    /// <param name="noZero">★[v117.0 · 계획 `2026-11-11_옹벽추가_수직옹벽.md` 2절 대안 · 키트 wfill 1111] 수직 옹벽(Shape 2)만 참 — 벽 = 원지반 교선(±ZeroD)을 안 넣는다.
+    /// 띠 안 부호(절토 W ≤ G · 성토 W ≥ G)는 Core 짓기 관문이 겹침 꼭짓점마다 정확히 보증하므로(RuleL = W) 교선이 필요 없고, 데이라잇 끝 칸(W − G가 µm뿐)에서
+    /// ±1 µm 교선이 칸 안을 헤매며 끝 점 X 곁 0.1 mm 안에 마디를 만들어 «못 푼 쌍»이 났다. 거짓(기본) = 옛 셈 그대로(비트 같음).</param>
     public static CompositeResult BuildCompositeLine(IReadOnlyList<Point3> poly, IReadOnlyList<Tri> wallTrisC, IReadOnlyList<Tri> wallTrisF, IReadOnlyList<Tri> groundTris, IReadOnlyList<Tri> planAll,
-        Func<double, double, bool>? edgeFree = null)
-        => BuildCompositeCore(poly, Array.Empty<Tri>(), groundTris, planAll, false, wallTrisC ?? Array.Empty<Tri>(), wallTrisF ?? Array.Empty<Tri>(), edgeFree);
+        Func<double, double, bool>? edgeFree = null, bool noZero = false)
+        => BuildCompositeCore(poly, Array.Empty<Tri>(), groundTris, planAll, false, wallTrisC ?? Array.Empty<Tri>(), wallTrisF ?? Array.Empty<Tri>(), edgeFree, noZero);
 
     /// <param name="down">사람에게 보이는 높이(EdgeAt·ZOneAt)만 되뒤집어 적는다 — 입력은 이미 뒤집혀 왔다.</param>
     /// <param name="wallC">★[v114.0] 선 옹벽 — 절토 벽 삼각형(null이면 손 폴리곤 길 · 종전과 비트 같다).</param>
     static CompositeResult BuildCompositeCore(IReadOnlyList<Point3> poly, IReadOnlyList<Tri> wallTris, IReadOnlyList<Tri> groundTris, IReadOnlyList<Tri> planAll,
-        bool down, IReadOnlyList<Tri>? wallC = null, IReadOnlyList<Tri>? wallF = null, Func<double, double, bool>? edgeFree = null)
+        bool down, IReadOnlyList<Tri>? wallC = null, IReadOnlyList<Tri>? wallF = null, Func<double, double, bool>? edgeFree = null, bool noZero = false)
     {
         bool line = wallC != null || wallF != null;
         // 규칙 한 곳 — 손 폴리곤 max(P, min(W, G)) · ★[v114.0] 선 옹벽 RuleOf(zp, zwc, zwf, zg)
@@ -390,7 +393,7 @@ public static partial class WallDaylight
         }
         var zs = new List<ZeroSet>();
         // ★[v114.0] 선 옹벽은 정지면을 안 보므로(폴리곤 안) 벽 = 원지반 교선만 — W = P · G = P 교선은 L(W = P0)을 µm로 따라붙어 못 푸는 쌍만 만든다
-        var pairs = !line ? new[] { (W, G), (W, P), (G, P) } : new[] { (WC, G), (WF, G) }.Where(p => p.Item1.N > 0).ToArray();
+        var pairs = !line ? new[] { (W, G), (W, P), (G, P) } : noZero ? Array.Empty<(TriSet, TriSet)>() : new[] { (WC, G), (WF, G) }.Where(p => p.Item1.N > 0).ToArray();
         foreach (var (a, b) in pairs)
             foreach (double lv in new[] { +ZeroD, -ZeroD })
                 zs.Add(ZeroLines(a, b, gf, ox, oy, null, lv));
@@ -698,6 +701,8 @@ public static partial class WallDaylight
         public bool Line => WallTrisC != null || WallTrisF != null;
         /// <summary>★[v114.3 · JACK 1105 진입도로 옹벽 추가] 선 옹벽 테두리 턱 관문에서 뺄 자리(<see cref="BuildCompositeLine"/> edgeFree) — 부지는 null.</summary>
         public Func<double, double, bool>? EdgeFree;
+        /// <summary>★[v117.0] 수직 옹벽(Shape 2) — 벽 = 원지반 교선을 안 넣는다(<see cref="BuildCompositeLine"/> noZero). 거짓 = 옛 셈 그대로.</summary>
+        public bool NoZero;
     }
 
     /// <summary>한 옹벽의 합성 단계 — 결과 · 앞 옹벽 폴리곤 안을 건드린 삼각형 수(0이어야 한다) · 앞 단계가 다시 지은 삼각형을 건드린 수.</summary>
@@ -802,7 +807,7 @@ public static partial class WallDaylight
                 }
             }
             var sw = Stopwatch.StartNew();
-            var r = w.Line ? BuildCompositeLine(w.Poly, w.WallTrisC!, w.WallTrisF!, w.GroundTris, cur, w.EdgeFree) : BuildComposite(w.Poly, w.WallTris, w.GroundTris, cur, w.Down);
+            var r = w.Line ? BuildCompositeLine(w.Poly, w.WallTrisC!, w.WallTrisF!, w.GroundTris, cur, w.EdgeFree, w.NoZero) : BuildComposite(w.Poly, w.WallTris, w.GroundTris, cur, w.Down);
             var st = new ComposeStep { No = w.No, R = r, Ms = sw.ElapsedMilliseconds };
             res.Steps.Add(st);
             if (r.Zone == null) { res.FailIndex = k; res.Fail = $"옹벽 {w.No} — {r.Fail}"; return res; }

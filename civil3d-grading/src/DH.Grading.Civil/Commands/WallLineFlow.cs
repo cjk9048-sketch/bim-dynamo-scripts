@@ -129,7 +129,8 @@ internal static class WallLineFlow
     /// <summary>★[v114.0] 짓기 재료 — 판정 + 기하(질문 없음). P0 · 원지반 삼각형은 경계 + 여유 상자만.
     /// ★[v114.3 · JACK 1105 소단 높이] 벽 소단 높이 = 옛 사면 소단 높이(옛 소단 방식 — 링에서 · H는 기하에 안 씀) · 링 꼭짓점이 합성 전 면과 맞는지 먼저 잰다(재검토 M-A).</summary>
     static WallByLine.Built BuildGeom(BoundaryCut.Result cut, IReadOnlyList<Point3> bd, GradingBundle region, List<(string, IReadOnlyList<Point3>)> bl,
-        double hc, double tc, double hf, double tf, double slopeW, double faceRun, double grid, double reach, CachedGroundSurface g, CachedGroundSurface p0, bool topStep = false, double blockLen = 9)
+        double hc, double tc, double hf, double tf, double slopeW, double faceRun, double grid, double reach, CachedGroundSurface g, CachedGroundSurface p0, bool topStep = false, double blockLen = 9,
+        WallByLine.WallShape shape = WallByLine.WallShape.Out)
     {
         double sx0 = cut.CutRing.Concat(cut.Line).Min(q => q.X) - reach - 5, sx1 = cut.CutRing.Concat(cut.Line).Max(q => q.X) + reach + 5;
         double sy0 = cut.CutRing.Concat(cut.Line).Min(q => q.Y) - reach - 5, sy1 = cut.CutRing.Concat(cut.Line).Max(q => q.Y) + reach + 5;
@@ -137,6 +138,13 @@ internal static class WallLineFlow
         var gTris = g.TrianglesIn(sx0, sy0, sx1, sy1);
         System.Func<double, double, double?> gAt = (x, y) => g.TryGetElevation(x, y, out double z) ? z : null;
         System.Func<double, double, double?> pAt = (x, y) => p0.TryGetElevation(x, y, out double z) ? z : null;
+        // ★[v117.0 · JACK 1111 · 계획 3절] 수직 옹벽 — 소단을 안 쓰므로 옛 사면 링(OldBenchOf) · 링 꼭짓점 일치(VertexMatch)를 건너뛴다(«옛 소단» 헛거절 막음) · 모양 · 기울기만 넘김
+        if (shape == WallByLine.WallShape.Vertical)
+            return WallByLine.Build(new WallByLine.Input
+            {
+                Line = cut.Line, Bd = bd, NewRing = cut.NewRing, CutRing = cut.CutRing, Plan = region.Boundary, SlopeW = slopeW, FaceRun = faceRun, Grid = grid, Reach = reach,
+                Ground = gAt, GroundTris = gTris, P0 = pAt, P0Tris = p0Tris, Blockers = bl, Shape = WallByLine.WallShape.Vertical,
+            });
         var (oc, of, rnote, whyC, whyF) = OldBenchOf(region, g);
         // ★[재검토 M-A] 다시 만든 링 = 정지면을 만든 그 링인가 — 상자 안 · 그 쪽 사면 자리(데이라잇 고리 안 1 cm · 계획선 밖 1 cm) 링 꼭짓점이 합성 전 면 꼭짓점과 0.1 mm(평면) · 1 mm(높이) 안에서 겹치는 몫.
         //   0단계 실측(1105 현장): 136점 중 134점(98.5 %) — 안 겹친 2점은 0.22~0.24 mm 옆에 면 꼭짓점이 있고 그 자리 면 높이 = 링 높이(보조선 교차 끼움 자리로 보임 · 재지 않음).
@@ -213,10 +221,13 @@ internal static class WallLineFlow
     }
 
     /// <summary>★[v113.0 · 화면 없는 탐침 · 대화 끝] 그린 점 · H · T로 목록 «대기»까지(한 트랜잭션 · 못 하면 물림) — 돌려주는 값: 번호(0 = 못 함) · 글.</summary>
-    internal static (int No, string Note) Make(Document doc, IReadOnlyList<Point3> src, string srcHandle, double hc, double tc, double hf, double tf, bool topStep = false, double blockLen = 9)
+    internal static (int No, string Note) Make(Document doc, IReadOnlyList<Point3> src, string srcHandle, double hc, double tc, double hf, double tf, bool topStep = false, double blockLen = 9,
+        WallByLine.WallShape shape = WallByLine.WallShape.Out)
     {
         var db = doc.Database;
-        var log = new System.Text.StringBuilder($"■ {Tag} {System.DateTime.Now:HH:mm:ss} — 폴리선 {src.Count}점{(srcHandle.Length > 0 ? $"(기존 폴리선 {srcHandle})" : "")}  · 절토 H {hc:0.##} · T {tc:0.##} · 성토 H {hf:0.##} · T {tf:0.##}m\n");
+        bool vert = shape == WallByLine.WallShape.Vertical;
+        var log = new System.Text.StringBuilder($"■ {Tag} {System.DateTime.Now:HH:mm:ss} — 폴리선 {src.Count}점{(srcHandle.Length > 0 ? $"(기존 폴리선 {srcHandle})" : "")}  · "
+            + (vert ? $"수직 옹벽 1:{System.Math.Max(GradingSettings.MinSlope, 0).ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)}" : $"절토 H {hc:0.##} · T {tc:0.##} · 성토 H {hf:0.##} · T {tf:0.##}m") + "\n");
         using var tr = db.TransactionManager.StartTransaction();
         (int, string) Stop(string why) { tr.Abort(); log.Append("  ⚠멈춤(안 바꿈) — " + why + "\n"); Log(log.ToString()); SelfCheckLog.Line(Tag, '⚠', "멈춤 — " + why, doc.Name); return (0, why); }
         var regions = GradingBundleStore.TryLoadAll(db, tr, out string rwhy);
@@ -254,8 +265,9 @@ internal static class WallLineFlow
         var p = GradingSettings.ToParams();
         double slopeW = System.Math.Max(GradingSettings.MinSlope, 0), faceRun = p.MinFaceRun, grid = System.Math.Max(1.0, p.VertexSpacing);
         var gC = new CachedGroundSurface(gTin); var pC = new CachedGroundSurface(p0);
-        var b = BuildGeom(cut, bd, region, bl, hc, tc, hf, tf, slopeW, faceRun, grid, System.Math.Max(0, GradingSettings.WallPolygonMargin), gC, pC, topStep, blockLen);
+        var b = BuildGeom(cut, bd, region, bl, hc, tc, hf, tf, slopeW, faceRun, grid, System.Math.Max(0, GradingSettings.WallPolygonMargin), gC, pC, topStep, blockLen, shape);
         log.Append(b.Log);
+        if (vert) SelfCheckLog.Line(Tag, b.Ok, b.SelfCheck, doc.Name);   // ★[v117.0 · 계획 1-6] 자가검증 한 줄(키트가 읽음 · 거절도)
         if (!b.Ok) return Stop($"{b.Code} — {b.Why}");
         // 번호 — 목록 · 남은 가상옹벽 면 중 큰 것 + 1(다시 안 쓴다)
         int maxNo = walls.Count > 0 ? walls.Max(w => w.No) : 0;
@@ -282,9 +294,20 @@ internal static class WallLineFlow
             ZoneF = b.ZoneF, ZoneC = b.ZoneC, Faces = b.Faces,
             BenchSamples = WallByLine.SamplesOf(b).Bench, FootSamples = WallByLine.SamplesOf(b).Foot,   // ★[v114.0 · 소단 높이 관문] 합성 되읽기가 Civil 면에서 다시 잰다
         };
+        if (vert)
+        {
+            // ★[v117.0 · 계획 3절] 수직 옹벽 — 단높이 · 소단 · 천단 계단 없음 · H = 최고(표시) · 기록 판 9(모양 2)
+            rec.Shape = 2; rec.Hc = rec.Tc = rec.Hf = rec.Tf = 0; rec.H = b.HMax; rec.T = 0; rec.TopStep = false; rec.FootMax = 0;
+        }
         walls.Add(rec);
         WallListStore.Save(db, tr, head, walls);
         tr.Commit();
+        if (vert)
+            log.Append(string.Format(System.Globalization.CultureInfo.InvariantCulture, "  ★수직 옹벽 {0}({1}) — 길이 {2:F2} m(절토 {3:F2} · 성토 {4:F2}) · 최고 {5:F2} m · 면적 {6:F1} ㎡ · 바깥 {7} · 쌍 {8} · 바늘 {9} — {10}{11}{12} · 목록 {13}\n",
+                no, (b.HasCut ? "절토" : "") + (b.HasCut && b.HasFill ? "·" : "") + (b.HasFill ? "성토" : ""), b.LineLen, b.LenC, b.LenF, b.HMax, b.Area, b.OutsideN, b.PairsUnder01, b.Needles, note,
+                b.Warn.Count > 0 ? " · ⚠" + string.Join(" · ⚠", b.Warn) : "", blk.Length > 0 ? $" · ⚠합성 막음: {blk}" : "", rec.State == 1 ? "미룬 옹벽(넣음)" : "«대기»")
+                + $"  자가검증 — 옛 경계 {cut.AreaOld:F2} = 새 {cut.AreaNew:F2} + 잘라낼 {cut.AreaCut:F2}㎡({(System.Math.Abs(cut.AreaOld - cut.AreaNew - cut.AreaCut) <= 0.01 ? "맞음" : "⚠어긋남")})\n");
+        else
         log.Append($"  ★선 옹벽 {no}({(b.HasCut ? "절토" : "")}{(b.HasCut && b.HasFill ? "·" : "")}{(b.HasFill ? "성토" : "")} · 부분 {b.Parts.Count} · 면 토막 {b.Faces.Count} · 마구리 {b.EndFaceN}{(topStep ? string.Format(System.Globalization.CultureInfo.InvariantCulture, " · 천단 계단 {0:0.##} m(가른 줄기 {1})", blockLen, b.StepCuts) : "")}) — {note}"
                  + (b.FootMax > 0 ? $" · ⚠선 바깥 최대 {b.FootMax:F2} m({b.FootAt.X:F1}, {b.FootAt.Y:F1})" : "")
                  + (b.Warn.Count > 0 ? " · ⚠" + string.Join(" · ⚠", b.Warn) : "") + (blk.Length > 0 ? $" · ⚠합성 막음: {blk}" : "")
@@ -326,40 +349,35 @@ internal static class WallLineFlow
         if (GradingSettings.WallLineOff || WallByLine.Off) { ed.WriteMessage($"\n[{Tag}] ⚠선 옹벽(v114)이 꺼져 있습니다(정지옵션 WallLineOff) — 아무것도 안 바꿨습니다."); return; }
         var got = WallLineDraw.Run(doc, Tag, bdF, regF.Boundary, pts => BoundaryCut.Classify(pts, bdF, regF.Boundary, blF));
         if (got == null) return;
-        // ★[v114.0 · 0-9] 제원 — 절토 · 성토 따로(Enter = 정지옵션의 그쪽 기본값) · 절 · 성은 자리마다 기하가 가린다
-        // ★[v114.3 · JACK 1105 소단 높이 · 계획 2판 3절(0-9를 바꿈)] 단높이는 옛 사면 링을 따르므로 묻지 않고 보여만 준다(따로 고르면 둘째 소단부터 다시 어긋난다) —
-        //   소단 폭 T만 묻는다(Enter = 그 쪽 사면 소단 폭 · 대소단 단은 그 단 폭). 기본값은 정지면을 만든 번들 제원
+        // ★★[v117.0 · JACK 1111 «선 그은 부분은 그냥 수직 1:0.01로 끝까지» · 계획 3절] 새로 그리는 부지 옹벽 = 수직 옹벽 — 묻는 것 없음([다시그리기(S)] · Enter = 적용).
+        //   옛 «제원 절토(C) · 성토(F) · 천단(P)» 묻기는 없앰(소단 · 단높이 · 천단 계단이 없다) — 옛 기록(Shape 0)은 다시 짓기(Rebuild)에서 옛 모양 그대로
         var p = GradingSettings.ToParams();
         double slopeW = System.Math.Max(GradingSettings.MinSlope, 0), faceRun = p.MinFaceRun, grid = System.Math.Max(1.0, p.VertexSpacing), margin = System.Math.Max(0, GradingSettings.WallPolygonMargin);
         var rp = regF.Params;
         double hc = rp.BenchHeightOf(true), tc = rp.BenchWidthOf(true), hf = rp.BenchHeightOf(false), tf = rp.BenchWidthOf(false);
-        bool topStep = false; double blockLen = 9;   // ★[v116.3 · JACK 1109 옹벽 천단 선택] 기본 = 경사(옛 판)
-        var b = BuildGeom(got.Cut, bdF, regF, blF, hc, tc, hf, tf, slopeW, faceRun, grid, margin, gC, pC, topStep, blockLen);
+        const WallByLine.WallShape shape = WallByLine.WallShape.Vertical;
+        var b = BuildGeom(got.Cut, bdF, regF, blF, hc, tc, hf, tf, slopeW, faceRun, grid, margin, gC, pC, false, 9, shape);
         double mk = System.Math.Max(0.3, System.Math.Sqrt(System.Math.Pow(bdF.Max(q => q.X) - bdF.Min(q => q.X), 2) + System.Math.Pow(bdF.Max(q => q.Y) - bdF.Min(q => q.Y), 2)) * 0.006);
+        var ic = System.Globalization.CultureInfo.InvariantCulture;
         while (true)
         {
-            // 미리보기 — 바꿀 자리(초록) · 줄 · 마구리(옅게 · 8) · F(새 데이라잇 · 빨강) · C · S 점(빨간 X)
+            // 미리보기 — 벽 띠 자리(초록 3) · L(새 데이라잇 = 그은 선 · 빨강 1) · 가름점 C(빨간 X)
             List<Autodesk.AutoCAD.DatabaseServices.Entity> live;
             if (b.Ok)
             {
                 var more = new List<IReadOnlyList<Point3>>();
                 foreach (var z in b.ZoneF.Concat(b.ZoneC)) more.Add(z.Append(z[0]).ToList());
                 live = WallLineDraw.Show(b.Points.Select(q => (q.X, q.Y)), got.Cut.Line, mk, 2, more, 3);
-                live.AddRange(WallLineDraw.Show(System.Array.Empty<(double, double)>(), null, mk, 2, b.Rows.Concat(b.EndFaces).Cast<IReadOnlyList<Point3>>(), 8));
                 live.AddRange(WallLineDraw.Show(System.Array.Empty<(double, double)>(), null, mk, 2, b.Foot.Cast<IReadOnlyList<Point3>>(), 1));
             }
             else live = WallLineDraw.Show(b.Marks, got.Pts, mk);
-            string foot = b.Ok ? string.Format(System.Globalization.CultureInfo.InvariantCulture, " · 선 바깥 최대 {0:F2} m{1}", b.FootMax, b.FootMax > 0 ? " ⚠" : "") : "";
-            string sides = b.Ok ? (b.HasCut ? $"절토 소단 {tc:0.##}" : "") + (b.HasCut && b.HasFill ? " / " : "") + (b.HasFill ? $"성토 소단 {tf:0.##}" : "") + " · 단높이 = 사면" : "";
-            string top = topStep ? string.Format(System.Globalization.CultureInfo.InvariantCulture, " · 천단 계단 {0:0.##} m", blockLen) : " · 천단 경사";
-            string spec = b.Ok ? $"〈{sides}{top}{foot}〉" : $"〈⚠{b.Why}〉";
+            string spec = b.Ok
+                ? string.Format(ic, "〈수직 1:{0} · 길이 {1:F2} m(절토 {2:F2} · 성토 {3:F2}) · 최고 {4:F2} m · 면적 {5:F1} ㎡〉", slopeW.ToString("0.###", ic), b.LineLen, b.LenC, b.LenF, b.HMax, b.Area)
+                : $"〈⚠{b.Why}〉";
             PromptResult r;
             try
             {
-                var pk = new PromptKeywordOptions($"\n[{Tag}] 제원 {spec} [{(b.HasCut || !b.Ok ? "절토(C)/" : "")}{(b.HasFill || !b.Ok ? "성토(F)/" : "")}천단(P)/다시그리기(S)] (Enter = 적용): ");
-                if (b.HasCut || !b.Ok) pk.Keywords.Add("C", "C", "절토(C)");
-                if (b.HasFill || !b.Ok) pk.Keywords.Add("F", "F", "성토(F)");
-                pk.Keywords.Add("P", "P", "천단(P)");
+                var pk = new PromptKeywordOptions($"\n[{Tag}] {spec} [다시그리기(S)] (Enter = 적용): ");
                 pk.Keywords.Add("S", "S", "다시그리기(S)");
                 pk.AllowNone = true; pk.AppendKeywordsToMessage = false;
                 r = ed.GetKeywords(pk);
@@ -367,41 +385,19 @@ internal static class WallLineFlow
             finally { WallLineDraw.Drop(live); }
             if (r.Status == PromptStatus.Cancel) { ed.WriteMessage($"\n[{Tag}] 그만두었습니다 — 아무것도 안 바꿨습니다."); return; }
             string kw = r.Status == PromptStatus.None ? "" : (r.StringResult ?? "").Trim().ToUpperInvariant();
-            if (kw == "C" || kw == "F")
-            {
-                bool c = kw == "C";
-                // ★[v114.3 · 계획 2판 3절] 소단 길이만(단높이 = 사면 · 보여만 준다)
-                var pdo = new PromptDoubleOptions($"\n{(c ? "절토" : "성토")} 소단 길이 (m)") { DefaultValue = c ? tc : tf, UseDefaultValue = true, AllowNegative = false, AllowZero = true };
-                var dr = ed.GetDouble(pdo);
-                if (dr.Status == PromptStatus.OK)
-                {
-                    if (dr.Value > 60) ed.WriteMessage("\n → 범위 밖 값입니다(소단 0~60 m).");
-                    else if (c) tc = dr.Value; else tf = dr.Value;
-                }
-                b = BuildGeom(got.Cut, bdF, regF, blF, hc, tc, hf, tf, slopeW, faceRun, grid, margin, gC, pC, topStep, blockLen);
-                continue;
-            }
-            if (kw == "P")
-            {
-                // ★[v116.3 · JACK 1109 옹벽 천단 선택] 경사(옛 — 윗선이 사면 소단을 따라 기욺) · 계단(블록마다 수평 · 절토 = 윗선 · 성토 = 아랫선)
-                (topStep, blockLen) = AskTop(ed, topStep, blockLen);
-                b = BuildGeom(got.Cut, bdF, regF, blF, hc, tc, hf, tf, slopeW, faceRun, grid, margin, gC, pC, topStep, blockLen);
-                continue;
-            }
             if (kw == "S")
             {
                 var g2 = WallLineDraw.Run(doc, Tag, bdF, regF.Boundary, pts => BoundaryCut.Classify(pts, bdF, regF.Boundary, blF));
                 if (g2 == null) return;
                 got = g2;
-                b = BuildGeom(got.Cut, bdF, regF, blF, hc, tc, hf, tf, slopeW, faceRun, grid, margin, gC, pC, topStep, blockLen);
+                b = BuildGeom(got.Cut, bdF, regF, blF, hc, tc, hf, tf, slopeW, faceRun, grid, margin, gC, pC, false, 9, shape);
                 continue;
             }
-            if (!b.Ok) { ed.WriteMessage($"\n[{Tag}] {b.Why} — 값을 바꾸거나(C · F) 다시 그리세요(S)."); continue; }
-            if (b.FootMax > 0) ed.WriteMessage(string.Format(System.Globalization.CultureInfo.InvariantCulture, "\n[{0}] ⚠선 바깥으로 최대 {1:F2} m 나갑니다({2:F1}, {3:F1}) — 막지 않습니다.", Tag, b.FootMax, b.FootAt.X, b.FootAt.Y));
+            if (!b.Ok) { ed.WriteMessage($"\n[{Tag}] {b.Why} — 다시 그리세요(S)."); continue; }
             break;
         }
-        ed.WriteMessage($"\n[{Tag}] 선 옹벽을 짓습니다…");
-        var (no, note) = Make(doc, got.Pts, got.SrcHandle, hc, tc, hf, tf, topStep, blockLen);
+        ed.WriteMessage($"\n[{Tag}] 수직 옹벽을 짓습니다…");
+        var (no, note) = Make(doc, got.Pts, got.SrcHandle, hc, tc, hf, tf, false, 9, shape);
         if (no == 0)
         {
             string why = GradingSettings.LastAddNote.Length > 0 ? GradingSettings.LastAddNote : note;
@@ -471,10 +467,15 @@ internal static class WallLineFlow
         var p = GradingSettings.ToParams();
         double sW = w.SlopeW >= 0 ? w.SlopeW : System.Math.Max(GradingSettings.MinSlope, 0), fR = w.FaceRun >= 0 ? w.FaceRun : p.MinFaceRun, gr = w.Grid >= 0 ? w.Grid : System.Math.Max(1.0, p.VertexSpacing);
         if (WallByLine.Off || GradingSettings.WallLineOff) return "선 옹벽(v114)이 꺼져 있다(WallLineOff) — 쉰다(지우지 않음)";
-        var b = BuildGeom(cut, bd, reg, bl, w.Hc, w.Tc, w.Hf, w.Tf, sW, fR, gr, w.Reach, new CachedGroundSurface(gTin), new CachedGroundSurface(p0), w.TopStep, w.BlockLen);
+        // ★[v117.0 · 계획 3절] 모양 그대로 다시 짓기 — 수직 옹벽(Shape 2)은 수직으로 · 옛 기록(Shape 0)은 옛 모양 그대로(옮김은 다음 판)
+        var shape = w.Shape == 2 ? WallByLine.WallShape.Vertical : WallByLine.WallShape.Out;
+        var b = BuildGeom(cut, bd, reg, bl, w.Hc, w.Tc, w.Hf, w.Tf, sW, fR, gr, w.Reach, new CachedGroundSurface(gTin), new CachedGroundSurface(p0), w.TopStep, w.BlockLen, shape);
+        if (shape == WallByLine.WallShape.Vertical) SelfCheckLog.Line(Tag, b.Ok, "다시 짓기 " + b.SelfCheck, "");
         if (!b.Ok) return $"폴리선 옹벽 — 새 정지면에서 못 지음: {b.Why}";
         string drift = WallByLine.Drift(w, b);   // ★[v114.0 · 설치 전 검토 7] 저장 값과 10 % 넘게 다르면 ⚠(막지 않음)
         // ★[v114.3 · JACK 1105 소단 높이 · 계획 2판 3절 LOW] 옛 규칙(선기준)으로 지은 옹벽을 새 규칙(옛 소단)으로 다시 지으면 소단 높이가 바뀐다 — 한 줄 남긴다(막지 않음)
+        //   ★[v117.0] 수직 옹벽은 소단이 없다 — 견주지 않음(Drift · SamePlace는 그대로)
+        if (shape != WallByLine.WallShape.Vertical)
         {
             static string Lv(IEnumerable<WallByLine.FaceSeg> fs) => string.Join(" · ", fs.Where(f => f.Kind == 0).Select(f => System.Math.Round(f.Level, 2)).Distinct().OrderBy(z => z).Select(z => z.ToString("F2", System.Globalization.CultureInfo.InvariantCulture)));
             string lo = Lv(w.Faces), ln = Lv(b.Faces);
