@@ -86,6 +86,18 @@ static class WallProfileCheck
         return best;
     }
 
+    /// <summary>★[v117.3 D1 ③ · S261 WLB가 씀] 판 U(절토 U자 선 — 아래 Run과 같은 판) 짓기 + 판정 · 절토 형식 표 · 공통 칸(검토 높이 없음).</summary>
+    internal static (WallByLine.Built B, BoundaryCut.Result Cut)? MakeU(WallSection.Common com, WallSection.Table cutT, WallByLine.WallShape shape = WallByLine.WallShape.Vertical)
+    {
+        var cons = new[] { new[] { new Coordinate(40, -40), new Coordinate(40, 40) }, new[] { new Coordinate(XD, -40), new Coordinate(XD, 40) } };
+        var pT = Tin(GridPts(20, -40, 90, 40, 1).Where(c => Math.Abs(c.X - XD) > 1e-6), cons, P0);
+        var gT = Tin(GridPts(20, -40, 90, 40, 1), Array.Empty<Coordinate[]>(), G);
+        var U = new List<Point3> { new(75, -5, 0), new(49.6, -5, 0), new(49.6, 5, 0), new(75, 5, 0) };
+        var bdU = Rect(-20, -60, XD, 60); var planU = Rect(0, -60, 40, 60, 100);
+        var b = Make(U, bdU, planU, G, P0, gT, pT, shape, new Opt(double.NaN, double.NaN, cutT, null, com));
+        return b == null ? null : (b, BoundaryCut.Classify(U, bdU, planU, null));
+    }
+
     public static void Run(Action<string, bool, string> check0)
     {
         void Check(string n, bool ok, string d) => check0("S244 WP " + n, ok, d);

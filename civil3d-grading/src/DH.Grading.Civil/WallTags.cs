@@ -21,6 +21,7 @@ public static class WallTags
         WallDaylightBuilder.Ground.Layer, WallDaylightBuilder.Ground.LayerSuspect,
         WallDaylightBuilder.Plan.Layer, WallDaylightBuilder.Plan.LayerSuspect,
         WallDaylightBuilder.BandLayer, WallDaylightBuilder.BandLayerSuspect,
+        LandBound.OutlineLayer,   // ★[v117.3 · D1 ③] 선 옹벽 구조물 외곽(옹벽과 함께 지우고 번호를 물려받는다)
     };
     /// <summary>v102 한 벌 이름(표지 없음) — 옮길 때 지운다.</summary>
     public const string LegacyWall = "가상옹벽_DH";

@@ -152,13 +152,17 @@ internal static class WallLineFlow
                 fCut = WallListStore.SectionOf(db, es.CutKind, out _); fFill = WallListStore.SectionOf(db, es.FillKind, out _); fCom = es.Common(slopeW);
             }
             catch { fCut = fFill = null; fCom = null; }   // 못 읽으면 기초 재기만 빠진다(짓기 그대로)
-            return WallByLine.Build(new WallByLine.Input
+            var land = LandBound.RingsOf(HostApplicationServices.WorkingDatabase, out string landNote);   // ★[v117.3 · JACK D1 ③] 용지 경계(없으면 그은 선) — 기초 외곽 경고만
+            var vb = WallByLine.Build(new WallByLine.Input
             {
                 Line = cut.Line, Bd = bd, NewRing = cut.NewRing, CutRing = cut.CutRing, Plan = region.Boundary, SlopeW = slopeW, FaceRun = faceRun, Grid = grid, Reach = reach,
                 Ground = gAt, GroundTris = gTris, P0 = pAt, P0Tris = p0Tris, Blockers = bl, Shape = shape,
                 Hc = hc, Tc = tc, Hf = hf, Tf = tf, TierH = tierH, TierB = tierB, TierZ1 = tierZ1,
                 ReviewHc = region.Params.BenchHeightOf(true), ReviewHf = region.Params.BenchHeightOf(false), FootCut = fCut, FootFill = fFill, FootCommon = fCom,
             });
+
+            WallProfile.LandCheck(vb, cut.CutRing, land, landNote);   // ★[v117.3 · D1 ③] 로그 ⑨-c · ⚠ · 미리보기 · 외곽선(기하 · 기록 그대로)
+            return vb;
         }
         var (oc, of, rnote, whyC, whyF) = OldBenchOf(region, g);
         // ★[재검토 M-A] 다시 만든 링 = 정지면을 만든 그 링인가 — 상자 안 · 그 쪽 사면 자리(데이라잇 고리 안 1 cm · 계획선 밖 1 cm) 링 꼭짓점이 합성 전 면 꼭짓점과 0.1 mm(평면) · 1 mm(높이) 안에서 겹치는 몫.
@@ -232,6 +236,7 @@ internal static class WallLineFlow
         foreach (var r in b.Rows) Draw(r, "DH-가상옹벽선", 6, false);
         foreach (var r in b.EndFaces) Draw(r, "DH-가상옹벽선", 6, false);
         Draw(b.Poly, "DH-가상폴리곤", 4, true);
+        if (b.Profile != null) foreach (var o in b.Profile.Outline) Draw(o, LandBound.OutlineLayer, 30, true);   // ★[v117.3 · D1 ③] 구조물 외곽(형식 단면 · 기초 포함) — 평면 확인용 가는 선 · 번호 표지(옹벽과 함께 지워짐)
         return (wid.Handle.ToString(), block, note);
     }
 
@@ -285,6 +290,7 @@ internal static class WallLineFlow
         log.Append(b.Log);
         if (vert) SelfCheckLog.Line(Tag, b.Ok, b.SelfCheck, doc.Name);   // ★[v117.0 · 계획 1-6] 자가검증 한 줄(키트가 읽음 · 거절도)
         if (vert && b.Ok && b.Profile != null) SelfCheckLog.Line(Tag, '✔', b.Profile.Probe, doc.Name);   // ★[로드맵 2-2] 측점표 탐침 한 줄(보고만 — 늘 ✔: 검토 높이 넘음은 경고일 뿐 · ⚠ 줄을 세는 키트 판정을 안 바꿈)
+        if (vert && b.Ok && b.Profile is { LandProbe.Length: > 0 } lpf) SelfCheckLog.Line(Tag, '✔', lpf.LandProbe, doc.Name);   // ★[v117.3 · D1 ③] 기초 외곽 · 용지 경계 한 줄(경계 밖이어도 ✔ — 경고만)
         if (!b.Ok) return Stop($"{b.Code} — {b.Why}");
         // 번호 — 목록 · 남은 가상옹벽 면 중 큰 것 + 1(다시 안 쓴다)
         int maxNo = walls.Count > 0 ? walls.Max(w => w.No) : 0;
@@ -406,6 +412,7 @@ internal static class WallLineFlow
                 : string.Format(ic, "〈수직 1:{0} · 길이 {1:F2} m(절토 {2:F2} · 성토 {3:F2}) · 최고 {4:F2} m · 면적 {5:F1} ㎡{6}〉", slopeW.ToString("0.###", ic), b.LineLen, b.LenC, b.LenF, b.HMax, b.Area,
                     b.TierNone ? string.Format(ic, " · 단높이 {0:0.##} 안 — 단 없이 됨", b.TierH) : "");
             if (b.Ok && b.Profile is { Preview.Length: > 0 } pf) ed.WriteMessage($"\n[{Tag}] {pf.Preview}");   // ★[로드맵 2-2 · 2-3] 측점표 한 줄(보고만)
+            if (b.Ok && b.Profile is { } lp) { live.AddRange(WallLineDraw.Show(lp.LandMarks, null, mk, 2, lp.Outline.Select(o => (IReadOnlyList<Point3>)o.Append(o[0]).ToList()), 30)); live.AddRange(WallLineDraw.Show(System.Array.Empty<(double, double)>(), null, mk, 2, lp.LandRings.Select(o => (IReadOnlyList<Point3>)o.Append(o[0]).ToList()), 5)); }   // ★[v117.3 · D1 ③] 구조물 외곽(주황) · 용지 경계(파랑) · 경계 밖 가장 먼 자리(빨간 X)
             PromptResult r;
             try
             {
