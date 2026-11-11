@@ -20,6 +20,7 @@ if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "fill")
 {
     MicroNeedleCheck.Run(Check);   // ★[v116.9] S241
     FillCheck.Run(Check, Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "data"));
+    Check("S255 VS ★성토 묶음은 수직부 짝 0(종전과 같은 길)", GradingGeometry.StepPairTotal == 0, $"{GradingGeometry.StepPairTotal}개");   // ★[JACK 1111 «수직부»]
     Console.WriteLine(fails == 0 ? "\n== 전부 통과 ==" : $"\n== 실패 {fails}건 ==");
     return fails == 0 ? 0 : 1;
 }
@@ -276,6 +277,14 @@ if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "alt")
     return fails == 0 ? 0 : 1;
 }
 
+// ★[JACK 1111 «수직부»] BLOCKTEST_ONLY=vstep — 계획선 수직부 짝 잇기 · 완전 수직 띄움(S255 VS)만
+if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "vstep")
+{
+    StepPairCheck.Run(Check);
+    Console.WriteLine(fails == 0 ? "\n== 전부 통과 ==" : $"\n== 실패 {fails}건 ==");
+    return fails == 0 ? 0 : 1;
+}
+
 // ★[v112.0] BLOCKTEST_ONLY=sheetbook — 도면화 순수 셈(S190 SB)만
 if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "sheetbook")
 {
@@ -415,6 +424,8 @@ BoundaryDrawCheck.Run(Check);   // ★[v113.0] S208 — [옹벽 추가] 찍는 �
 ProfileFlipCheck.Run(Check);    // ★[v113.1] S210 PF · S211 PS — 종단 방향 바꾸기(측점 기록 · 되돌림 기록 · 엔진 대칭) · 종단 축척 H · V(옛 규칙 · 전수 · 나눔)
 RoadBendCheck.Run(Check);       // ★[v113.1 · JACK 1104] S212 BD — 급한 굽은 안쪽 진입도로 면(선 면 검사 통과 · 곡선 중심 낭떠러지 · 섬 · Civil 바늘 접기)
 RoadEnvelopeCheck.Run(Check);   // ★[v113.3] S214 EV — 진입도로 점 평가기 연속(주름 원천 감싸기 · 매끈한 측점 · 마구리 모서리 · 반평면 · 같은 다리 섞음)
+// ★[JACK 1111 «빌드 속도»] BLOCKTEST_SKIP에 ring이 있으면(쉼표로 여럿 — 예: fill,ring) S236 고리 묶음을 건너뛴다 — 진입도로 엔진을 안 건드린 판
+if (!(Environment.GetEnvironmentVariable("BLOCKTEST_SKIP") ?? "").Split(',').Contains("ring"))
 RoadRingCheck.Run(Check);       // ★[v116 · JACK 1109 고리 엔진] S236 RR — 옹벽 없는 진입도로 고리 엔진(곧은 길 = 횡단 · V 굽이 · 헤어핀 · 세모 겹침 0 · 턱 0)
 RoadWedgeCheck.Run(Check);      // ★[v114.3 · JACK 1105 오목부] S217 RW — 급한 굽은 안쪽 쐐기(흘러내림 자르지 않기 · 주름 끝 너머 빈 사면 · B1 평가기 하나)
 MicroNeedleCheck.Run(Check);    // ★[v116.9 · JACK 1110 부지 옹벽 합성 실패] S241 MN — Civil이 뒤집을 짧은 변 바늘(118 µm · 짧은 변 0.27 mm · 11.8 mm)
@@ -428,6 +439,7 @@ WallVerticalCheck.Run(Check);   // ★[v117.0 · JACK 1111] S244 WV — 부지 �
 StructCheck.Run(Check);        // ★[v115 · JACK 1105 Revit 구조물] S220~S234 — 구조물 커튼 자르기 · 평면 외곽 · 목록 · 단위
 IfcCheck.Run(Check);            // ★[v116.5 · JACK 1110 구조물 IFC] S238 — IFC 읽기(돌출 · 구멍 면 · 반복 부재 · 지도 변환 · I형 · 호 단면 · 모르는 형상 · 한글 이름)
 StructQtyCheck.Run(Check);      // ★[v117.4 · JACK 1111] S250 SQ — 구조물 솔리드 면 합치기 · 횡단 구조물 공제(성토 · 되메우기 · 두 기준 · 껍질 · 옹벽 겹침 · 표 줄)
+StepPairCheck.Run(Check);       // ★[JACK 1111 «수직부»] S255 VS — 계획선 수직부 짝 잇기(위–위 · 아래–아래 선 · 평지 링이 두 점 지킴 · 면 높이 ±1 mm) · 완전 수직 띄움 · 짝 없음/못 이음 ⚠ 종전대로 · 벽 둘
 StructAxisCheck.Run(Check);     // ★[JACK 1111 «종단선을 구조물 축에 맞춤»] S254 SA — 구조물 주축(최소 넓이 네모) · 축 따라 종단선(부지 경계 + 5 m) · 비스듬 각
 
 const double W = 0.46, H = 0.2, STEP = 5.0, HW = W / 2;
@@ -15199,7 +15211,7 @@ static (bool Closed, double CloseGap, int ExactDup, int NearDup1e6, int ZeroLen,
         CompositeCheck.Synthetic(Check);
         // ★★★[v102.0] 성토 옹벽 — S136 거울 · S142 성토 뜻 · S141 들머리·날머리 완전성 · S143 현장 0929 15:39
         // ★[v102.1 · JACK 0930 «시간만 줄이기»] BLOCKTEST_SKIP=fill이면 건너뛴다 — 성토 시험(BLOCKTEST_ONLY=fill)을 다른 창에서 동시에 돌려 전체 시간을 나눈다
-        if (Environment.GetEnvironmentVariable("BLOCKTEST_SKIP") == "fill") Console.WriteLine("SKIP  성토 시험(S136·S141~S145) — BLOCKTEST_SKIP=fill(따로 돌림)");
+        if ((Environment.GetEnvironmentVariable("BLOCKTEST_SKIP") ?? "").Split(',').Contains("fill")) Console.WriteLine("SKIP  성토 시험(S136·S141~S145) — BLOCKTEST_SKIP=fill(따로 돌림)");
         else FillCheck.Run(Check, d);
     }
     // ⑥ 현장 재생 — Civil이 실행마다 떨군 입력을 그대로 다시 돌린다
@@ -15264,6 +15276,8 @@ static (bool Closed, double CloseGap, int ExactDup, int NearDup1e6, int ZeroLen,
     }
 }
 
+// ★[JACK 1111 «수직부»] 수직부 없는 시험은 하나도 안 건드려졌다 — 전체 판에서 이은 짝 = S255 VS가 이은 5개뿐(그 밖 계획선은 종전과 비트 같은 길)
+Check("S255 VS ★전체 판에서 수직부 짝은 S255만(5개)", GradingGeometry.StepPairTotal == 5, $"{GradingGeometry.StepPairTotal}개");
 Console.WriteLine(fails == 0 ? "\n== 전부 통과 ==" : $"\n== 실패 {fails}건 ==");
 return fails == 0 ? 0 : 1;
 
