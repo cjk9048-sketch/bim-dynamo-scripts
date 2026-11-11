@@ -422,7 +422,31 @@ internal static class WallExcavBuilder
             // ★[v114.0] 선 옹벽(종류 2)도 아직 터파기를 안 짓는다 — Poly는 바꿀 자리 ∪ R_out이라 손 폴리곤 앞면 선으로 다시 지으면 틀린다(조용히 틀리지 않게 빼고 ⚠ · 다음 판 Faces로)
             if (w.Kind != 0)
             {
-                notes.Add($"⚠선 옹벽 {w.No} — 옹벽 터파기는 아직 안 됨(빠짐 · 다음 판)");
+                // ★★★[로드맵 F · D6 ① «지형 띠 그대로 + 구조물 몸통 따로»] 수직(모양 2) · 다단(모양 3) 선 옹벽 — 면 토막(Faces)의 발 줄 = 앞면 아랫선 →
+                //   구간 옹벽과 같은 재기(정지면_DH) · 같은 단면 표 · 터파기 · 3D. 단마다 따로 옹벽(단 번호 = Tier). 옛 모양 0 · 굳은 선 옹벽(면 토막 기록 없음)은 종전대로 ⚠ 빠짐.
+                if ((w.Shape == 2 || w.Shape == 3) && w.Faces.Count > 0)
+                {
+                    string lsrc = "선 옹벽 " + w.No;
+                    var used = new System.Collections.Generic.List<WallExcav.FaceLine>();
+                    var lb = WallExcav.LineBottoms(w.Faces, w.Shape, w.TierB, w.SlopeW >= 0 ? w.SlopeW : gsMin, mAt, lsrc, mn, notes, used);
+                    foreach (var f in used)
+                    {
+                        nFaces++;
+                        fp.Append(f.Src).Append(f.Soil).Append(';');
+                        foreach (var q in f.Pts) fp.Append(q.X.ToString("R", System.Globalization.CultureInfo.InvariantCulture)).Append(',').Append(q.Y.ToString("R", System.Globalization.CultureInfo.InvariantCulture)).Append(';');
+                    }
+                    foreach (var (b0, bb) in lb)
+                    {
+                        if (!double.IsNaN(bb)) benchBelow[b0] = bb;
+                        bottoms.Add(b0);
+                    }
+                    stepLog.Add($"{lsrc}({(w.Shape == 3 ? "다단" : "수직")}) 면 {used.Count} → 바닥 줄 {lb.Count}"
+                                + (lb.Count > 0 ? "(" + string.Join(" · ", lb.GroupBy(x => (x.B.Up, x.B.Step)).OrderBy(g => g.Key.Up ? 0 : 1).ThenBy(g => g.Key.Step)
+                                      .Select(g => $"{(g.Key.Up ? "절토" : "성토")} {g.Key.Step}단 {g.Count()}줄 최고 {g.Max(x => x.B.WallHMax):F2}m")) + ")" : ""));
+                    if (lb.Count == 0 && used.Count > 0) notes.Add($"{lsrc} — 면 토막 {used.Count}개에서 벽(0.1m 이상)을 못 찾았다(정지면_DH에 옹벽이 안 든 듯 — 다시 합성 뒤 그릴 것)");
+                    continue;
+                }
+                notes.Add($"⚠선 옹벽 {w.No} — 옹벽 터파기는 아직 안 됨(빠짐 · {(w.Frozen ? "굳은 선 옹벽" : "옛 모양 — 수직 · 다단만 들어감")})");
                 continue;
             }
             if (w.IsWall.Count != w.Poly.Count || w.Poly.Count < 3)
@@ -555,6 +579,8 @@ internal static class WallExcavBuilder
         var secs = SectionizeAll(bottoms, benchBelow, tCut, tFill, st, notes, secNote);
         if (secNote.Warn) notes.Add("단면 — " + secNote.Text);
         facesTxt = $"앞면 선 {nFaces}줄({string.Join(" · ", stepLog)}{(bundles != null ? $" · 번들 구역 {bundles.Count}" : "")}) · 바닥 줄 {bottoms.Count} · 단면 줄 {secs.Count}";
+        string lbt = WallExcav.LineBodyText(secs);   // ★[로드맵 F] 선 옹벽 몸통 · 수량(없으면 빈 글 — 구간 옹벽만인 도면 글 그대로)
+        if (lbt.Length > 0) facesTxt += " · " + lbt;
         // ★[v106 · 계획 2판 2.3] 지형 벽면 자가점검 — 3D 앞면(전단 뒤)이 정지면_DH 벽면보다 앞에 서는가(InfraWorks에서 지형이 무늬를 안 가리나)
         try { foreach (var (_, sl) in secs) WallSweep.CoverCheck(sl, mAt, cover); }
         catch (System.Exception cex) { notes.Add("지형 벽면 자가점검을 못 함 — " + cex.Message); }   // ★[검토 낮음 L4] 자가점검 탓에 3D를 잃지 않게
@@ -915,6 +941,9 @@ internal static class WallExcavBuilder
                          + $" · 되읽기 {back} · {(frz.Length == 0 ? "굳힘" : "⚠굳힘 실패 " + frz)} · 옛 면 지움 {erased}(선형이 쓰는 것 {keptOld} 남김)"
                          + $" · {sw.ElapsedMilliseconds}ms(앞면 {tFaces} · 조각 {tPieces} · 껍질 {tEnv} · 가져오기 {tImp}) · 도장 {R.Stamp}"
                          + (warn.Length > 0 ? " · ⚠" + warn : ""));
+            // ★[로드맵 F] 선 옹벽 몸통 · 수량(단마다 · 평균단면법) — 선 옹벽이 없으면 줄 없음(구간 옹벽 로그 그대로)
+            string lbt = WallExcav.LineBodyText(secs);
+            if (lbt.Length > 0) log.AppendLine("  옹벽 터파기 — " + lbt);
             return R;
 
             static string MissingTris(System.Collections.Generic.IReadOnlyList<Tri> ours, System.Collections.Generic.IReadOnlyList<Tri> theirs)
