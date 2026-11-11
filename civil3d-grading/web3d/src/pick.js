@@ -73,7 +73,7 @@ export class Picker {
     const ndc = new THREE.Vector2(((cx - rect.left) / rect.width) * 2 - 1, -((cy - rect.top) / rect.height) * 2 + 1);
     this.ray.setFromCamera(ndc, this.view.camera);
     const objs = [];
-    for (const k of ['drain', 'terrain', 'ground', 'excav', 'wall', 'pattern']) {
+    for (const k of ['drain', 'terrain', 'ground', 'excav', 'wall', 'pattern', 'struct']) {
       const l = this.L[k];
       if (l && l.obj && l.obj.visible) objs.push(l.obj);
     }
@@ -248,6 +248,12 @@ export class Picker {
         go = b ? { x0: b[0] + this.origin[0], y0: b[1] + this.origin[1], x1: b[2] + this.origin[0], y1: b[3] + this.origin[1], wall: w.id } : { x: X, y: Y, r: 20 };
       }
       rows.push(['표고', fmt(p.z, 3) + ' m']);
+    } else if (u.layer === 'struct') {
+      // ★[JACK 1111] 불러온 구조물 — 이름
+      title = u.name || '구조물';
+      rows.push(['종류', '불러온 구조물']);
+      rows.push(['표고', fmt(p.z, 3) + ' m']);
+      go = { x: X, y: Y, r: 20 };
     }
     rows.push(['좌표', `${fmt(X, 3)}, ${fmt(Y, 3)}`]);
     return { title, rows, go };
