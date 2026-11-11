@@ -370,7 +370,56 @@ public static partial class WallByLine
         }
         var tLines = new List<List<Point3>>();
         Point3 Pz(Coordinate c, double zc) => new(c.X + ox, c.Y + oy, sg * zc);
-        { var rl = ring.Select(c => Pz(c, Tc(SD(c.X, c.Y)))).ToList(); rl.Add(rl[0]); tLines.Add(rl); }
+        // ★[v117.4 설치 전 검토 중간 1 · 굽은 곳 소단 «혹»] 고리 꼭짓점 높이는 줄 다각형(Buf(d) — 둥근 이음이 현)으로 가른다.
+        //   정확한 거리 SD로 가르면 현과 참 호 사이(90° 꺾임 0.48 %·d · d 6 m에서 3 cm)에 든 꼭짓점이 소단 대신 벽 기울기 값을 받아 소단에 δ/s(1:0.01이면 1 cm에 1 m) 혹이 선다.
+        //   칸 = 머리 줄 다각형이 덮으면 그 앞 소단 · 발 줄 다각형만 덮으면 벽 띠(두 줄 테두리까지 거리 비로 사이값) · 둘 다 아니면 다음 칸 · 끝까지 아니면 마지막 소단.
+        //   소단 칸은 SD로 가른 값과 같은 수(같은 Zk) — 칸이 같고 소단이면 비트 그대로
+        int ringSliver = 0, ringBand = 0, ringMoved = 0; double ringDiff = 0; (double X, double Y) ringDiffAt = default;
+        {
+            var prepB = new Dictionary<double, NetTopologySuite.Geometries.Prepared.IPreparedGeometry>();
+            NetTopologySuite.Geometries.Prepared.IPreparedGeometry PB(double d) { if (!prepB.TryGetValue(d, out var p)) prepB[d] = p = PreparedGeometryFactory.Prepare(Buf(d)); return p; }
+            var bIn = new List<(double DH, double ZH, double DF, double ZF)>();
+            for (int k = 2; k <= n; k++) bIn.Add(((k - 1) * step, Zk(k - 1), (k - 1) * step + sH, Zk(k)));
+            var bOut = new List<(double DH, double ZH, double DF, double ZF)> { (TRampA, z1p, TRampB, zLow) };
+            // 칸 번호(0 = 첫 칸 앞 소단 · 2j+1 = j번 벽 띠 · 2j+2 = j번 벽 뒤 소단)와 높이
+            (int Cell, double Z) ByPoly(Coordinate c, bool outSide)
+            {
+                var bs = outSide ? bOut : bIn; var pt = gf.CreatePoint(c);
+                for (int j = 0; j < bs.Count; j++)
+                {
+                    var (dh, zh, df, zf) = bs[j];
+                    if (PB(dh).Covers(pt)) return (2 * j, zh);
+                    if (PB(df).Covers(pt))
+                    {
+                        double a = Buf(dh).Boundary.Distance(pt), b = Buf(df).Boundary.Distance(pt);
+                        return (2 * j + 1, a + b > 0 ? zh + (zf - zh) * a / (a + b) : zh);
+                    }
+                }
+                return (2 * bs.Count, bs[^1].ZF);
+            }
+            int BySd(double d, bool outSide)
+            {
+                var bs = outSide ? bOut : bIn; double ad = Math.Abs(d);
+                for (int j = 0; j < bs.Count; j++) { if (ad < bs[j].DH) return 2 * j; if (ad < bs[j].DF) return 2 * j + 1; }
+                return 2 * bs.Count;
+            }
+            var rl = new List<Point3>();
+            foreach (var c in ring)
+            {
+                double d = SD(c.X, c.Y), zt0 = Tc(d);
+                bool outSide = d < 0;
+                var (cell, zp) = ByPoly(c, outSide);
+                int cs = BySd(d, outSide);
+                double z = cell == cs && cell % 2 == 0 ? zt0 : zp;
+                if (cell != cs) ringSliver++; else if (cell % 2 == 1) ringBand++;
+                if (Math.Abs(z - zt0) > 1e-6) ringMoved++;
+                if (Math.Abs(z - zt0) > ringDiff) { ringDiff = Math.Abs(z - zt0); ringDiffAt = (c.X + ox, c.Y + oy); }
+                rl.Add(Pz(c, z));
+            }
+            rl.Add(rl[0]); tLines.Add(rl);
+        }
+        // «칸이 SD와 다름»에는 줄 위(현 꼭짓점 · 줄 끝 = 경계에 딱 놓인 점)도 든다 — 그런 점은 두 값이 같다. 높이가 1 µm 넘게 바뀐 수가 실제 고친 수
+        log.Append(string.Format(ci, "  [다단] 고리 꼭짓점 높이 = 줄 다각형 — 칸이 SD와 다름 {0} · 벽 띠 안 {1} · 높이 바뀜(1 µm 넘음) {5} · SD 값과 차 최대 {2:F4} m @({3:F2}, {4:F2})\n", ringSliver, ringBand, ringDiff, ringDiffAt.X, ringDiffAt.Y, ringMoved));
         foreach (var r in rows) foreach (var p in r.Pieces) tLines.Add(p.Select(c => Pz(c, r.Z)).ToList());
         foreach (var (a, za, b, zb) in rungLines) tLines.Add(new List<Point3> { Pz(a, za), Pz(b, zb) });
         var tAll = MeshLines(tLines, ox, oy);
@@ -382,6 +431,7 @@ public static partial class WallByLine
             if (!prepZt.Contains(gf.CreatePoint(new Coordinate(cx, cy)))) continue;
             tT.Add(t); tArea += Math.Abs((t.B.X - t.A.X) * (t.C.Y - t.A.Y) - (t.B.Y - t.A.Y) * (t.C.X - t.A.X)) / 2;
         }
+        R.TierT = tT;
         log.Append(string.Format(ci, "  [다단] 구역 Z_T {0:F3}㎡ ({8:F2}, {9:F2})~({10:F2}, {11:F2}) · 고리 {1}점 · 줄 {2}(조각 {3}) · 사다리 {4} · T 세모 {5}(넓이 {6:F3}㎡ · 차 {7:E1})\n",
             zt.Area, ring.Count, rows.Count, rows.Sum(r => r.Pieces.Count), rungLines.Count, tT.Count, tArea, tArea - zt.Area,
             zt.EnvelopeInternal.MinX + ox, zt.EnvelopeInternal.MinY + oy, zt.EnvelopeInternal.MaxX + ox, zt.EnvelopeInternal.MaxY + oy));
@@ -632,6 +682,7 @@ public static partial class WallByLine
         R.EdgeGMax = b2.EdgeGMax; R.EdgeP0Max = b2.EdgeP0Max; R.SignBad = b2.SignBad; R.SignN = b2.SignN; R.SignMax = b2.SignMax; R.GoneN = b2.GoneN; R.GoneMax = b2.GoneMax; R.InBandVerts = b2.InBandVerts;
         R.Warn.AddRange(b2.Warn);
         R.BenchPts.AddRange(b2.BenchPts); R.BenchN = b2.BenchN; R.FootN = b2.FootN;
+        R.Profile = b2.Profile;   // ★[로드맵 2-2] 측점표 = 지은 바깥 벽(2차 수직 · P0′) 것 — 1차(옛 사면 그대로)의 것은 로그 «다단 · 1차 수직»에만
 
         // ⑬ 면 — 바깥 = 2차 수직 그대로 · 안쪽 단 k = 머리 줄(d_k)과 발 줄(d_k + sH) 위 F(= P0′) · 벽 높이 > 0.1 mm인 몫
         R.Faces.AddRange(b2.Faces);

@@ -142,12 +142,24 @@ internal static class WallLineFlow
         System.Func<double, double, double?> pAt = (x, y) => p0.TryGetElevation(x, y, out double z) ? z : null;
         // ★[v117.0 · JACK 1111 · 계획 3절] 수직 옹벽 — 소단을 안 쓰므로 옛 사면 링(OldBenchOf) · 링 꼭짓점 일치(VertexMatch)를 건너뛴다(«옛 소단» 헛거절 막음) · 모양 · 기울기만 넘김
         if (shape is WallByLine.WallShape.Vertical or WallByLine.WallShape.Tiered)   // ★[v117.3] 다단도 같은 재료(단높이 · 소단 = 절토 Hc · Tc / 성토 Hf · Tf · 손 값이 있으면 그것)
+        {
+            // ★[로드맵 2-2 · 2-3 — 보고만] 검토 높이 = 이 구역 제원의 소단 생성 기준 높이(D4 ① · 기록 Hc/Hf 아님 — 수직 기록은 0) · 기초 재기 = 터파기 설정의 절토 · 성토 형식 표
+            WallSection.Table? fCut = null, fFill = null; WallSection.Common? fCom = null;
+            try
+            {
+                var db = HostApplicationServices.WorkingDatabase;
+                var es = WallListStore.ExcavOf(db, out _);
+                fCut = WallListStore.SectionOf(db, es.CutKind, out _); fFill = WallListStore.SectionOf(db, es.FillKind, out _); fCom = es.Common(slopeW);
+            }
+            catch { fCut = fFill = null; fCom = null; }   // 못 읽으면 기초 재기만 빠진다(짓기 그대로)
             return WallByLine.Build(new WallByLine.Input
             {
                 Line = cut.Line, Bd = bd, NewRing = cut.NewRing, CutRing = cut.CutRing, Plan = region.Boundary, SlopeW = slopeW, FaceRun = faceRun, Grid = grid, Reach = reach,
                 Ground = gAt, GroundTris = gTris, P0 = pAt, P0Tris = p0Tris, Blockers = bl, Shape = shape,
                 Hc = hc, Tc = tc, Hf = hf, Tf = tf, TierH = tierH, TierB = tierB, TierZ1 = tierZ1,
+                ReviewHc = region.Params.BenchHeightOf(true), ReviewHf = region.Params.BenchHeightOf(false), FootCut = fCut, FootFill = fFill, FootCommon = fCom,
             });
+        }
         var (oc, of, rnote, whyC, whyF) = OldBenchOf(region, g);
         // ★[재검토 M-A] 다시 만든 링 = 정지면을 만든 그 링인가 — 상자 안 · 그 쪽 사면 자리(데이라잇 고리 안 1 cm · 계획선 밖 1 cm) 링 꼭짓점이 합성 전 면 꼭짓점과 0.1 mm(평면) · 1 mm(높이) 안에서 겹치는 몫.
         //   0단계 실측(1105 현장): 136점 중 134점(98.5 %) — 안 겹친 2점은 0.22~0.24 mm 옆에 면 꼭짓점이 있고 그 자리 면 높이 = 링 높이(보조선 교차 끼움 자리로 보임 · 재지 않음).
@@ -272,6 +284,7 @@ internal static class WallLineFlow
         var b = BuildGeom(cut, bd, region, bl, hc, tc, hf, tf, slopeW, faceRun, grid, System.Math.Max(0, GradingSettings.WallPolygonMargin), gC, pC, topStep, blockLen, shape, tierH, tierB, tierZ1);
         log.Append(b.Log);
         if (vert) SelfCheckLog.Line(Tag, b.Ok, b.SelfCheck, doc.Name);   // ★[v117.0 · 계획 1-6] 자가검증 한 줄(키트가 읽음 · 거절도)
+        if (vert && b.Ok && b.Profile != null) SelfCheckLog.Line(Tag, '✔', b.Profile.Probe, doc.Name);   // ★[로드맵 2-2] 측점표 탐침 한 줄(보고만 — 늘 ✔: 검토 높이 넘음은 경고일 뿐 · ⚠ 줄을 세는 키트 판정을 안 바꿈)
         if (!b.Ok) return Stop($"{b.Code} — {b.Why}");
         // 번호 — 목록 · 남은 가상옹벽 면 중 큰 것 + 1(다시 안 쓴다)
         int maxNo = walls.Count > 0 ? walls.Max(w => w.No) : 0;
@@ -392,6 +405,7 @@ internal static class WallLineFlow
                     double.IsNaN(tZ) ? "자동" : "손", b.OuterHMax, b.BreakN, b.BreakN > 0 ? " — 구간 나눔 권함(다음 판)" : "")
                 : string.Format(ic, "〈수직 1:{0} · 길이 {1:F2} m(절토 {2:F2} · 성토 {3:F2}) · 최고 {4:F2} m · 면적 {5:F1} ㎡{6}〉", slopeW.ToString("0.###", ic), b.LineLen, b.LenC, b.LenF, b.HMax, b.Area,
                     b.TierNone ? string.Format(ic, " · 단높이 {0:0.##} 안 — 단 없이 됨", b.TierH) : "");
+            if (b.Ok && b.Profile is { Preview.Length: > 0 } pf) ed.WriteMessage($"\n[{Tag}] {pf.Preview}");   // ★[로드맵 2-2 · 2-3] 측점표 한 줄(보고만)
             PromptResult r;
             try
             {
