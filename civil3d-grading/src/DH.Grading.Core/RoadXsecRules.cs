@@ -175,6 +175,17 @@ public static class RoadXsecRules
     /// <summary>도면설정 «횡단도 배치» 기본 차례 번호(1 = 1×2) — <c>GradingSettings.XsecLayout</c> 기본값과 같다.</summary>
     public const int LayoutDefault = 1;
 
+    /// <summary>★★[v117.7.1 · JACK 1104 «부지 · 진입도로 따로» · 1111 «진입도로 축척이 이상하게 변해»] 자동 축척이라도 한 번 그린 진입도로 횡단도는 그린 축척 그대로 —
+    /// 계획부지 다시 생성 · 부지 종단 주석 축척이 바뀌어 다시 그려도 안 따라간다(실측 pvx1: 1:150 → 1:500). 이 도로 설정(도면설정 «진입도로 횡단도 축척» · 배치)이 바뀌었을 때만 다시 고른다.
+    /// 돌려줌 = 그릴 고정 축척(0 = 지금 규칙 — 고정 칸이면 그 값 · 아니면 칸에 맞춰 고름). <paramref name="layoutWas"/> &lt; 0 = 옛 기록(1×2로 그렸다고 봄 — <see cref="Stale(string, string, string, string, double, double, double, double, int, int)"/>와 같음).</summary>
+    public static double KeptScale(double pinNow, double pinWas, double scaleWas, int viewsWas, int layoutWas, int layoutNow)
+    {
+        static bool Pos(double v) => double.IsFinite(v) && v > 0;
+        if (Pos(pinNow) || Pos(pinWas) || !Pos(scaleWas) || viewsWas <= 0) return 0;
+        int was = layoutWas >= 0 ? layoutWas : LayoutDefault;
+        return layoutNow >= 0 && was != layoutNow ? 0 : scaleWas;
+    }
+
     /// <summary>★★[v113.2 · JACK 1104 «횡단도 배치는 부지 별도 진입도로 별도»] 도면 기록 «DH_SHEETLAYOUT»(정수 칸 차례) → (부지, 진입도로) 배치.
     /// 판 1 = [배치] (옛 «공통» — 둘 다 그 값) · 판 2 = [부지, 2, 진입도로]. 기록이 없거나 깨졌으면 −1(부르는 쪽이 기본값).
     /// 옛 애드인은 첫 칸만 읽으므로 판 2도 부지 배치로 읽는다.</summary>

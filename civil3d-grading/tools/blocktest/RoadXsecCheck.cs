@@ -115,5 +115,22 @@ static class RoadXsecCheck
                 lSame == "" && lMove == "횡단도 배치가 바뀌었습니다" && lOld1 == "" && lOld4 == lMove && lFirst == stc,
                 $"«{lSame}» «{lMove}» «{lOld1}» «{lOld4}» «{lFirst}»");
         }
+
+        // ⑥ ★★[v117.7.1 · JACK 1104 · 1111 · 화면 없는 시험 pvx1] 자동 축척이라도 한 번 그린 횡단도는 그린 축척 그대로 — 이 도로 설정(축척 칸 · 배치)이 바뀌었을 때만 다시 고름
+        {
+            double keep = RoadXsecRules.KeptScale(0, 0, 150, 73, 1, 1);          // 계획부지 다시 생성 · 부지 주석 축척 바뀜 — 자동 · 그린 1:150
+            double fixNow = RoadXsecRules.KeptScale(200, 0, 150, 73, 1, 1);      // 이제 고정 칸 → 그 칸(지킴 없음)
+            double wasFix = RoadXsecRules.KeptScale(0, 200, 200, 73, 1, 1);      // 고정 → 자동으로 되돌림 = 다시 고름
+            double first = RoadXsecRules.KeptScale(0, 0, 0, 0, -1, 1);           // 처음 그림
+            double noView = RoadXsecRules.KeptScale(0, 0, 150, 0, 1, 1);         // 기록에 뷰 없음
+            double lay = RoadXsecRules.KeptScale(0, 0, 150, 73, 1, 4);           // 진입도로 배치 바뀜 = 다시 고름
+            double layOld = RoadXsecRules.KeptScale(0, 0, 150, 73, -1, 1);       // 옛 기록(배치 안 적음) = 1×2로 봄
+            double layOld4 = RoadXsecRules.KeptScale(0, 0, 150, 73, -1, 4);
+            double nan = RoadXsecRules.KeptScale(double.NaN, double.NaN, 150, 73, 1, 1);
+            double bad = RoadXsecRules.KeptScale(0, 0, double.NaN, 73, 1, 1);
+            check("S183 ⑥ 그린 축척 지킴 — 자동 · 그린 1:150 = 150 · 고정 칸 = 0 · 고정에서 자동 = 0 · 처음 · 뷰 없음 = 0 · 배치 바뀜 = 0 · 옛 기록 = 1×2로 봄 · NaN 칸 = 자동 · NaN 축척 = 0",
+                keep == 150 && fixNow == 0 && wasFix == 0 && first == 0 && noView == 0 && lay == 0 && layOld == 150 && layOld4 == 0 && nan == 150 && bad == 0,
+                $"{keep} · {fixNow} · {wasFix} · {first} · {noView} · {lay} · {layOld} · {layOld4} · {nan} · {bad}");
+        }
     }
 }

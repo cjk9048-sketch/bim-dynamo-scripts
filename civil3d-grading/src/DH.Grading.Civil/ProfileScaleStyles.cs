@@ -115,14 +115,32 @@ internal static class ProfileScaleStyles
         return n;
     }
 
-    /// <summary>값이 있는 double 속성(get/set)을 k배 — 이름표에 든 것만.</summary>
+    /// <summary>값이 있는 double 속성(get/set)을 k배 — 이름표에 든 것만.
+    /// <para>★[v117.7.1 · 화면 없는 시험 pvx1 · pvx2] 원래 값을 <b>모두 먼저</b> 읽고 각각 «원래 × k»로 쓴 뒤 다시 읽어 어긋난 것을 다시 쓴다(차례와 무관).
+    /// 한 칸씩 읽고 곱하던 때 횡단 축 눈금 OffsetX가 k²배였다(k = 5: 종이 0.9 → 22.5 mm · 글자 · 눈금 크기는 맞음) — 앞 칸(Size · TextHeight)을 쓰면 Civil이 OffsetX를 같이 바꾸는 것으로 보인다.</para></summary>
     internal static int ScaleProps(object o, HashSet<string> names, double k)
     {
-        int c = 0;
+        var want = new List<(System.Reflection.PropertyInfo P, double V)>();
         foreach (var pi in o.GetType().GetProperties())
         {
             if (!names.Contains(pi.Name) || pi.PropertyType != typeof(double) || !pi.CanWrite || !pi.CanRead) continue;
-            try { double v = (double)pi.GetValue(o)!; if (double.IsFinite(v) && v != 0) { pi.SetValue(o, v * k); c++; } } catch { }
+            try { double v = (double)pi.GetValue(o)!; if (double.IsFinite(v) && v != 0) want.Add((pi, v * k)); } catch { }
+        }
+        int c = 0;
+        foreach (var (pi, v) in want)
+            try { pi.SetValue(o, v); c++; } catch { }
+        // 뒤 칸을 쓰다 앞 칸이 바뀌었으면 다시(두 번까지 — 서로 물고 늘어지면 마지막 쓴 값)
+        for (int pass = 0; pass < 2; pass++)
+        {
+            bool again = false;
+            foreach (var (pi, v) in want)
+                try
+                {
+                    double now = (double)pi.GetValue(o)!;
+                    if (Math.Abs(now - v) > 1e-9 * Math.Max(1.0, Math.Abs(v))) { pi.SetValue(o, v); again = true; }
+                }
+                catch { }
+            if (!again) break;
         }
         return c;
     }
