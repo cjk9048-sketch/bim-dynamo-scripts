@@ -140,6 +140,28 @@ public static partial class WallByLine
             return keep.Count == 0 ? gf.CreatePolygon() : keep.Count == 1 ? keep[0] : gf.BuildGeometry(keep);
         }
 
+        // ③-b ★[v117.x A · 로드맵 D2 ③] 구간 — 받은 구간(2개 이상)이면 구간마다 Z1 · 아니면 한 구간(옛 길 그대로) + 안 맞을 때 구간안(제안만)
+        var rungsT = TierRungs(b1, up, sg, pl, ox, oy);
+        List<TierSec>? secs = null;   // 절토 꼴 Z1(NoTier = −∞) — 2개 이상일 때만
+        if (inp.TierSecs is { Count: >= 2 })
+        {
+            secs = ResolveTierSecs(inp.TierSecs, rungsT, H, sg, pl.Len, out string sw);
+            if (secs == null) return No("구간", sw, (b1.A.X, b1.A.Y));
+            if (secs.All(q => q.NoTier)) return No("구간", "모든 구간이 단 없이 됩니다 — 한 구간(O) 또는 수직만(V)", (b1.A.X, b1.A.Y));
+            z1p = secs.Where(q => !q.NoTier).Max(q => q.Z1);
+            R.TierZ1 = R.TierZ1Auto = sg * z1p;
+        }
+        else
+        {
+            var pr = ProposeTierSecs(rungsT, H, pl.Len, TierSecMinLen, out int prBrk);
+            if (pr.Count >= 2)
+            {
+                R.TierPropose = pr.Select(q => new TierSec { S0 = q.S0, S1 = q.S1, NoTier = q.NoTier, Z1 = q.NoTier ? double.NaN : sg * q.Z1 }).ToList();
+                R.TierProposeBreaks = prBrk;
+                for (int k = 1; k < pr.Count; k++) { var c = pl.At(pr[k].S0); R.TierProposeMarks.Add((c.X + ox, c.Y + oy)); }
+            }
+        }
+
         // 면 읽기(세계 좌표)
         var gLook = TriLookup(inp.GroundTris); var pLook = TriLookup(inp.P0Tris);
         double? GW(double x, double y) => gLook(x, y) ?? inp.Ground(x, y);
@@ -204,6 +226,49 @@ public static partial class WallByLine
             if (u >= sH) return Zk(k);
             return Zk(k - 1) - u / s;
         }
+        // ★[v117.x A] 구간 — 구간 j의 단 수 n_j(Z_n_j가 구역 P0 최저를 지남 · 단 없음 = 1) · 높이 Z_k^j(n_j 뒤는 그대로 · 단 없음 = zLow) · T_j(d)(같은 줄 거리 · 높이만 다름)
+        int nSec = secs?.Count ?? 1;
+        var z1s = new double[nSec]; var ns = new int[nSec];
+        if (secs == null) { z1s[0] = z1p; ns[0] = n; }
+        else
+            for (int j = 0; j < nSec; j++)
+            {
+                if (secs[j].NoTier) { z1s[j] = double.NaN; ns[j] = 1; continue; }
+                z1s[j] = secs[j].Z1; int nj = 2; while (nj < n && secs[j].Z1 - (nj - 1) * H > minP) nj++;
+                ns[j] = nj; secs[j].N = nj;
+            }
+        double ZkJ(int j, int k) => secs == null ? Zk(k) : secs[j].NoTier ? zLow : z1s[j] - (Math.Min(k, ns[j]) - 1) * H;
+        double TcJ(int j, double d)
+        {
+            if (secs == null) return Tc(d);
+            if (secs[j].NoTier) return zLow;
+            double z1 = z1s[j];
+            if (d < -TRampA) return d <= -TRampB ? zLow : z1 + (zLow - z1) * (-d - TRampA) / (TRampB - TRampA);
+            if (d < step) return z1;
+            int k = Math.Min(n, (int)Math.Floor(d / step) + 1);
+            double dk = (k - 1) * step, u = d - dk;
+            if (u >= sH) return ZkJ(j, k);
+            return ZkJ(j, k - 1) - u / s;
+        }
+        // 구간 경계 띠 — 높은 쪽(Z1 큰 쪽 · 단 없음 = 가장 낮음) 구간은 경계 S까지 그대로 · 낮은 쪽으로 폭 w = s·(두 T 차 최대)의 1:s 옆벽(옆 계단) · 띠 안 T = 두 구간 T의 1차
+        var bandA = new double[Math.Max(0, nSec - 1)]; var bandB = new double[Math.Max(0, nSec - 1)];
+        double eOff = 0;
+        double StaOf(double x, double y) => plE.Near(x, y).S - eOff;
+        (int J, int K, double W) SecAt(double sx)
+        {
+            for (int b = 0; b < nSec - 1; b++)
+            {
+                if (sx <= bandA[b]) return (b, b, 0);
+                if (sx < bandB[b]) return (b, b + 1, (sx - bandA[b]) / (bandB[b] - bandA[b]));
+            }
+            return (nSec - 1, nSec - 1, 0);
+        }
+        double Tp(double x, double y, double d)
+        {
+            if (secs == null) return Tc(d);
+            var (j, k, w) = SecAt(StaOf(x, y));
+            return j == k ? TcJ(j, d) : TcJ(j, d) * (1 - w) + TcJ(k, d) * w;
+        }
         log.Append(string.Format(ci, "  [다단] 방향 {0} · 1차 최고 {1:F3} m · H {2:F2} · b {3:F2} · 1:{4} · 첫 소단 Z1 {5:F3}({6} · 자동 {7:F3} @({8:F2}, {9:F2})) · 단 {10} · 깊이 D_T {11:F3} m · 구역 P0 최저 {12:F3} @({13:F2}, {14:F2}) · Z_n {15:F3}\n",
             up ? "절토" : "성토", hMax1, H, bw, s.ToString("0.###", ci), sg * z1p, z1Hand ? "손" : "자동", sg * z1a, z1At.X, z1At.Y, n, DT, sg * minP, minAt.X, minAt.Y, sg * Zk(n)));
         // 상자(★[검토 LOW 7]) — 읽은 원지반 · 정지면이 구역 + 1 m를 덮어야
@@ -212,6 +277,54 @@ public static partial class WallByLine
             var zw = new Envelope(ze.MinX + ox, ze.MaxX + ox, ze.MinY + oy, ze.MaxY + oy);
             if (!envG.Contains(zw) || !envP.Contains(zw))
                 return No("상자", string.Format(ci, "다단 구역(깊이 {0:F2} m)이 읽은 면 상자보다 큽니다 — 원지반 {1} · 정지면 {2} · 구역 ({3:F1}, {4:F1})~({5:F1}, {6:F1})", DT, envG.Contains(zw) ? "덮음" : "모자람", envP.Contains(zw) ? "덮음" : "모자람", zw.MinX, zw.MinY, zw.MaxX, zw.MaxY), (b1.A.X, b1.A.Y));
+        }
+
+        // ④-b ★[v117.x A] 구간 — zLow(단 없음 구간 · 띠 폭에 필요) · 경계 띠 · 꺾은점 곁 검사
+        if (secs != null)
+        {
+            var keepAt = minAt;
+            zLow = Math.Min(Enumerable.Range(0, nSec).Where(j => !secs[j].NoTier).Min(j => z1s[j] - (ns[j] - 1) * H), MinP0(TouchL(cutP.Intersection(Buf(TOut))))) - 1;
+            minAt = keepAt;
+            eOff = plE.Near(pl.C[0].X, pl.C[0].Y).S;
+            var dS = new List<double> { -TRampB, -TRampA, 0, DT };
+            for (int k = 1; k <= n; k++) { dS.Add((k - 1) * step); dS.Add((k - 1) * step + sH); dS.Add(k * step - 1e-9); }
+            for (int bI = 0; bI < nSec - 1; bI++)
+            {
+                double sb = secs[bI].S1, dT = 0;
+                foreach (double d in dS) dT = Math.Max(dT, Math.Abs(TcJ(bI, d) - TcJ(bI + 1, d)));
+                double w = Math.Max(s * dT, 4 * MinSp);
+                double zA = secs[bI].NoTier ? double.NegativeInfinity : z1s[bI], zB = secs[bI + 1].NoTier ? double.NegativeInfinity : z1s[bI + 1];
+                if (zA >= zB) { bandA[bI] = sb; bandB[bI] = sb + w; } else { bandA[bI] = sb - w; bandB[bI] = sb; }
+                var cB = pl.At(sb); R.TierSecMarks.Add((cB.X + ox, cB.Y + oy));
+                // 띠가 L 한 토막 안 · 옆벽 선(띠 끝 법선)의 점이 그 측점으로 읽혀야(꺾은점 곁이면 다른 토막이 더 가까움)
+                bool okSeg = bandA[bI] > 1e-6 && bandB[bI] < pl.Len - 1e-6;
+                for (int i = 1; i + 1 < pl.C.Length && okSeg; i++) if (pl.Cum[i] >= bandA[bI] - 1e-6 && pl.Cum[i] <= bandB[bI] + 1e-6) okSeg = false;
+                foreach (double e in new[] { bandA[bI], bandB[bI] })
+                {
+                    if (!okSeg) break;
+                    var c = pl.At(e); var (tx, ty) = pl.Tan(e);
+                    double nx = side > 0 ? ty : -ty, ny = side > 0 ? -tx : tx;
+                    foreach (double d in new[] { -(TOut + 0.2), DT + 1 })
+                        if (Math.Abs(StaOf(c.X + nx * d, c.Y + ny * d) - e) > 1e-6) okSeg = false;
+                }
+                if (!okSeg) return No("구간", string.Format(ci, "구간 경계 STA {0:F2}가 선 꺾은점 · 끝에 가까워 옆벽을 못 그립니다 — 경계를 옮기세요(수동 구간 M)", sb), (cB.X + ox, cB.Y + oy));
+            }
+            log.Append(string.Format(ci, "  [다단 구간] {0}구간 — {1}\n", nSec, string.Join(" / ", Enumerable.Range(0, nSec).Select(j => secs[j].NoTier
+                ? string.Format(ci, "STA {0:F2}~{1:F2} 단 없음", secs[j].S0, secs[j].S1)
+                : string.Format(ci, "STA {0:F2}~{1:F2} 단 {2} · Z1 {3:F3}", secs[j].S0, secs[j].S1, ns[j], sg * z1s[j])))
+                + " · 옆벽 띠 " + string.Join(" · ", Enumerable.Range(0, nSec - 1).Select(bI => string.Format(ci, "{0:F3}~{1:F3}", bandA[bI], bandB[bI])))));
+        }
+        else if (R.TierPropose != null)
+        {
+            // 제안 단 수(어림 — 같은 구역 P0 최저로)
+            foreach (var q in R.TierPropose) if (!q.NoTier) { int nj = 2; while (nj < 60 && sg * q.Z1 - (nj - 1) * H > minP) nj++; q.N = nj; }
+            for (int k = 0; k < R.TierPropose.Count; k++)
+            {
+                var q = R.TierPropose[k];
+                R.TierProposeText.Add(q.NoTier ? string.Format(ci, "구간 {0}: STA {1:F2}~{2:F2} · 단 없음(수직만)", k + 1, q.S0, q.S1)
+                    : string.Format(ci, "구간 {0}: STA {1:F2}~{2:F2} · 단 {3} · 첫 소단 {4:F2}", k + 1, q.S0, q.S1, q.N, q.Z1));
+            }
+            log.Append("  [다단 구간안] " + string.Join(" / ", R.TierProposeText) + string.Format(ci, " · 남는 끊김(어림) {0}\n", R.TierProposeBreaks));
         }
 
         // ⑤ 관문 «자리»(★[검토 LOW 6]) — 바닥 테두리(구역 안 몫)에서 가운데값(P0, T, G) = P0(±1 µm)
@@ -226,7 +339,7 @@ public static partial class WallByLine
                 double d = SD(x, y); if (d <= 0 || d > DT + 1e-9) return;
                 var p = PW(x + ox, y + oy); var g = GW(x + ox, y + oy); if (p == null || g == null) return;
                 nS++;
-                double pc = sg * p.Value, gc = sg * g.Value, rule = Math.Max(pc, Math.Min(Tc(d), gc));
+                double pc = sg * p.Value, gc = sg * g.Value, rule = Math.Max(pc, Math.Min(Tp(x, y, d), gc));
                 if (rule - pc > worst) { worst = rule - pc; wAt = (x + ox, y + oy); wP = pc; wD = d; }
             }
             var fr = floorP.ExteriorRing.Coordinates;
@@ -270,37 +383,80 @@ public static partial class WallByLine
             for (int i = 0; i < zg.NumGeometries; i++) if (zg.GetGeometryN(i) is Polygon p && p.Area > 1e-6) big.Add(p);
             if (big.Count != 1 || big[0].NumInteriorRings > 0) return No("다단 합성", $"다단 구역이 한 고리가 아닙니다(조각 {big.Count} · 구멍 {(big.Count > 0 ? big[0].NumInteriorRings : 0)})", (b1.A.X, b1.A.Y));
             zt = big[0];
-            zLow = Math.Min(Zk(n), MinP0(TouchL(cutP.Intersection(Buf(TOut))))) - 1;
+            if (secs == null) zLow = Math.Min(Zk(n), MinP0(TouchL(cutP.Intersection(Buf(TOut))))) - 1;
         }
         // ⑦ 테라스 T 세모 — 줄(d_k · d_k + sH · 높이 일정) + 벽 띠 사다리(앞 줄 꼭짓점마다 수선 발 + 가로대) + 구역 고리(꼭짓점마다 T(d)) → MeshLines
-        var rows = new List<(int K, bool Top, double D, double Z, List<List<Coordinate>> Pieces)>();
+        var rows = new List<(int K, bool Top, double D, double Z, List<List<Coordinate>> Pieces, int J)>();
+        // ★[v117.x A] 구간이면 줄을 경계 띠(옆벽)에서 끊어 구간마다 그 높이로 · 끊은 끝은 옆벽 선(띠 끝 법선)의 꼭짓점(높이 = 그 줄)
+        Geometry? bandsP = null;
+        var crossPts = new List<(Coordinate C, double Z)>[Math.Max(0, 2 * (nSec - 1))];
+        if (secs != null)
+        {
+            var qs = new List<Geometry>();
+            for (int bI = 0; bI < nSec - 1; bI++)
+            {
+                crossPts[2 * bI] = new(); crossPts[2 * bI + 1] = new();
+                var a = pl.At(bandA[bI]); var b = pl.At(bandB[bI]); var (tx, ty) = pl.Tan(bandA[bI]);
+                double nx = side > 0 ? ty : -ty, ny = side > 0 ? -tx : tx, d0 = -(TOut + 0.2), d1 = DT + 1;
+                qs.Add(gf.CreatePolygon(new[] { new Coordinate(a.X + nx * d0, a.Y + ny * d0), new Coordinate(b.X + nx * d0, b.Y + ny * d0), new Coordinate(b.X + nx * d1, b.Y + ny * d1), new Coordinate(a.X + nx * d1, a.Y + ny * d1), new Coordinate(a.X + nx * d0, a.Y + ny * d0) }));
+            }
+            bandsP = NetTopologySuite.Operation.Union.CascadedPolygonUnion.Union(qs);
+        }
+        void AddRow(int k, bool top, double d, Func<int, double> zOf, List<List<Coordinate>> ps)
+        {
+            if (secs == null) { rows.Add((k, top, d, zOf(0), ps, 0)); return; }
+            var per = Enumerable.Range(0, nSec).Select(_ => new List<List<Coordinate>>()).ToList();
+            foreach (var p in ps)
+            {
+                Geometry rest; try { rest = gf.CreateLineString(p.ToArray()).Difference(bandsP); } catch { rest = gf.CreateLineString(p.ToArray()); }
+                var lm = new LineMerger(); lm.Add(rest);
+                foreach (var l in lm.GetMergedLineStrings().OfType<LineString>())
+                {
+                    if (l.Length <= MinSp) continue;
+                    var mid = new NetTopologySuite.LinearReferencing.LengthIndexedLine(l).ExtractPoint(l.Length / 2);
+                    var (j, _, _) = SecAt(StaOf(mid.X, mid.Y));
+                    var cs = l.Coordinates.ToList(); per[j].Add(cs);
+                    foreach (var e in new[] { cs[0], cs[^1] })
+                    {
+                        double se = StaOf(e.X, e.Y);
+                        for (int bI = 0; bI < nSec - 1; bI++)
+                        {
+                            if (j == bI && Math.Abs(se - bandA[bI]) <= 1e-6) crossPts[2 * bI].Add((e, zOf(j)));
+                            if (j == bI + 1 && Math.Abs(se - bandB[bI]) <= 1e-6) crossPts[2 * bI + 1].Add((e, zOf(j)));
+                        }
+                    }
+                }
+            }
+            for (int j = 0; j < nSec; j++) rows.Add((k, top, d, zOf(j), per[j], j));
+        }
         {
             // L 바깥 내림 줄(−0.25 · −0.45) — R_out 쪽 테두리 안만
             var zOut = cutP.Intersection(Buf(TOut));
-            foreach (var (d, zc) in new[] { (TRampA, z1p), (TRampB, zLow) })
+            foreach (var (d, zf) in new (double, Func<int, double>)[] { (TRampA, j => secs == null ? z1p : secs[j].NoTier ? zLow : z1s[j]), (TRampB, _ => zLow) })
             {
                 var ps = new List<List<Coordinate>>();
                 Geometry cut; try { cut = Buf(d).Boundary.Intersection(zOut); } catch { cut = gf.CreateLineString(); }
                 var lm = new LineMerger(); lm.Add(cut);
                 foreach (var l in lm.GetMergedLineStrings().OfType<LineString>()) if (l.Length > MinSp) ps.Add(l.Coordinates.ToList());
-                rows.Add((0, false, -d, zc, ps));
+                AddRow(0, false, -d, zf, ps);
             }
         }
         for (int k = 2; k <= n; k++)
-            foreach (var (top, d, zc) in new[] { (true, (k - 1) * step, Zk(k - 1)), (false, (k - 1) * step + sH, Zk(k)) })
+            foreach (var (top, d, kz) in new[] { (true, (k - 1) * step, k - 1), (false, (k - 1) * step + sH, k) })
             {
                 var ps = new List<List<Coordinate>>();
                 Geometry cut;
                 try { cut = Buf(d).Boundary.Intersection(zIn); } catch { cut = gf.CreateLineString(); }
                 var lm = new LineMerger(); lm.Add(cut);
                 foreach (var l in lm.GetMergedLineStrings().OfType<LineString>()) if (l.Length > MinSp) ps.Add(l.Coordinates.ToList());
-                rows.Add((k, top, d, zc, ps));
+                AddRow(k, top, d, j => ZkJ(j, kz), ps);
             }
         // 사다리 — 벽 k 머리 줄 꼭짓점 → 발 줄 수선 발(0.25 mm 안 꼭짓점이면 그것)
         var rungLines = new List<(Coordinate A, double ZA, Coordinate B, double ZB)>();
         for (int k = 2; k <= n; k++)
+        for (int sj = 0; sj < nSec; sj++)   // ★[v117.x A] 구간마다(같은 구간 줄끼리만 — 옆벽을 건너는 가로대 없음)
         {
-            var top = rows.First(r => r.K == k && r.Top); var foot = rows.First(r => r.K == k && !r.Top);
+            var top = rows.First(r => r.K == k && r.Top && r.J == sj); var foot = rows.First(r => r.K == k && !r.Top && r.J == sj);
             var lils = foot.Pieces.Select(p => new NetTopologySuite.LinearReferencing.LengthIndexedLine(gf.CreateLineString(p.ToArray()))).ToList();
             var adds = foot.Pieces.Select(_ => new List<(double T, Coordinate C)>()).ToList();
             var pairs = new List<(Coordinate Src, int Piece, Coordinate Dst)>();
@@ -339,13 +495,39 @@ public static partial class WallByLine
                 if (best != null && best.Distance(src) > 1e-9) rungLines.Add((src, top.Z, best, foot.Z));
             }
         }
+        // ★[v117.x A] 옆벽 선 — 띠 끝(구간 쪽) 법선을 구역으로 자른 것 · 꼭짓점 = 그 구간 줄 끝(높이 = 줄) + 구역 고리 위 두 끝(높이 = 고리 셈 · 아래에서)
+        var crossLines = new List<(int J, List<(Coordinate C, double Z)> V)>();
+        if (secs != null)
+            for (int bI = 0; bI < nSec - 1; bI++)
+                foreach (var (e, ej, cp) in new[] { (bandA[bI], bI, crossPts[2 * bI]), (bandB[bI], bI + 1, crossPts[2 * bI + 1]) })
+                {
+                    var c = pl.At(e); var (tx, ty) = pl.Tan(e);
+                    double nx = side > 0 ? ty : -ty, ny = side > 0 ? -tx : tx, d0 = -(TOut + 0.2), d1 = DT + 1;
+                    var seg = gf.CreateLineString(new[] { new Coordinate(c.X + nx * d0, c.Y + ny * d0), new Coordinate(c.X + nx * d1, c.Y + ny * d1) });
+                    Geometry cg; try { cg = seg.Intersection(zt); } catch { continue; }
+                    var lm = new LineMerger(); lm.Add(cg);
+                    foreach (var l in lm.GetMergedLineStrings().OfType<LineString>())
+                    {
+                        if (l.Length <= MinSp) continue;
+                        var lil = new NetTopologySuite.LinearReferencing.LengthIndexedLine(l);
+                        var vs = new List<(double T, Coordinate C, double Z, bool Row)>();
+                        foreach (var q in l.Coordinates) vs.Add((lil.Project(q), q, double.NaN, false));
+                        foreach (var (q, z) in cp) if (l.Distance(gf.CreatePoint(q)) <= 1e-7) vs.Add((lil.Project(q), q, z, true));
+                        vs = vs.OrderBy(q => q.T).ThenByDescending(q => q.Row).ToList();
+                        var o = new List<(Coordinate C, double Z)>();
+                        foreach (var q in vs)
+                        {
+                            if (o.Count > 0 && o[^1].C.Distance(q.C) < MinSp) { if (q.Row) o[^1] = (q.C, q.Z); continue; }
+                            o.Add((q.C, q.Z));
+                        }
+                        if (o.Count >= 2) crossLines.Add((ej, o));
+                    }
+                }
         // 구역 고리 — 줄 끝점을 꼭짓점으로 끼움(높이 = 그 줄)
         var ring = zt.ExteriorRing.Coordinates.Take(zt.ExteriorRing.NumPoints - 1).ToList();
         {
             var ins = new Dictionary<int, List<(double T, Coordinate C)>>();
-            foreach (var r in rows)
-                foreach (var p in r.Pieces)
-                    foreach (var e in new[] { p[0], p[^1] })
+            foreach (var e in rows.SelectMany(r => r.Pieces).SelectMany(p => new[] { p[0], p[^1] }).Concat(crossLines.SelectMany(x => new[] { x.V[0].C, x.V[^1].C })))
                     {
                         if (ring.Any(v => v.Distance(e) <= 1e-9)) continue;
                         int bi = -1; double bd = 1e-7, bt = 0;
@@ -378,13 +560,19 @@ public static partial class WallByLine
         {
             var prepB = new Dictionary<double, NetTopologySuite.Geometries.Prepared.IPreparedGeometry>();
             NetTopologySuite.Geometries.Prepared.IPreparedGeometry PB(double d) { if (!prepB.TryGetValue(d, out var p)) prepB[d] = p = PreparedGeometryFactory.Prepare(Buf(d)); return p; }
-            var bIn = new List<(double DH, double ZH, double DF, double ZF)>();
-            for (int k = 2; k <= n; k++) bIn.Add(((k - 1) * step, Zk(k - 1), (k - 1) * step + sH, Zk(k)));
-            var bOut = new List<(double DH, double ZH, double DF, double ZF)> { (TRampA, z1p, TRampB, zLow) };
-            // 칸 번호(0 = 첫 칸 앞 소단 · 2j+1 = j번 벽 띠 · 2j+2 = j번 벽 뒤 소단)와 높이
-            (int Cell, double Z) ByPoly(Coordinate c, bool outSide)
+            // ★[v117.x A] 구간마다 줄 높이(한 구간이면 옛 bIn · bOut 그대로)
+            var bInJ = new List<List<(double DH, double ZH, double DF, double ZF)>>(); var bOutJ = new List<List<(double DH, double ZH, double DF, double ZF)>>();
+            for (int sj = 0; sj < nSec; sj++)
             {
-                var bs = outSide ? bOut : bIn; var pt = gf.CreatePoint(c);
+                var bIn = new List<(double DH, double ZH, double DF, double ZF)>();
+                for (int k = 2; k <= n; k++) bIn.Add(((k - 1) * step, ZkJ(sj, k - 1), (k - 1) * step + sH, ZkJ(sj, k)));
+                bInJ.Add(bIn);
+                bOutJ.Add(new List<(double DH, double ZH, double DF, double ZF)> { (TRampA, secs == null ? z1p : secs[sj].NoTier ? zLow : z1s[sj], TRampB, zLow) });
+            }
+            // 칸 번호(0 = 첫 칸 앞 소단 · 2j+1 = j번 벽 띠 · 2j+2 = j번 벽 뒤 소단)와 높이
+            (int Cell, double Z) ByPoly(Coordinate c, bool outSide, int sj)
+            {
+                var bs = outSide ? bOutJ[sj] : bInJ[sj]; var pt = gf.CreatePoint(c);
                 for (int j = 0; j < bs.Count; j++)
                 {
                     var (dh, zh, df, zf) = bs[j];
@@ -397,23 +585,45 @@ public static partial class WallByLine
                 }
                 return (2 * bs.Count, bs[^1].ZF);
             }
-            int BySd(double d, bool outSide)
+            int BySd(double d, bool outSide, int sj)
             {
-                var bs = outSide ? bOut : bIn; double ad = Math.Abs(d);
+                var bs = outSide ? bOutJ[sj] : bInJ[sj]; double ad = Math.Abs(d);
                 for (int j = 0; j < bs.Count; j++) { if (ad < bs[j].DH) return 2 * j; if (ad < bs[j].DF) return 2 * j + 1; }
                 return 2 * bs.Count;
+            }
+            double ZAt(Coordinate c, double d, int sj, bool count)
+            {
+                double zt0 = TcJ(sj, d);
+                bool outSide = d < 0;
+                var (cell, zp) = ByPoly(c, outSide, sj);
+                int cs = BySd(d, outSide, sj);
+                double z = cell == cs && cell % 2 == 0 ? zt0 : zp;
+                if (!count) return z;
+                if (cell != cs) ringSliver++; else if (cell % 2 == 1) ringBand++;
+                if (Math.Abs(z - zt0) > 1e-6) ringMoved++;
+                if (Math.Abs(z - zt0) > ringDiff) { ringDiff = Math.Abs(z - zt0); ringDiffAt = (c.X + ox, c.Y + oy); }
+                return z;
+            }
+            // 옆벽 선 끝(고리 위) 높이 = 그 구간 고리 셈 — 고리 꼭짓점도 같은 값
+            var fixedZ = new Dictionary<(double, double), double>();
+            for (int x = 0; x < crossLines.Count; x++)
+            {
+                var (ej, v) = crossLines[x];
+                foreach (int i in new[] { 0, v.Count - 1 })
+                    if (double.IsNaN(v[i].Z)) { double z = ZAt(v[i].C, SD(v[i].C.X, v[i].C.Y), ej, false); v[i] = (v[i].C, z); fixedZ[(v[i].C.X, v[i].C.Y)] = z; }
+                for (int i = 1; i + 1 < v.Count; i++) if (double.IsNaN(v[i].Z)) v[i] = (v[i].C, TcJ(ej, SD(v[i].C.X, v[i].C.Y)));
             }
             var rl = new List<Point3>();
             foreach (var c in ring)
             {
-                double d = SD(c.X, c.Y), zt0 = Tc(d);
-                bool outSide = d < 0;
-                var (cell, zp) = ByPoly(c, outSide);
-                int cs = BySd(d, outSide);
-                double z = cell == cs && cell % 2 == 0 ? zt0 : zp;
-                if (cell != cs) ringSliver++; else if (cell % 2 == 1) ringBand++;
-                if (Math.Abs(z - zt0) > 1e-6) ringMoved++;
-                if (Math.Abs(z - zt0) > ringDiff) { ringDiff = Math.Abs(z - zt0); ringDiffAt = (c.X + ox, c.Y + oy); }
+                double d = SD(c.X, c.Y), z;
+                if (fixedZ.TryGetValue((c.X, c.Y), out double fz)) z = fz;
+                else if (secs == null) z = ZAt(c, d, 0, true);
+                else
+                {
+                    var (j, k, w) = SecAt(StaOf(c.X, c.Y));
+                    z = j == k ? ZAt(c, d, j, true) : ZAt(c, d, j, true) * (1 - w) + ZAt(c, d, k, false) * w;
+                }
                 rl.Add(Pz(c, z));
             }
             rl.Add(rl[0]); tLines.Add(rl);
@@ -422,6 +632,7 @@ public static partial class WallByLine
         log.Append(string.Format(ci, "  [다단] 고리 꼭짓점 높이 = 줄 다각형 — 칸이 SD와 다름 {0} · 벽 띠 안 {1} · 높이 바뀜(1 µm 넘음) {5} · SD 값과 차 최대 {2:F4} m @({3:F2}, {4:F2})\n", ringSliver, ringBand, ringDiff, ringDiffAt.X, ringDiffAt.Y, ringMoved));
         foreach (var r in rows) foreach (var p in r.Pieces) tLines.Add(p.Select(c => Pz(c, r.Z)).ToList());
         foreach (var (a, za, b, zb) in rungLines) tLines.Add(new List<Point3> { Pz(a, za), Pz(b, zb) });
+        foreach (var (_, v) in crossLines) tLines.Add(v.Select(q => Pz(q.C, q.Z)).ToList());
         var tAll = MeshLines(tLines, ox, oy);
         var prepZt = PreparedGeometryFactory.Prepare(zt);
         var tT = new List<Tri>(); double tArea = 0;
@@ -447,6 +658,30 @@ public static partial class WallByLine
         if (comp.Zone == null) return No("다단 합성", "소단 면 합성을 못 했습니다 — " + comp.Fail, (b1.A.X, b1.A.Y));
         var p0All = comp.Zone.Concat(comp.Untouched).ToList();
         var p0Look = TriLookup(p0All);
+        // ★[v117.x A] 옆벽(구간 경계 띠) 높이 — 두 띠 끝 법선 위 같은 거리 d(sH ~ D_T · 5 cm)에서 P0′ 차 최대
+        if (secs != null)
+            for (int bI = 0; bI < nSec - 1; bI++)
+            {
+                var ca = pl.At(bandA[bI]); var cb = pl.At(bandB[bI]); var (tx, ty) = pl.Tan(bandA[bI]);
+                double nx = side > 0 ? ty : -ty, ny = side > 0 ? -tx : tx;
+                for (double d = sH; d <= DT; d += 0.05)
+                {
+                    var za = p0Look(ca.X + nx * d + ox, ca.Y + ny * d + oy); var zb = p0Look(cb.X + nx * d + ox, cb.Y + ny * d + oy);
+                    if (za != null && zb != null) R.TierSideHMax = Math.Max(R.TierSideHMax, Math.Abs(za.Value - zb.Value));
+                }
+            }
+
+        // ⑧-b ★[v117.x B · D3 ②] 끝 비탈 — 선 두 끝(벽 끝 꼭대기 · 원지반 높이)에서 원뿔 비탈(1:m · 검토 높이를 넘으면 단 높이 Z_k마다 소단 b) · 최종 = 가운데값(P0′, S, G)
+        //   (절토 max(P0′, min(S, G)) — 끝 비탈은 옛 면보다 깊이 안 판다 · 땅 높이까지만). 두 끝 비탈이 실제로 면을 바꾸는 자리(S > P0′)가 겹치면 거절 · 바닥 · 다른 옹벽에 닿아도 거절(V자 골 자동 없음)
+        List<Polygon> endQ = new(); Func<double, double, double>? endS = null;
+        if (inp.TierEndSlope)
+        {
+            R.TierEnd = true;   // 기록(판 11) · 자가검증 글 — 바뀐 자리가 없어도 «켬»은 남김(다시 지을 때 같은 판정)
+            var er = TierEndSlopes(inp, R, log, gf, ox, oy, sg, up, H, bw, pl, nP, floorP, zLow, ns[0], ns[nSec - 1], k => ZkJ(0, k), k => ZkJ(nSec - 1, k),
+                secs != null && secs[0].NoTier, secs != null && secs[nSec - 1].NoTier, GW, p0All, out endQ, out endS);
+            if (er.Code.Length > 0) return No(er.Code, er.Why, er.At);
+            if (endQ.Count > 0) { p0All = er.P0; p0Look = TriLookup(p0All); }
+        }
 
         // ⑨ 2차 수직 — P0 자리에 P0′(코드 그대로)
         var inp2 = inp.Copy(); inp2.Shape = WallShape.Vertical; inp2.P0Tris = p0All; inp2.P0 = (x, y) => p0Look(x, y) ?? inp.P0(x, y);
@@ -457,6 +692,8 @@ public static partial class WallByLine
         inp2.ZeroAt = (x, y) =>
         {
             var g = GW(x, y); var p = PW(x, y); var t = tLook(x, y);
+            // ★[v117.x B] 끝 비탈이 있으면 T 대신 max(T, S)(구역 밖이면 S)
+            if (endS != null) { double sv = endS(x, y); t = t == null ? sg * sv : sg * Math.Max(sg * t.Value, sv); }
             return g != null && p != null && t != null && sg * p.Value <= sg * g.Value && sg * g.Value <= sg * t.Value;
         };
         var b2 = BuildVertical(inp2);
@@ -482,7 +719,14 @@ public static partial class WallByLine
         var pieces = new List<(List<Point3> P, Tri Src)>();
         var prepBd = PreparedGeometryFactory.Prepare(bdAll);
         int clipMiss = 0, clipped = 0, dropSide = 0, dropBd = 0, dropBad = 0;
-        foreach (var t in comp.Zone)
+        // ★[v117.x B] 끝 비탈이 면을 바꿨으면 바꿀 자리 = 다단 구역 ∪ 끝 비탈 자리(마지막 P0″ 세모 · 무게중심으로 — 두 테두리 모두 세모 변)
+        var zoneTris = comp.Zone;
+        if (endQ.Count > 0)
+        {
+            var uP = PreparedGeometryFactory.Prepare(NetTopologySuite.Operation.Union.CascadedPolygonUnion.Union(endQ.Cast<Geometry>().Append(zt).ToList()));
+            zoneTris = p0All.Where(t => uP.Contains(gf.CreatePoint(new Coordinate((t.A.X + t.B.X + t.C.X) / 3 - ox, (t.A.Y + t.B.Y + t.C.Y) / 3 - oy)))).ToList();
+        }
+        foreach (var t in zoneTris)
         {
             var a = new Coordinate(t.A.X - ox, t.A.Y - oy); var b = new Coordinate(t.B.X - ox, t.B.Y - oy); var c = new Coordinate(t.C.X - ox, t.C.Y - oy);
             var tp = gf.CreatePolygon(new[] { a, b, c, a.Copy() });
@@ -551,6 +795,17 @@ public static partial class WallByLine
             }
             trP = big[0];
         }
+        // ★[조정자 1111 · 도로 계획 검토에서 — 부지도] 막을 다각형(앞 옹벽 · 구멍 · 굳은 옹벽 · 앞 구역 · 진입도로) — 소단 자리(구간 · 끝 비탈 포함)가 겹치면 거절
+        //   (2차 수직은 제 띠만 잼 · 합성(exactG)이 앞 옹벽을 덮어쓰지 않게 · 수직 ⑦과 같은 한도 1e-2㎡)
+        if (inp.Blockers != null)
+            foreach (var (name, br) in inp.Blockers)
+            {
+                var bp2 = BoundaryCutPoly(gf, br, ox, oy);
+                if (bp2 == null) continue;
+                Geometry? og = null; try { og = trP.Intersection(bp2); } catch { try { og = trP.Buffer(0).Intersection(bp2.Buffer(0)); } catch { } }
+                if (og == null) return No("겹침", $"다단 소단 자리와 {name}의 겹침을 못 쟀습니다 — 막습니다", (b1.A.X, b1.A.Y));
+                if (og.Area > 1e-2) return No("겹침", string.Format(ci, "다단 소단 자리가 {0}과 겹칩니다({1:F2}㎡) — 수직만(V) 또는 선을 옮기세요", name, og.Area), Wd(og.InteriorPoint.Coordinate));
+            }
         // 안쪽 길(X_A → X_B · L′ 아닌 쪽)
         var trR = trP.ExteriorRing.Coordinates.Take(trP.ExteriorRing.NumPoints - 1).ToList();
         int iA = trR.FindIndex(c => c.Distance(qL[0]) <= 1e-9), iB = trR.FindIndex(c => c.Distance(qL[^1]) <= 1e-9);
@@ -688,8 +943,10 @@ public static partial class WallByLine
         R.Faces.AddRange(b2.Faces);
         R.OuterHMax = b2.Faces.Count == 0 ? 0 : b2.Faces.Max(f => f.HMax);
         for (int k = 2; k <= n; k++)
+        for (int sj = 0; sj < nSec; sj++)   // ★[v117.x A] 구간마다
         {
-            var top = rows.First(r => r.K == k && r.Top); var foot = rows.First(r => r.K == k && !r.Top);
+            if (secs != null && (secs[sj].NoTier || k > ns[sj])) continue;
+            var top = rows.First(r => r.K == k && r.Top && r.J == sj); var foot = rows.First(r => r.K == k && !r.Top && r.J == sj);
             var fLines = foot.Pieces.Select(p => gf.CreateLineString(p.ToArray())).ToList();
             foreach (var tp in top.Pieces)
             {
@@ -711,7 +968,7 @@ public static partial class WallByLine
                     if (q == null || bd > 1.5 * sH + 1e-6 || zp == null || zq == null) { Close(); continue; }
                     double h = sg * (zp.Value - zq.Value);
                     if (h <= 1e-4) { Close(); continue; }
-                    fs ??= new FaceSeg { Up = up, Tier = k, Level = sg * Zk(k - 1), Kind = 0, Part = 1 };
+                    fs ??= new FaceSeg { Up = up, Tier = k, Level = sg * ZkJ(sj, k - 1), Kind = 0, Part = 1 };
                     var pt = new Point3(p.X + ox, p.Y + oy, zp.Value); var qt = new Point3(q.X + ox, q.Y + oy, zq.Value);
                     if (up) { fs.Top.Add(pt); fs.Foot.Add(qt); } else { fs.Top.Add(qt); fs.Foot.Add(pt); }
                     fs.HMax = Math.Max(fs.HMax, h);
@@ -740,7 +997,9 @@ public static partial class WallByLine
                     {
                         double x = cs[i].X + (cs[i + 1].X - cs[i].X) * u / nn, y = cs[i].Y + (cs[i + 1].Y - cs[i].Y) * u / nn;
                         var z = p0Look(x + ox, y + oy); var g = GW(x + ox, y + oy);
-                        if (z == null || g == null || Math.Abs(sg * z.Value - Zk(k)) > 1e-6 || sg * (g.Value - z.Value) < 1e-3) continue;
+                        double zkHere = Zk(k);
+                        if (secs != null) { var (j0, k0, _) = SecAt(StaOf(x, y)); if (j0 != k0 || secs[j0].NoTier || k > ns[j0]) continue; zkHere = ZkJ(j0, k); }
+                        if (z == null || g == null || Math.Abs(sg * z.Value - zkHere) > 1e-6 || sg * (g.Value - z.Value) < 1e-3) continue;
                         R.BenchPts.Add((x + ox, y + oy, z.Value, 0)); R.BenchN++;
                     }
                 }
@@ -767,7 +1026,14 @@ public static partial class WallByLine
             {
                 if (seq[i].H > 1e-4) { i++; continue; }
                 int j = i; while (j + 1 < m && seq[j + 1].H <= 1e-4) j++;
-                if (i > 0 && j < m - 1) { R.BreakN++; var mid = seq[(i + j) / 2]; R.BreakAt.Add((mid.X, mid.Y)); }
+                // ★[v117.x A] 구간 경계(옆벽 띠)에 걸친 0 몫 = 높은 구간 바깥 단의 정해진 끝(단별 종료) — 끊김 아님
+                bool atBand = false;
+                if (secs != null && i > 0 && j < m - 1)
+                {
+                    double sa = pl.Near(seq[i - 1].X - ox, seq[i - 1].Y - oy).S, sb2 = pl.Near(seq[j + 1].X - ox, seq[j + 1].Y - oy).S;
+                    for (int bI = 0; bI < nSec - 1 && !atBand; bI++) atBand = Math.Min(sa, sb2) < bandB[bI] + 1e-3 && Math.Max(sa, sb2) > bandA[bI] - 1e-3;
+                }
+                if (i > 0 && j < m - 1 && !atBand) { R.BreakN++; var mid = seq[(i + j) / 2]; R.BreakAt.Add((mid.X, mid.Y)); }
                 i = j + 1;
             }
         }
@@ -818,15 +1084,20 @@ public static partial class WallByLine
             }
         }
         log.Append(string.Format(ci, "  [다단] 소단 자리 — 세모 {0}(L′로 자름 {1} · 자른 점이 L′ 꼭짓점 아님 {2}) · 조각 {3}(주머니 {4} · 고리 {5}) · 넓이 {6:F3}㎡ · 안쪽 테두리 {7}점 · 선 {8} · 벽 세모 절 {9} · 성 {10}\n",
-            comp.Zone.Count, clipped, clipMiss, pieces.Count, pocketPieces.Count, pocketRings.Count, trP.Area, inner.Count, lines.Count, R.WallTrisC.Count, R.WallTrisF.Count));
+            zoneTris.Count, clipped, clipMiss, pieces.Count, pocketPieces.Count, pocketRings.Count, trP.Area, inner.Count, lines.Count, R.WallTrisC.Count, R.WallTrisF.Count));
         log.Append(string.Format(ci, "  [다단] 면 — 바깥 최고 {0:F3} m · 안쪽 {1}토막 최고 {2:F3} m · 끊김 {3}곳 · 땅 위 {4}(최대 {5:F1} µm) · 바깥 {6} · 쌍 {7} · 짧은 변 {8} · 바늘 {9}\n",
             R.OuterHMax, R.Faces.Count(f => f.Tier >= 2), R.InnerHMax, R.BreakN, R.AboveN, R.AboveMax * 1e6, R.OutsideN, R.PairsUnder01, R.ShortEdges, R.Needles));
         if (R.OuterHMax > H + 1e-3) R.Warn.Add(string.Format(ci, "바깥 벽 최고 {0:F3} m가 단높이 {1:F2} m보다 1 mm 넘게 높음", R.OuterHMax, H));
-        if (R.BreakN > 0) R.Warn.Add($"바깥 단 끊김 {R.BreakN}곳 — 구간 나눔 권함(다음 판)");
+        if (R.BreakN > 0) R.Warn.Add($"바깥 단 끊김 {R.BreakN}곳 — 구간 나눔 권함" + (R.TierPropose != null ? $"(구간안 {R.TierPropose.Count}구간 · [구간 나눔(P)])" : ""));
         if (clipMiss > 0) R.Warn.Add($"L′로 자른 점 {clipMiss}개가 L′ 꼭짓점이 아님(0.25 mm 밖)");
         if (R.PairsUnder01 + R.ShortEdges + R.Needles > 0) R.Warn.Add($"0.1 mm 안 점 쌍 {R.PairsUnder01} · 0.25 mm 미만 변 {R.ShortEdges} · 바늘 세모 {R.Needles}(Civil이 합치거나 뒤집을 수 있다)");
         if (R.OutsideN > 0) return No("자가검증", $"소단 자리 · 벽 세모 {R.OutsideN}개가 선 바깥(R_out)에 있습니다", (b1.A.X, b1.A.Y));
         if (R.AboveMax > 1e-2) return No("자가검증", string.Format(ci, "소단 자리가 원지반 · 옛 사면보다 {0:F1} mm 높은(절토 꼴) 자리 {1}점 — 낮은 땅을 메움", R.AboveMax * 1000, R.AboveN), (b1.A.X, b1.A.Y));
+        if (secs != null)
+        {
+            R.TierSecsUsed = secs.Select(q => new TierSec { S0 = q.S0, S1 = q.S1, NoTier = q.NoTier, Hand = q.Hand, N = q.NoTier ? 0 : q.N, Z1 = q.NoTier ? double.NaN : sg * q.Z1 }).ToList();
+            if (R.TierSideHMax > H + 1e-3) R.Warn.Add(string.Format(ci, "구간 경계 옆벽 최고 {0:F2} m가 단높이 {1:F2} m보다 높음", R.TierSideHMax, H));
+        }
         R.Ok = true; R.Code = "통과";
         R.SelfCheck = SelfLineT(R);
         log.Append("  " + R.SelfCheck + "\n");
@@ -842,6 +1113,8 @@ public static partial class WallByLine
         var ci = CultureInfo.InvariantCulture;
         string F(double v, string f) => double.IsFinite(v) ? v.ToString(f, ci) : "—";
         return $"[옹벽 추가 다단] {b.TierN}단 · H {F(b.TierH, "F2")} · b {F(b.TierB, "F2")} · Z1 {F(b.TierZ1, "F3")}{(b.TierZ1 == b.TierZ1Auto ? "(자동)" : "(손)")} · 바깥 최고 {F(b.OuterHMax, "F2")} m · 안쪽 최고 {F(b.InnerHMax, "F2")} m"
-             + $" · 끊김 {b.BreakN}곳 · 주머니 {b.PocketN} · 바깥 {b.OutsideN} · 쌍 {b.PairsUnder01} · 짧은 변 {b.ShortEdges} · 바늘 {b.Needles} · 땅 위 {b.AboveN} · 관문 {(b.Ok ? "통과" : "거절 " + b.Code + " — " + b.Why)}";
+             + $" · 끊김 {b.BreakN}곳 · 주머니 {b.PocketN} · 바깥 {b.OutsideN} · 쌍 {b.PairsUnder01} · 짧은 변 {b.ShortEdges} · 바늘 {b.Needles} · 땅 위 {b.AboveN} · 관문 {(b.Ok ? "통과" : "거절 " + b.Code + " — " + b.Why)}"
+             + (b.TierSecsUsed.Count >= 2 ? $" · 구간 {b.TierSecsUsed.Count}(" + string.Join(" / ", b.TierSecsUsed.Select(q => q.NoTier ? $"{F(q.S0, "F2")}~{F(q.S1, "F2")} 단 없음" : $"{F(q.S0, "F2")}~{F(q.S1, "F2")} 단 {q.N} Z1 {F(q.Z1, "F3")}")) + $" · 옆벽 최고 {F(b.TierSideHMax, "F2")} m)" : "")
+             + (b.TierEnd ? " · " + b.TierEndText : "");
     }
 }
