@@ -665,10 +665,19 @@ public class RoadCommand
             var candP = new List<int>();
             var cands = new List<RoadGrade.TierLine>();
             //   ★[v116.9 · 4-1] 그림 전용 소단 턱 선(DisplayOnly)도 뺀다
-            if (pieceSnap == null) { cands = s.Lines.Where(l => l.Side != 0 && !l.Cross && !l.DisplayOnly && (l.Role == RoadGrade.LineRole.Wall) != wallMode).ToList(); candP.AddRange(cands.Select(_ => 0)); }
+            //   ★★[JACK 1111 «소단 앞선 · 뒷선이 다 나옴 → 부지 때처럼 · 같은 단이면 쭉 이어서»] 단마다 시작선 하나(절토 = 아랫선 · 성토 = 윗선 · 1단 = 도로 가장자리) · 같은 단 조각 잇기(토막마다 — 측점이 토막 것)
+            var pickLog = new List<string>();
+            List<RoadGrade.TierLine> Pick(List<RoadGrade.TierLine> ls, RoadGrade.Result? rr)
+            {
+                var o = RoadGrade.PickLines(ls, wallMode, wallMode && rr != null && rr.Error.Length == 0 ? RoadGrade.EdgeStartLines(rr) : null, out var pst);
+                pickLog.Add(pst.Text);
+                return o;
+            }
+            if (pieceSnap == null) { cands = Pick(s.Lines, lastSnap); candP.AddRange(cands.Select(_ => 0)); }
             else
                 for (int pk = 0; pk < pieceSnap.Count; pk++)
-                    foreach (var l in pieceSnap[pk].Lines.Where(l => l.Side != 0 && !l.Cross && !l.DisplayOnly && (l.Role == RoadGrade.LineRole.Wall) != wallMode)) { cands.Add(l); candP.Add(pk); }
+                    foreach (var l in Pick(pieceSnap[pk].Lines, pieceSnap[pk].R)) { cands.Add(l); candP.Add(pk); }
+            try { DiagLog.Append($"\n[{label}] {string.Join(" · 토막 ", pickLog)}"); } catch { }
             if (cands.Count == 0)
             {
                 // ★[v113.0 · 설치 전 검토 M4] 옹벽선이 없어도(폴리선 옹벽이 모두 쉬는 중) 사면 변환은 폴리선 옹벽을 번호로 지울 수 있게
