@@ -294,6 +294,9 @@ public static class SheetCommand
         bool keepAnno = ctx != null && (ctx.KeepDrawingScale || (plan.KeepAnno > 0 && System.Math.Abs(plan.KeepAnno - scale) < 1e-6));
         if (!keepAnno) SetDrawingScale(db, scale, log);
         else log.AppendLine($"도면 축척 그대로(진입도로 — 부지 축척 1:{scale:F0}과 같음)");
+        // ★★[v117.5.1 · JACK 1111] 부지가 주석 축척을 바꿨으면 그려 둔 진입도로 종단도는 이 도로 스타일에 비율을 구워 꼴 그대로(밴드 · 글자가 새 주석 축척을 따라 줄지 않게) —
+        //   부지 뷰 스타일 손질(축 눈금 등)보다 먼저: 같이 쓰던 스타일이면 도로가 제 복사본으로 옮겨 간 뒤 부지가 고친다
+        if (ctx == null) RoadSheets.KeepLook(db, log);
         LogGrid(db, pvId, log, "① 축척 건 뒤");        // ★[v32.32] 격자가 어느 단계에서 좁아지는지 — 설명은 LogGrid
 
         // ── ②-b 뷰 스타일이 정해진 **뒤에** 왼쪽 축 눈금을 세운다(JACK: "왼쪽 바를 스케일(체크)로").

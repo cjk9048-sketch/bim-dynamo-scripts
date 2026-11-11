@@ -470,7 +470,7 @@ internal sealed class RoadSession
     internal string SheetOverlap(Point3d at)
     {
         var db = _doc.Database;
-        var (scale, ve) = RoadSheets.PlannedScale(db);   // ★[v113.1] 도면설정 H · V(자동 H = 1:1000으로 넓게 짐작 · 자동 V = 도곽 안)
+        var (scale, ve) = RoadSheets.PlannedScale(db, Design.SheetScale);   // ★[v113.1] 도면설정 H · V(자동 H = 1:1000으로 넓게 짐작 · 자동 V = 도곽 안) · ★[v117.5.1] 옛 설정 = 그린 H
         return RoadSheets.Overlap(db, AlignId, at, scale, RoadSheets.SheetCount(db, AlignId, scale), ve);
     }
 
@@ -599,7 +599,7 @@ internal sealed class RoadSession
                     {
                         // ★[v111.4] 축척 = 지금 규칙의 축척(부지 종단도 축척 · 없으면 도면설정 진입도로 칸) — 도면 주석 축척만 보면 진입도로 칸을 바꿔도 못 알아챔
                         // ★★[v113.1] 판 2 설정(도면설정 «2. 진입도로» H · V) = 칸 열쇠 · 그린 뒤 주석 축척으로 견줌(자동 축척은 그 값을 미리 모름) · 옛 설정 = 지금 비교 그대로
-                        var (pl, v2, key, _, _) = RoadSheets.Setting(db, "");
+                        var (pl, v2, key, _, _) = RoadSheets.Setting(db, "", Design.SheetScale);   // ★[v117.5.1] 옛 설정 — 그린 H 그대로(부지 축척을 안 따름)
                         double want = wantSheet = pl.PinH;
                         stampNow = RoadSheets.StampOf(tr, AlignId, PlanId);
                         if (stampNow != Design.SheetStamp) sheetNote = "종단이 수정되었습니다";
