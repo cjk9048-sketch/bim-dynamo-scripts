@@ -131,14 +131,17 @@ public static partial class WallDaylight
     /// <param name="noZero">★[v117.0 · 계획 `2026-11-11_옹벽추가_수직옹벽.md` 2절 대안 · 키트 wfill 1111] 수직 옹벽(Shape 2)만 참 — 벽 = 원지반 교선(±ZeroD)을 안 넣는다.
     /// 띠 안 부호(절토 W ≤ G · 성토 W ≥ G)는 Core 짓기 관문이 겹침 꼭짓점마다 정확히 보증하므로(RuleL = W) 교선이 필요 없고, 데이라잇 끝 칸(W − G가 µm뿐)에서
     /// ±1 µm 교선이 칸 안을 헤매며 끝 점 X 곁 0.1 mm 안에 마디를 만들어 «못 푼 쌍»이 났다. 거짓(기본) = 옛 셈 그대로(비트 같음).</param>
+    /// <param name="exactG">★[v117.3 · JACK 1111 14:27 «선 바깥은 원지반 그대로»] 수직 · 다단(Shape 2 · 3)만 참 — 폴리곤 안에는 정지면 변을 안 넣는다(선 옹벽 규칙은 폴리곤 안에서 정지면을 안 본다).
+    /// 원지반 변은 R_out(폴리곤 − 벽 세모)에만 넣는다(바꿀 자리 안은 noZero 계약으로 규칙이 늘 벽 — 원지반 변이 벽 세모를 다시 쪼개 0.1 mm 쌍만 만든다).
+    /// 그래서 R_out 조각 = 원지반 세모를 R_out으로 자른 것 그대로(옛 사면의 촘촘한 꼭짓점이 원지반 높이로 다시 뽑히지 않는다). 거짓(기본) = 옛 셈 그대로(비트 같음).</param>
     public static CompositeResult BuildCompositeLine(IReadOnlyList<Point3> poly, IReadOnlyList<Tri> wallTrisC, IReadOnlyList<Tri> wallTrisF, IReadOnlyList<Tri> groundTris, IReadOnlyList<Tri> planAll,
-        Func<double, double, bool>? edgeFree = null, bool noZero = false)
-        => BuildCompositeCore(poly, Array.Empty<Tri>(), groundTris, planAll, false, wallTrisC ?? Array.Empty<Tri>(), wallTrisF ?? Array.Empty<Tri>(), edgeFree, noZero);
+        Func<double, double, bool>? edgeFree = null, bool noZero = false, bool exactG = false)
+        => BuildCompositeCore(poly, Array.Empty<Tri>(), groundTris, planAll, false, wallTrisC ?? Array.Empty<Tri>(), wallTrisF ?? Array.Empty<Tri>(), edgeFree, noZero, exactG);
 
     /// <param name="down">사람에게 보이는 높이(EdgeAt·ZOneAt)만 되뒤집어 적는다 — 입력은 이미 뒤집혀 왔다.</param>
     /// <param name="wallC">★[v114.0] 선 옹벽 — 절토 벽 삼각형(null이면 손 폴리곤 길 · 종전과 비트 같다).</param>
     static CompositeResult BuildCompositeCore(IReadOnlyList<Point3> poly, IReadOnlyList<Tri> wallTris, IReadOnlyList<Tri> groundTris, IReadOnlyList<Tri> planAll,
-        bool down, IReadOnlyList<Tri>? wallC = null, IReadOnlyList<Tri>? wallF = null, Func<double, double, bool>? edgeFree = null, bool noZero = false)
+        bool down, IReadOnlyList<Tri>? wallC = null, IReadOnlyList<Tri>? wallF = null, Func<double, double, bool>? edgeFree = null, bool noZero = false, bool exactG = false)
     {
         bool line = wallC != null || wallF != null;
         // 규칙 한 곳 — 손 폴리곤 max(P, min(W, G)) · ★[v114.0] 선 옹벽 RuleOf(zp, zwc, zwf, zg)
@@ -403,9 +406,11 @@ public static partial class WallDaylight
         // ④ 한 번에 잇기 — 폴리곤 테두리 + 손댄 정지면 삼각형 변 전부 + (폴리곤으로 자른) 옹벽·원지반 변 + (폴리곤으로 자른) 교선
         var lines = new List<Geometry> { polyG.ExteriorRing };
         var seen = new HashSet<((double, double), (double, double))>();
-        void AddEdges(TriSet S0, bool clip)
+        void AddEdges(TriSet S0, bool clip, bool outside = false, Geometry? clipTo = null)
         {
             var ls = new List<LineString>();
+            // ★[v117.3 · exactG] 폴리곤 밖만 남길 정지면 변은 같은 변 표에 안 적는다 — 적으면 같은 자리 벽 변(L 위 0.5 m 등)이 «이미 넣음»으로 빠지고 정지면 변은 잘려 없어져 그 선이 사라진다
+            var seenE = clip && outside ? new HashSet<((double, double), (double, double))>() : seen;
             for (int i = 0; i < S0.N; i++)
             {
                 if (!S0.Ok[i]) continue;
@@ -414,19 +419,26 @@ public static partial class WallDaylight
                 {
                     var p = p3[e]; var q = p3[(e + 1) % 3];
                     var key = p.CompareTo(q) <= 0 ? (p, q) : (q, p);
-                    if (!seen.Add(key)) continue;
+                    if (!seenE.Add(key)) continue;
                     ls.Add(gf.CreateLineString(new[] { new Coordinate(p.Item1, p.Item2), new Coordinate(q.Item1, q.Item2) }));
                 }
             }
             if (ls.Count == 0) return;
             Geometry g = gf.CreateMultiLineString(ls.ToArray());
-            if (clip) { try { g = OverlayNGRobust.Overlay(g, polyG, NetTopologySuite.Operation.Overlay.SpatialFunction.Intersection); } catch { R.Fail = "변을 폴리곤으로 못 잘랐다"; } }
+            if (clip) { try { g = OverlayNGRobust.Overlay(g, clipTo ?? polyG, outside ? NetTopologySuite.Operation.Overlay.SpatialFunction.Difference : NetTopologySuite.Operation.Overlay.SpatialFunction.Intersection); } catch { R.Fail = "변을 폴리곤으로 못 잘랐다"; } }
             lines.Add(g);
         }
-        AddEdges(P, false);
+        AddEdges(P, line && exactG, true);   // ★[v117.3] exactG — 정지면 변은 폴리곤 밖만(안은 원지반 · 벽 변뿐 · 거짓이면 옛 셈 그대로)
         if (line) { if (WC.N > 0) AddEdges(WC, true); if (WF.N > 0) AddEdges(WF, true); }
         else AddEdges(W, true);
-        AddEdges(G, true);
+        // ★[v117.3 · exactG] 원지반 변은 R_out(폴리곤 − 벽 세모)에만 — 바꿀 자리 안은 규칙이 늘 벽(noZero 계약)이라 원지반 변이 벽 세모를 다시 쪼개 0.1 mm 쌍만 만든다(다단 키트 전 하네스 S248 t7 «못 푼 쌍 2»)
+        Geometry? rOutG = null;
+        if (line && exactG)
+        {
+            try { rOutG = OverlayNGRobust.Overlay(polyG, OverlayNGRobust.Union(wallC!.Concat(wallF!).Select(t => (Geometry)TriPoly(t)).ToList()), NetTopologySuite.Operation.Overlay.SpatialFunction.Difference); }
+            catch (Exception ex) { R.Fail = $"R_out(폴리곤 − 벽)을 못 만들었다 {ex.GetType().Name}"; }
+        }
+        AddEdges(G, true, false, rOutG);
         foreach (var z in zs)
         {
             if (z.Lines.Count == 0) continue;
@@ -703,6 +715,8 @@ public static partial class WallDaylight
         public Func<double, double, bool>? EdgeFree;
         /// <summary>★[v117.0] 수직 옹벽(Shape 2) — 벽 = 원지반 교선을 안 넣는다(<see cref="BuildCompositeLine"/> noZero). 거짓 = 옛 셈 그대로.</summary>
         public bool NoZero;
+        /// <summary>★[v117.3 · JACK 1111 14:27] 수직 · 다단(Shape 2 · 3) — 폴리곤 안에 정지면 변을 안 넣는다(<see cref="BuildCompositeLine"/> exactG · R_out = 원지반 세모 그대로).</summary>
+        public bool ExactG;
     }
 
     /// <summary>한 옹벽의 합성 단계 — 결과 · 앞 옹벽 폴리곤 안을 건드린 삼각형 수(0이어야 한다) · 앞 단계가 다시 지은 삼각형을 건드린 수.</summary>
@@ -807,7 +821,7 @@ public static partial class WallDaylight
                 }
             }
             var sw = Stopwatch.StartNew();
-            var r = w.Line ? BuildCompositeLine(w.Poly, w.WallTrisC!, w.WallTrisF!, w.GroundTris, cur, w.EdgeFree, w.NoZero) : BuildComposite(w.Poly, w.WallTris, w.GroundTris, cur, w.Down);
+            var r = w.Line ? BuildCompositeLine(w.Poly, w.WallTrisC!, w.WallTrisF!, w.GroundTris, cur, w.EdgeFree, w.NoZero, w.ExactG) : BuildComposite(w.Poly, w.WallTris, w.GroundTris, cur, w.Down);
             var st = new ComposeStep { No = w.No, R = r, Ms = sw.ElapsedMilliseconds };
             res.Steps.Add(st);
             if (r.Zone == null) { res.FailIndex = k; res.Fail = $"옹벽 {w.No} — {r.Fail}"; return res; }

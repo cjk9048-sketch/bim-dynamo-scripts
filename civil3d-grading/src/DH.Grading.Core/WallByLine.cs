@@ -64,11 +64,16 @@ public static partial class WallByLine
         public InwardRule InRule = InwardRule.Strict;
         /// <summary>★[v117.0 1단계] <see cref="InwardRule.Ledge"/> 규칙의 턱 한도(m · 첫 소단이 선 위 원지반보다 높은(절토) · 낮은(성토) 양) — 계획 «1단계 결과» 제안값 1.0 m(JACK이 정함).</summary>
         public double LedgeMax = 1.0;
+        /// <summary>★[v117.3 · 계획 `2026-11-11_부지_다단옹벽.md` 2절] 다단(<see cref="WallShape.Tiered"/>) — 단높이 H · 소단 폭 b(NaN = 방향의 Hc/Hf · Tc/Tf) · 첫 소단 Z1(실제 z · NaN = 자동).</summary>
+        public double TierH = double.NaN, TierB = double.NaN, TierZ1 = double.NaN;
+        /// <summary>★[v117.3] 얕은 복사(다단 2차 수직 짓기가 P0만 바꿔 부른다).</summary>
+        internal Input Copy() => (Input)MemberwiseClone();
     }
 
     /// <summary>★[v117.0 1단계] 선 옹벽 모양 — 0 = 옛 바깥 계단(v114~v116) · 1 = 선 안쪽 계단(새).</summary>
     /// <summary>★[v117.0 · JACK 1111 · 계획 `2026-11-11_옹벽추가_수직옹벽.md`] 2 = 수직 옹벽(그은 선에서 옛 사면을 1:s로 두부 자르듯 · <see cref="BuildVertical"/>).</summary>
-    public enum WallShape { Out = 0, In = 1, Vertical = 2 }
+    /// <summary>★[v117.3 · JACK 1111 «경계 중심 방향으로 소단»] 3 = 부지 다단(수직 옹벽 + 선 안쪽 소단 · <see cref="BuildTiered"/>).</summary>
+    public enum WallShape { Out = 0, In = 1, Vertical = 2, Tiered = 3 }
 
     /// <summary>★[v117.0 1단계 · 0단계 M1 뒤] 새 모양의 단 수 n 규칙.
     /// <para><see cref="Strict"/> — 선 어디서도 첫 소단이 원지반 위로 뜨지 않는 가장 높은 기준(절토 · 성토 거울) · 바깥 벽이 어디서든 단높이를 넘으면 거절(JACK 1110 18시).</para>
@@ -205,6 +210,19 @@ public static partial class WallByLine
         public int RungN, RungG, RungP0, TailN, InBandVerts, OutsideN, SignBad, SignN, SolveIterMax, Unsolved, GoneN;
         /// <summary>뺀 가로대(까닭별).</summary>
         public Dictionary<string, int> RungDrop = new();
+
+        // ══ ★[v117.3 · 계획 `2026-11-11_부지_다단옹벽.md`] 다단(<see cref="BuildTiered"/> · Shape 3)만 채운다 ══
+        /// <summary>단 수 n · 바깥 단이 끊긴 곳(양 끝 꼬리 말고) · 땅 위(절토 F &gt; max(G, P0) + 1 µm) 표본 수 · L′ 자른 점이 L′ 꼭짓점이 아닌 수 · 성토(절토) 주머니 고리 수.</summary>
+        public int TierN, BreakN, AboveN, ClipMiss, PocketN;
+        /// <summary>단높이 H · 소단 폭 b · 첫 소단 Z1(실제 z) · 자동 Z1 · 바깥 최고 · 안쪽 최고 · 구역 깊이 D_T · 땅 위 최대(m).</summary>
+        public double TierH = double.NaN, TierB = double.NaN, TierZ1 = double.NaN, TierZ1Auto = double.NaN, OuterHMax, InnerHMax, TierDepth, AboveMax;
+        /// <summary>참 = 다단이 필요 없어 v117 수직 결과 그대로(비트 같음 · Shape 2).</summary>
+        public bool TierNone;
+        /// <summary>바깥 단이 끊긴 자리(미리보기 빨간 X).</summary>
+        public List<(double X, double Y)> BreakAt = new();
+        /// <summary>첫 합성(P0′) 한 줄 · 단 머리 줄(미리보기 초록).</summary>
+        public string TierCompText = "";
+        public List<List<Point3>> TierRows = new();
     }
 
     static readonly CultureInfo Ci = CultureInfo.InvariantCulture;
@@ -747,6 +765,7 @@ public static partial class WallByLine
         // ★[v117.0 1단계 · 검토 H2] 새 모양은 부르는 쪽이 명시할 때만 — 기본(Out)은 아래 옛 몸통 그대로(비트 같음)
         if (inp.Shape == WallShape.In) return BuildIn(inp);
         if (inp.Shape == WallShape.Vertical) return BuildVertical(inp);   // ★[v117.0 · JACK 1111] 수직 옹벽 — 옛 몸통은 그대로
+        if (inp.Shape == WallShape.Tiered) return BuildTiered(inp);   // ★[v117.3] 다단 — 수직 옹벽 + 선 안쪽 소단
         var R = new Built();
         var log = new System.Text.StringBuilder();
         // ★[v115 · 설치 전 검토 S2] 옛 소단 높이 읽기 수 · 시간(이번 짓기 몫 — 링 단 표는 여러 짓기가 함께 씀)
@@ -2454,7 +2473,8 @@ public static partial class WallByLine
     /// <summary>★[v114.0] 판정 + 짓기를 한 번에 — 화면 없는 탐침 · 하네스 · 다시 짓기가 같은 길로 부른다(그린 선 원본 → 자르기 → 기하).</summary>
     public static (BoundaryCut.Result Cut, Built? Built) Make(IReadOnlyList<Point3> src, IReadOnlyList<Point3> bd, IReadOnlyList<Point3> plan,
         IEnumerable<(string Name, IReadOnlyList<Point3> Ring)>? blockers, double hc, double tc, double hf, double tf, double slopeW, double faceRun, double grid, double reach,
-        Func<double, double, double?> ground, Func<double, double, double?> p0, IReadOnlyList<Tri>? p0Tris, IReadOnlyList<Tri>? groundTris = null, WallShape shape = WallShape.Out)
+        Func<double, double, double?> ground, Func<double, double, double?> p0, IReadOnlyList<Tri>? p0Tris, IReadOnlyList<Tri>? groundTris = null, WallShape shape = WallShape.Out,
+        double tierZ1 = double.NaN)
     {
         var bl = blockers?.ToList();
         var cut = BoundaryCut.Classify(src, bd, plan, bl);
@@ -2462,7 +2482,7 @@ public static partial class WallByLine
         var b = Build(new Input
         {
             Line = cut.Line, Bd = bd, NewRing = cut.NewRing, CutRing = cut.CutRing, Plan = plan, Hc = hc, Tc = tc, Hf = hf, Tf = tf, SlopeW = slopeW, FaceRun = faceRun, Grid = grid, Reach = reach,
-            Ground = ground, P0 = p0, P0Tris = p0Tris, GroundTris = groundTris, Blockers = bl, Shape = shape,
+            Ground = ground, P0 = p0, P0Tris = p0Tris, GroundTris = groundTris, Blockers = bl, Shape = shape, TierZ1 = tierZ1,
         });
         return (cut, b);
     }
