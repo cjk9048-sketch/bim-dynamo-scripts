@@ -86,6 +86,15 @@ if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "struct")
     StructCheck.Run(Check);
     IfcCheck.Run(Check);
     StructQtyCheck.Run(Check);   // ★[v117.4] S250
+    StructAxisCheck.Run(Check);   // ★[JACK 1111] S254
+    Console.WriteLine(fails == 0 ? "\n== 전부 통과 ==" : $"\n== 실패 {fails}건 ==");
+    return fails == 0 ? 0 : 1;
+}
+
+// ★[JACK 1111 «종단선을 구조물 축에 맞춤»] BLOCKTEST_ONLY=stax — 구조물 주축 · 축 따라 종단선 · 비스듬 각(S254)만
+if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "stax")
+{
+    StructAxisCheck.Run(Check);
     Console.WriteLine(fails == 0 ? "\n== 전부 통과 ==" : $"\n== 실패 {fails}건 ==");
     return fails == 0 ? 0 : 1;
 }
@@ -412,6 +421,7 @@ WallVerticalCheck.Run(Check);   // ★[v117.0 · JACK 1111] S244 WV — 부지 �
 StructCheck.Run(Check);        // ★[v115 · JACK 1105 Revit 구조물] S220~S234 — 구조물 커튼 자르기 · 평면 외곽 · 목록 · 단위
 IfcCheck.Run(Check);            // ★[v116.5 · JACK 1110 구조물 IFC] S238 — IFC 읽기(돌출 · 구멍 면 · 반복 부재 · 지도 변환 · I형 · 호 단면 · 모르는 형상 · 한글 이름)
 StructQtyCheck.Run(Check);      // ★[v117.4 · JACK 1111] S250 SQ — 구조물 솔리드 면 합치기 · 횡단 구조물 공제(성토 · 되메우기 · 두 기준 · 껍질 · 옹벽 겹침 · 표 줄)
+StructAxisCheck.Run(Check);     // ★[JACK 1111 «종단선을 구조물 축에 맞춤»] S254 SA — 구조물 주축(최소 넓이 네모) · 축 따라 종단선(부지 경계 + 5 m) · 비스듬 각
 
 const double W = 0.46, H = 0.2, STEP = 5.0, HW = W / 2;
 const double D = 0.5, FS = D / 2; // 깊이·전면 돌출(벽 중심=링, JACK 0720 Z-파이팅 해소): 절토 +FS(안쪽), 성토 −FS
