@@ -373,6 +373,11 @@ public sealed class QtyTableSpec
         L.Add(new LeftRow("되메우기", null, "구조물", null));
         L.Add(new LeftRow(null, null, "주  위", QtyKey.OfBackfill()));
 
+        // ★[v117.4 · JACK 1111] 불러온 구조물 공제 — 값이 나온 도면에만(구조물 없는 도면은 줄 · 축척 그대로)
+        bool sF = seen.Contains(QtyKey.OfStructFill()), sB = seen.Contains(QtyKey.OfStructBackfill());
+        if (sF) L.Add(new LeftRow("구조물|공제", null, "성  토", QtyKey.OfStructFill()));
+        if (sB) L.Add(new LeftRow(sF ? null : "구조물|공제", null, "되메우기", QtyKey.OfStructBackfill()));
+
         // ── 오른쪽: 공종 ──────────────────────────────────────────────────
         var R = new List<RightRow>
         {
@@ -707,7 +712,7 @@ public sealed class QtyTableFold
 
 /// <summary>수량 하나를 가리키는 열쇠. <b>표와 계산이 같은 열쇠를 쓴다</b> —
 /// 종전엔 줄 번호로 이어 붙였는데, 줄이 실행 중에 늘고 줄면 번호가 곧 어긋난다.</summary>
-public enum QtyKeyKind { Fill, Cut, Exc, Backfill }
+public enum QtyKeyKind { Fill, Cut, Exc, Backfill, StructFill, StructBackfill }
 
 public readonly record struct QtyKey(QtyKeyKind Kind, RockClass Rock, DepthClass Depth, WaterClass Water)
 {
@@ -715,6 +720,9 @@ public readonly record struct QtyKey(QtyKeyKind Kind, RockClass Rock, DepthClass
     public static QtyKey OfCut(RockClass r) => new(QtyKeyKind.Cut, r, DepthClass.Le, WaterClass.Land);
     public static QtyKey OfExc(RockClass r, DepthClass d, WaterClass w) => new(QtyKeyKind.Exc, r, d, w);
     public static QtyKey OfBackfill() => new(QtyKeyKind.Backfill, RockClass.Soil, DepthClass.Le, WaterClass.Land);
+    /// <summary>★[v117.4] 불러온 구조물 공제 — 성토 · 되메우기에서 뺀 넓이(그 두 줄은 뺀 값 · 이 줄은 얼마 뺐는지).</summary>
+    public static QtyKey OfStructFill() => new(QtyKeyKind.StructFill, RockClass.Soil, DepthClass.Le, WaterClass.Land);
+    public static QtyKey OfStructBackfill() => new(QtyKeyKind.StructBackfill, RockClass.Soil, DepthClass.Le, WaterClass.Land);
 }
 
 /// <summary>한 측점의 수량 장부 — <b>열쇠로 넣고 열쇠로 뺀다</b>.
