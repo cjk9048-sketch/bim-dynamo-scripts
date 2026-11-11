@@ -19,9 +19,44 @@ public static partial class RoadGrade
     /// <summary>★[v114.3] 진입도로 선 옹벽 기록(Core) — 번호 · 그린 원본(세계 XY) · 절토 · 성토 소단 폭 · 선에서 벽이 갈 수 있는 여유(m). 단높이는 묻지 않는다(도로 사면 단높이 · 옛 소단).</summary>
     /// <summary>★[v116.3 · JACK 1109 옹벽 천단 선택] <paramref name="TopStep"/> = 계단 천단 · <paramref name="BlockLen"/> = 블록 길이(0 = 9 m).
     /// 둘 다 기본값이면 JSON에 안 씀 — 도로 지문(<c>RoadSession.SigOf</c>가 이 목록을 직렬화)이 옛 판과 같다(계획 2판 M6).</summary>
+    /// <summary>★★[v117.x · JACK 1111 «옹벽 추가는 부지나 진입도로나 똑같은 로직» · 계획 `2026-11-12_진입도로_옹벽추가_부지로직.md` 3절] <paramref name="Shape"/> = 부지와 같은 모양
+    /// (<see cref="WallByLine.WallShape.Vertical"/> 수직 · <see cref="WallByLine.WallShape.Tiered"/> 다단 — 부지 Core <see cref="WallByLine.Build"/>가 그대로 짓는다) ·
+    /// 다단 단높이 · 소단 폭 · 첫 소단(null = 도로 사면 단높이 · 기록 소단 폭 · 자동). 모두 기본값이면 JSON에 안 씀 — 옛 벽(Out)의 도로 지문 바이트 그대로.</summary>
     public sealed record LineWall(int No, double[] SrcX, double[] SrcY, double Tc, double Tf, double Reach = 40,
         [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] bool TopStep = false,
-        [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] double BlockLen = 0);
+        [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] double BlockLen = 0,
+        [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] WallByLine.WallShape Shape = WallByLine.WallShape.Out,
+        [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] double? TierH = null,
+        [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] double? TierB = null,
+        [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] double? TierZ1 = null)
+    {
+        /// <summary>부지와 같은 새 모양(수직 · 다단)인가 — 옛 모양(Out)은 거짓.</summary>
+        [System.Text.Json.Serialization.JsonIgnore] public bool SiteLike => Shape is WallByLine.WallShape.Vertical or WallByLine.WallShape.Tiered;
+    }
+
+    /// <summary>★[v117.x · 계획 3절 · 검토 HIGH 2] 도면 기록(Civil <c>BoundWallRec</c> 칸) → Core 선 옹벽 — 한 곳에서(하네스가 같은 셈을 잰다).
+    /// 모양 0 = 옛(천단 계단 그대로) · 2 = 수직 · 3 = 다단(단높이 · 소단 = 쓴 값 · 첫 소단 = 손 값만 · null = 자동 — 다시 지을 때마다 지금 면에서 다시 셈 · 코디네이터 결정 1112).
+    /// 모르는 모양 · 다단 값이 숫자가 아님 → null(부르는 쪽이 쉰다 ⚠ — 엉뚱한 모양으로 짓지 않음).</summary>
+    public static LineWall? LineWallOf(int no, double[] srcX, double[] srcY, double tc, double tf, double reach, bool topStep, double blockLen, int shape, double tierH, double tierB, double? tierZ1)
+    {
+        if (shape == 0) return new LineWall(no, srcX, srcY, tc, tf, reach, topStep, topStep ? (blockLen > 0 ? blockLen : 9) : 0);
+        if (shape == 2) return new LineWall(no, srcX, srcY, tc, tf, reach, false, 0, WallByLine.WallShape.Vertical);
+        if (shape != 3 || !(tierH > 0) || !double.IsFinite(tierH) || !(tierB >= 0) || !double.IsFinite(tierB) || tierZ1 is double z && !double.IsFinite(z)) return null;
+        return new LineWall(no, srcX, srcY, tc, tf, reach, false, 0, WallByLine.WallShape.Tiered, tierH, tierB, tierZ1);
+    }
+
+    /// <summary>★[v117.x · 계획 3절] 도면 기록 해시(<c>BoundWallRec.SigNow</c>) 꼬리 — 모양 0이면 빈 글(옛 기록 해시 그대로) · 2 «|모양2» · 3 «|모양3» + 단높이 · 소단 비트 + 첫 소단(손 값 비트 · 자동).</summary>
+    public static string ShapeSig(int shape, double tierH, double tierB, double? tierZ1)
+    {
+        if (shape == 0) return "";
+        var sb = new System.Text.StringBuilder("|모양").Append(shape);
+        if (shape == 3)
+        {
+            sb.Append(',').Append(BitConverter.DoubleToInt64Bits(tierH)).Append(',').Append(BitConverter.DoubleToInt64Bits(tierB)).Append(',');
+            sb.Append(tierZ1 is double z ? "손" + BitConverter.DoubleToInt64Bits(z) : "자동");
+        }
+        return sb.ToString();
+    }
 
     /// <summary>★[v114.3] 선 옹벽 하나의 이번 시도 상태.</summary>
     public sealed class WallState
@@ -41,7 +76,12 @@ public static partial class RoadGrade
         public long Ms;
         /// <summary>이 벽이 남긴 바꿀 자리 세모(격자 · 하네스).</summary>
         public List<Tri> ZoneTris = new();
-        public string Text => Ok
+        public string Text => Ok && Built is { Shape: 2 or 3 } vb
+            ? string.Format(CultureInfo.InvariantCulture, "선 옹벽 {0} — {1} · {2} · {3} · 선 {4:F1} m · 최고 {5:F2} m · 면적 {6:F1} ㎡{7}", No, Side < 0 ? "좌" : Side > 0 ? "우" : "끝",
+                vb.Shape == 3 ? string.Format(CultureInfo.InvariantCulture, "다단 {0}단(단높이 {1:0.##} · 소단 {2:0.##} · 첫 소단 {3:F3})", vb.TierN, vb.TierH, vb.TierB, vb.TierZ1) : string.Format(CultureInfo.InvariantCulture, "수직 1:{0:0.###}", vb.Batter),
+                string.Join("+", new[] { vb.HasFill ? "성토" : "", vb.HasCut ? "절토" : "" }.Where(s => s.Length > 0)), vb.LineLen, vb.Shape == 3 ? Math.Max(vb.OuterHMax, vb.InnerHMax) : vb.HMax, vb.Area,
+                vb.Warn.Count > 0 ? " · ⚠" + string.Join(" · ⚠", vb.Warn) : "")
+            : Ok
             ? string.Format(CultureInfo.InvariantCulture, "선 옹벽 {0} — {1} · {2} · 선 {3:F1} m · 선 바깥 최대 {4:F2} m{5}", No, Side < 0 ? "좌" : Side > 0 ? "우" : "끝",
                 Built == null ? "" : string.Join("+", new[] { Built.HasFill ? "성토" : "", Built.HasCut ? "절토" : "" }.Where(s => s.Length > 0)), Built?.LineLen ?? 0, FootMax,
                 Built != null && Built.Warn.Count > 0 ? " · ⚠" + string.Join(" · ⚠", Built.Warn) : "")
@@ -232,9 +272,13 @@ public static partial class RoadGrade
         }
         }
         var bc = st.BenchC!; var bf = st.BenchF!;
+        // ★★[v117.x · JACK 1111 «부지로 다 완성하고 진입도로에 대입» · 계획 `2026-11-12_진입도로_옹벽추가_부지로직.md` 1~2절] 수직 · 다단 = 부지와 같은 Core(BuildVertical · BuildTiered) ·
+        //   재료 대응: P0 = 이 벽 앞까지 지은 도로 면(밖 = 바탕) · G = 바탕 · Bd = 도로 면 바깥 고리 · 바닥 = 도로 띠 · 단높이 = 도로 사면 단높이 · 소단 = 기록 소단 폭(부지 BuildGeom과 같은 자리)
+        bool site = w.SiteLike;
         // 짓기 — P0 = 이 시도 세모(밖은 바탕 — 넓은 소단 · 끝 띠가 도로 면 끝을 넘는 자리) · 원지반 = 바탕 세모
         double reach = Math.Max(5, double.IsFinite(w.Reach) ? w.Reach : 40);
-        double mnx = cut.CutRing.Min(q => q.X) - reach - 5, mny = cut.CutRing.Min(q => q.Y) - reach - 5, mxx = cut.CutRing.Max(q => q.X) + reach + 5, mxy = cut.CutRing.Max(q => q.Y) + reach + 5;
+        double ext = w.Shape == WallByLine.WallShape.Tiered ? 10 : 0;   // ★[부지 BuildGeom과 같음] 다단 소단 구역(깊이 D_T)이 선 안쪽으로 들어가므로 상자를 10 m 더
+        double mnx = cut.CutRing.Min(q => q.X) - reach - 5 - ext, mny = cut.CutRing.Min(q => q.Y) - reach - 5 - ext, mxx = cut.CutRing.Max(q => q.X) + reach + 5 + ext, mxy = cut.CutRing.Max(q => q.Y) + reach + 5 + ext;
         bool InBox(Tri t) => Math.Max(t.A.X, Math.Max(t.B.X, t.C.X)) >= mnx && Math.Min(t.A.X, Math.Min(t.B.X, t.C.X)) <= mxx && Math.Max(t.A.Y, Math.Max(t.B.Y, t.C.Y)) >= mny && Math.Min(t.A.Y, Math.Min(t.B.Y, t.C.Y)) <= mxy;
         var p0n = cur.Where(InBox).ToList();
         var gn = gtr.TrianglesIn(mnx, mny, mxx, mxy);
@@ -250,17 +294,64 @@ public static partial class RoadGrade
             LevelMode = WallByLine.LevelKind.OldBench, CutBench = bc, FillBench = bf, RowDens = Math.Clamp(inp.EdgeStep, 0.3, 1.0),
             TopStep = w.TopStep, BlockLen = w.BlockLen > 0 ? w.BlockLen : 9,   // ★[v116.3 · JACK 1109 옹벽 천단 선택]
         };
+        if (site)
+        {
+            // ★[v117.x · 하네스 S262 (c) «상자»] 부지 P0(정지면_DH)는 원지반 위에 붙인 면이라 상자 전체를 덮지만 도로 면은 데이라잇(Bd)에서 끝난다 —
+            //   P0 = «도로 면 · 그 밖은 바탕»(위 P0 함수와 같은 뜻)을 세모로도: 도로 면 바깥 고리에서 2 m 넘게 떨어진 바탕 세모를 P0 세모에 더한다.
+            //   값은 그대로(그 자리 P0 함수 = 바탕) · 2 m 띄움 = L(Bd 안)과 건너는 변 없음 · 합성 손댐(2e-4 m) · 변 이웃(꼭짓점 안 나눔)에 안 걸림 → 다단 구역(Bd 안)의 «상자» 검사만 덮는다
+            var gfb = new GeometryFactory();
+            var bdFar = PreparedGeometryFactory.Prepare(gfb.CreatePolygon(bd.Append(bd[0]).Select(q => new Coordinate(q.X, q.Y)).ToArray()).Buffer(2.0));
+            int addG = 0;
+            var p0x = new List<Tri>(p0n.Count + gn.Count); p0x.AddRange(p0n);
+            foreach (var t in gn)
+                if (!bdFar.Intersects(gfb.CreatePolygon(new[] { new Coordinate(t.A.X, t.A.Y), new Coordinate(t.B.X, t.B.Y), new Coordinate(t.C.X, t.C.Y), new Coordinate(t.A.X, t.A.Y) }))) { p0x.Add(t); addG++; }
+            bi.P0Tris = p0x;
+            log.Append(string.Format(CultureInfo.InvariantCulture, "  ⓟ P0 = 도로 면 세모 {0} + 바탕 세모 {1}(도로 면 바깥 고리 2 m 밖 · 값은 P0 함수와 같음)\n", p0n.Count, addG));
+            // ★[v117.x · 계획 1절] 부지와 같은 모양 · 다단 값(null = 단높이 Hc/Hf · 소단 Tc/Tf · 첫 소단 자동 — 부지 Enter와 같음) · 검토 높이 = 도로 사면 단높이(보고만 · 부지 D4 ①)
+            bi.Shape = w.Shape;
+            bi.TierH = w.TierH ?? double.NaN; bi.TierB = w.TierB ?? double.NaN; bi.TierZ1 = w.TierZ1 ?? double.NaN;
+            bi.ReviewHc = inp.Cut.BenchH; bi.ReviewHf = inp.Fill.BenchH;
+        }
         var built = WallByLine.Build(bi);
         st.Built = built;
         log.Append(built.Log);
-        log.Append("  ⓑ 단 표 — " + bc.Text + " / " + bf.Text + "\n");
+        if (!site) log.Append("  ⓑ 단 표 — " + bc.Text + " / " + bf.Text + "\n");
+        if (site && !built.Ok && built.Code == "바닥") built.Why = built.Why.Replace("부지 바닥(계획선)", "도로 띠");   // ★[v117.x] 도로의 바닥 = 도로 띠(글만)
         if (!built.Ok) { st.Code = built.Code; st.Why = built.Why; st.Log = log.ToString(); return; }
+        if (site && built.Shape == 3)
+        {
+            // ★[v117.x · 계획 검토 LOW] 소단 폭 0 — 단이 맞붙은 한 벽이 된다(도로 설계 소단 폭 0이 기본일 수 있음) → 묻고 고치게
+            if (!(built.TierB > 0)) { st.Code = "소단 폭"; st.Why = string.Format(CultureInfo.InvariantCulture, "다단인데 소단 폭이 {0:0.##} m — 소단폭(B)을 넣거나 수직만(V)", built.TierB); st.Log = log.ToString(); return; }
+            // ★[v117.x · 계획 검토 HIGH 3] 다단 소단 자리(선 안쪽 구역)는 Core 짓기가 막을 다각형을 안 본다(수직 띠만 봄) — 앞 선 옹벽 바꿀 자리 · 도로 면 안 구멍 · 부지 계획선과
+            //   겹치면 합성(ExactG)이 그 자리를 덮어쓴다 → 겹침 넓이 1e-2 ㎡ 넘으면 거절(까닭 · 자리)
+            var gfo = new GeometryFactory();
+            var zs = built.ZoneC.Concat(built.ZoneF).Where(z => z.Count >= 3).Select(z => NtsSupport.ToCleanGeometry(z.ToList(), gfo)).Where(g => g != null && !g.IsEmpty).Cast<Geometry>().ToList();
+            Geometry? zu0 = null;
+            try { zu0 = zs.Count == 0 ? null : NetTopologySuite.Operation.Union.CascadedPolygonUnion.Union(zs); } catch { zu0 = zs.Count == 0 ? null : gfo.BuildGeometry(zs).Buffer(0); }
+            if (zu0 != null)
+                foreach (var (bnm, ring0) in bls)
+                {
+                    if (ring0 == null || ring0.Count < 3) continue;
+                    var bg = NtsSupport.ToCleanGeometry(ring0.ToList(), gfo);
+                    if (bg == null || bg.IsEmpty) continue;
+                    Geometry ov; try { ov = zu0.Intersection(bg); } catch { continue; }
+                    if (ov.Area <= 1e-2) continue;
+                    var ip = ov.InteriorPoint;
+                    st.Code = "겹침"; st.Why = string.Format(CultureInfo.InvariantCulture, "다단 소단 자리가 {0}과 겹칩니다({1:F2} ㎡ · ({2:F1}, {3:F1})) — 수직만(V) 또는 선을 옮기세요", bnm, ov.Area, ip.X, ip.Y);
+                    built.Marks.Add((ip.X, ip.Y)); cut.Marks.Add((ip.X, ip.Y));
+                    log.Append("  거절 겹침 — " + st.Why + "\n"); st.Log = log.ToString(); return;
+                }
+        }
         st.FootMax = built.FootMax; st.FootAt = built.FootAt;
         // 합성 — L 위만 테두리 턱 관문(바깥 호는 뒤에서 뺌 · 도로 면 끝 너머는 정지면이 없다)
         var gfz = new GeometryFactory();
         var lG = gfz.CreateLineString(cut.Line.Select(q => new Coordinate(q.X, q.Y)).ToArray());
-        bool Free(double x, double y) => lG.Distance(gfz.CreatePoint(new Coordinate(x, y))) > 1e-6;
-        var res = WallDaylight.ComposeWalls(cur, new[] { new WallDaylight.WallInput { No = w.No, Poly = built.Poly, GroundTris = gn, WallTrisC = built.WallTrisC, WallTrisF = built.WallTrisF, EdgeFree = Free } });
+        // ★[v117.x · 계획 2절] 수직 · 다단은 안쪽 테두리(L′ · 다단 구역 안 테두리)가 Poly 안쪽 — 옛 경계 Bd 위(R_out 호 · Bd 조각 = 도로 면 끝)만 빼고 안쪽 테두리 W = P0를 잰다
+        //   Bd = 닫힌 고리(RingOf는 첫 점을 안 되풀이 — 닫는 변까지) · 표본이 많아 색인 거리
+        var bdD = site ? new NetTopologySuite.Operation.Distance.IndexedFacetDistance(gfz.CreateLinearRing(bd.Append(bd[0]).Select(q => new Coordinate(q.X, q.Y)).ToArray())) : null;
+        bool Free(double x, double y) => bdD != null ? bdD.Distance(gfz.CreatePoint(new Coordinate(x, y))) <= 1e-6 : lG.Distance(gfz.CreatePoint(new Coordinate(x, y))) > 1e-6;
+        // ★[v117.x] NoZero · ExactG = 부지 합성(WallCompositeCommand 선 옹벽 모양 2 · 3)과 같음 — 옛 모양은 거짓(옛 셈 그대로)
+        var res = WallDaylight.ComposeWalls(cur, new[] { new WallDaylight.WallInput { No = w.No, Poly = built.Poly, GroundTris = gn, WallTrisC = built.WallTrisC, WallTrisF = built.WallTrisF, EdgeFree = Free, NoZero = site, ExactG = site } });
         log.Append("  ⓒ 합성 — " + res.Summary + (res.Steps.Count > 0 ? " · " + res.Steps[0].R.Summary : "") + "\n");
         if (res.All == null) { st.Rest = true; st.Code = "합성"; st.Why = "합성을 못 함 — " + res.Fail; st.Log = log.ToString(); return; }
         // R_out∖Zone 빼기 — 무게중심이 R_out 안 · 바꿀 자리(성토 · 절토 고리) 밖
@@ -470,9 +561,11 @@ public static partial class RoadGrade
             var b = w.BenchC ?? w.BenchF;
             foreach (var f in w.Built.Faces)
             {
-                if (f.Top.Count < 2) continue;
+                // ★[v117.x · 부지 WallLinePlan과 같음] 수직 · 다단 성토 면 = 바깥 쪽 줄(Foot — 그은 선 L 자리) · 절토 · 옛 모양 = Top 그대로
+                var src = w.Built.Shape is 2 or 3 && !f.Up ? f.Foot : f.Top;
+                if (src.Count < 2) continue;
                 var nt = new TierLine { Cut = f.Up, Side = w.Side, K = Math.Max(0, f.Tier - 1), Role = LineRole.Wall, Prof = 0, Cross = f.Kind == 1, WallNo = w.No };
-                foreach (var q in f.Top) nt.Pts.Add((q.X, q.Y, q.Z, b switch { RoadBench rb => rb.Band(q.X, q.Y).S, RoadRing.RingBench gb => gb.StationAt(q.X, q.Y), _ => double.NaN }));
+                foreach (var q in src) nt.Pts.Add((q.X, q.Y, q.Z, b switch { RoadBench rb => rb.Band(q.X, q.Y).S, RoadRing.RingBench gb => gb.StationAt(q.X, q.Y), _ => double.NaN }));
                 o.Add(nt);
             }
         }
@@ -497,9 +590,34 @@ public static partial class RoadGrade
     public static List<(Point3 A, Point3 B)> CutTicks(List<(Point3 A, Point3 B)> ticks, WallSurface ws)
     {
         var gf = new GeometryFactory();
-        var ps = ws.Built.Where(w => w.Built != null && w.Built.Poly.Count >= 3).Select(w => PreparedGeometryFactory.Prepare(gf.CreatePolygon(w.Built!.Poly.Append(w.Built.Poly[0]).Select(q => new Coordinate(q.X, q.Y)).ToArray()).Buffer(-1e-6))).ToList();
-        if (ps.Count == 0) return ticks;
-        return ticks.Where(t => { var c = gf.CreatePoint(new Coordinate((t.A.X + t.B.X) / 2, (t.A.Y + t.B.Y) / 2)); return !ps.Any(p => p.Contains(c)); }).ToList();
+        Polygon PolyOf(WallByLine.Built b) => gf.CreatePolygon(b.Poly.Append(b.Poly[0]).Select(q => new Coordinate(q.X, q.Y)).ToArray());
+        var ps = ws.Built.Where(w => w.Built != null && w.Built.Poly.Count >= 3 && w.Built.Shape is not (2 or 3)).Select(w => PreparedGeometryFactory.Prepare(PolyOf(w.Built!).Buffer(-1e-6))).ToList();
+        // ★[v117.x · 계획 2절] 수직 · 다단 — 가운데 규칙이면 L을 건너 R_out(선 밖)까지 뻗는 빗금이 남는다 → Poly(바꿀 자리 ∪ R_out)로 잘라 밖 몫만 남김(옛 모양은 그대로)
+        var cs = new List<Geometry>();
+        foreach (var w in ws.Built.Where(w => w.Built != null && w.Built.Poly.Count >= 3 && w.Built.Shape is 2 or 3))
+        {
+            Geometry g = PolyOf(w.Built!);
+            if (!g.IsValid) g = g.Buffer(0);
+            if (!g.IsEmpty) cs.Add(g);
+        }
+        if (ps.Count == 0 && cs.Count == 0) return ticks;
+        var kept = ps.Count == 0 ? ticks : ticks.Where(t => { var c = gf.CreatePoint(new Coordinate((t.A.X + t.B.X) / 2, (t.A.Y + t.B.Y) / 2)); return !ps.Any(p => p.Contains(c)); }).ToList();
+        if (cs.Count == 0) return kept;
+        var cps = cs.Select(g => (G: g, P: PreparedGeometryFactory.Prepare(g))).ToList();
+        var o = new List<(Point3 A, Point3 B)>(kept.Count);
+        foreach (var t in kept)
+        {
+            Geometry seg = gf.CreateLineString(new[] { new Coordinate(t.A.X, t.A.Y), new Coordinate(t.B.X, t.B.Y) });
+            bool hit = false;
+            try { foreach (var (g, p) in cps) if (p.Intersects(seg)) { hit = true; seg = seg.Difference(g); } }
+            catch { continue; }   // 못 자르면 그 빗금은 뺀다(선 밖에 남기지 않음)
+            if (!hit) { o.Add(t); continue; }
+            double ex = t.B.X - t.A.X, ey = t.B.Y - t.A.Y, l2 = ex * ex + ey * ey;
+            Point3 At(Coordinate c) { double u = l2 < 1e-18 ? 0 : Math.Clamp(((c.X - t.A.X) * ex + (c.Y - t.A.Y) * ey) / l2, 0, 1); return new Point3(c.X, c.Y, t.A.Z + (t.B.Z - t.A.Z) * u); }
+            for (int i = 0; i < seg.NumGeometries; i++)
+                if (seg.GetGeometryN(i) is LineString ls && ls.Length >= 1e-3) o.Add((At(ls.StartPoint.Coordinate), At(ls.EndPoint.Coordinate)));
+        }
+        return o;
     }
 
     /// <summary>★[v114.3] 데이라잇 — 지은 벽마다 R_out ∪ Zone 테두리 · 안의 점(A · B 곁 1 mm 밖)을 빼고 끊은 뒤 F(새 데이라잇)를 더한다.</summary>
