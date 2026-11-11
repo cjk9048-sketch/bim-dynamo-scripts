@@ -45,7 +45,7 @@ export class Section {
     const add = (m) => { if (!m) return; for (const x of (Array.isArray(m) ? m : [m])) set.add(x); };
     const L = this.L;
     if (L.terrain) { L.terrain.mats.forEach(add); add(L.terrain.cfMat); add(L.terrain.laneMat); add(L.terrain.jointMat); }   // ★[v116.8 · 검토 M] 줄눈도
-    for (const id of ['ground', 'excav', 'wall', 'pattern', 'drain', 'cad', 'slope', 'bldg', 'tree']) {   // ★[v115] 수목도 잘림
+    for (const id of ['ground', 'excav', 'wall', 'pattern', 'struct', 'drain', 'cad', 'slope', 'bldg', 'tree']) {   // ★[v115] 수목도 잘림 · ★[JACK 1111] 구조물도(뚜껑 없음)
       const l = L[id];
       if (!l || !l.obj) continue;
       l.obj.traverse(o => { if (o.material && !o.userData.noClip && !o.userData.stencil) add(o.material); });
