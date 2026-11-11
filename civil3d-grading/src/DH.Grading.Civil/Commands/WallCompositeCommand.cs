@@ -298,7 +298,7 @@ public sealed class WallCompositeCommand
         {
             EventViewerMute.End(evPrev); _job = null; _issuesBefore = null; _quiet = false;
             // ★[v103.2 · 코드 검토 낮음 5] 종단을 곧 그리는 관문(종단도 · 종단/횡단) · 정지면 생성이 끝에서 알리는 «이어서»가 아니면 여기서 «옛 면 기준» 한 줄(InfraWorks · 터파기 앞 합성)
-            if (doc != null && caller != "종단도" && caller != "종단/횡단" && caller != "이어서") PureWithWallsBuilder.NotifyStale(doc);
+            if (doc != null && caller != "종단도" && caller != "종단/횡단" && caller != "이어서" && caller != "옛 옹벽 옮기기") PureWithWallsBuilder.NotifyStale(doc);   // ★[v117.x] 옛 옹벽 옮기기(DHWALLMIGRATE)는 합성 뒤 종단을 다시 그린다
         }
         return (_lastOk, _lastSummary);
     }
