@@ -16,7 +16,8 @@ import { inHost, post, onHost } from './host.js';
 
 // ★[JACK 1103] 'align' = 부지 측점 · 'ralign' = 진입도로 측점(도로가 있을 때만)
 // ★[v115 · JACK 1105 임상도] 'tree' = 수목(임상도) — 건물 다음
-const ORDER = ['terrain', 'sat', 'cutfill', 'ground', 'wall', 'pattern', 'ditch', 'excav', 'drain', 'slope', 'cad', 'bldg', 'tree', 'align', 'ralign'];
+// ★[JACK 1111] 'struct' = 불러온 구조물(있을 때만)
+const ORDER = ['terrain', 'sat', 'cutfill', 'ground', 'wall', 'pattern', 'struct', 'ditch', 'excav', 'drain', 'slope', 'cad', 'bldg', 'tree', 'align', 'ralign'];
 const KEEP = 'dh3d.layers.v1';
 
 function loadKeep() { try { return JSON.parse(localStorage.getItem(KEEP) || '{}'); } catch { return {}; } }
@@ -286,6 +287,7 @@ async function main() {
       origin: head.origin, bbox: b, walls: (head.walls || []).length, patterns: (head.patterns || []).length, warn: head.warn || [],
       drain: L.drain ? L.drain.summary : null, slope: L.slope ? { n: L.slope.n, step: L.slope.step } : null, cad: L.cad ? (L.cad.missing ? 'missing' : (head.cad.labels || []).length) : null,
       bldg: L.bldg ? (L.bldg.missing ? { missing: L.bldg.missing, quiet: !!L.bldg.quiet } : { n: L.bldg.n, hit: L.bldg.hit }) : null,
+      struct: L.struct ? { n: L.struct.n } : null,
       forest: L.tree ? (L.tree.missing ? { missing: L.tree.missing, quiet: !!L.tree.quiet } : { n: L.tree.n, note: L.tree.note, legend: L.tree.legend }) : null,
       align: L.align ? { name: L.align.name, st: L.align.st.length, views: L.align.views } : null, build: !!head.build, geo: head.geo || null,
       ralign: L.ralign ? L.ralign.roads.map(a => ({ name: a.name, st: a.st.length, views: a.views })) : null,
