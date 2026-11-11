@@ -274,6 +274,13 @@ if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "wtier")
     Console.WriteLine(fails == 0 ? "\n== 전부 통과 ==" : $"\n== 실패 {fails}건 ==");
     return fails == 0 ? 0 : 1;
 }
+// ★[로드맵 2-2 · 2-3] BLOCKTEST_ONLY=wprof — 선 옹벽 측점 높이표 · 분류 · 검토 높이 · 기초 재기(S244 WP — 보고만 · 기하 그대로)만
+if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "wprof")
+{
+    WallProfileCheck.Run(Check);
+    Console.WriteLine(fails == 0 ? "\n== 전부 통과 ==" : $"\n== 실패 {fails}건 ==");
+    return fails == 0 ? 0 : 1;
+}
 // ★[v117.0] BLOCKTEST_ONLY=wvrepro — 수직 옹벽 오프라인 재현(키트 HLWVD 덤프 · WV_REPRO_DIR · WV_REPRO_TAGS — 전체 목록에는 안 넣음)
 if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "wvrepro") { WallVerticalRepro.Run(Check); return fails == 0 ? 0 : 1; }
 
@@ -453,6 +460,7 @@ StructPointsCheck.Run(Check);   // ★[v116.9 · JACK 1110 구조물 좌표계 �
 StructRegionCheck.Run(Check);   // ★[v117.1 · JACK 1111 구조물 3D 영역] S247 R3 — 네모 · 세모 자르기 · 선 자르기 · 높이 입히기 · 3D 파일 · 점 파일 region3d
 WallInwardCheck.Run(Check);     // ★[v117.0 0단계 · 1단계] S243 WI — 부지 안쪽 계단 미리 재기(Survey) ⓪ + 짓기(BuildIn · 엄격 · 턱 규칙 · 합성은 2단계)
 WallVerticalCheck.Run(Check);   // ★[v117.0 · JACK 1111] S244 WV — 부지 수직 옹벽(두부 자르기 · 짓기 · 합성 왕복 · 목록 판 9)
+WallProfileCheck.Run(Check);    // ★[로드맵 2-2 · 2-3] S244 WP — 측점 높이표 · 절/성/0 · 검토 높이 ⚠ · 기초 재기(보고만 · 기하 그대로)
 StructCheck.Run(Check);        // ★[v115 · JACK 1105 Revit 구조물] S220~S234 — 구조물 커튼 자르기 · 평면 외곽 · 목록 · 단위
 IfcCheck.Run(Check);            // ★[v116.5 · JACK 1110 구조물 IFC] S238 — IFC 읽기(돌출 · 구멍 면 · 반복 부재 · 지도 변환 · I형 · 호 단면 · 모르는 형상 · 한글 이름)
 StructQtyCheck.Run(Check);      // ★[v117.4 · JACK 1111] S250 SQ — 구조물 솔리드 면 합치기 · 횡단 구조물 공제(성토 · 되메우기 · 두 기준 · 껍질 · 옹벽 겹침 · 표 줄)
