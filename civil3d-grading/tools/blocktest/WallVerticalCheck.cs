@@ -389,5 +389,42 @@ static class WallVerticalCheck
             Check("(m) 목록 판 9 — 모양 0만이면 판 7 바이트 그대로 · 모양 2면 판 9(끝에 모양) 왕복 · 모양 5는 못 읽음", (int)v0[1].Value == 7 && (int)v2[1].Value == 9 && v2.Count == v0.Count + 3 && dec && r2.Count == 1 && r2[0].Shape == 2 && r2[0].Faces.Count == (ba?.Faces.Count ?? 0) && !decBad && whyB.Contains("모양"),
                 $"판 {v0[1].Value} → {v2[1].Value} · 값 {v0.Count} → {v2.Count} · {why2} · 모양 5: {whyB}");
         }
+
+        // ── ★[v117.2 · 설치 전 검토 뒤처리 · 계획 `2026-11-11_옹벽추가_자문기반_로드맵.md` 2-1 · 계획 검토 M1 · M3 · M4 · L4] ──
+        //   자문 11.4 회귀 대응: 1 (a) · 2 (b) · 3 · 4 키트 선 · (i) · 5 (g) · 6 (c) · 7 (d) · 8 (e) · 15(원지반 구멍) = (n) · 13(다른 옹벽 곁) · 14(기초 경계) = 다음 판 · 9~12(다단 · 끝) = v119~v120
+        Console.WriteLine("\n== S244 (v117.2) 뒤처리 ==");
+        static string D6(WallByLine.Built? b) => b == null ? "" : string.Join(" ", b.Log.Split('\n').Where(l => l.Contains("⑥-d")).Select(l => l.Trim()));
+        // 뒤처리 1 — 셋째 풀기 뒤 L′ 위 P0 건넘을 마지막 사다리에서 다시 잼(1 mm 넘는 것만 꼭짓점으로) · 고정물마다 새 건넘 수 · 새 / 옛 잣대
+        {
+            var fx = new (string N, WallByLine.Built? B)[] { ("(a)", ba), ("(c)", bc), ("(f″)", null), ("(g) R 20", bg1), ("(g) 90°", bg2), ("(g) 30°", bg3), ("(i)", bi), ("(j)", bj), ("(j′)", bj2) };
+            bool ok = fx.Where(q => q.B != null).All(q => q.B!.Ok && q.B.EdgeP0Max <= VEdge && q.B.Log.Contains("⑥-d"));
+            Check("(v117.2 뒤처리 1) 셋째 풀기 뒤 L′ 위 P0 건넘 — 마지막 L′에서 잼 · L′ W−P0 ≤ 1 mm · 지은 고정물 그대로 지음", ok,
+                string.Join(" | ", fx.Where(q => q.B != null).Select(q => $"{q.N} {D6(q.B)}")));
+        }
+        // 뒤처리 2 — 낮은 벽(h ≈ 32 mm · w0 ≈ 0.323 mm)의 벌어지는 꺾임 90°: β·w0/0.25 mm = 2.03 → 나눔 2 → 이웃 부채 끝 현 0.247 mm < 0.25 mm(옛 판 «꺾임» 거절) → 나눔 1로 줄여 지음
+        {
+            Func<double, double, double> pfan = (x, y) => G(x, y) - (x <= 44 ? 0.0322 : x < 46 ? 0.0322 * (46 - x) / 2 : 0);
+            var pTf2 = Grid(20, -40, 70, 40, 1, pfan);
+            var (cf2, bf2) = Make(new List<Point3> { new(52, -5, 0), new(43, -5, 0), new(43, 5, 0), new(52, 5, 0) }, p0: pfan, pT: pTf2, gT: gT1);
+            Check("(v117.2 뒤처리 2) 낮은 벽 90° 부채 — 현 < 0.25 mm면 나눔 하나 줄여 지음(옛 판 «꺾임») · 바깥 · 쌍 · 바늘 0", bf2 != null && Clean(bf2) && bf2.Log.Contains("부채 나눔 줄임"),
+                $"{Brief(bf2, cf2)} · {D6(bf2)}");
+            if (bf2 != null && bf2.Ok) { CompCheck("(v117.2 뒤처리 2)", bf2, cf2, gT1, pTf2, Check, false, G, pfan); CompCheck("(v117.2 뒤처리 2)", bf2, cf2, gT1, pTf2, Check, true, G, pfan); }
+        }
+        // 뒤처리 3 — 끝 높이(A) 0인데 띠 끝 X_A(옛 경계 위 A에서 0.29 mm 남쪽)에서 정지면이 원지반보다 19 mm 높음 → «끝 높이»(띠 끝 X) · 끝 높이 관문(A)은 안 걸림
+        {
+            double yA = -10 + 5 * (2.0 / 3);
+            Func<double, double, double> pe3 = (x, y) => P0(x, y) + (x > 45 && y < yA - 1e-4 ? 100 * (yA - 1e-4 - y) : 0);
+            var (ce3, be3) = Make(Ok, p0: pe3);
+            Check("(v117.2 뒤처리 3) 띠 끝 X에서만 정지면 − 원지반 > 1 cm(끝 높이 A 0) → «끝 높이» · «띠 끝 X»", be3 != null && !be3.Ok && be3.Code == "끝 높이" && be3.Why.Contains("띠 끝 X") && be3.EndStepA <= 1e-9,
+                $"끝 높이 A {be3?.EndStepA * 1000:F3} mm · {be3?.Code} {be3?.Why}");
+        }
+        // 뒤처리 4 · (n) — R_out 호(옛 경계 x = 46) 가운데 |y| < 0.5 m에서 원지반을 못 읽음(구멍) → 거절 «원지반» + 첫 자리 · 끝 A · B는 셈 밖
+        {
+            var bl = Bd.ToList();
+            var (cn, bn) = WallByLine.Make(Ok, bl, Plan(), null, 0, 0, 0, 0, S, 0.005, 1, 10, (x, y) => x > 45.9 && Math.Abs(y) < 0.5 ? null : G(x, y), (x, y) => P0(x, y), null, null, WallByLine.WallShape.Vertical);
+            Check("(v117.2 뒤처리 4 · n) R_out 호 원지반 구멍 → «원지반» 거절 · 첫 자리(x 46 · |y| < 0.5)", bn != null && !bn.Ok && bn.Code == "원지반" && bn.Marks.Count == 1 && Math.Abs(bn.Marks[0].X - 46) < 1e-6 && Math.Abs(bn.Marks[0].Y) < 0.5,
+                $"{bn?.Code} {bn?.Why}");
+        }
     }
+    const double VEdge = 1e-3;
 }

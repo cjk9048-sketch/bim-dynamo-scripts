@@ -240,9 +240,11 @@ internal static class WallLineDraw
             }
             if (pts.Count < 2) { ed.WriteMessage($"\n[{tag}] 점이 모자랍니다 — 아무것도 안 바꿨습니다."); return null; }
             // 찍어 그린 선은 첫 · 끝 토막을 경계 밖으로 1 m 늘여 판정(Classify는 양 끝이 경계 밖이어야 — 경계 위 두 점이 그대로 교점)
-            var list = drawnMode ? BoundaryDraw.Extend(pts.Select(q => (q.X, q.Y)).ToList(), 1.0) : pts.Select(q => new Point3(q.X, q.Y, 0)).ToList();
+            // ★[v117.2 · JACK 1111 13:5x «끝 점이 경계 안»] 늘인 점이 경계 안(뾰족한 V 자리)이거나 늘인 토막이 경계에 또 닿으면 그 끝은 안 늘임 — 경계 위 클릭 점 그대로(Classify가 1 mm 안 끝을 받음)
+            bool extA = true, extB = true;
+            var list = drawnMode ? BoundaryDraw.ExtendSafe(geo, pts.Select(q => (q.X, q.Y)).ToList(), 1.0, out extA, out extB) : pts.Select(q => new Point3(q.X, q.Y, 0)).ToList();
             var cut = classify(list);
-            try { DiagLog.AppendCarry($"\n  [{tag}] 폴리선 판정 — 점 {list.Count}개{(src.Length > 0 ? $"(기존 폴리선 {src})" : "")} · {BoundaryCut.CodeName(cut.Code)} · 교차 {cut.Crossings}" + (cut.Ok ? $" · A({cut.A.X:F2},{cut.A.Y:F2}) · B({cut.B.X:F2},{cut.B.Y:F2}) · 교차각 {cut.AngleA:F0}°/{cut.AngleB:F0}° · 옛 {cut.AreaOld:F1} = 새 {cut.AreaNew:F1} + 잘라낼 {cut.AreaCut:F1}㎡" : " · " + cut.Why)); } catch { }
+            try { DiagLog.AppendCarry($"\n  [{tag}] 폴리선 판정 — 점 {list.Count}개{(src.Length > 0 ? $"(기존 폴리선 {src})" : "")}{(extA && extB ? "" : $" · 안 늘인 끝 {(extA ? "" : "A")}{(extB ? "" : "B")}(늘이면 경계에 다시 닿음 — 클릭 점 그대로)")} · {BoundaryCut.CodeName(cut.Code)} · 교차 {cut.Crossings}" + (cut.Ok ? $" · A({cut.A.X:F2},{cut.A.Y:F2}) · B({cut.B.X:F2},{cut.B.Y:F2}) · 교차각 {cut.AngleA:F0}°/{cut.AngleB:F0}° · 옛 {cut.AreaOld:F1} = 새 {cut.AreaNew:F1} + 잘라낼 {cut.AreaCut:F1}㎡" : " · " + cut.Why)); } catch { }
             SelfCheckLog.Line(tag + " — 폴리선 판정", cut.Ok ? '–' : '⚠', $"{BoundaryCut.CodeName(cut.Code)} · 교차 {cut.Crossings}" + (cut.Ok ? "" : " · " + cut.Why), doc.Name);
             if (cut.Ok)
             {

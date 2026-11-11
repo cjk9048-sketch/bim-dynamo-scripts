@@ -94,5 +94,42 @@ static class BoundaryDrawCheck
         check("S208 ⑲ 준비한 경계 — 가시(유효하지 않은 고리)는 고친 고리로 · 가시 끝 곁 클릭 거절 · 준비한 판정 = 한 번 판정", cx19 != null && f19 != null && f19.Kind == BoundaryDraw.Kind.No && same19,
               $"고리 점 {cx19?.RingCount} · 가시 끝 곁 {f19?.Kind} {f19?.Why} · 같음 {same19}");
         check("S208 ⑮ 모서리 곁 첫 점 → 붙임 · 안쪽 토막 받음", f4.Kind == BoundaryDraw.Kind.Start && n11.Kind == BoundaryDraw.Kind.Inside, $"{f4.Kind} ({f4.X:F3},{f4.Y:F3}) → {n11.Kind} {n11.Why}");
+
+        // ⑳ ★[v117.2 · JACK 1111 13:5x «폴리선의 끝 점이 경계 안» — 경계 V 자리에서 끝을 1 m 눈감고 늘이면 경계 안으로] ExtendSafe — 늘인 점이 경계 밖이고 경계에 끝 점에서만 닿을 때만 늘임
+        {
+            var cxU = BoundaryDraw.Prepare(u, ufl)!;
+            var safe14 = BoundaryDraw.ExtendSafe(cxU, drawn, 1.0, out bool ea14, out bool eb14);
+            bool same14 = ea14 && eb14 && safe14.Count == line.Count && safe14.Zip(line).All(q => q.First.X == q.Second.X && q.First.Y == q.Second.Y);
+            var cut14 = BoundaryCut.Classify(safe14, u, ufl);
+            check("S208 ⑳ 곧은 경계(⑭ 그대로) — 두 끝 다 늘임 · 점이 Extend와 비트 같음 · 판정 같음", same14 && cut14.Ok == cut.Ok && cut14.A.X == cut.A.X && cut14.A.Y == cut.A.Y && cut14.B.X == cut.B.X && cut14.B.Y == cut.B.Y,
+                  $"늘임 A {ea14} · B {eb14} · 점 {safe14.Count}/{line.Count} · 같음 {same14} · {BoundaryCut.CodeName(cut14.Code)}");
+            // V 홈(위 변 가운데 (40,100) → (50,90) → (60,100)) · 바닥 40..60 × 20..40
+            var vr = L((0, 0), (100, 0), (100, 100), (60, 100), (50, 90), (40, 100), (0, 100));
+            var vfl = L((40, 20), (60, 20), (60, 40), (40, 40));
+            var cxV = BoundaryDraw.Prepare(vr, vfl)!;
+            foreach (var (nm, dpts, vEnd) in new[]
+            {
+                ("끝이 V 꼭짓점", new List<(double X, double Y)> { (0, 50), (20, 85), (50, 90) }, true),
+                ("시작이 V 꼭짓점", new List<(double X, double Y)> { (50, 90), (80, 85), (100, 50) }, false),
+            })
+            {
+                // 찍는 규칙도 받는지(첫 점 · 가운데 · 끝)
+                var acc = new List<(double X, double Y)>(); bool drawOk = true; string dw = "";
+                for (int i = 0; i < dpts.Count; i++)
+                {
+                    var stp = i == 0 ? BoundaryDraw.First(cxV, dpts[i].X, dpts[i].Y, snap) : BoundaryDraw.Next(cxV, acc, dpts[i].X, dpts[i].Y, snap);
+                    dw += $"{stp.Kind} ";
+                    if (!stp.Ok) { drawOk = false; dw += stp.Why; break; }
+                    acc.Add((stp.X, stp.Y));
+                }
+                var old = BoundaryCut.Classify(BoundaryDraw.Extend(acc, 1.0), vr, vfl);
+                var sl = BoundaryDraw.ExtendSafe(cxV, acc, 1.0, out bool ea, out bool eb);
+                var cv = BoundaryCut.Classify(sl, vr, vfl);
+                var vEndPt = vEnd ? cv.B : cv.A;
+                bool ok = drawOk && !old.Ok && cv.Ok && (vEnd ? ea && !eb : !ea && eb) && Math.Abs(vEndPt.X - 50) < 1e-9 && Math.Abs(vEndPt.Y - 90) < 1e-9;
+                check($"S208 ⑳ {nm} — 옛 늘임은 거절 · 그 끝은 안 늘이고 클릭 점(V) 그대로 → 판정 통과 · 교점 = V", ok,
+                      $"찍기 {dw}· 옛 {BoundaryCut.CodeName(old.Code)} {old.Why} · 새 늘임 A {ea} · B {eb} · {BoundaryCut.CodeName(cv.Code)} {cv.Why} · A({cv.A.X:F4},{cv.A.Y:F4}) B({cv.B.X:F4},{cv.B.Y:F4}) · 교차 {cv.Crossings}");
+            }
+        }
     }
 }
