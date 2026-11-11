@@ -107,7 +107,10 @@ internal static class M0Dump
                         string P3(System.Collections.Generic.IEnumerable<Point3> ps) => string.Join(" ", ps.Select(p => string.Format(ci, "{0:R},{1:R},{2:R}", p.X, p.Y, p.Z)));
                         foreach (var w in walls)
                         {
-                            sb.AppendLine($"WALL {w.No} {(w.Up ? "절토" : "성토")} 상태 {w.State} 보류 «{w.Hold}» P0 {w.P0Handle}" + (w.Kind != 0 ? $" 종류 {w.Kind}(선 · 절 H {w.Hc:0.##} T {w.Tc:0.##} · 성 H {w.Hf:0.##} T {w.Tf:0.##} · 선 바깥 {w.FootMax:F3} · 자리 성 {w.ZoneF.Count} 절 {w.ZoneC.Count} · 면 토막 {w.Faces.Count} · 앞면 {w.FaceLen:F2} m)" : ""));   // ★[v114.0] 판 7 종류 2
+                            sb.AppendLine($"WALL {w.No} {(w.Up ? "절토" : "성토")} 상태 {w.State} 보류 «{w.Hold}» P0 {w.P0Handle}" + (w.Kind != 0 ? $" 종류 {w.Kind}(선 · 절 H {w.Hc:0.##} T {w.Tc:0.##} · 성 H {w.Hf:0.##} T {w.Tf:0.##} · 선 바깥 {w.FootMax:F3} · 자리 성 {w.ZoneF.Count} 절 {w.ZoneC.Count} · 면 토막 {w.Faces.Count} · 앞면 {w.FaceLen:F2} m)" : "")
+                                + (w.Kind == 2 && w.Shape == 2 ? string.Format(ci, " 모양 수직 · 길이 {0:F2} m · 최고 {1:F2} m · 면적 {2:F1} ㎡", w.FaceLen, w.Faces.Count == 0 ? 0 : w.Faces.Max(f => f.HMax),
+                                    w.Faces.Where(f => f.Kind == 0).Sum(f => Enumerable.Range(0, System.Math.Max(0, f.Top.Count - 1)).Sum(i => (System.Math.Abs(f.Top[i].Z - f.Foot[i].Z) + System.Math.Abs(f.Top[i + 1].Z - f.Foot[i + 1].Z)) / 2
+                                        * System.Math.Sqrt((f.Top[i + 1].X - f.Top[i].X) * (f.Top[i + 1].X - f.Top[i].X) + (f.Top[i + 1].Y - f.Top[i].Y) * (f.Top[i + 1].Y - f.Top[i].Y))))) : ""));   // ★[v114.0] 판 7 종류 2 · ★[v117.0] 판 9 모양
                             if (w.Kind != 0) sb.AppendLine("LINE " + string.Join(" ", w.Line.Select(p => string.Format(ci, "{0:R},{1:R}", p.X, p.Y))) + " | SRC " + string.Join(" ", w.Src.Select(p => string.Format(ci, "{0:R},{1:R}", p.X, p.Y))));
                             if (w.Kind != 0)
                             {

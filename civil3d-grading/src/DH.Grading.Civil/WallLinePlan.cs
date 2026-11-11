@@ -172,7 +172,9 @@ internal static class WallLinePlan
             {
                 var pl = new Polyline3d { LayerId = lid };
                 ms.AppendEntity(pl); tr.AddNewlyCreatedDBObject(pl, true);
-                foreach (var q in f.Top) { var v = new PolylineVertex3d(new Point3d(q.X, q.Y, q.Z)); pl.AppendVertex(v); tr.AddNewlyCreatedDBObject(v, true); }
+                // ★[v117.0 · 계획 3절] 수직 옹벽(Shape 2) = 그은 선 L 쪽(절토 머리 · 성토 발 — 그은 자리 그대로)
+                var src = w.Shape == 2 && !f.Up ? f.Foot : f.Top;
+                foreach (var q in src) { var v = new PolylineVertex3d(new Point3d(q.X, q.Y, q.Z)); pl.AppendVertex(v); tr.AddNewlyCreatedDBObject(v, true); }
                 WallTags.Tag(db, tr, pl, w.No, region);
                 wl++;
             }

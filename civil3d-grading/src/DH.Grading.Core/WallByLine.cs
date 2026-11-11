@@ -67,7 +67,8 @@ public static partial class WallByLine
     }
 
     /// <summary>★[v117.0 1단계] 선 옹벽 모양 — 0 = 옛 바깥 계단(v114~v116) · 1 = 선 안쪽 계단(새).</summary>
-    public enum WallShape { Out = 0, In = 1 }
+    /// <summary>★[v117.0 · JACK 1111 · 계획 `2026-11-11_옹벽추가_수직옹벽.md`] 2 = 수직 옹벽(그은 선에서 옛 사면을 1:s로 두부 자르듯 · <see cref="BuildVertical"/>).</summary>
+    public enum WallShape { Out = 0, In = 1, Vertical = 2 }
 
     /// <summary>★[v117.0 1단계 · 0단계 M1 뒤] 새 모양의 단 수 n 규칙.
     /// <para><see cref="Strict"/> — 선 어디서도 첫 소단이 원지반 위로 뜨지 않는 가장 높은 기준(절토 · 성토 거울) · 바깥 벽이 어디서든 단높이를 넘으면 거절(JACK 1110 18시).</para>
@@ -196,6 +197,14 @@ public static partial class WallByLine
         public List<Point3> OutRing = new();
         /// <summary>자가검증 한 줄(계획 4절).</summary>
         public string SelfCheck = "";
+
+        // ══ ★[v117.0 · 계획 `2026-11-11_옹벽추가_수직옹벽.md` 1-5] 수직 옹벽(<see cref="BuildVertical"/> · Shape 2)만 채운다 ══
+        /// <summary>벽 기울기 s(1:s) · 띠 폭 범위(L′까지 거리) · 벽 면적(Σ 가로대 높이 × L 길이) · 절토 · 성토 L 길이 · L 위 |W − G| · L′ 위 |W − P0| 최대 · 가로대 사이 폭 차 최대 · 부호 최대(m) · 꼬리 길이 · R_out 호 |G − P0| 최대 · 뺀 꼭짓점 차 최대.</summary>
+        public double Batter, WMin = double.NaN, WMax = double.NaN, Area, LenC, LenF, EdgeGMax, EdgeP0Max, BatterDevMax, SignMax, TailLen, ArcStepMax, GoneMax;
+        /// <summary>가로대 수 · G 변 · P0 변(L′ 위 포함) · 꼬리 곳 · 띠 안 꼭짓점 · 선 바깥 · 부호 틀림 · 부호 잰 점 · 풀이 되풀이 최대 · 못 푼 기운 가로대 · 뺀 꼭짓점.</summary>
+        public int RungN, RungG, RungP0, TailN, InBandVerts, OutsideN, SignBad, SignN, SolveIterMax, Unsolved, GoneN;
+        /// <summary>뺀 가로대(까닭별).</summary>
+        public Dictionary<string, int> RungDrop = new();
     }
 
     static readonly CultureInfo Ci = CultureInfo.InvariantCulture;
@@ -737,6 +746,7 @@ public static partial class WallByLine
     {
         // ★[v117.0 1단계 · 검토 H2] 새 모양은 부르는 쪽이 명시할 때만 — 기본(Out)은 아래 옛 몸통 그대로(비트 같음)
         if (inp.Shape == WallShape.In) return BuildIn(inp);
+        if (inp.Shape == WallShape.Vertical) return BuildVertical(inp);   // ★[v117.0 · JACK 1111] 수직 옹벽 — 옛 몸통은 그대로
         var R = new Built();
         var log = new System.Text.StringBuilder();
         // ★[v115 · 설치 전 검토 S2] 옛 소단 높이 읽기 수 · 시간(이번 짓기 몫 — 링 단 표는 여러 짓기가 함께 씀)
@@ -2444,7 +2454,7 @@ public static partial class WallByLine
     /// <summary>★[v114.0] 판정 + 짓기를 한 번에 — 화면 없는 탐침 · 하네스 · 다시 짓기가 같은 길로 부른다(그린 선 원본 → 자르기 → 기하).</summary>
     public static (BoundaryCut.Result Cut, Built? Built) Make(IReadOnlyList<Point3> src, IReadOnlyList<Point3> bd, IReadOnlyList<Point3> plan,
         IEnumerable<(string Name, IReadOnlyList<Point3> Ring)>? blockers, double hc, double tc, double hf, double tf, double slopeW, double faceRun, double grid, double reach,
-        Func<double, double, double?> ground, Func<double, double, double?> p0, IReadOnlyList<Tri>? p0Tris, IReadOnlyList<Tri>? groundTris = null)
+        Func<double, double, double?> ground, Func<double, double, double?> p0, IReadOnlyList<Tri>? p0Tris, IReadOnlyList<Tri>? groundTris = null, WallShape shape = WallShape.Out)
     {
         var bl = blockers?.ToList();
         var cut = BoundaryCut.Classify(src, bd, plan, bl);
@@ -2452,7 +2462,7 @@ public static partial class WallByLine
         var b = Build(new Input
         {
             Line = cut.Line, Bd = bd, NewRing = cut.NewRing, CutRing = cut.CutRing, Plan = plan, Hc = hc, Tc = tc, Hf = hf, Tf = tf, SlopeW = slopeW, FaceRun = faceRun, Grid = grid, Reach = reach,
-            Ground = ground, P0 = p0, P0Tris = p0Tris, GroundTris = groundTris, Blockers = bl,
+            Ground = ground, P0 = p0, P0Tris = p0Tris, GroundTris = groundTris, Blockers = bl, Shape = shape,
         });
         return (cut, b);
     }

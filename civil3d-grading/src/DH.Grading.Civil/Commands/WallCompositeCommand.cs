@@ -908,6 +908,7 @@ public sealed class WallCompositeCommand
                                 else if (w.ZoneC.Any(r => GradingGeometry.PointInRing(r, cx, cy))) tcL.Add(t);
                             }
                             wi.WallTrisF = tf; wi.WallTrisC = tcL;
+                            wi.NoZero = w.Shape == 2;   // ★[v117.0 · 계획 2절 대안] 수직 옹벽 — 벽 = 원지반 교선 생략(띠 부호는 짓기 관문이 보증 · 옛 모양은 그대로)
                             log.AppendLine($"   선 옹벽 {w.No} — 가상옹벽 삼각형 {wallTris.Count} → 성토 자리 {tf.Count} · 절토 자리 {tcL.Count}");
                             if (tf.Count + tcL.Count == 0) bad = "선 옹벽의 바꿀 자리 안에 가상옹벽 삼각형이 없다";
                         }
