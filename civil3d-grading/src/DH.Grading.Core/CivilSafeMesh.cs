@@ -794,7 +794,8 @@ public static class CivilSafeMesh
                 if (Margin && dd >= MustMerge) { rep.MarginKept++; continue; }     // 이어지지 않은 여유 띠 쌍 — Civil이 안 합친다
                 DebugLog?.Invoke($"못 푼 쌍 {Pt(a)} · {Pt(b)} · 네모 {Box(a, b) * 1e6:F1}µm");
                 rep.Unresolved++;
-                if (rep.UnresolvedAt.Length < 200) rep.UnresolvedAt += (rep.UnresolvedAt.Length > 0 ? " " : "") + At(X[a], Y[a]);
+                // ★[계측 · 키트 wmig «못 푼 쌍 1»] 두 점 · 갈래 · 네모 거리까지(못 풀었을 때만 글이 바뀜)
+                if (rep.UnresolvedAt.Length < 200) rep.UnresolvedAt += (rep.UnresolvedAt.Length > 0 ? " " : "") + At(X[a], Y[a]) + string.Format(CultureInfo.InvariantCulture, "[{0} ~ {1} · 네모 {2:F1}µm]", Pt(a), Pt(b), Box(a, b) * 1e6);
             }
         }
 
