@@ -53,10 +53,10 @@ internal sealed class ProfilePlan
 /// P4 실측: 종단 밴드 스타일 <c>CopyAsSibling</c>은 라벨 스타일까지 깊게 복사(6/6 · 라벨 22칸 모두 다른 객체) — 부지 글자를 안 건드림.</para></summary>
 internal static class ProfileScaleStyles
 {
-    static readonly HashSet<string> TickProps = new(StringComparer.Ordinal) { "Size", "TextHeight", "OffsetX", "OffsetY" };
-    static readonly HashSet<string> TitleProps = new(StringComparer.Ordinal) { "TextHeight", "OffsetX", "OffsetY", "BorderGap" };
-    static readonly HashSet<string> GridProps = new(StringComparer.Ordinal) { "AxisOffsetLeft", "AxisOffsetRight", "AxisOffsetBottom", "AxisOffsetAbove" };
-    static readonly HashSet<string> BandProps = new(StringComparer.Ordinal) { "BandHeight", "TextHeight", "TextBoxWidth" };
+    internal static readonly HashSet<string> TickProps = new(StringComparer.Ordinal) { "Size", "TextHeight", "OffsetX", "OffsetY" };
+    internal static readonly HashSet<string> TitleProps = new(StringComparer.Ordinal) { "TextHeight", "OffsetX", "OffsetY", "BorderGap" };
+    internal static readonly HashSet<string> GridProps = new(StringComparer.Ordinal) { "AxisOffsetLeft", "AxisOffsetRight", "AxisOffsetBottom", "AxisOffsetAbove" };
+    internal static readonly HashSet<string> BandProps = new(StringComparer.Ordinal) { "BandHeight", "TextHeight", "TextBoxWidth" };
     static readonly HashSet<string> LabelProps = new(StringComparer.Ordinal)
     {
         "Height", "XOffset", "YOffset", "MaxWidth", "StartPointXOffset", "StartPointYOffset", "EndPointXOffset", "EndPointYOffset", "FixedLength", "BlockHeight", "Gap",
@@ -116,7 +116,7 @@ internal static class ProfileScaleStyles
     }
 
     /// <summary>값이 있는 double 속성(get/set)을 k배 — 이름표에 든 것만.</summary>
-    static int ScaleProps(object o, HashSet<string> names, double k)
+    internal static int ScaleProps(object o, HashSet<string> names, double k)
     {
         int c = 0;
         foreach (var pi in o.GetType().GetProperties())
@@ -149,7 +149,7 @@ internal static class ProfileScaleStyles
     }
 
     /// <summary>라벨 스타일 하나의 글자 · 선 · 블록 · 눈금 · 테두리 크기를 k배.</summary>
-    static int ScaleLabel(Transaction tr, ObjectId lsId, double k, HashSet<ObjectId> done)
+    internal static int ScaleLabel(Transaction tr, ObjectId lsId, double k, HashSet<ObjectId> done)
     {
         if (lsId.IsNull || !done.Add(lsId)) return 0;
         int c = 0;
