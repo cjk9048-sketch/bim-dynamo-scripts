@@ -195,4 +195,51 @@ internal static class Web3DExtras
         tr.Commit();
         return (ext, matched, total);
     }
+
+    /// <summary>★[JACK 1111 «3D 뷰에서 불러온 구조물이 안 보여»] 불러온 구조물 — 구조물마다 메시 하나(장면 좌표 · 뺀 부재(지형) 세모 제외).
+    /// 형상 = <see cref="StructImport.ModelOf"/>(xref 블록 정의를 걸음 — 레이어 켬/끔과 무관 · 캐시). <b>읽기만</b> — <see cref="StructImport.LoadAll"/>은 기록을 고칠 수 있어 안 씀.</summary>
+    internal static List<(string Name, float[] Pos, int[] Idx)> Structs(Database db, double ox, double oy, System.Text.StringBuilder log)
+    {
+        var res = new List<(string, float[], int[])>();
+        StructUnits.Box2? g0 = null; bool gDone = false;
+        StructUnits.Box2? Ground() { if (!gDone) { g0 = StructImport.GroundBox(db, out _); gDone = true; } return g0; }
+        using var tr = db.TransactionManager.StartTransaction();
+        if (!StructImport.TryLoad(db, tr, out _, out var recs, out string why)) { log.AppendLine("  구조물: 목록 못 읽음 — " + why); tr.Commit(); return res; }
+        foreach (var r in recs)
+        {
+            BlockReference? br = null;
+            try
+            {
+                if (r.XrefHandle.Length > 0 && db.TryGetObjectId(new Handle(System.Convert.ToInt64(r.XrefHandle, 16)), out var iid) && !iid.IsErased)
+                    br = tr.GetObject(iid, OpenMode.ForRead) as BlockReference;
+            }
+            catch { }
+            if (br == null) { log.AppendLine($"  구조물: {r.Name} — 삽입 없음(건너뜀)"); continue; }
+            if (tr.GetObject(br.BlockTableRecord, OpenMode.ForRead) is not BlockTableRecord btr || (btr.IsFromExternalReference && btr.XrefStatus != XrefStatus.Resolved))
+            { log.AppendLine($"  구조물: {r.Name} — 원본 없음(건너뜀)"); continue; }
+            var m = StructImport.ModelOf(db, tr, r, br, Ground, out _, out _);
+            if (m == null || m.Empty) { log.AppendLine($"  구조물: {r.Name} — 세모 없음(건너뜀)"); continue; }
+            var map = new int[m.V.Length / 3]; System.Array.Fill(map, -1);
+            var pos = new List<float>(); var idx = new List<int>();
+            for (int t = 0; t < m.TriCount; t++)
+            {
+                int p = t < m.TriPart.Length ? m.TriPart[t] : -1;
+                if (p >= 0 && p < m.Parts.Count && m.Parts[p].Excluded) continue;
+                for (int k = 0; k < 3; k++)
+                {
+                    int v = m.T[3 * t + k];
+                    if (map[v] < 0)
+                    {
+                        map[v] = pos.Count / 3;
+                        pos.Add((float)(m.V[3 * v] + m.Ox - ox)); pos.Add((float)(m.V[3 * v + 1] + m.Oy - oy)); pos.Add((float)(m.V[3 * v + 2] + m.Oz));
+                    }
+                    idx.Add(map[v]);
+                }
+            }
+            if (idx.Count == 0) { log.AppendLine($"  구조물: {r.Name} — 그릴 세모 없음(모두 뺀 부재)"); continue; }
+            res.Add((r.Name, pos.ToArray(), idx.ToArray()));
+        }
+        tr.Commit();
+        return res;
+    }
 }

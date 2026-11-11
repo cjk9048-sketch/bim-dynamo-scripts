@@ -348,6 +348,21 @@ export async function buildLayers(view, head) {
   if (wallGrp.children.length) { scene.add(wallGrp); L.wall = { obj: wallGrp, label: '옹벽', on: true, fixed: true }; }   // ★[JACK 1028] 옹벽은 늘 보임 — 층 목록에 단추 없음
   if (patGrp.children.length) { scene.add(patGrp); L.pattern = { obj: patGrp, label: '옹벽 무늬', on: true }; }
 
+  // ── ★[JACK 1111 «3D 뷰에서 불러온 구조물이 안 보여»] 불러온 구조물 — 구조물마다 메시 하나 · 매스콘크리트(옹벽과 같은 콘크리트 질감 · 밝은 회색) ·
+  //   양면(열린 메시도 구멍 없이) · 그림자 · 층 «구조물»(없는 장면은 안 생김)
+  if (head.structs && head.structs.length) {
+    const grp = new THREE.Group();
+    const m = surfMaterial(view, 'concrete', 3, '#b9b5ad', true, { side: THREE.DoubleSide });
+    for (const s of head.structs) {
+      if (!s.pos || !s.idx || s.idx.length === 0) continue;
+      const mesh = new THREE.Mesh(flat(geom(s.pos, s.idx)), m);
+      mesh.castShadow = true; mesh.receiveShadow = true;
+      mesh.userData = { layer: 'struct', name: s.name };
+      grp.add(mesh);
+    }
+    if (grp.children.length) { scene.add(grp); L.struct = { obj: grp, label: '구조물', on: true, n: grp.children.length }; }
+  }
+
   // ── ★[도로 마무리 ② · 계획 6.6] 진입도로 측구 — U형 그레이팅(어두운 격자 띠) · 물길(뚜껑 없음) · L형 경계석(콘크리트) · 층 «측구»(없는 장면은 안 생김)
   const DT = head.ditches;
   if (DT) {

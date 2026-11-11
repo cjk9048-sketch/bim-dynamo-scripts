@@ -419,6 +419,16 @@ internal static class Web3DBuilder
         if (alignBox != null)
             try { strataHead = Strata(db, alignBox, ox, oy, sc, log); }
             catch (System.Exception stx) { c.Warn.Add("지층을 3D에 못 넣었습니다 — " + stx.Message); log.AppendLine("  지층: 실패 — " + stx); }
+        // ④g ★[JACK 1111 «3D 뷰에서 불러온 구조물이 안 보여»] 불러온 구조물 — 구조물마다 메시 하나 · 없으면 열쇠를 안 넣는다(옛 장면 바이트 그대로)
+        List<object>? structHead = null;
+        try
+        {
+            var ss = Web3DExtras.Structs(db, ox, oy, log);
+            log.AppendLine($"  구조물: structs {ss.Count} · tris {ss.Sum(s => s.Idx.Length / 3):N0}");
+            if (ss.Count > 0)
+                structHead = ss.Select(s => (object)new Dictionary<string, object> { ["name"] = s.Name, ["pos"] = sc.F32(s.Pos), ["idx"] = sc.U32(s.Idx) }).ToList();
+        }
+        catch (System.Exception sx) { c.Warn.Add("구조물을 3D에 못 넣었습니다 — " + sx.Message); log.AppendLine("  구조물: 실패 — " + sx); }
         Lap("빗물 · 지적 · 측점", skipSat ? null : "건물 받는 중");
 
         // ④c ★★[v111.7 · JACK 1102 «3D 보기에 건물 · 층수로 높이 · 켜고 끄기»] 건물 — VWorld 건물정보
@@ -575,6 +585,7 @@ internal static class Web3DBuilder
         if (strataHead != null) H["strata"] = strataHead;
         if (roadAlignHead != null) H["roadAlign"] = roadAlignHead;
         if (forestHead != null) H["forest"] = forestHead;   // ★[v115] 수목(꺼짐이면 열쇠 없음)
+        if (structHead != null) H["structs"] = structHead;   // ★[JACK 1111] 불러온 구조물이 있을 때만
         if (c.Ground != null && c.GroundOfName.Length > 0 && c.GroundOfName != c.GroundName)
             c.Warn.Add($"원지반이 둘입니다 — 토공량 · 절성토 색은 «{c.GroundName}», 옹벽 변환 자리 · 단면은 «{c.GroundOfName}»");
         H["warn"] = c.Warn.Select(NoPath).Distinct().ToList();
