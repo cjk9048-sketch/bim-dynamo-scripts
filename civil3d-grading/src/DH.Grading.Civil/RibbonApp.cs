@@ -53,6 +53,7 @@ using AcadApp = Autodesk.AutoCAD.ApplicationServices.Application;
 [assembly: CommandClass(typeof(DH.Grading.Civil.UndoGuard))]                          // ★[v114.2] DHUNDOCLR(명령 뒤 되돌리기 기록 비움 — Civil 결함 회피)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.StructCommand))]             // ★[v115 · JACK 1105] DHSTRUCT · DHSTRUCTPTS(v116.9 좌표계 내보내기) · DHSTRUCTOFF(Revit 구조물)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.UDitchCommand))]             // ★[배수지 U형 측구 1단계] DHUDITCH(창) · -DHUDITCH(명령줄)
+[assembly: CommandClass(typeof(DH.Grading.Civil.Commands.WallMigrateCommand))]        // ★[v117.9] DHWALLMIGRATE(옛 옹벽 옮기기 — 키트에서 «알 수 없는 명령»으로 찾음)
 
 namespace DH.Grading.Civil;
 
