@@ -194,6 +194,9 @@ static class WallTieredCheck
         // (t8) 큰 좌표 — (t1)과 1e-6 안
         var (c8, b8) = Make(U, pT, gT, dx: 200000, dy: 550000);
         Check("(t8) 큰 좌표 — (t1)과 Z1 · 단 · 벽 높이 1e-6 안", Clean(b8) && b1 != null && Math.Abs(b8!.TierZ1 - b1.TierZ1) <= 1e-6 && b8.TierN == b1.TierN && Math.Abs(b8.OuterHMax - b1.OuterHMax) <= 1e-6 && Math.Abs(Inner(b8, 2) - Inner(b1, 2)) <= 1e-6 && Math.Abs(Inner(b8, 3) - Inner(b1, 3)) <= 1e-6, Brief(b8, c8));
+        // ★[바늘 0 · 키트 wtcut 바늘 3 · 짧은 변 1] 큰 좌표에서 L′ 위 자른 점(L′ 꼭짓점 아님)이 세계 좌표로 옮겨 L′ 변에서 ~1e-11 m 떨어져 MeshLines가 마디를 못 지었다(옛: 바늘 3 · 짧은 변 1)
+        //   → 그 점을 L′을 지나는 선(2차 수직 부분 고리 · 소단 자리 고리)에도 끼운다 — 바늘 · 짧은 변 · 쌍 0
+        Check("(t8) 큰 좌표 — 벽 면 바늘 0 · 짧은 변 0 · 쌍 0(L′ 위 자른 점을 L′ 지나는 선에도 끼움)", b8 != null && b8.Ok && b8.Needles == 0 && b8.ShortEdges == 0 && b8.PairsUnder01 == 0 && b8.Log.Contains("L′ 지나는 선에 자른 점 끼움"), Brief(b8, c8));
         // (t9) Z1 손 입력 — 112(자동보다 높음 · ⚠ 없음) · 110(낮음 → ⚠ 바깥 벽 > 단높이)
         var (c9, b9) = Make(U, pT, gT, z1: 112); var (c9b, b9b) = Make(U, pT, gT, z1: 110);
         Check("(t9) Z1 손 입력 — 112 그대로 · 110이면 ⚠", Clean(b9) && Math.Abs(b9!.TierZ1 - 112) <= 1e-9 && !b9.Warn.Any(w => w.Contains("첫 소단 손")) && Clean(b9b) && b9b!.Warn.Any(w => w.Contains("첫 소단 손")),
@@ -225,6 +228,7 @@ static class WallTieredCheck
             Check("(t12) 성토 · 땅이 Z1 밑 · 흔든 원지반 · 큰 좌표 — 짓고 깨끗 · 높이 0 칸 ≥ 1(|W − G| ≤ 1 mm) · 2차 부호 0 · 끊김 ≥ 1",
                 Clean(b12) && b12!.Dir == -1 && b12.TierN >= 2 && b12.SignBad == 0 && b12.BreakN >= 1 && zN >= 1 && zMax <= 1000,
                 $"높이 0 칸 {zN} · |W − G| 최대 {zMax} µm · {Brief(b12, c12)}");
+            Check("(t12) 성토 · 큰 좌표 — 벽 면 바늘 0 · 짧은 변 0 · 쌍 0(옛: 바늘 16 · 짧은 변 1)", b12 != null && b12.Ok && b12.Needles == 0 && b12.ShortEdges == 0 && b12.PairsUnder01 == 0, Brief(b12, c12));
         }
 
         // (t13) ★[v117.4 설치 전 검토 중간 1 · 굽은 곳 소단 «혹»] U자 선 꺾은점 (49.6, 5)의 벽 3 발 줄(d 2.15 · 둥근 이음 8분할 현) — 바닥(계획선) 뾰족 끝 꼭짓점 p*를
