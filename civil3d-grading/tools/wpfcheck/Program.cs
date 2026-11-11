@@ -78,6 +78,7 @@ internal static class Program
 
         if (DiagCheck.Run() != 0) return 1;
         if (SheetBookShot.Run() != 0) return 1;   // ★[v112.0] 도킹창 «도면화» 그림 셋 · 잘린 글
+        if (StructExportShot.Run() != 0) return 1;   // ★[v117.1] [구조물 좌표 내보내기] 창 그림 셋 · [내보내기] 규칙
         int rc = CloseCheck.Run();
         if (rc != 0) return rc;
         Console.WriteLine("== 화면 모양표 전부 통과 ==");

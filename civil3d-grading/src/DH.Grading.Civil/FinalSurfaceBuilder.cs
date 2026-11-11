@@ -300,7 +300,7 @@ internal static class FinalSurfaceBuilder
             try { var m = st.GetDisplayStyleModel(t); bool want = t == CivilDb.Styles.SurfaceDisplayStyleType.Boundary; if (m.Visible != want) m.Visible = want; } catch { }
     }
 
-    static List<Tri> ReadAll(CivilDb.TinSurface s, string who)
+    internal static List<Tri> ReadAll(CivilDb.TinSurface s, string who)
     {
         var t = PureWithWallsBuilder.ReadTris(s, out int lost);
         if (lost > 0) throw new InvalidOperationException($"«{who}» 세모를 읽다 {lost}개를 버림");
@@ -572,8 +572,9 @@ internal static class FinalSurfaceBuilder
     }
 
     /// <summary>★[계획 5장] 지형 고르기 — 도로 없음 → <see cref="Pick.HasRoads"/> 거짓(지금 코드 그대로 · 한 줄도 안 달라짐) · 최종면 맞음 → 그 면 · 없음/옛것 → 메모리 합치기(같은 Compose · 도면 안 바꿈).
-    /// 합치기 실패면 정지면_DH + ⚠ «진입도로 빠짐». 읽기만 한다(DBMOD 0 → 0).</summary>
-    internal static Pick PickTerrain(Database db, System.Text.StringBuilder log, List<string> warn)
+    /// 합치기 실패면 정지면_DH + ⚠ «진입도로 빠짐». 읽기만 한다(DBMOD 0 → 0).
+    /// ★[v117.1 · 계획 9절 M6] <paramref name="meshOnly"/> = 면(세모)만 고르고 포장 · 차로 · 소단 띠는 안 셈(구조물 3D 영역 — 가벼운 문).</summary>
+    internal static Pick PickTerrain(Database db, System.Text.StringBuilder log, List<string> warn, bool meshOnly = false)
     {
         var P = new Pick();
         using var tr = db.TransactionManager.StartTransaction();
@@ -638,7 +639,7 @@ internal static class FinalSurfaceBuilder
             }
         }
         // 포장(차로 + 길어깨) · 차로 — 설계에서(노선 + 폭)
-        if (P.InTerrain)
+        if (P.InTerrain && !meshOnly)
         {
             var paves = new List<Geometry>(); var lanes = new List<Geometry>(); var lanesC = new List<Geometry>();
             foreach (var (r, _, f) in roadT)
