@@ -2292,8 +2292,9 @@ public sealed partial class XsecViewCommand
                         var note = new MText();
                         note.SetDatabaseDefaults(db);
                         if (!kst.IsNull) note.TextStyleId = kst;   // 한글 글꼴 — 높이보다 먼저
-                        note.Contents = Lit("※ 미포함 — 흙막이(가시설) 면적 · 성토에서 구조물 부피 공제"
-                                          + " · 되메우기에서 옹벽 밖 구조물 부피 공제"
+                        // ★[v117.4 · JACK 1111] 불러온 구조물이 있으면 성토 · 되메우기에서 뺐다 → 구조물 두 마디는 그 도면에서만 뺀다(없는 도면은 실제로 안 뺐으니 글자 그대로)
+                        note.Contents = Lit("※ 미포함 — 흙막이(가시설) 면적"
+                                          + (qty.StructDed ? " · 위가 열린 구조물(U형 수로 등) 안 빈 곳 공제" : " · 성토에서 구조물 부피 공제 · 되메우기에서 옹벽 밖 구조물 부피 공제")
                                           + (string.IsNullOrEmpty(qty.Foot) ? "" : "  ※ " + qty.Foot))
                                       // ★표의 <c>Position</c>은 <b>왼쪽 위</b>다 — 계획지표면 안내는 다음 문단(겹치지 않게).
                                       + (plan ? "\\P" + Lit("※ 계획지표면 기준 — 구조물 자리 성토는 되메우기와 겹칩니다"
@@ -4338,7 +4339,9 @@ public sealed partial class XsecViewCommand
         double[] backOut = null,
         X2Ctx x2ctx = null,
         System.Action<DH.Grading.Core.WallExcav.Xs2D> x2sink = null,
-        System.Collections.Generic.IReadOnlyList<DH.Grading.Core.IGroundSurface> extraEdges = null)
+        System.Collections.Generic.IReadOnlyList<DH.Grading.Core.IGroundSurface> extraEdges = null,
+        System.Collections.Generic.IReadOnlyList<DH.Grading.Core.StructModel> structs = null,
+        double[] stOut = null)
     {
         // ★[v111.5 · 검토 M1] csP = 계획면(부지 = 정지면 캐시 · 진입도로 = FirstOf(진입도로, 바탕면)) · extraEdges = 가장자리를 따로 다듬을 면(진입도로 · 바탕 — 합친 면의 경계 계단)
         // 절단선의 좌우 끝을 구한다 — 종단도·횡단도가 쓰는 것과 <b>같은 함수</b>다.
@@ -4686,6 +4689,45 @@ public sealed partial class XsecViewCommand
                 else dbg?.Append(" | ⚠옹벽 단면 공제 못 함(터파기 바닥 · 지표 배열 없음)");
             }
         }
+        // ★★★[v117.4 · JACK 1111 «불러온 구조물 부피를 되메우기 · 성토에서»] 구조물 단면(그림과 같은 StructSlice.Cut — 이 절단선) ∩ 수량 칸 — 위 같은 배열 · 같은 축(StructQty 주석)
+        if (structs != null && structs.Count > 0 && gy != null)
+        {
+            try
+            {
+                var curS = new DH.Grading.Core.StructSlice.Curtain { X = new[] { lx, rx }, Y = new[] { ly, ry }, U = new[] { -wl, wr }, ExtendStart = true, ExtendEnd = true };
+                var polys = new System.Collections.Generic.List<NetTopologySuite.Geometries.Polygon>();
+                int nModel = 0; bool dirty = false;
+                foreach (var m in structs)
+                {
+                    var c = DH.Grading.Core.StructSlice.Cut(m, curS, new DH.Grading.Core.StructSlice.Window(-wl, wr, -1e5, 1e5), StructDraw.JoinTol, StructDraw.CloseEps);   // 수량 폭 안만
+                    if (c.OpenParts > 0 || c.OpenLines.Count > 0 || !c.AreaOk) dirty = true;   // ★[계획 검토 MEDIUM 3] 열린 부재 · 넓이 검산 어긋남 — 표 밑 «미포함» 그대로 둠
+                    if (c.All.Count > 0) { polys.AddRange(c.All); nModel++; }
+                }
+                if (dirty && stOut != null && stOut.Length >= 3) stOut[2] = 1;
+                if (nModel > 1) polys = DH.Grading.Core.StructQty.Union(polys);   // ★[계획 검토 MEDIUM 2] 구조물끼리 겹친 자리를 두 번 안 빼게
+                if (polys.Count > 0)
+                {
+                    // ★[계획 검토 HIGH 1] 바깥 껍질 통째(배수지 물칸 · 박스 안 빈 곳엔 흙이 없다) · ★[MEDIUM 1] 그린 옹벽 단면과 겹친 자리는 옹벽 공제가 이미 뺐다 — 먼저 지움
+                    var shells = DH.Grading.Core.StructQty.Shells(polys, out double holeA);
+                    double wallOv = 0;
+                    if (x2 != null) shells = DH.Grading.Core.StructQty.Minus(shells, DH.Grading.Core.StructQty.WallPolys(x2), out wallOv);
+                    // ★[계획 검토 HIGH 2] 이 측점의 실제 기준(basisE — 계획면 기준이어도 옹벽 터파기만 있는 측점은 원지반 기준) · 옹벽 몫 띠(wxBot2 ~ wxTop2) 그대로
+                    var topS = DH.Grading.Core.CrossSectionArea.SurfaceFor(gy, py2, basisE);
+                    var (dF, dB, dBelow) = DH.Grading.Core.StructQty.Deduct(shells, xs, gy, py2, ey, topS, wxTop2 != null ? wxBot2 : null, wxTop2);
+                    // ★[계획 검토 MEDIUM 1 · 4] 공제 한도 = 옹벽 공제 뒤 남은 값 · 원장 · 합계보다 먼저(이 qq가 그대로 들어간다)
+                    double tF = double.IsNaN(qq.Fill) ? 0 : System.Math.Min(qq.Fill, dF), tB = double.IsNaN(qq.Backfill) ? 0 : System.Math.Min(qq.Backfill, dB);
+                    qq = qq with { Fill = qq.Fill - tF, Backfill = qq.Backfill - tB };
+                    if (stOut != null && stOut.Length >= 4) { stOut[0] = tF; stOut[1] = tB; stOut[3] = dBelow; }
+                    dbg?.Append($" | 구조물 단면 {polys.Count}개 {polys.Sum(p => p.Area):F2}㎡" + (holeA > 1e-6 ? $"(안 빈 곳 {holeA:F2}㎡ 메움)" : "")
+                                + $" → 성토에서 {tF:F2} · 되메우기에서 {tB:F2}㎡ 뺌"
+                                + (tF < dF - 1e-6 || tB < dB - 1e-6 ? " ⚠값보다 커 0에서 멈춤" : "")
+                                + (wallOv > 1e-3 ? $" ⚠옹벽 단면과 겹침 {wallOv:F2}㎡(옹벽 공제에 듦 — 구조물에서 뺌)" : "")
+                                + (dBelow > 0.1 ? $" ⚠터파기 바닥 아래 구조물 {dBelow:F2}㎡(공제 안 함 — 터파기 면이 구조물을 못 감쌈)" : "")
+                                + (dirty ? " ⚠열린 부재 · 넓이 검산 어긋남" : ""));
+                }
+            }
+            catch (System.Exception exS) { dbg?.Append(" | ⚠구조물 공제 실패 — " + exS.Message); }
+        }
         if (dbg != null)
         // ★[JACK 0827 "토적표 정확도 향상"] <b>어느 구간을 쟀는지</b> 남긴다 —
         //   BO로 잡은 영역과 맞대 보려면 우리가 센 자리를 알아야 한다.
@@ -4744,7 +4786,9 @@ public sealed partial class XsecViewCommand
         /// <summary>★[v104 · 계획 6 · 검토 중간 9] 표 아래 «미포함» 줄에 덧붙일 말(보강토체 등 — 되메우기에 듦). 없으면 빈 문자열.</summary>
         string Foot = "",
         /// <summary>★[v105.3] 측점 이름 → 그 측점 2D 터파기 · 배면(수량이 지은 그 객체 — 그림이 그대로 쓴다). 2D가 아니면 null.</summary>
-        System.Collections.Generic.Dictionary<string, DH.Grading.Core.WallExcav.Xs2D> X2 = null);
+        System.Collections.Generic.Dictionary<string, DH.Grading.Core.WallExcav.Xs2D> X2 = null,
+        /// <summary>★[v117.4] 불러온 구조물을 성토 · 되메우기 공제에 썼다 — 표 밑 «미포함»에서 구조물 두 마디를 뺀다.</summary>
+        bool StructDed = false);
 
     /// <summary>측점 이름 → 그 측점의 수량. 표를 그릴 때 이 표를 찾아 값을 채운다.
     /// <para>★★★[JACK 0831] <b>표 얼개도 여기서 나온다</b> — 어느 한 측점에서라도 나온 조합을
@@ -4769,6 +4813,7 @@ public sealed partial class XsecViewCommand
         var qtyBasis = DH.Grading.Core.CrossSectionArea.ExcavBase.Lower;
         int nOldVer = 0;          // ★옛 방식(층 하단)으로 만들어진 지층면 수
         string wallFoot = "";     // ★[v104] 보강토체 등 — 표 아래 한 줄
+        bool structOn = false;    // ★[v117.4] 불러온 구조물을 공제에 썼다(표 밑 «미포함» 두 마디를 뺀다)
         var x2map = new System.Collections.Generic.Dictionary<string, DH.Grading.Core.WallExcav.Xs2D>();   // ★[v105.3]
         var padHit = new System.Collections.Generic.HashSet<string>();   // ★[v111.5] 진입도로 — 부지 정지면 위 측점
         int nRoadEdge = 0; string firstRoadEdge = null;                   // ★[v111.5] 진입도로가 횡단 폭 끝에 닿은 측점
@@ -4812,7 +4857,7 @@ public sealed partial class XsecViewCommand
             if (uncutLen > 1.0)
                 warn.Append($"\n  ⚠이 노선 횡단과 거의 나란해(15° 안) 횡단 · 수량에서 빠진 옹벽 앞면 {uncutLen:F0} m(변 {uncutSegs}개)"
                           + " — 그 벽은 그 벽을 가로지르는 노선으로 따로 세세요(2D 실무 방식).");
-            return new QtyResult(map, ledgers, spec, warn.ToString(), qtyBasis, wallFoot, x2map.Count > 0 ? x2map : null);
+            return new QtyResult(map, ledgers, spec, warn.ToString(), qtyBasis, wallFoot, x2map.Count > 0 ? x2map : null, structOn);
         }
         if (sl == null || sl.Count == 0) return Done();
         int nOk = 0, nNo = 0, nThrow = 0; string firstThrow = null;
@@ -4828,6 +4873,13 @@ public sealed partial class XsecViewCommand
         var wback = new System.Collections.Generic.List<(double St, double Extra)>();
         var exSt = WallListStore.ExcavOf(db, out _);   // ★[v104 설치 전 검토 높음 1] 배면 기록은 지금 설정이 켬 · 같은 경사일 때만 쓴다
         bool csWxSeen = false;
+        // ★★[v117.4 · JACK 1111] 불러온 구조물(Revit) — 측점마다 단면을 잘라 성토 · 되메우기에서 뺀다(트랜잭션 밖에서 읽음 — LoadAll이 제 트랜잭션을 연다)
+        System.Collections.Generic.List<DH.Grading.Core.StructModel> structs = null;
+        if (StructImport.Any(db))
+            try { structs = StructImport.LoadAll(db, null, out _).Where(x => !x.Model.Empty).Select(x => x.Model).ToList(); }
+            catch (System.Exception exL) { log?.AppendLine("  ⚠구조물 공제 — 구조물을 못 읽음: " + exL.Message); }
+        var sded = new System.Collections.Generic.List<(double St, double F, double B)>();
+        var sdirty = new System.Collections.Generic.List<string>(); var sbelow = new System.Collections.Generic.List<string>();
         try
         {
             using var tr = db.TransactionManager.StartTransaction();
@@ -5016,10 +5068,19 @@ public sealed partial class XsecViewCommand
                     var led = new DH.Grading.Core.QtyLedger();
                     var secOut = new double[4] { double.NaN, 0, 0, 0 };
                     var backOut = new double[2] { double.NaN, 0 };
+                    var stOut = new double[4] { double.NaN, double.NaN, 0, 0 };   // ★[v117.4] 구조물 공제(성토 · 되메우기 · 잘림 어긋남 · 터파기 바닥 아래)
                     var q = QtyAt(tr, al0, s.St, wl, wr, csG, planQ, csE, dbg,
                                   strata, csW, led, DH.Grading.Core.QuantityTable.DeepLimitM,
                                   qtyBasis, csWx, secRec, secOut, backRec, backOut,
-                                  x2ctx, x2ctx == null ? null : x => x2map[s.Name] = x, roadEdges);
+                                  x2ctx, x2ctx == null ? null : x => x2map[s.Name] = x, roadEdges, structs, stOut);
+                    if (stOut[2] > 0) sdirty.Add(s.Name);
+                    if (stOut[3] > 0.1) sbelow.Add(s.Name);
+                    if (!double.IsNaN(stOut[0]))
+                    {
+                        sded.Add((s.St, stOut[0], stOut[1]));
+                        led.Add(DH.Grading.Core.QtyKey.OfStructFill(), stOut[0]);
+                        led.Add(DH.Grading.Core.QtyKey.OfStructBackfill(), stOut[1]);
+                    }
                     // ★[v111.5 · 검토 M5 · M6] 진입도로 — 부지 정지면이 원지반과 다른 자리를 지나는 측점(부지 토량과 겹침) · 진입도로가 횡단 폭 끝에 닿는 측점
                     if (xt != null && SectionCommand.TryCut(al0, s.St, wl, wr, out var cutR))
                     {
@@ -5160,6 +5221,21 @@ public sealed partial class XsecViewCommand
             for (int i = 0; i + 1 < wb.Count; i++) volB += (wb[i].Extra + wb[i + 1].Extra) / 2 * (wb[i + 1].St - wb[i].St);
             log?.AppendLine($"  옹벽 배면사면(1:{backRec?.N:0.##}) — 측점 {wb.Count}개 · 그 위 원지반 합 {wb.Sum(w => w.Extra):F2}㎡(약 {volB:F1}㎥ · 절토에 듦 · 되메우기는 배면사면까지)");
             if (volB > 0.05) wallFoot = (wallFoot.Length > 0 ? wallFoot + " · " : "") + $"옹벽 배면사면(1:{backRec?.N:0.##}) 위 원지반은 절토에 들어 있다 — 약 {volB:F1}㎥";
+        }
+        // ★★[v117.4 · JACK 1111] 불러온 구조물 공제 — 평균단면법 부피(측점 순) · 로그 한 줄 + 표 꼬리
+        //   (진입도로 노선 횡단도 같은 수량 함수 — 그 노선을 지나는 구조물도 뺀다)
+        if (structs != null && structs.Count > 0)
+        {
+            var sd = sded.OrderBy(w => w.St).ToList();
+            double vF = 0, vB = 0;
+            for (int i = 0; i + 1 < sd.Count; i++) { double L = sd[i + 1].St - sd[i].St; vF += (sd[i].F + sd[i + 1].F) / 2 * L; vB += (sd[i].B + sd[i + 1].B) / 2 * L; }
+            log?.AppendLine($"  구조물 공제(불러온 구조물 {structs.Count}개 · 바깥 껍질) — 단면이 걸친 측점 {sd.Count}개 · 성토에서 합 {sd.Sum(w => w.F):F2}㎡(약 {vF:F1}㎥)"
+                          + $" · 되메우기에서 합 {sd.Sum(w => w.B):F2}㎡(약 {vB:F1}㎥) · 성토 · 되메우기 줄은 뺀 값");
+            if (vF + vB > 0.05) wallFoot = (wallFoot.Length > 0 ? wallFoot + " · " : "") + $"불러온 구조물 공제 약 {vF + vB:F1}㎥(성토 {vF:F1} · 되메우기 {vB:F1})";
+            // ★[계획 검토 MEDIUM 3] 잘림이 깨끗하지 않은 측점이 있으면 «미포함» 두 마디를 그대로 둔다
+            if (sdirty.Count > 0) log?.AppendLine($"  ⚠구조물 공제 — 열린 부재 · 넓이 검산 어긋남 측점 {sdirty.Count}개({string.Join(", ", sdirty.Take(8))}{(sdirty.Count > 8 ? " …" : "")}) — 그 몫이 덜 빠질 수 있어 표 밑 «미포함» 안내를 그대로 둠");
+            if (sbelow.Count > 0) log?.AppendLine($"  ⚠구조물 공제 — 터파기 바닥 아래 구조물이 있는 측점 {sbelow.Count}개({string.Join(", ", sbelow.Take(8))}{(sbelow.Count > 8 ? " …" : "")}) — 터파기 면이 구조물을 못 감쌌습니다([구조물 터파기]를 확인)");
+            structOn = sdirty.Count == 0;
         }
         // ★★[v111.5 · 계획 3 · 검토 M5] 진입도로가 부지 정지면(정지면_DH) 위에 놓인 측점 — 그 자리 토량은 부지 토량과 겹친다(계획면이 정지면_DH를 따라가 부지 절성토가 함께 셈) · 표 꼬리 한 줄
         if (xt != null && padHit.Count > 0)
