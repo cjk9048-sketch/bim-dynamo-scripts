@@ -129,6 +129,16 @@ static class WallTieredCheck
         return (extra, verts, cen);
     }
 
+    /// <summary>★[v117.5 · t12] 점 흔들기 — 좌표 해시로 정함(난수 안 씀 · 어디서 돌려도 같음) · ±amp/2.</summary>
+    static Coordinate Jit(Coordinate c, double amp, int salt)
+    {
+        long hx = (long)Math.Round(c.X * 8), hy = (long)Math.Round(c.Y * 8);
+        ulong h = (ulong)(hx * 73856093L ^ hy * 19349663L ^ (salt + 1) * 83492791L);
+        h ^= h >> 29; h *= 0xBF58476D1CE4E5B9UL; h ^= h >> 32;
+        double u = (h & 0xFFFF) / 65535.0 - 0.5, v = ((h >> 16) & 0xFFFF) / 65535.0 - 0.5;
+        return new Coordinate(c.X + u * amp, c.Y + v * amp);
+    }
+
     public static void Run(Action<string, bool, string> check0)
     {
         void Check(string n, bool ok, string d) => check0("S248 WT " + n, ok, d);
@@ -201,6 +211,22 @@ static class WallTieredCheck
         var (c11, b11) = Make(U, pT11, gT, p0: p11);
         Check("(t11) 옛 성토 주머니 — 주머니 고리 ≥ 1 · 땅 위 0", Clean(b11) && b11!.PocketN >= 1 && b11.WallTrisF.Count > 0, Brief(b11, c11));
 
+        // (t12) ★[v117.5 · 키트 wtfill 1111 «2차 수직 자가검증 반대쪽 2점 12.4 µm»] 성토 · (t3) 피라미드(땅이 Z1 밑 → 끊김) · 원지반 점을 흔든 불규칙 삼각망 · 큰 좌표 —
+        //   P0′ = G 자리(소단이 땅 높이에서 잘림)를 합성 다듬기가 성긴 세모로 다시 엮어 µm 근사 → 옛: 2차 수직 «자가검증» 반대쪽 8점 1.3 µm로 거절.
+        //   새: 그 자리 G를 그대로 읽고 높이 0 칸(부호 대신 |W − G| ≤ 1 mm) — 짓고 깨끗 · 높이 0 칸 ≥ 1 · 2차 부호 0 · 끊김 ≥ 1
+        Func<double, double, double> g12 = (x, y) => G(x, y) - 4 * Math.Max(0, 1 - Math.Abs(y) / 2) * Math.Max(0, 1 - Math.Abs(x - 49.6) / 3);
+        var gT12 = Tin(GridPts(20, -40, 90, 40, 1).Select(c => Jit(c, 0.6, 5)).Concat(GridPts(46.6, -2, 52.6, 2, 0.25).Select(c => Jit(c, 0.15, 5))).Distinct(), Array.Empty<Coordinate[]>(), g12);
+        const double DX12 = 210300, DY12 = 509780;
+        var (c12, b12) = Make(U, pT, gT12, g: g12, dx: DX12, dy: DY12, sz: -1);
+        {
+            var zl = b12?.Log.Split('\n').FirstOrDefault(l => l.Contains("⑥-e 높이 0 칸")) ?? "";
+            var zm = System.Text.RegularExpressions.Regex.Match(zl, @"부호 안 잼\) (\d+) · \|W − G\| 최대 ([0-9.]+) µm");
+            int zN = zm.Success ? int.Parse(zm.Groups[1].Value) : -1; double zMax = zm.Success ? double.Parse(zm.Groups[2].Value, System.Globalization.CultureInfo.InvariantCulture) : double.NaN;
+            Check("(t12) 성토 · 땅이 Z1 밑 · 흔든 원지반 · 큰 좌표 — 짓고 깨끗 · 높이 0 칸 ≥ 1(|W − G| ≤ 1 mm) · 2차 부호 0 · 끊김 ≥ 1",
+                Clean(b12) && b12!.Dir == -1 && b12.TierN >= 2 && b12.SignBad == 0 && b12.BreakN >= 1 && zN >= 1 && zMax <= 1000,
+                $"높이 0 칸 {zN} · |W − G| 최대 {zMax} µm · {Brief(b12, c12)}");
+        }
+
         // 합성 왕복(Core 세모 · 출하 길)
         Console.WriteLine("\n== S248 합성 왕복(exactG) ==");
         void Both(string nm, WallByLine.Built? b, BoundaryCut.Result c, List<Tri> g, List<Tri> p)
@@ -214,6 +240,7 @@ static class WallTieredCheck
         Both("(t7)", b7, c7, gT, pT);
         if (b8 != null && b8.Ok) Both("(t8)", b8, c8, Shift(gT, 200000, 550000), Shift(pT, 200000, 550000));
         Both("(t11)", b11, c11, gT, pT11);
+        Both("(t12)", b12, c12, Shift(gT12, DX12, DY12, -1), Shift(pT, DX12, DY12, -1));
         if (b11 != null && b11.Ok)
         {
             var (cf, cc) = CivilWall(b11);

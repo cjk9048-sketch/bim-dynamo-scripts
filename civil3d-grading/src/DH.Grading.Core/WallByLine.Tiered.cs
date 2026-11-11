@@ -400,6 +400,15 @@ public static partial class WallByLine
 
         // ⑨ 2차 수직 — P0 자리에 P0′(코드 그대로)
         var inp2 = inp.Copy(); inp2.Shape = WallShape.Vertical; inp2.P0Tris = p0All; inp2.P0 = (x, y) => p0Look(x, y) ?? inp.P0(x, y);
+        // ★[v117.5 · 키트 wtfill] P0′ = G가 짓기상 정확한 자리 — 규칙(절토 꼴 max(P0, min(T, G)))이 G를 고르는 곳: P0 ≤ G ≤ T(세 면을 제 삼각망에서 읽음).
+        //   합성 P0′는 그 자리를 성긴 세모(원지반 변 여럿을 걸침 · 꼭짓점만 G)로 엮어 µm 근사 — 하네스 S248 t12 실측: 2차 수직 «자가검증» 반대쪽 8점 1.3 µm
+        //   (키트 wtfill 12.4 µm도 이 자리로 보임 · 재지 않음). 2차 수직은 거기서 G를 그대로 읽고 두 L′ 끝이 다 그 자리인 칸은 높이 0 칸으로 다룬다
+        var tLook = TriLookup(tT);
+        inp2.ZeroAt = (x, y) =>
+        {
+            var g = GW(x, y); var p = PW(x, y); var t = tLook(x, y);
+            return g != null && p != null && t != null && sg * p.Value <= sg * g.Value && sg * g.Value <= sg * t.Value;
+        };
         var b2 = BuildVertical(inp2);
         log.Append("  [다단 · 2차 수직(P0′)]\n").Append(b2.Log);
         if (!b2.Ok) return No("다단 수직", $"P0′에 대고 바깥 벽을 못 지었습니다 — {b2.Code}: {b2.Why}", b2.Marks.ToArray());

@@ -112,7 +112,9 @@ public static partial class WallByLine
         var gLook = hasG ? TriLookup(inp.GroundTris!) : null;
         var pLook = hasP ? TriLookup(inp.P0Tris!) : null;
         double? GR(double lx, double ly) { double x = lx + ox, y = ly + oy; return gLook?.Invoke(x, y) ?? inp.Ground(x, y); }
-        double? PR(double lx, double ly) { double x = lx + ox, y = ly + oy; return pLook?.Invoke(x, y) ?? inp.P0(x, y); }
+        // ★[v117.5 · 키트 wtfill] 다단 2차 — P0′ = G가 짓기상 정확한 자리는 원지반을 그대로 읽는다(합성 삼각망은 그 자리를 µm 근사 — 하네스 S248 t12 반대쪽 1.3 µm)
+        var zeroAt = inp.ZeroAt;
+        double? PR(double lx, double ly) { double x = lx + ox, y = ly + oy; if (zeroAt != null && zeroAt(x, y)) { var gz = GR(lx, ly); if (gz != null) return gz; } return pLook?.Invoke(x, y) ?? inp.P0(x, y); }
         int p0Fb = 0;
         // L 위 높이(δ 셈용) — 끝(옛 경계 · 삼각망 테두리 µm 밖)은 선 안쪽으로 1 mm 민 자리 · 그래도 못 읽으면 (P0만) G(옛 Build ① edgeFb와 같음 · 셈). 끝 높이는 따로(검토 3)
         double? OnL(Func<double, double, double?> rd, double s, bool p0)
@@ -975,6 +977,15 @@ public static partial class WallByLine
         // ★[v117.2 · 설치 전 검토 뒤처리 3] 끝 조각(옛 경계 위 A → X)의 벽이 원지반 반대쪽으로 1 cm 넘게 — 그 칸 부호 한도가 늘어 말없이 지나던 것을 끝 높이 계약(1 cm)으로 막음
         if (endOver > VEndMax)
             return No("끝 높이", string.Format(ci, "띠 끝 X_{0}에서 정지면이 원지반 반대쪽으로 {1:F3} m(1 cm 넘음) — 끝 {0} 곁 옛 경계가 데이라잇이 아닙니다 ({2:F2}, {3:F2}) · 선 끝을 옮기세요", endOverNm, endOver, endOverAt.X, endOverAt.Y), endOverAt);
+        // ★[v117.5 · 키트 wtfill] 높이 0 칸(다단 2차만) — 두 L′ 끝이 P0′ = G 자리면 네 귀 W = G 정확 · 칸 안 W − G는 0.25 mm 띠 안 원지반 꺾임뿐(벽 아님) →
+        //   부호 대신 |W − G| ≤ 1 mm(L · L′ 턱 계약)로 잰다. 가로대 빠진 벽 섬이 칸에 숨으면 1 mm에서 걸린다
+        bool[]? zeroCell = null; int zeroN = 0; double zeroMax = 0; (double X, double Y) zeroWAt = default;
+        if (zeroAt != null)
+        {
+            zeroCell = new bool[Math.Max(0, rungs.Count - 1)];
+            for (int i = 0; i + 1 < rungs.Count; i++) zeroCell[i] = zeroAt(rungs[i].Q.X + ox, rungs[i].Q.Y + oy) && zeroAt(rungs[i + 1].Q.X + ox, rungs[i + 1].Q.Y + oy);
+            zeroN = zeroCell.Count(z => z);
+        }
         {
             var gV = new STRtree<Coordinate>();
             foreach (var (a, b) in edG) { gV.Insert(new Envelope(a), a); gV.Insert(new Envelope(b), b); }
@@ -984,6 +995,7 @@ public static partial class WallByLine
                 var (pk, t) = cellTris[ti];
                 bool up = parts[pk].Up;
                 bool endCell = cellOf[ti] == 0 || cellOf[ti] == rungs.Count - 2;
+                bool zc = zeroCell != null && zeroCell[cellOf[ti]];
                 var A = new Coordinate(t.A.X - ox, t.A.Y - oy); var B = new Coordinate(t.B.X - ox, t.B.Y - oy); var C = new Coordinate(t.C.X - ox, t.C.Y - oy);
                 double den = Cross3(A, B, C);
                 if (Math.Abs(den) < 1e-24) continue;
@@ -1000,6 +1012,7 @@ public static partial class WallByLine
                 {
                     if (pl.Near(q.X, q.Y).D <= 1e-9 || OnEnd(q)) continue;
                     var g = GR(q.X, q.Y); if (g == null) continue;
+                    if (zc) { double dzc = Math.Abs(Wb(q) - g.Value); if (dzc > zeroMax) { zeroMax = dzc; zeroWAt = Wd(q); } continue; }
                     R.SignN++;
                     double w = Wb(q), over = (up ? w - g.Value : g.Value - w) - (endCell ? endOver : 0);
                     if (over > signMax) { signMax = over; signAt = Wd(q); }
@@ -1166,9 +1179,11 @@ public static partial class WallByLine
         // ★[v117.2 · 뒤처리 1 · 3 재기] 끝 조각 양쪽 |P0 − G| · 셋째 풀기 뒤 꼭짓점 없는 L′ 위 P0 건넘(새 것 · 그 자리 |W − P0|) · 다시 넣은 수 · L′ W−P0 새 잣대(마지막 L′ 위) / 옛 잣대(첫 건넘 자리) · 부채 줄임
         log.Append(string.Format(ci, "  ⑥-d 끝 조각 |P0 − G| 최대 {0:F1} µm · L′ 위 P0 새 건넘 {1}(|W − P0| 최대 {2:F4} mm) · 다시 넣음 {3} · L′ W−P0 새 잣대 {4:F4} / 옛 잣대 {5:F4} mm{6}\n",
             endAbs * 1e6, freshN, freshMax * 1000, addP0L2, R.EdgeP0Max * 1000, edgeP0Old * 1000, fanCut > 0 ? $" · 부채 나눔 줄임 {fanCut}" : ""));
+        if (zeroAt != null) log.Append(string.Format(ci, "  ⑥-e 높이 0 칸(P0′ = G 자리 · 부호 안 잼) {0} · |W − G| 최대 {1:F1} µm @({2:F3}, {3:F3})\n", zeroN, zeroMax * 1e6, zeroWAt.X, zeroWAt.Y));
         // 자가검증 거절(우리 규칙 구멍 — 나면 규칙을 고침)
         if (R.OutsideN > 0) return No("자가검증", $"벽 띠 · 세모 {R.OutsideN}개가 선 바깥(R_out)에 있습니다 — 선 바깥에는 아무것도 없어야 합니다", (R.A.X, R.A.Y));
         if (R.SignBad > 0) return No("자가검증", string.Format(ci, "띠 안 벽 면이 원지반 반대쪽 {0}점(최대 {1:F1} µm @({2:F2}, {3:F2})) — 합성이 벽 대신 원지반을 고른다", R.SignBad, R.SignMax * 1e6, signAt.X, signAt.Y), signAt);
+        if (zeroMax > VEdgeMax) return No("턱", string.Format(ci, "높이 0 칸(소단이 땅 높이에서 잘린 자리) 벽 면이 원지반과 {0:F2} mm 어긋납니다 ({1:F2}, {2:F2}) — 띠 안 원지반 꺾임 · 가로대 빠진 벽", zeroMax * 1000, zeroWAt.X, zeroWAt.Y), zeroWAt);
         if (R.PairsUnder01 + R.ShortEdges + R.Needles > 0) return No("자가검증", $"0.1 mm 안 점 쌍 {R.PairsUnder01} · 0.25 mm 미만 변 {R.ShortEdges} · 바늘 세모 {R.Needles} — Civil이 합치거나 뒤집는다", (R.A.X, R.A.Y));
         if (R.EdgeGMax > VEdgeMax) return No("턱", string.Format(ci, "선(L) 위 벽 면이 원지반과 {0:F2} mm 어긋납니다 ({1:F2}, {2:F2}) — 사다리에 못 넣은 원지반 꺾임", R.EdgeGMax * 1000, eGAt.X, eGAt.Y), eGAt);
         if (R.EdgeP0Max > VEdgeMax) return No("턱", string.Format(ci, "벽 띠 안쪽 끝(L′) 위 벽 면이 정지면과 {0:F2} mm 어긋납니다 ({1:F2}, {2:F2}) — 사다리에 못 넣은 정지면 꺾임", R.EdgeP0Max * 1000, eP0At.X, eP0At.Y), eP0At);
