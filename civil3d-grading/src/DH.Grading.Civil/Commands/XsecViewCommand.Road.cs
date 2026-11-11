@@ -535,7 +535,13 @@ public sealed partial class XsecViewCommand
                 {
                     using var tr = db.TransactionManager.StartTransaction();
                     var mId = FindStyle(tr, mName, cdoc.Styles.SectionViewStyles);
-                    if (!mId.IsNull && mId != vs) tr.GetObject(mId, OpenMode.ForWrite).Erase();
+                    if (!mId.IsNull && mId != vs)
+                    {
+                        // ★[v117.7.1 · pvx1 E] 이름부터 비킨다 — 지운 스타일이 이름을 쥐면 다음 자동 축척의 «측정» CopyAsSibling이 빈 Id(«복사본 없음» → 옛 스타일로 재 1:150이 1:500으로 · ProfileScaleStyles.DropRoadClones와 같은 까닭)
+                        var mSb = (CivilDb.Styles.StyleBase)tr.GetObject(mId, OpenMode.ForWrite);
+                        try { mSb.Name = mName + $" 옛{System.DateTime.Now:MMddHHmmssfff}"; } catch { }
+                        mSb.Erase();
+                    }
                     tr.Commit();
                 }
                 catch { }

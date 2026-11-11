@@ -74,6 +74,8 @@ internal sealed class XsecTarget
     internal string Title = "진입도로 횡단면도";
     /// <summary>도면설정 «진입도로 횡단도 축척»(0 = 자동 — 부지와 같은 PickScale).</summary>
     internal double Pin;
+    /// <summary>★[v117.7.1] <see cref="Pin"/>이 도면설정 고정이 아니라 자동으로 그린 축척을 지킨 것(<see cref="DH.Grading.Core.RoadXsecRules.KeptScale"/>) — 알림 글만 다름(기록 XsecPin은 0 그대로).</summary>
+    internal bool Kept;
     /// <summary>지울 옛 횡단(이 도로 기록 — 그룹 핸들 · 뷰 핸들).</summary>
     internal string OldGroup = "";
     internal List<string> OldViews = new();
