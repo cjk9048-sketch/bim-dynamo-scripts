@@ -334,6 +334,7 @@ internal static class RoadSheets
                 double h = d.SheetScale, v = d.SheetScaleV is double sv && sv > 0 ? sv : h;
                 string msg = ProfileScaleStyles.Rebake(db, views, h, v, a0, a1, aid.Handle.ToString(), log);
                 d.SheetAnno = a1;
+                XsecScaleStyles.RetagFrames(db, aid.Handle.ToString(), SheetFrameTag.KindProf, a0, a1);   // ★[v117.6.1] 도면화 뷰포트가 거는 주석 축척도 지금 값으로(스타일을 a1 기준으로 구웠으므로)
                 using (var tr = db.TransactionManager.StartTransaction()) { d.Write(tr, aid); tr.Commit(); }
                 // 열린 진입도로(도킹창)의 기억도 — 다음 SaveDesign이 옛 값을 다시 쓰지 않게
                 try { if (Autodesk.AutoCAD.ApplicationServices.Core.Application.DocumentManager.GetDocument(db) is { } doc && RoadSession.Of(doc) is RoadSession s && s.AlignId == aid) s.Design.SheetAnno = a1; } catch { }
