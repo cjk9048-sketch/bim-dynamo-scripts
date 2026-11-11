@@ -128,7 +128,7 @@ internal static class WallLineFlow
 
     /// <summary>★[v114.0] 짓기 재료 — 판정 + 기하(질문 없음). P0 · 원지반 삼각형은 경계 + 여유 상자만.
     /// ★[v114.3 · JACK 1105 소단 높이] 벽 소단 높이 = 옛 사면 소단 높이(옛 소단 방식 — 링에서 · H는 기하에 안 씀) · 링 꼭짓점이 합성 전 면과 맞는지 먼저 잰다(재검토 M-A).</summary>
-    static WallByLine.Built BuildGeom(BoundaryCut.Result cut, IReadOnlyList<Point3> bd, GradingBundle region, List<(string, IReadOnlyList<Point3>)> bl,
+    internal static WallByLine.Built BuildGeom(BoundaryCut.Result cut, IReadOnlyList<Point3> bd, GradingBundle region, List<(string, IReadOnlyList<Point3>)> bl,
         double hc, double tc, double hf, double tf, double slopeW, double faceRun, double grid, double reach, CachedGroundSurface g, CachedGroundSurface p0, bool topStep = false, double blockLen = 9,
         WallByLine.WallShape shape = WallByLine.WallShape.Out, double tierH = double.NaN, double tierB = double.NaN, double tierZ1 = double.NaN,
         List<WallByLine.TierSec>? tierSecs = null, bool tierEnd = false)
@@ -204,7 +204,7 @@ internal static class WallLineFlow
     }
 
     /// <summary>가상옹벽{번호}_DH · 선 · 폴리곤(이 트랜잭션) — 됐으면 면 핸들 · 아니면 빈 값 + 까닭.</summary>
-    static (string Handle, string Block, string Note) BuildSurface(Database db, Transaction tr, WallByLine.Built b, int no, string region, ObjectId groundId)
+    internal static (string Handle, string Block, string Note) BuildSurface(Database db, Transaction tr, WallByLine.Built b, int no, string region, ObjectId groundId)
     {
         string name = WallRec.WallSurfaceName(no);
         var wid = GradingBuilder.BuildVirtualSlope(db, tr, new List<List<Point3>>(), name, b.Lines, groundId, null, midOrd: 0.001);
