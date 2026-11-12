@@ -53,6 +53,7 @@ using AcadApp = Autodesk.AutoCAD.ApplicationServices.Application;
 [assembly: CommandClass(typeof(DH.Grading.Civil.UndoGuard))]                          // ★[v114.2] DHUNDOCLR(명령 뒤 되돌리기 기록 비움 — Civil 결함 회피)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.StructCommand))]             // ★[v115 · JACK 1105] DHSTRUCT · DHSTRUCTPTS(v116.9 좌표계 내보내기) · DHSTRUCTOFF(Revit 구조물)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.UDitchCommand))]             // ★[배수지 U형 측구 1단계] DHUDITCH(창) · -DHUDITCH(명령줄)
+[assembly: CommandClass(typeof(DH.Grading.Civil.SectionPalette))]                         // ★[JACK 1112] DHSECPANEL · DHROADSECPANEL(종횡단도 도킹창 — 종단도 · 횡단도 단추를 하나로)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.WallMigrateCommand))]        // ★[v117.9] DHWALLMIGRATE(옛 옹벽 옮기기 — 키트에서 «알 수 없는 명령»으로 찾음)
 
 namespace DH.Grading.Civil;
@@ -792,6 +793,21 @@ public sealed class RibbonApp : IExtensionApplication
                 "진입도로 [종단도]와 진입도로 지표면이 먼저 있어야 합니다.\n" +
                 "놓을 자리를 찍습니다(Enter = 지난 자리 · Esc = 그만).", null);
 
+            // ★★[JACK 1112 «종단도 · 횡단도 단추를 종횡단도 하나로 — 누르면 도킹창 · 1.종단도 2.횡단도 · 노리선 단추는 없애»]
+            //   옛 단추(btnProf · btnStn · btnStnFb · btnStnDel · btnRev · btnXsec · btnRoadSheet · btnRoadXsec)는 <b>만들어만 두고 안 얹는다</b> — 명령은 그대로 살아 있고
+            //   종횡단도 창 안 단추가 같은 명령을 부른다. 노리선 단추(btnNori)도 리본에서만 뺐다(DHNORI 명령은 남음).
+            var btnSecSite = MakeButton(
+                "종횡단도", "DHSECPANEL ", "계획지표면 종단도 · 횡단도 창 — 열고 닫기", "종단");
+            btnSecSite.ToolTip = MakeTip("계획지표면 종횡단도 (DHSECPANEL)",
+                "오른쪽에 **종횡단도 창**이 열립니다(다시 누르면 닫힘).\n" +
+                "1. 종단도 — 종단도 · 측점 추가 · 측점 전후 · 측점 지우기 · 시점↔종점\n" +
+                "2. 횡단도 — 횡단도 그리기", null);
+            var btnSecRoad = MakeButton(
+                "종횡단도", "DHROADSECPANEL ", "진입도로 종단도 · 횡단도 창 — 열고 닫기", "횡단");
+            btnSecRoad.ToolTip = MakeTip("진입도로 종횡단도 (DHROADSECPANEL)",
+                "오른쪽에 **진입도로 종횡단도 창**이 열립니다(다시 누르면 닫힘).\n" +
+                "1. 종단도 · 2. 횡단도 — 열린 진입도로 기준", null);
+
             // ── 무엇이 있어야 눌 수 있나(JACK 0901) ───────────────────────────
             //   여기 한 곳만 보면 <b>일하는 순서</b>가 그대로 읽힌다.
             _needGround.Clear(); _needPlan.Clear(); _all.Clear();
@@ -818,13 +834,7 @@ public sealed class RibbonApp : IExtensionApplication
             //     ★[JACK 0910] 그 단추가 <b>창을 여는 문</b>이 되면서 잠글 자리가 없어졌다 —
             //     실행을 막는 관문은 <c>ExcavPanel</c>(계획지표면 라디오)과 <c>DoExcav</c>에 그대로 있다.
             //   ※btnWall/btnSlope는 리본에 안 얹히므로 잠금 목록에서도 뺀다 — 헛돈다.
-            _needPlan.Add(btnNori);          // 노리선
-            _needPlan.Add(btnProf);          // 계획지표면 종단도
-            _needPlan.Add(btnStn);
-            _needPlan.Add(btnStnFb);
-            _needPlan.Add(btnStnDel);   // ★[검토 0902] 형제 둘은 있는데 이것만 빠져 있었다
-            _needPlan.Add(splitStn);         // ★[v111.6] [측점] 스플릿 — 항목이 셋 다 꺼지면 스플릿 자체도(화살표까지) 끈다
-            _needPlan.Add(btnXsec);          // 계획지표면 횡단도
+            _needPlan.Add(btnSecSite);       // ★[JACK 1112] 종횡단도 — 계획지표면이 있어야(옛 종단도 · 횡단도 단추와 같은 규칙)
             //   ★[v111.6 · JACK 1102] 진입도로 단추(창 · 종단도 · 횡단도)는 어느 목록에도 안 넣는다 — 열린 도로가 없으면 명령이 물러난다
 
             // ★[계획 §4] 찍는 중에 한꺼번에 잠글 목록 — <b>둘의 합집합</b>이면 충분하다.
@@ -861,9 +871,7 @@ public sealed class RibbonApp : IExtensionApplication
             pGrade.Items.Add(splitSurf);
             pGrade.Items.Add(Spacer());
             // ★★[v113.3 · JACK 1105] [종단도] 스플릿(종단도 생성 · 측점 넷) — 옛 [종단도] 단추 · [측점] 스플릿 자리를 하나로
-            pGrade.Items.Add(splitStn);
-            pGrade.Items.Add(Spacer());
-            pGrade.Items.Add(btnXsec);
+            pGrade.Items.Add(btnSecSite);
             pGrade.Items.Add(Spacer());
             // ★★[v110 · JACK 1028 «진입도로 — 인프라웍스처럼»] 노선(폴리선 · Civil 노선) → 종단 초안 → 실시간 미리보기 + 도킹창
             // ★★[v110.2 · JACK 1029 «진입도로 버튼은 스플릿버튼 — 첫째 경로 그리기(직접 눌러 그리면 선형) · 둘째 지금처럼 폴리선 선택»]
@@ -926,17 +934,13 @@ public sealed class RibbonApp : IExtensionApplication
             pRoad.Items.Add(Spacer());
             pRoad.Items.Add(btnRoadNew);
             pRoad.Items.Add(Spacer());
-            pRoad.Items.Add(btnRoadSheet);
-            pRoad.Items.Add(Spacer());
-            pRoad.Items.Add(btnRoadXsec);
+            pRoad.Items.Add(btnSecRoad);
             pRoad.Items.Add(Spacer());
 
             // ★★[v111.6 · JACK 1102] [공통] = 둘이 함께 쓰는 것 — 도면설정 · 노리선 · 지층 · 위성지도(기타에서 옮김) · ★[v111.7] 원지반 가져오기는 [원지반 작성]으로
             tab.Panels.Add(new RibbonPanel { Source = pCommon });
             pCommon.Items.Add(Spacer());
             pCommon.Items.Add(btnSheetSet);
-            pCommon.Items.Add(Spacer());
-            pCommon.Items.Add(btnNori);
             pCommon.Items.Add(Spacer());
             pCommon.Items.Add(btnStrata);
             pCommon.Items.Add(Spacer());
@@ -1691,6 +1695,7 @@ public sealed class RibbonApp : IExtensionApplication
             //   <para>★<b>끄는 목록에 넣었으면 켜는 목록에도 넣어야 한다</b> — 이 저장소가
             //   "고침이 낸 구멍"으로 여러 번 값을 치른 그 모양이다(§75 ⑤ · §77 ④).</para>
             foreach (var it in _always) if (it != null) it.IsEnabled = true;
+            SectionPalette.RefreshAll(hasPlan);   // ★[JACK 1112] 종횡단도 창 단추도 같은 규칙(찍는 중 잠금은 창 안에서 Busy를 읽음)
 
             // ★★★[계획 §4 · 검토 0909 H2] <b>찍는 중에는 리본을 잠근다 — 맨 끝에서.</b>
             //   리본 단추는 명령 앞에 <c>^C^C</c>를 붙여 보낸다 — 그것이 <b>진행 중인 찍기를 죽인다</b>.

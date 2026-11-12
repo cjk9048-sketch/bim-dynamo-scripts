@@ -3886,7 +3886,7 @@ public sealed class CreateGradingCommand
                             $"클립링 절 {(bundle.CutClipRing?.Count ?? 0)}점/성 {(bundle.FillClipRing?.Count ?? 0)}점 · " +
                             $"옹벽선 절 {(bundle.CutWallRuns?.Count ?? 0)}줄/성 {(bundle.FillWallRuns?.Count ?? 0)}줄" +
                             trimMsg +
-                            "\n→ [노리선]·[INFRAWORKS] 버튼이 이 번들을 사용합니다";
+                            "\n→ [INFRAWORKS] 버튼이 이 번들을 사용합니다";
             }
             catch (System.Exception ex) { bundleMsg = "번들 저장 실패 — " + ex.Message; bundleFailed = true; }
             try

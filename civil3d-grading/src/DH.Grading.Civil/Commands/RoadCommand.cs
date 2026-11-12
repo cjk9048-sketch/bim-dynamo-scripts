@@ -1517,7 +1517,7 @@ public class RoadCommand
             var parts = new List<string>();
             if (surfDone) parts.Add("지표면"); else if (finalDone) parts.Add("최종지표면"); if (sheetDone) parts.Add("종단도"); if (xsecDone) parts.Add("횡단도");
             string what = string.Join(" · ", parts);
-            string tick = surfMsg.Contains("노리선") ? " · 노리선은 [노리선]으로 다시" : "";
+            string tick = "";
             // ★[v111.8 · 7.7] 최종지표면은 만들었는데 경고(가파른 띠 — 사면이 땅에 못 닿음 등)가 있으면 그 글
             if ((surfDone || finalDone) && !s.FinalNote.StartsWith("⚠") && s.FinalNote.Contains('⚠')) tick += " · " + s.FinalNote[s.FinalNote.IndexOf('⚠')..];
             if (force && surfDone && !sheetDone && !xsecDone) ed.WriteMessage("\n[진입도로] " + surfMsg);

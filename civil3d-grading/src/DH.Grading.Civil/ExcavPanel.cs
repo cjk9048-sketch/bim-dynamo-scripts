@@ -207,7 +207,7 @@ internal sealed class ExcavPanel : UserControl
         //     ★<b>옹벽이 아니라 가시설</b>이다 — 이 저장소는 둘을 이미 갈라 놓았고
         //       (종단 막대 끝이 다르고 밴드 표기가 다르다) 섞으면 종단면도가 틀리게 그려진다.
         //     ★<b>소단·대소단·라운드·옹벽형태는 없다</b>(JACK 지시 11~13).
-        var secWall = GradingDialog.AddCollapsible(root, "4. 사면 수정 (가시설)",
+        var secWall = GradingDialog.AddCollapsible(root, "4. 사면 수정 (가시설)", out var wallBadge,
             "둘레의 한 구간만 수직으로 세웁니다 — 자리를 찍고 길이를 주면 됩니다",
             open: false, key: "터파기:4.가시설", group: G);
         var wRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 6) };
@@ -243,6 +243,15 @@ internal sealed class ExcavPanel : UserControl
         top.Children.Add(head);
         top.Children.Add(_status);
         top.Children.Add(_said);
+        // ★[v117.13 · JACK 1112 «구조물 터파기에서도 내용을 설명하는 애니메이션 — 위치는 맨 위 · 1~4번(3번은 생성이니 생략) · 마우스를 올려놨을 때»]
+        //   예시 칸(FixDemoView) = 맨 위 고정(값 칸과 같이 밀려 내려가지 않음) · 칸 제목 · 칸 안에 마우스 → 그 칸 예시 · 나가면 멈춤
+        var demo = new FixDemoView("칸 제목에 마우스 → 예시", "exBase") { Margin = new Thickness(0, 0, 0, 8), HorizontalAlignment = HorizontalAlignment.Left };
+        void Hook(FrameworkElement? fe, string key) { if (fe == null) return; fe.MouseEnter += (_, __) => demo.Play(key); fe.MouseLeave += (_, __) => demo.Idle(); }
+        static FrameworkElement? HeadOf(TextBlock badge) => (badge.Parent as FrameworkElement)?.Parent as FrameworkElement;   // 요약칸 → 머리 줄 → 머리(누르는 자리)
+        Hook(HeadOf(_baseBadge), "exBase"); Hook(secBase, "exBase");
+        Hook(HeadOf(_targetBadge), "exTarget"); Hook(secTarget, "exTarget");
+        Hook(HeadOf(wallBadge), "exWall"); Hook(secWall, "exWall");
+        top.Children.Add(demo);
         DockPanel.SetDock(top, Dock.Top);
         deck.Children.Add(top);
         // ★[JACK 0910] 정지 창과 같이 — 값 칸 <b>뒤에</b> 회사 로고를 크게 옅게 깐다.

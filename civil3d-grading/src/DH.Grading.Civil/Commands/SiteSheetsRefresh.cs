@@ -17,6 +17,16 @@ internal static class SiteSheetsRefresh
     internal static void Run(Document doc, string who)
     {
         if (doc == null) return;
+        // ★[JACK 1112 «노리선은 첫생성이나 업데이트 때마다 저절로»] 도로 면을 여러 번 다시 지어도 노리선은 끝에서 한 번만(도면 설정 «노리선 그리기» 꺼져 있으면 안 함)
+        NoriCommand.AutoHold++;
+        try { RunCore(doc, who); }
+        finally { NoriCommand.AutoHold--; }
+        string nori = NoriCommand.AutoDraw(doc);
+        if (nori.Length > 0) { try { DiagLog.Append($"\n■ 노리선 저절로 — {who} 뒤 · {nori}\n"); } catch { } }
+    }
+
+    static void RunCore(Document doc, string who)
+    {
         // ★★[v116.12 · JACK 1110 «진입도로 지표면까지 있는 상태에서 계획지표면 옹벽 수정을 하면 진입도로 지표면이 없어지는 것 같아» · 인터뷰 «자동으로 [업데이트]까지»]
         //   먼저 진입도로(바탕 = 정지면_DH가 바뀜) — 지표면 · 최종지표면_DH(· 그려 둔 진입도로 종단 · 횡단)를 새 부지에 맞춰 다시. 그 뒤 부지 종단 · 횡단.
         try { RefreshRoads(doc, who); } catch (System.Exception rx) { try { DiagLog.Append($"\n■ 진입도로 갱신 — {who} 뒤 ⚠예외 {rx.GetType().Name}: {rx.Message}\n"); } catch { } }
@@ -173,7 +183,7 @@ internal static class SiteSheetsRefresh
         bool noriQueued = false;
         try
         {
-            if (hadNori && !ZoneEditCommon.HasNoriLines(db))
+            if (hadNori && !ZoneEditCommon.HasNoriLines(db) && !NoriSetting.IsOn(db))   // ★[JACK 1112] 켜져 있으면 Run 끝의 AutoDraw가 그림 — 꺼져 있을 땐 손으로 그린 노리선만 이어 감
             {
                 doc.SendStringToExecute("DHNORI ", true, false, true); noriQueued = true;
                 log.AppendLine("  노리선이 지워져 [노리선]을 이어서 건다(쓰던 사람은 계속 맞게)");
