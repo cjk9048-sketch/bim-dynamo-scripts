@@ -40,6 +40,21 @@ public sealed class WallPickCommand
         }
     }
 
+    /// <summary>★[v117.9.2 · JACK 1112 «옹벽 추가로 만든 옹벽을 되돌릴 방법»] [옹벽 되돌리기] — 옹벽 자리 클릭(또는 번호) → 확인 → 그 옹벽만 지우고 원래 사면으로(<see cref="ZoneEditCommon.RunWallRevert"/>).</summary>
+    [CommandMethod("DHWALLREVERT")]
+    public void Revert()
+    {
+        Document doc = AcadApp.DocumentManager.MdiActiveDocument;
+        if (doc == null) return;
+        GradingSettings.SyncToDocument(doc);
+        try { ZoneEditCommon.RunWallRevert(doc); }
+        catch (System.Exception ex)
+        {
+            doc.Editor.WriteMessage("\n[옹벽 되돌리기] 실패 — " + ex.Message);
+            try { DiagLog.Append($"\n■ [옹벽 되돌리기] 예외 — {ex.GetType().Name}: {ex.Message}\n{ex.StackTrace}\n"); } catch { }
+        }
+    }
+
     /// <summary>★[v117.3 · JACK D1 ③] [용지 경계] — 닫힌 폴리선(여럿)을 골라 도면에 둔다 · 지우기. [옹벽 추가]가 기초 외곽을 이 경계로 잰다(없으면 그은 선 · 경고만).</summary>
     [CommandMethod("DHLANDBOUND")]
     public void LandBoundary()

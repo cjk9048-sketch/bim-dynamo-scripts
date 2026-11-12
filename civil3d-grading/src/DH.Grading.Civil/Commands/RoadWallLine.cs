@@ -213,7 +213,7 @@ internal static class RoadWallLine
                 live = WallLineDraw.Show(b.Points.Select(q => (q.X, q.Y)).Concat(b.BreakAt), st!.Cut!.Line, mk, 2, more, 3);
                 live.AddRange(WallLineDraw.Show(System.Array.Empty<(double, double)>(), null, mk, 2, b.Foot.Cast<IReadOnlyList<Point3>>(), 1));
             }
-            else live = WallLineDraw.Show((st?.Cut?.Marks ?? new List<(double, double)>()).Concat(b?.Marks ?? new List<(double, double)>()), got.Pts, mk);
+            else live = WallLineDraw.Show((st?.Cut?.Marks ?? new List<(double, double)>()).Concat(b?.Marks ?? new List<(double, double)>()), got.Cut.Line.Count >= 2 ? got.Cut.Line : got.Pts, mk);   // ★[v117.9.2] 거절 때도 경계 위 A..B 선(판정용 1 m 늘임은 안 보임)
             string spec = !ok ? $"〈⚠{t.Why}〉"
                 : b!.Shape == 3 ? string.Format(ic, "〈다단 {0}단 · 단높이 {1:0.##} · 소단 {2:0.##} · 첫 소단 {3:F2}({4}) · 바깥 최고 {5:F2} m · 끊김 {6}곳{7}〉", b.TierN, b.TierH, b.TierB, b.TierZ1,
                     double.IsNaN(tZ) ? "자동" : "손", b.OuterHMax, b.BreakN, b.BreakN > 0 ? " — 구간 나눔 권함(다음 판)" : "")

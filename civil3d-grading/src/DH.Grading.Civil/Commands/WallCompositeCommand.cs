@@ -227,7 +227,7 @@ public sealed class WallCompositeCommand
         string txt;
         try
         {
-            CreateGradingCommand.DrawWallPolygon(db, tr, w.Poly, w.No, region);
+            // ★[v117.9.2 · JACK 1112 «하늘색 폴리선 — 꼭 있어야 하면 숨기고 아니면 삭제» · 설치 전 검토 중간 1] 다시 지을 때도 옹벽 자리 폴리곤(청록)은 안 그린다(읽는 곳 없음 — 목록 Poly를 씀)
             txt = CreateGradingCommand.BuildWallInPolygon(db, tr, w.Poly, w.HeadZ, w.Up, p, ground, groundId, w.No, region, w.H, w.T, sW, fR, gr);
         }
         catch (System.Exception ex) { return $"다시 짓다 터졌다({ex.GetType().Name}: {ex.Message})"; }

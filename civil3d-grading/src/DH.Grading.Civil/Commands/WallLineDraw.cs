@@ -253,7 +253,7 @@ internal static class WallLineDraw
             }
             // ── 거절 — 까닭 + 빨간 X(질문 동안 · 명령당 한 번 걷기) ──
             ed.WriteMessage($"\n[{tag}] {cut.Why} — 아무것도 안 바꿨습니다.");
-            var live = Show(cut.Marks, list, mk);
+            var live = Show(cut.Marks, pts.Select(q => new Point3(q.X, q.Y, 0)).ToList(), mk);   // ★[v117.9.2 · JACK 1112 «경계 밖으로 노란 선 길어짐»] 찍은 선 그대로 보임(1 m 늘인 판정용 선은 안 보임)
             try
             {
                 var pk = new PromptKeywordOptions($"\n[{tag}] [다시 그리기(R)]: ");

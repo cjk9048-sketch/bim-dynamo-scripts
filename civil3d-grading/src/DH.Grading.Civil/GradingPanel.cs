@@ -444,8 +444,9 @@ internal sealed class GradingPanel : UserControl
         }
         // ★★[v113.0 · JACK 1104 «옹벽 변환은 말 그대로 소단선을 변형 · 폴리선으로 옹벽을 추가하는 건 별도 단추»] [사면→옹벽] · [옹벽→사면] · [옹벽 추가]
         _toWall = WBtn("사면→옹벽", "DHWALL", "고른 계단선부터 바깥 단을 옹벽으로 바꿉니다.");
-        _toSlope = WBtn("옹벽→사면", "DHSLOPE", "옹벽선을 골라 다시 사면으로 되돌립니다. 추가한 옹벽은 W로 지웁니다.");
+        _toSlope = WBtn("옹벽→사면", "DHSLOPE", "옹벽선을 골라 다시 사면으로 되돌립니다.");
         _addWall = WBtn("옹벽 추가", "DHWALLADD", "경계에서 경계까지 폴리선을 그려 옹벽을 추가합니다.");
+        WBtn("옹벽 되돌리기", "DHWALLREVERT", "[옹벽 추가]로 만든 옹벽 자리를 클릭하면 그 옹벽을 지우고 원래 사면으로 되돌립니다.");   // ★[v117.9.2 · JACK 1112]
         _migrate = WBtn("옛 옹벽 옮기기", "DHWALLMIGRATE", "옛 모양(선 바깥 계단) 선 옹벽을 같은 선으로 새 모양(다단 · 수직)으로 다시 짓습니다.");   // ★[v117.x] 옛 모양이 있을 때만 보임
         _migrate.Visibility = Visibility.Collapsed;
         WBtn("용지 경계", "DHLANDBOUND", "닫힌 폴리선으로 용지 경계를 고르거나 지웁니다.\n[옹벽 추가]는 옹벽 기초 외곽이 이 경계 밖이면 알립니다(없으면 그은 선 기준).");   // ★[v117.3 · JACK D1 ③]
