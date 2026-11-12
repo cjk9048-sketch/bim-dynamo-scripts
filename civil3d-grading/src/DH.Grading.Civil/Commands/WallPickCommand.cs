@@ -50,18 +50,10 @@ public sealed class WallPickCommand
         try { ZoneEditCommon.RunWallRevert(doc); }
         catch (System.Exception ex)
         {
-            doc.Editor.WriteMessage("\n[옹벽 되돌리기] 실패 — " + ex.Message);
-            try { DiagLog.Append($"\n■ [옹벽 되돌리기] 예외 — {ex.GetType().Name}: {ex.Message}\n{ex.StackTrace}\n"); } catch { }
+            doc.Editor.WriteMessage("\n[옹벽 삭제] 실패 — " + ex.Message);
+            try { DiagLog.Append($"\n■ [옹벽 삭제] 예외 — {ex.GetType().Name}: {ex.Message}\n{ex.StackTrace}\n"); } catch { }
         }
     }
 
-    /// <summary>★[v117.3 · JACK D1 ③] [용지 경계] — 닫힌 폴리선(여럿)을 골라 도면에 둔다 · 지우기. [옹벽 추가]가 기초 외곽을 이 경계로 잰다(없으면 그은 선 · 경고만).</summary>
-    [CommandMethod("DHLANDBOUND")]
-    public void LandBoundary()
-    {
-        Document doc = AcadApp.DocumentManager.MdiActiveDocument;
-        if (doc == null) return;
-        try { LandBound.Run(doc); }
-        catch (System.Exception ex) { doc.Editor.WriteMessage("\n[용지 경계] 실패 — " + ex.Message); }
-    }
+    // ★[v117.12 · JACK 1112 «용지 경계 기능은 없애»] [용지 경계](DHLANDBOUND) 명령 없앰 — 도면에 남은 옛 기록(NOD DH_GRADING/LANDBOUND)은 아무도 안 읽음(지우지 않음)
 }

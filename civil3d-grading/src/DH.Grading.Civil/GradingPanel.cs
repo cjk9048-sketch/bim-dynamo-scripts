@@ -430,7 +430,7 @@ internal sealed class GradingPanel : UserControl
             "사면 → 옹벽 · 옹벽 → 사면 · 옹벽 추가",
             open: true, key: "정지:계획부지수정", group: null);   // ★묶음 없음 — 위 주석과 같은 까닭
         // ★[v117.11 · JACK 1112 «사면 옹벽 변환 단추 두 개를 한 열 · 다음 열에 옹벽 추가 · 제거를 한 열 · 예시 영상은 단추 옆 한 칸 안에서 4개 단추를 다 반영»]
-        //   왼쪽 = 단추(1줄 사면→옹벽 · 옹벽→사면 / 2줄 옹벽 추가 · 옹벽 되돌리기 / 3줄 옛 옹벽 옮기기 · 용지 경계) · 오른쪽 = 예시 칸(FixDemoView — 올린 단추의 그림 애니메이션)
+        //   왼쪽 = 단추(1줄 사면→옹벽 · 옹벽→사면 / 2줄 옹벽 추가 · 옹벽 삭제 / 3줄 옛 옹벽 옮기기(있을 때만)) · 오른쪽 = 예시 칸(FixDemoView — 올린 단추의 그림 애니메이션)
         var demo = new FixDemoView { Margin = new Thickness(6, 0, 0, 4), VerticalAlignment = VerticalAlignment.Top };
         var fixGrid = new Grid { Margin = new Thickness(0, 0, 0, 2) };
         fixGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
@@ -438,7 +438,7 @@ internal sealed class GradingPanel : UserControl
         var btnCol = new StackPanel();
         var row1 = new StackPanel { Orientation = Orientation.Horizontal };
         var row2 = new StackPanel { Orientation = Orientation.Horizontal };
-        var wRow = new WrapPanel { MaxWidth = 210 };   // 3줄 — 옛 옹벽 옮기기(있을 때만) · 용지 경계
+        var wRow = new WrapPanel { MaxWidth = 210 };   // 3줄 — 옛 옹벽 옮기기(있을 때만)
         btnCol.Children.Add(row1); btnCol.Children.Add(row2); btnCol.Children.Add(wRow);
         Grid.SetColumn(btnCol, 0); Grid.SetColumn(demo, 1);
         fixGrid.Children.Add(btnCol); fixGrid.Children.Add(demo);
@@ -470,11 +470,11 @@ internal sealed class GradingPanel : UserControl
         _toSlope = WBtn("옹벽→사면", "DHSLOPE", "옹벽선 클릭 → 다시 사면", "toSlope");
         target = row2;
         _addWall = WBtn("옹벽 추가", "DHWALLADD", "경계 → 사면 띠 안 → 경계 클릭 → 선 따라 옹벽", "add");
-        WBtn("옹벽 되돌리기", "DHWALLREVERT", "[옹벽 추가] 옹벽 자리 클릭 → Enter → 원래 사면", "revert");   // ★[v117.9.2 · JACK 1112]
+        WBtn("옹벽 삭제", "DHWALLREVERT", "[옹벽 추가] 옹벽 자리 클릭 → Enter → 옹벽 지움 · 원래 사면", "delete");   // ★[v117.9.2 · JACK 1112] · ★[v117.12] «옹벽 되돌리기 → 옹벽 삭제»
         target = wRow;
         _migrate = WBtn("옛 옹벽 옮기기", "DHWALLMIGRATE", "옛 모양(선 바깥 계단) 선 옹벽을 같은 선으로 새 모양(다단 · 수직)으로 다시 짓습니다.");   // ★[v117.x] 옛 모양이 있을 때만 보임
         _migrate.Visibility = Visibility.Collapsed;
-        WBtn("용지 경계", "DHLANDBOUND", "닫힌 폴리선으로 용지 경계를 고르거나 지웁니다.\n[옹벽 추가]는 옹벽 기초 외곽이 이 경계 밖이면 알립니다(없으면 그은 선 기준).");   // ★[v117.3 · JACK D1 ③]
+        // ★[v117.12 · JACK 1112 «용지 경계 기능은 없애»] [용지 경계] 단추 없앰(DHLANDBOUND 명령 · 기초 외곽 검사도 없앰)
         // ★[v102.2 · JACK 0930 «옹벽합성 버튼은 없애고 노선 선정과정이 끝나면 자동으로 진행되게»] [옹벽 합성] 버튼 없앰 —
         //   옹벽 변환(부분 지정)이 옹벽을 끝까지 지으면 합성이 이어서 돈다(ZoneEditCommon). DHWALLCOMP 명령은 남는다(손으로 다시 합성 · 복구용)
         secFix.Children.Add(fixGrid);

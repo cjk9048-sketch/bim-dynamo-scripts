@@ -153,7 +153,6 @@ internal static class WallLineFlow
                 fCut = WallListStore.SectionOf(db, es.CutKind, out _); fFill = WallListStore.SectionOf(db, es.FillKind, out _); fCom = es.Common(slopeW);
             }
             catch { fCut = fFill = null; fCom = null; }   // 못 읽으면 기초 재기만 빠진다(짓기 그대로)
-            var land = LandBound.RingsOf(HostApplicationServices.WorkingDatabase, out string landNote);   // ★[v117.3 · JACK D1 ③] 용지 경계(없으면 그은 선) — 기초 외곽 경고만
             var vb = WallByLine.Build(new WallByLine.Input
             {
                 Line = cut.Line, Bd = bd, NewRing = cut.NewRing, CutRing = cut.CutRing, Plan = region.Boundary, SlopeW = slopeW, FaceRun = faceRun, Grid = grid, Reach = reach,
@@ -163,7 +162,7 @@ internal static class WallLineFlow
                 TierSecs = tierSecs, TierEndSlope = tierEnd, EndRatioC = region.Params.CutSlope, EndRatioF = region.Params.FillSlope, BlockersWarnOnly = blockWarnOnly,   // ★[v117.9 · 검토 MED] 다시 짓기 = 겹침 ⚠만   // ★[v117.x A · B] 구간 · 끝 비탈(사면 기울기 = 정지 제원)
             });
 
-            WallProfile.LandCheck(vb, cut.CutRing, land, landNote);   // ★[v117.3 · D1 ③] 로그 ⑨-c · ⚠ · 미리보기 · 외곽선(기하 · 기록 그대로)
+            // ★[v117.12 · JACK 1112 «용지 경계 기능은 없애»] 기초 외곽 ↔ 용지 경계 검사(⑨-c · ⚠ · 미리보기) 없앰 — ⑨-b 기초 재기(로그)는 그대로
             return vb;
         }
         var (oc, of, rnote, whyC, whyF) = OldBenchOf(region, g);
@@ -433,7 +432,7 @@ internal static class WallLineFlow
                 : string.Format(ic, "〈수직 1:{0} · 길이 {1:F2} m(절토 {2:F2} · 성토 {3:F2}) · 최고 {4:F2} m · 면적 {5:F1} ㎡{6}〉", slopeW.ToString("0.###", ic), b.LineLen, b.LenC, b.LenF, b.HMax, b.Area,
                     b.TierNone ? string.Format(ic, " · 단높이 {0:0.##} 안 — 단 없이 됨", b.TierH) : "");
             if (b.Ok && b.Profile is { Preview.Length: > 0 } pf) ed.WriteMessage($"\n[{Tag}] {pf.Preview}");   // ★[로드맵 2-2 · 2-3] 측점표 한 줄(보고만)
-            if (b.Ok && b.Profile is { } lp) { live.AddRange(WallLineDraw.Show(lp.LandMarks, null, mk, 2, lp.Outline.Select(o => (IReadOnlyList<Point3>)o.Append(o[0]).ToList()), 30)); live.AddRange(WallLineDraw.Show(System.Array.Empty<(double, double)>(), null, mk, 2, lp.LandRings.Select(o => (IReadOnlyList<Point3>)o.Append(o[0]).ToList()), 5)); }   // ★[v117.3 · D1 ③] 구조물 외곽(주황) · 용지 경계(파랑) · 경계 밖 가장 먼 자리(빨간 X)
+            // ★[v117.12 · JACK 1112] 용지 경계 · 구조물 외곽 미리보기 없앰(용지 경계 기능 없앰)
             // ★[v117.x A] 구간안(한 구간이 안 맞을 때만) · 지은 구간 · 끝 비탈 판정 — 한 줄씩
             if (tierUi && tSecs == null && b.TierPropose != null) foreach (var t in b.TierProposeText) ed.WriteMessage($"\n[{Tag}] 구간안 {t}");
             if (tierUi && b.Ok && b.TierSecsUsed.Count >= 2)

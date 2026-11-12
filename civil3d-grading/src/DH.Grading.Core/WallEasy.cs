@@ -46,7 +46,7 @@ public static class WallEasy
             case "섞임 겹침": return "절토 · 성토가 바뀌는 자리에서 두 옹벽 자리가 겹침 → 그 자리 곁에서 선을 조금 옮기기";
             case "겹침":
                 if (why.Contains("못 쟀")) return Bug;
-                return $"다른 옹벽 · 구조물과 겹침{Who(why)} → 선 옮기기 · 또는 그 옹벽 먼저 [옹벽 되돌리기]" + (why.Contains("다단") ? " · 또는 수직만(V)" : "");
+                return $"다른 옹벽 · 구조물과 겹침{Who(why)} → 선 옮기기 · 또는 그 옹벽 먼저 [옹벽 삭제]" + (why.Contains("다단") ? " · 또는 수직만(V)" : "");
             case "구간":
                 if (why.Contains("모든 구간이 단 없이")) return "나눈 구간 모두 단 필요 없음 → 한 구간(O) · 또는 수직만(V)";
                 if (why.Contains("꺾은점")) return "구간 경계가 선 꺾인 곳 · 끝에 너무 가까움 → 구간 경계 옮기기(수동 구간 M)";
@@ -124,7 +124,7 @@ public static class WallEasy
             case BoundaryCut.Code.Blocked:
             {
                 var m = Regex.Match(why, @"^(.+?)과 겹칩니다");
-                return $"다른 옹벽과 겹침{(m.Success ? $"({m.Groups[1].Value})" : "")} → 선 옮기기 · 또는 그 옹벽 먼저 [옹벽 되돌리기]";
+                return $"다른 옹벽과 겹침{(m.Success ? $"({m.Groups[1].Value})" : "")} → 선 옮기기 · 또는 그 옹벽 먼저 [옹벽 삭제]";
             }
             default: return why.Length > 0 ? why : Bug;
         }

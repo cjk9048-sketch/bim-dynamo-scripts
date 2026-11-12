@@ -95,6 +95,7 @@ internal sealed class RoadPanel : UserControl
         // ── ■ 도로 설정 — 작은 칸 셋(한 번에 하나 펼침 · 창을 만들 때마다 «노선»이 열린 채로) ──
         // ★★[v111.7 · JACK 1102 «도킹창 묶음 정리»] 작은 칸 «종단» · «옹벽 제안»은 새 큰 칸 ■ 종단 · ■ 옹벽으로 옮김 — 여기는 값만(노선 · 횡단 · 사면)
         const string G = "도로:설정칸";
+        const string GT = "도로:큰칸";   // ★[v117.12 · JACK 1112] 큰 칸(설정 · 종단 · 옹벽 · 측구)은 한 번에 하나만 펼침 — ■ 결과는 묶음 밖(늘 펼침)
         // ★★[v113.3 · JACK 1105 «진입도로 생성을 누르면 진입도로 창이 뜨고, 창에 도로 그리기랑 폴리선 선택 · 별도 팝업은 만들지 말고»] 창 맨 위 — 새 도로 만들기(늘 켜짐 · 아래 ■ 도로 설정 값으로)
         var mk = new WrapPanel { Margin = new Thickness(0, 2, 0, 6) };
         Button MakeBtn(string text, string cmd, string tip, bool primary)
@@ -117,7 +118,7 @@ internal sealed class RoadPanel : UserControl
         MakeBtn("폴리선 선택", "DHROAD", "그려 둔 폴리선 · 3D 폴리선 · Civil 노선을 골라 아래 도로 설정 값으로 만듭니다", false);
         _root.Children.Add(mk);
         GradingDialog.ForgetOpen("도로:노선", "도로:횡단", "도로:포장", "도로:사면");
-        var secSet = GradingDialog.AddCollapsible(_root, "■ 도로 설정", "노선 · 횡단 · 포장 · 사면", first: true, open: true, key: "도로:설정");
+        var secSet = GradingDialog.AddCollapsible(_root, "■ 도로 설정", "노선 · 횡단 · 포장 · 사면", first: true, open: true, key: "도로:설정", group: GT);
 
         _host = GradingDialog.AddCollapsible(secSet, "노선", "꺾인 곳 곡선 반경 — [경로 그리기] · [폴리선 선택] 둘 다 · 바꾸면 열린 도로의 곡선도 바뀝니다", open: true, key: "도로:노선", group: G, level: 2);
         _curve = Row(("곡선 반경 m", d => d.CurveR, (d, v) => { d.CurveR = v; RoadDesign.LastCurveR = v; _recurve = true; }, 1, 3, 1000))[0];
@@ -150,7 +151,7 @@ internal sealed class RoadPanel : UserControl
 
         // ── ■ 종단 ──
         // ★★[v111.7 · JACK 1102 «도킹창 묶음 정리»] 값(최대 경사 · PVI 간격) → [PVI 넣기] [PVI 지우기](옛 ■ 진입도로 수정에서 옮김) → [종단 자동으로 다시](옛 [종단 초안 다시] — 명령에서 한 번 물음)
-        _host = GradingDialog.AddCollapsible(_root, "■ 종단", "최대 종단경사 · PVI 간격 · PVI 넣기 · 지우기", open: true, key: "도로:종단");
+        _host = GradingDialog.AddCollapsible(_root, "■ 종단", "최대 종단경사 · PVI 간격 · PVI 넣기 · 지우기", open: false, key: "도로:종단", group: GT);
         Row(("최대 경사 %", d => d.MaxGrade, (d, v) => d.MaxGrade = v, 100, 0.5, 30), ("PVI 간격", d => d.MinPviLen, (d, v) => d.MinPviLen = v, 1, 1, 500));
         // ★[v111.2 · JACK 1030 «PVI 수정 기능 — 넣기 · 삭제»] 종단도에서 찍기(Enter까지 여러 번)
         Buttons(("PVI 넣기", "DHROADPVIADD", "종단도를 찍은 측점에 PVI를 넣습니다 — 지금 계획선 위라 모양은 그대로, 넣은 뒤 잡아끌어 높이를 바꿉니다(Enter 끝)", false),
@@ -163,15 +164,45 @@ internal sealed class RoadPanel : UserControl
 
         // ── ■ 옹벽 ──
         // ★★[v111.7 · JACK 1102] [옹벽 변환] [사면 변환](옛 ■ 진입도로 수정에서 옮김 — 전체 해제는 명령 안 C · 부지와 같음) → 옹벽 제안 한 줄(제안 높이 · [사업 경계]) · 풍선 글은 쉬운 말로
-        _host = GradingDialog.AddCollapsible(_root, "■ 옹벽", "사면 → 옹벽 · 옹벽 → 사면 · 옹벽 추가", open: true, key: "도로:옹벽");
+        _host = GradingDialog.AddCollapsible(_root, "■ 옹벽", "사면 → 옹벽 · 옹벽 → 사면 · 옹벽 추가 · 삭제", open: false, key: "도로:옹벽", group: GT);
         // ★★[v113.0 · JACK 1104 «옹벽 변환은 소단선 변형 · 폴리선 옹벽 추가는 별도 단추»] [사면→옹벽] · [옹벽→사면] · [옹벽 추가](풍선 글 짧게)
-        Buttons(("사면→옹벽", "DHROADWALLCONV", "고른 사면선 · 소단선부터 바깥을 옹벽으로 바꿉니다.", false),
-                ("옹벽→사면", "DHROADSLOPECONV", "옹벽선을 골라 다시 사면으로 되돌립니다. 추가한 옹벽은 W로 지웁니다.", false),
-                ("옹벽 추가", "DHROADWALLADD", "경계에서 경계까지 폴리선을 그려 옹벽을 추가합니다.", false));
+        // ★[v117.12 · JACK 1112] 부지 창과 같은 자리 — 왼쪽 단추(1줄 사면→옹벽 · 옹벽→사면 / 2줄 옹벽 추가 · 옹벽 삭제) · 오른쪽 예시 칸(FixDemoView). 단추 그대로 Buttons와 같이 Act로 명령을 보내고 _needRoad로 켜짐을 맞춘다
+        {
+            var demo = new FixDemoView { Margin = new Thickness(6, 0, 0, 4), VerticalAlignment = VerticalAlignment.Top };
+            var wGrid = new Grid { Margin = new Thickness(0, 2, 0, 2) };
+            wGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            wGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            var wCol = new StackPanel();
+            var wRow1 = new StackPanel { Orientation = Orientation.Horizontal };
+            var wRow2 = new StackPanel { Orientation = Orientation.Horizontal };
+            wCol.Children.Add(wRow1); wCol.Children.Add(wRow2);
+            Grid.SetColumn(wCol, 0); Grid.SetColumn(demo, 1);
+            wGrid.Children.Add(wCol); wGrid.Children.Add(demo);
+            void WB(Panel row, string text, string cmd, string tip, string key)
+            {
+                var b = new Button { Content = text, MinWidth = 96, Height = 30, Margin = new Thickness(0, 0, 6, 4), VerticalContentAlignment = VerticalAlignment.Center, ToolTip = tip };
+                b.Click += (_, __) => Act(text, cmd);
+                _needRoad.Add(b);
+                // 꺼진 단추는 마우스 일을 안 받는다 — 감싼 테두리가 받아 예시를 돌린다
+                var hit = new Border { Background = System.Windows.Media.Brushes.Transparent, Child = b };
+                hit.MouseEnter += (_, __) => demo.Play(key);
+                hit.MouseLeave += (_, __) => demo.Idle();
+                row.Children.Add(hit);
+            }
+            WB(wRow1, "사면→옹벽", "DHROADWALLCONV", "계단선 클릭 → 그 단부터 바깥이 옹벽", "toWall");
+            WB(wRow1, "옹벽→사면", "DHROADSLOPECONV", "옹벽선 클릭 → 다시 사면", "toSlope");
+            WB(wRow2, "옹벽 추가", "DHROADWALLADD", "경계 → 사면 띠 안 → 경계 클릭 → 선 따라 옹벽", "add");
+            WB(wRow2, "옹벽 삭제", "DHROADWALLDEL", "[옹벽 추가] 옹벽 자리 클릭 → Enter → 옹벽 지움 · 원래 사면", "delete");
+            _host.Children.Add(wGrid);
+        }
         // ★[v116.4 · JACK 1109 «옹벽 제안 기능은 필요 없으니 없앨 것»] 옹벽 제안 한 줄(제안 높이 · [사업 경계]) 없앰 — 옛 기록 칸(SuggestH · LimitHandle)은 읽기만 하고 안 씀
 
         // ── ■ 측구 ★★[도로 마무리 ② · 계획 6.3 · JACK 1102 «드롭박스 · 대표단면 + 치수»] 형식 → 그 형식 치수(mm) → [구간 지정](두 점 · 쪽 = 첫 점) ──
-        _host = GradingDialog.AddCollapsible(_root, "■ 측구", "U형 · L형 · 치수 · 구간 지정", open: false, key: "도로:측구");
+        _host = GradingDialog.AddCollapsible(_root, "■ 측구", "측구 단면 · 구간 지정", open: false, key: "도로:측구", group: GT);
+        // ★[v117.12 · JACK 1112] 형식 · 치수 · 그레이팅 · 경고는 «측구 단면» 팝업으로 — 칸은 여기서 만들고(저장 · 켜짐 규칙 그대로) 창이 열릴 때만 그 안에 붙인다
+        var ditchDock = _host;
+        _ditchBody = new StackPanel();
+        _host = _ditchBody;
         var kindRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(2, 2, 0, 6) };
         kindRow.Children.Add(new TextBlock { Text = "형식", FontSize = 11, Foreground = DhBrand.Sub, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0) });
         _ditchKind = new ComboBox { Width = 96, Height = 26, ToolTip = "[구간 지정]으로 넣을 측구 형식 — «없음»으로 구간을 지정하면 그 구간 측구를 지웁니다" };
@@ -194,7 +225,24 @@ internal sealed class RoadPanel : UserControl
         _host = hostD;
         _ditchWarn = new TextBlock { FontSize = 11, Foreground = DhBrand.Warn, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(2, 0, 0, 4), Visibility = Visibility.Collapsed };
         _host.Children.Add(_ditchWarn);
-        Buttons(("구간 지정", "DHROADDITCH", "도로 가장자리 곁 두 점(시작 · 끝)을 찍어 그 구간에 지금 형식 · 치수의 측구를 넣습니다 — 쪽은 첫 점 · «없음»이면 그 구간 측구를 지웁니다", false));
+        _host = ditchDock;
+        var ditchRow = new WrapPanel { Margin = new Thickness(0, 2, 0, 4) };
+        var ditchBtn = new Button
+        {
+            Content = "측구 단면…", Height = 30, MinWidth = 96, Padding = new Thickness(12, 0, 12, 0), Margin = new Thickness(0, 0, 6, 6),
+            VerticalContentAlignment = VerticalAlignment.Center, ToolTip = "형식 · 치수 · 그레이팅 → 팝업",
+        };
+        ditchBtn.Click += (_, __) => OpenDitchWindow();
+        var segBtn = new Button
+        {
+            Content = "구간 지정", Height = 30, MinWidth = 72, Padding = new Thickness(12, 0, 12, 0), Margin = new Thickness(0, 0, 6, 6),
+            VerticalContentAlignment = VerticalAlignment.Center,
+            ToolTip = "도로 가장자리 곁 두 점(시작 · 끝) → 그 구간에 지금 형식 · 치수 측구 · «없음»이면 그 구간 측구 지움",
+        };
+        segBtn.Click += (_, __) => Act("구간 지정", "DHROADDITCH");
+        _needRoad.Add(segBtn);
+        ditchRow.Children.Add(ditchBtn); ditchRow.Children.Add(segBtn);
+        _host.Children.Add(ditchRow);
 
         // ── ■ 결과 ──
         _host = GradingDialog.AddCollapsible(_root, "■ 결과", "토공량 · 높이 · 경사 · 옹벽", open: true, key: "도로:결과");
@@ -225,6 +273,28 @@ internal sealed class RoadPanel : UserControl
         };
         _root.Children.Add(_resetBtn);
         Show(null);
+    }
+
+    StackPanel _ditchBody = null!;
+    RoadDitchWindow? _ditchWin;
+
+    /// <summary>★[v117.12] «측구 단면» 팝업 — 칸 묶음(<see cref="_ditchBody"/>)을 창에 붙임 · 닫으면 칸 값을 받고(Commit) 떼어 냄 · 이미 열려 있으면 앞으로.</summary>
+    void OpenDitchWindow()
+    {
+        try
+        {
+            if (_ditchWin != null) { _ditchWin.Activate(); return; }
+            var win = new RoadDitchWindow(_ditchBody, Commit);
+            win.Closed += (_, __) => _ditchWin = null;
+            _ditchWin = win;
+            AcadApp.ShowModelessWindow(win);
+        }
+        catch (System.Exception ex)
+        {
+            // ★[v117.12 · 설치 전 검토 LOW] 창을 지은 뒤 못 띄웠으면 칸들을 그 창에서 떼어 둔다(안 떼면 다음 [측구 단면…]이 «부모 둘»로 계속 실패)
+            try { if (_ditchBody.Parent is System.Windows.Controls.Border b) b.Child = null; } catch { }
+            _ditchWin = null; _note.Text = "측구 단면 창 못 엶 — " + ex.Message;
+        }
     }
 
     Button _updateBtn = null!;

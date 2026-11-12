@@ -15,19 +15,19 @@ namespace DH.Grading.Civil;
 /// 그림 크기 = 절토 · 성토 예시와 같은 바탕(420 × 300 · Viewbox 줄이기만).</para></summary>
 internal sealed class FixDemoView : Border
 {
-    const double W = 420, H = 300;
+    const double W = 420, H = 300, Scale = 0.7;
     readonly Canvas _cv = new() { Width = W, Height = H, ClipToBounds = true };
-    readonly TextBlock _cap = new() { FontSize = 11, Foreground = DhBrand.Sub, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(2, 4, 2, 0) };
+    readonly TextBlock _cap = new() { MaxWidth = 420 * 0.7, FontSize = 11, Foreground = DhBrand.Sub, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(2, 4, 2, 0) };
     readonly DispatcherTimer _tm = new(DispatcherPriority.Render) { Interval = TimeSpan.FromMilliseconds(40) };
     readonly System.Diagnostics.Stopwatch _sw = new();
     string _key = "add";
 
     static readonly Dictionary<string, (double Period, string Caption)> Spec = new()
     {
-        ["toWall"] = (4.2, "사면→옹벽 — 계단선 클릭 → 그 단부터 바깥이 옹벽"),
-        ["toSlope"] = (4.2, "옹벽→사면 — 옹벽선 클릭 → 다시 계단 사면"),
+        ["toWall"] = (4.2, "사면→옹벽 — 소단선 클릭 → 그 선이 옹벽 · 바깥 단은 원지반"),
+        ["toSlope"] = (4.2, "옹벽→사면 — 옹벽선 클릭 → 다시 소단 · 사면"),
         ["add"] = (5.0, "옹벽 추가 — 초록 경계 클릭 → 사면 띠 안 → 경계 클릭 → 선 따라 옹벽 · 선 바깥은 원지반"),
-        ["revert"] = (4.4, "옹벽 되돌리기 — 옹벽 자리 클릭 → Enter → 원래 사면"),
+        ["delete"] = (4.4, "옹벽 삭제 — 옹벽 자리 클릭 → Enter → 원래 사면"),
     };
 
     public FixDemoView()
@@ -35,7 +35,7 @@ internal sealed class FixDemoView : Border
         BorderBrush = DhBrand.Line; BorderThickness = new Thickness(1); CornerRadius = new CornerRadius(6);
         Background = DhBrand.Card; Padding = new Thickness(4);
         var st = new StackPanel();
-        st.Children.Add(new Viewbox { Child = _cv, Stretch = Stretch.Uniform, StretchDirection = StretchDirection.DownOnly, MaxWidth = W });
+        st.Children.Add(new Viewbox { Child = _cv, Stretch = Stretch.Uniform, StretchDirection = StretchDirection.Both, MaxWidth = W * Scale });   // ★[v117.12 · JACK 1112 «그림 영역 너무 크니 지금의 70 %»]
         st.Children.Add(_cap);
         Child = st;
         _tm.Tick += (_, __) => { try { Draw(_key, _sw.Elapsed.TotalSeconds % Spec[_key].Period); } catch { _tm.Stop(); } };
@@ -118,53 +118,76 @@ internal sealed class FixDemoView : Border
         _cv.Children.Add(new Rectangle { Width = W, Height = H, Fill = DhBrand.Card });
         switch (key)
         {
-            case "toWall": Section(Seg(t, 1.5, 2.6), t, true); break;
-            case "toSlope": Section(1 - Seg(t, 1.5, 2.6), t, false); break;
+            case "toWall": PlanTier(Seg(t, 1.5, 2.6), t, true); break;
+            case "toSlope": PlanTier(1 - Seg(t, 1.5, 2.6), t, false); break;
             case "add": Plan(t, false); break;
-            case "revert": Plan(t, true); break;
+            case "delete": Plan(t, true); break;
         }
     }
 
-    // ── 단면 — 계단 사면(1:1 · 소단) ↔ 수직 옹벽. u = 0 사면 · 1 옹벽 ──
-    void Section(double u, double t, bool toWall)
+    // ── ★[v117.12 · JACK 1112 «사면→옹벽 · 옹벽→사면 영상은 평면뷰에서 보는 형태로»] 평면 — 부지 둘레 소단선 두 줄 · 초록 경계.
+    //    아래쪽 첫 소단선을 클릭 → 그 선이 옹벽 · 그 바깥 단은 원지반 · 경계가 옹벽 선까지 들어옴(u = 0 사면 · 1 옹벽) ──
+    void PlanTier(double u, double t, bool toWall)
     {
-        Tx(10, 8, "단면", 13, Dim, true);
-        // 원지반(점선) — 왼쪽 낮고 오른쪽 높음
-        Point Og(double x) => new(x, 200 - (x - 20) * 120.0 / 330.0);
-        Ln(Og(20), new Point(410, 66), Ground, 1.6, dash: true);
-        Tx(330, 44, "원지반", 12, Ground);
-        // 사면 꼴 · 옹벽 꼴 꼭짓점(같은 차례 — 사이를 옮김)
-        var slope = new[] { new Point(20, 230), new Point(140, 230), new Point(190, 180), new Point(220, 180), new Point(270, 130), new Point(300, 130), new Point(350, 80), new Point(410, 66) };
-        var wall = new[] { new Point(20, 230), new Point(140, 230), new Point(190, 180), new Point(220, 180), new Point(221, Og(221).Y), new Point(300, Og(300).Y), new Point(350, Og(350).Y), new Point(410, 66) };
-        var prof = new Point[slope.Length];
-        for (int i = 0; i < slope.Length; i++) prof[i] = L(slope[i], wall[i], u);
-        var body = new List<Point>(prof) { new Point(410, 290), new Point(20, 290) };
-        Pl(body, A(SoilC, 0.45), null, 0);
-        Pl(prof, null, Profile, 2.6, closed: false);
-        Tx(52, 238, "부지", 13, Txt, true);
-        // 소단 표시(사면 꼴일 때)
-        if (u < 0.98) { Tx(150, 186, "1:1", 11, A(Color.FromRgb(0x44, 0x44, 0x44), 1 - u)); Tx(226, 160, "소단", 11, A(Color.FromRgb(0x44, 0x44, 0x44), 1 - u)); }
-        // 옹벽(회색 벽체) — u에 따라 나타남
+        Tx(10, 8, "평면", 13, Dim, true);
+        const double pl = 120, pt = 92, pr = 310, pb = 208, d1 = 24, d2 = 48, d3 = 72;   // 부지 · 소단선 1 · 2 · 경계(띠 바깥)
+        Point[] Rect(double d) => new[] { new Point(pl - d, pt - d), new Point(pr + d, pt - d), new Point(pr + d, pb + d), new Point(pl - d, pb + d) };
+        double wx0 = pl - d1 + 10, wx1 = pr + d1 - 10, wy = pb + d1;   // 옹벽이 될 소단선 몫(아래쪽)
+        // 경계 — 아래쪽 옹벽 몫은 u만큼 소단선 1까지 올라옴
+        double by = pb + d3 + (wy - (pb + d3)) * u;
+        var bd = new[] { new Point(pl - d3, pt - d3), new Point(pr + d3, pt - d3), new Point(pr + d3, pb + d3), new Point(wx1, pb + d3), new Point(wx1, by), new Point(wx0, by), new Point(wx0, pb + d3), new Point(pl - d3, pb + d3) };
+        Pl(Rect(d3), A(SoilC, 0.42), null, 0);
+        var og = new[] { new Point(wx0, wy), new Point(wx1, wy), new Point(wx1, pb + d3), new Point(wx0, pb + d3) };   // 원지반으로 돌아가는 자리
+        if (u > 0) Pl(og, A(OgC, u), null, 0);
+        // 사면 빗금 — 단마다(부지 → 소단 1 · 소단 1 → 소단 2 · 소단 2 → 경계) · 옹벽 바깥 몫은 u만큼 옅어짐
+        void Hatch(double dIn, double dOut)
+        {
+            double len = dOut - dIn;
+            for (int side = 0; side < 4; side++)
+            {
+                int n = side % 2 == 0 ? 14 : 8;
+                for (int i = 1; i < n; i++)
+                {
+                    double f = (double)i / n; Point a0, dir;
+                    switch (side)
+                    {
+                        case 0: a0 = new Point(pl - dIn + (pr - pl + 2 * dIn) * f, pt - dIn); dir = new Point(0, -1); break;
+                        case 1: a0 = new Point(pr + dIn, pt - dIn + (pb - pt + 2 * dIn) * f); dir = new Point(1, 0); break;
+                        case 2: a0 = new Point(pl - dIn + (pr - pl + 2 * dIn) * f, pb + dIn); dir = new Point(0, 1); break;
+                        default: a0 = new Point(pl - dIn, pt - dIn + (pb - pt + 2 * dIn) * f); dir = new Point(-1, 0); break;
+                    }
+                    double l = i % 2 == 0 ? len * 0.7 : len * 0.4;
+                    var q = new Point(a0.X + dir.X * l, a0.Y + dir.Y * l);
+                    var mid = L(a0, q, 0.5);
+                    double al = InPoly(og, mid) ? 1 - u : 1;
+                    if (al > 0.02) Ln(a0, q, A(Color.FromRgb(0x9A, 0x7B, 0x4F), al), 1.1);
+                }
+            }
+        }
+        Hatch(0, d1); Hatch(d1, d2); Hatch(d2, d3);
+        // 소단선(갈색 가는 선) — 옹벽 바깥 몫(소단선 2 아래쪽)은 u만큼 옅어짐
+        Pl(Rect(d1), null, A(Color.FromRgb(0x8A, 0x6A, 0x3A), 1), 1.4);
+        var b2 = Rect(d2);
+        Pl(new[] { new Point(wx0, b2[2].Y), b2[3], b2[0], b2[1], b2[2], new Point(wx1, b2[2].Y) }, null, A(Color.FromRgb(0x8A, 0x6A, 0x3A), 1), 1.4, closed: false);
+        Ln(new Point(wx0, b2[2].Y), new Point(wx1, b2[2].Y), A(Color.FromRgb(0x8A, 0x6A, 0x3A), 1 - u), 1.4);
+        Pl(Rect(0), Pad, Dim, 1.2);
+        Tx(193, 136, "부지", 15, Txt, true);
+        Tx(pr + d1 + 4, pt + 4, "소단선", 11, A(Color.FromRgb(0x8A, 0x6A, 0x3A), 1));
+        Pl(bd, null, Green, 2.4);
+        Tx(pr + d3 - 30, pt - d3 - 18, "경계", 12, Green, true);
+        // 옹벽(짙은 회색) — u만큼
         if (u > 0.02)
         {
-            double top = Og(221).Y;
-            _cv.Children.Add(new Rectangle { Width = 8, Height = 180 - top, Fill = A(Color.FromRgb(0x50, 0x50, 0x50), u) });
-            Canvas.SetLeft(_cv.Children[^1], 216); Canvas.SetTop(_cv.Children[^1], top);
-            _cv.Children.Add(new Rectangle { Width = 26, Height = 7, Fill = A(Color.FromRgb(0x50, 0x50, 0x50), u) });
-            Canvas.SetLeft(_cv.Children[^1], 207); Canvas.SetTop(_cv.Children[^1], 180);
-            Tx(232, 140, "옹벽", 13, A(Color.FromRgb(0x30, 0x30, 0x30), u), true);
+            Pl(new[] { new Point(wx0, wy), new Point(wx1, wy) }, null, A(Color.FromRgb(0x50, 0x50, 0x50), u), 6, closed: false, flatEnds: true);
+            Tx((wx0 + wx1) / 2 - 14, wy + 6, "옹벽", 13, A(Color.FromRgb(0x30, 0x30, 0x30), u), true);
+            Tx(wx0 + 6, pb + d3 - 18, "원지반", 11, A(Color.FromRgb(0x5B, 0x6A, 0x4C), u));
         }
-        // 마우스 — 사면→옹벽: 둘째 단 소단 끝 클릭 · 옹벽→사면: 옹벽 클릭
-        var target = toWall ? new Point(220, 180) : new Point(220, 160);
-        var home = new Point(390, 262);
-        double mv = Seg(t, 0.3, 1.1);
+        // 마우스 — 사면→옹벽: 아래 첫 소단선 클릭 · 옹벽→사면: 옹벽 클릭
+        var target = new Point(250, wy);
+        var home = new Point(395, 270);
         double press = t >= 1.1 && t < 1.5 ? (t - 1.1) / 0.4 : 0;
-        if (t >= 1.1 && t < 2.6)
-        {
-            if (toWall) Ln(new Point(206, 180), new Point(234, 180), Red, 4);   // 고른 계단선(소단)
-            else Ln(new Point(220, Og(221).Y), new Point(220, 180), Red, 4);     // 고른 옹벽선
-        }
-        if (t < 3.6) Ptr(L(home, target, mv), press);
+        if (t >= 1.1 && t < 2.6) Ln(new Point(wx0, wy), new Point(wx1, wy), Red, 4);   // 고른 소단선 · 옹벽선
+        if (t < 3.6) Ptr(L(home, target, Seg(t, 0.3, 1.1)), press);
     }
 
     // ── 평면 — 부지(회색) · 사면 띠(흙 · 빗금) · 초록 경계. revert = 옹벽이 있는 데서 시작해 되돌림 ──

@@ -994,6 +994,7 @@ public sealed class RibbonApp : IExtensionApplication
             pMisc.Items.Add(Spacer());
             pMisc.Items.Add(btnReset);           // ★[v111.6] 위성지도는 [공통]으로 옮김
             pMisc.Items.Add(Spacer());
+            try { ToneRibbon(tab); } catch { }   // ★[v117.12 · JACK 1112] 칸마다 색 계열 하나(모양 그대로)
         }
         catch
         {
@@ -1056,13 +1057,53 @@ public sealed class RibbonApp : IExtensionApplication
     }
 
     /// <summary>작은 단추(16) 그림 — 새 그림의 16 단순판 · 없으면 큰 그림.</summary>
-    private static ImageSource? MakeGlyphSmall(string kind) => Bake(RibbonIcons.Get(kind, true) ?? RibbonIcons.Get("default", true), 16) ?? MakeGlyph(kind);
+    private static ImageSource? MakeGlyphSmall(string kind)
+    {
+        var img = Bake(RibbonIcons.Get(kind, true) ?? RibbonIcons.Get("default", true), 16);
+        if (img != null) { _kindOf.AddOrUpdate(img, new GlyphKey(kind, true)); return img; }
+        return MakeGlyph(kind);
+    }
+
+    /// <summary>★[v117.12] 구운 그림 → 그 그림의 이름(칸 색으로 다시 구울 때 — <see cref="ToneRibbon"/>).</summary>
+    private sealed record GlyphKey(string Kind, bool Small);
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<ImageSource, GlyphKey> _kindOf = new();
+
+    /// <summary>★[v117.12 · JACK 1112 «카테고리별로 모양은 유지 · 색상을 공통된 느낌으로 구분감»] 리본 칸마다 그 칸 색으로 단추 그림을 다시 굽는다(<see cref="RibbonTone"/>) — 못 하면 그 단추는 그대로.</summary>
+    private static void ToneRibbon(RibbonTab tab)
+    {
+        foreach (var panel in tab.Panels)
+        {
+            double? hue = RibbonTone.HueOf(panel.Source?.Title);
+            if (hue == null || panel.Source == null) continue;
+            foreach (var it in panel.Source.Items) ToneItem(it, hue.Value);
+        }
+    }
+
+    private static void ToneItem(RibbonItem it, double hue)
+    {
+        try
+        {
+            if (it is RibbonButton rb)
+            {
+                ImageSource? Re(ImageSource? img)
+                {
+                    if (img == null || !_kindOf.TryGetValue(img, out var k)) return img;
+                    var src = RibbonIcons.Get(k.Kind, k.Small) ?? RibbonIcons.Get("default", k.Small);
+                    return Bake(RibbonTone.Apply(src, hue), k.Small ? 16 : 32) ?? img;
+                }
+                rb.LargeImage = Re(rb.LargeImage);
+                rb.Image = Re(rb.Image);
+            }
+            if (it is RibbonListButton lb) foreach (var c in lb.Items) ToneItem(c, hue);
+        }
+        catch { }
+    }
 
     private static ImageSource? MakeGlyph(string kind)
     {
         // ★[v117.10 · JACK 1112] 새 그림(스타일 E) 먼저 — 모르는 이름은 새 그림의 default · 새 그림이 안 되면(예외) 아래 옛 선 그림
         var neo = Bake(RibbonIcons.Get(kind) ?? RibbonIcons.Get("default"), 32);
-        if (neo != null) return neo;
+        if (neo != null) { _kindOf.AddOrUpdate(neo, new GlyphKey(kind, false)); return neo; }
         try
         {
             const int S = 32;
