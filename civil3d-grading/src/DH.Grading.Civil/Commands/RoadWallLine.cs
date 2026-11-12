@@ -227,18 +227,19 @@ internal static class RoadWallLine
             }
             if (benchHit) easyWhy += " · 빨간 소단선 = 바닥 침범 자리";
             string spec = !ok ? $"〈⚠{easyWhy}〉"
-                : b!.Shape == 3 ? string.Format(ic, "〈다단 {0}단 · 단높이 {1:0.##} · 소단 {2:0.##} · 첫 소단 {3:F2}({4}) · 바깥 최고 {5:F2} m · 끊김 {6}곳{7}〉", b.TierN, b.TierH, b.TierB, b.TierZ1,
-                    double.IsNaN(tZ) ? "자동" : "손", b.OuterHMax, b.BreakN, b.BreakN > 0 ? " — 구간 나눔 권함(다음 판)" : "")
+                : b!.Shape == 3 ? string.Format(ic, "〈다단 {0}단 · 단높이 {1:0.##} · 소단 {2:0.##} · 바깥 최고 {3:F2} m{4}〉", b.TierN, b.TierH, b.TierB,
+                    b.OuterHMax, b.BreakN > 0 ? string.Format(ic, " · 끊김 {0}곳 → 선을 둘로 나눠 그리기 권함", b.BreakN) : "")
                 : string.Format(ic, "〈수직 1:{0} · 길이 {1:F2} m(절토 {2:F2} · 성토 {3:F2}) · 최고 {4:F2} m · 면적 {5:F1} ㎡{6}〉", b.Batter.ToString("0.###", ic), b.LineLen, b.LenC, b.LenF, b.HMax, b.Area,
                     b.TierNone ? string.Format(ic, " · 단높이 {0:0.##} 안 — 단 없이 됨", b.TierH) : "");
             if (ok && b!.Profile is { Preview.Length: > 0 } pf) ed.WriteMessage($"\n[{Tag}] {pf.Preview}");   // 측점표 한 줄(보고만 · 부지와 같음)
             PromptResult r;
             try
             {
-                var pk = new PromptKeywordOptions(tierUi ? $"\n[{Tag}] {spec} [단높이(H)/소단폭(B)/첫소단(Z)/수직만(V)/다시그리기(S)] (Enter = 적용): "
+                // ★[v117.14 · JACK 1112 «첫소단 등 안 쓰면 없애»] 첫소단(Z) 없앰 — 첫 소단은 늘 자동(부지와 같음)
+                var pk = new PromptKeywordOptions(tierUi ? $"\n[{Tag}] {spec} [단높이(H)/소단폭(B)/수직만(V)/다시그리기(S)] (Enter = 적용): "
                     : !tierMode ? $"\n[{Tag}] {spec} [다단(T)/다시그리기(S)] (Enter = 적용): " : $"\n[{Tag}] {spec} [다시그리기(S)] (Enter = 적용): ");
                 pk.Keywords.Add("S", "S", "다시그리기(S)");
-                if (tierUi) { pk.Keywords.Add("H", "H", "단높이(H)"); pk.Keywords.Add("B", "B", "소단폭(B)"); pk.Keywords.Add("Z", "Z", "첫소단(Z)"); pk.Keywords.Add("V", "V", "수직만(V)"); }
+                if (tierUi) { pk.Keywords.Add("H", "H", "단높이(H)"); pk.Keywords.Add("B", "B", "소단폭(B)"); pk.Keywords.Add("V", "V", "수직만(V)"); }
                 else pk.Keywords.Add("V", "V", "수직만(V)", false, true);   // 숨김 — 스크립트의 V 한 줄이 단이 필요 없는 선에서도 그대로 지나가게(부지와 같음)
                 if (!tierMode) pk.Keywords.Add("T", "T", "다단(T)");
                 pk.AllowNone = true; pk.AppendKeywordsToMessage = false;
@@ -256,21 +257,18 @@ internal static class RoadWallLine
             }
             if (kw == "V") { if (tierMode) { tierMode = false; t = Geo(); } continue; }
             if (kw == "T") { tierMode = true; t = Geo(); continue; }
-            if (kw is "H" or "B" or "Z")
+            if (kw is "H" or "B")
             {
-                double cur = b == null ? double.NaN : kw == "H" ? b.TierH : kw == "B" ? b.TierB : b.TierZ1;
-                string now = double.IsFinite(cur) ? cur.ToString(kw == "Z" ? "0.###" : "0.##", ic) : "—";
-                // Enter = 그대로(None — 자동 첫 소단이 Enter 한 번에 손 값으로 바뀌지 않게 · 부지와 같음)
-                var pdo = new PromptDoubleOptions(kw == "H" ? $"\n단높이 (m · 지금 {now} · Enter = 그대로)" : kw == "B" ? $"\n소단 폭 (m · 지금 {now} · Enter = 그대로)" : $"\n첫 소단 높이 (m · 지금 {now}{(double.IsNaN(tZ) ? " 자동" : "")} · Enter = 그대로) [자동(A)]")
-                { AllowNegative = kw == "Z", AllowZero = kw != "H", AllowNone = true };
-                if (kw == "Z") { pdo.Keywords.Add("A", "A", "자동(A)"); pdo.AppendKeywordsToMessage = false; }
+                double cur = b == null ? double.NaN : kw == "H" ? b.TierH : b.TierB;
+                string now = double.IsFinite(cur) ? cur.ToString("0.##", ic) : "—";
+                // Enter = 그대로
+                var pdo = new PromptDoubleOptions(kw == "H" ? $"\n단높이 (m · 지금 {now} · Enter = 그대로)" : $"\n소단 폭 (m · 지금 {now} · Enter = 그대로)")
+                { AllowNegative = false, AllowZero = kw != "H", AllowNone = true };
                 var dr = ed.GetDouble(pdo);
-                if (dr.Status == PromptStatus.Keyword && (dr.StringResult ?? "").Trim().ToUpperInvariant() == "A") tZ = double.NaN;
-                else if (dr.Status == PromptStatus.OK)
+                if (dr.Status == PromptStatus.OK)
                 {
                     if (kw == "H") { if (dr.Value < 0.5 || dr.Value > 30) ed.WriteMessage("\n → 범위 밖 값(단높이 0.5~30 m) — 그대로"); else tH = dr.Value; }
                     else if (kw == "B") { if (dr.Value > 20) ed.WriteMessage("\n → 범위 밖 값(소단 폭 0~20 m) — 그대로"); else tB = dr.Value; }
-                    else tZ = dr.Value;
                 }
                 t = Geo();
                 continue;

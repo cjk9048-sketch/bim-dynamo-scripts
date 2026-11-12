@@ -91,11 +91,33 @@ internal static class WallFaceMarks
         var smp = Sample(al);
         if (smp.Count < 2) return "";
         var ivs = new System.Collections.Generic.List<(double S0, double S1, PureWithWallsBuilder.ReflWall W, Envelope Env)>();
-        int boundSkip = 0;
+        int boundSkip = 0, lineN = 0;
         foreach (var w in walls)
         {
-            // ★[v113.0 · JACK 1104 «옹벽 폴리선»] 경계 폴리선 옹벽의 Poly는 바꿀 자리(R_out 포함)라 측점 가리기 · 걷기에 쓰면 원지반 자리까지 가린다 — 빼고 로그에 적는다
-            if (w.Kind != 0) { boundSkip++; continue; }   // ★[v114.0] 선 옹벽(종류 2)도 — Poly(바꿀 자리 ∪ R_out)로 가리면 원지반 자리까지 가린다
+            // ★[v113.0 · JACK 1104 «옹벽 폴리선»] 경계 폴리선 옹벽의 Poly는 바꿀 자리(R_out 포함)라 측점 가리기 · 걷기에 쓰면 원지반 자리까지 가린다
+            // ★[v117.14 · JACK 1112 «옹벽 추가로 만들었을 경우 종단에 옹벽 객체가 반영이 안 돼»] 원인: 선 옹벽(종류 2)은 위 까닭으로 통째로 뺐음(«다음 판»).
+            //   고침: Poly 대신 실제 벽 앞면 띠(앞면 토막마다 머리선 ~ 발선 · 둘레 0.5 m)로 노선이 지나는 구간을 잡고 그 구간만 걷는다(벽 막대 · 앞뒤 측점 · 가리기는 벽 곁만)
+            if (w.Kind != 0)
+            {
+                bool any = false;
+                foreach (var f in w.Faces ?? new System.Collections.Generic.List<WallByLine.FaceSeg>())
+                {
+                    if (f.Kind != 0 || f.Top == null || f.Top.Count < 2) continue;
+                    Geometry band;
+                    try
+                    {
+                        var cs = f.Top.Select(q => new Coordinate(q.X, q.Y)).Concat(Enumerable.Reverse(f.Foot ?? new System.Collections.Generic.List<Point3>()).Select(q => new Coordinate(q.X, q.Y))).ToList();
+                        if (cs.Count >= 3) { cs.Add(cs[0].Copy()); band = gf.CreatePolygon(cs.ToArray()); if (!band.IsValid) band = band.Buffer(0); }
+                        else band = gf.CreateLineString(f.Top.Select(q => new Coordinate(q.X, q.Y)).ToArray()).Buffer(0.05);
+                        if (band.IsEmpty) band = gf.CreateLineString(f.Top.Select(q => new Coordinate(q.X, q.Y)).ToArray()).Buffer(0.05);
+                    }
+                    catch { band = gf.CreateLineString(f.Top.Select(q => new Coordinate(q.X, q.Y)).ToArray()).Buffer(0.05); }
+                    var bB = band.Buffer(0.5);
+                    foreach (var (a, b) in Intervals(smp, bB, gf)) { ivs.Add((a, b, w, bB.EnvelopeInternal)); any = true; }
+                }
+                if (any) lineN++; else if ((w.Faces?.Count ?? 0) == 0) boundSkip++;
+                continue;
+            }
             if (w.Poly == null || w.Poly.Count < 3) continue;
             var ring = w.Poly.Select(q => new Coordinate(q.X, q.Y)).ToList(); ring.Add(ring[0].Copy());
             Geometry pg = gf.CreatePolygon(ring.ToArray());
@@ -103,7 +125,8 @@ internal static class WallFaceMarks
             var pgB = pg.Buffer(0.01);
             foreach (var (a, b) in Intervals(smp, pgB, gf)) ivs.Add((a, b, w, pgB.EnvelopeInternal));
         }
-        if (boundSkip > 0) log?.AppendLine($"  ⚠폴리선 옹벽 {boundSkip}개는 종단 측점 가리기 · 걷기에서 뺐다(다음 판)");
+        if (lineN > 0) log?.AppendLine($"  선 옹벽 {lineN}개 — 벽 앞면 띠(둘레 0.5 m)로 노선 구간을 잡아 걷음");
+        if (boundSkip > 0) log?.AppendLine($"  ⚠선 옹벽 {boundSkip}개는 앞면 토막 기록이 없어 종단에서 뺐다(옛 기록 — 그 옹벽을 다시 지으면 들어감)");
         if (ivs.Count == 0) return "";
         bool InAny(double s) => ivs.Any(v => s >= v.S0 - 1e-6 && s <= v.S1 + 1e-6);
         // ① 가리기

@@ -40,7 +40,20 @@ internal sealed class FixDemoView : Border
         ["pfDel"] = (4.6, "측점 지우기 — 측점 근처 클릭 → 그 측점 삭제"),
         ["pfRev"] = (5.0, "시점↔종점 — 방향 뒤집기 · 0+000이 반대쪽 끝으로"),
         ["xsView"] = (5.6, "횡단도 그리기 — 자리 클릭 → 측점마다 횡단면도 배치"),
+        // ★[JACK 1112 «도킹창 맨 위 설명 애니메이션 — 계획부지 정지»] 선택 · 사면형상 · 산지 대소단(평면)
+        ["pickPlan"] = (5.0, "계획 경계 선택 — 계획고가 든 닫힌 폴리선 클릭 → 빨강"),
+        ["pickGround"] = (5.2, "원지반 선택 — 원지반 지표면 클릭 · 비우면 자동"),
+        ["shapeMiter"] = (4.4, "사면형상 직각 — 볼록한 모서리를 각지게 세움"),
+        ["shapeRound"] = (4.4, "사면형상 라운드 — 볼록한 모서리를 둥글게"),
+        ["terrace"] = (5.0, "산지 대소단 — 일정 높이마다 넓은 소단 · 간격 = 넓은 소단 사이"),
     };
+
+    /// <summary>현재 장면 키.</summary>
+    public string Current => _key;
+    /// <summary>타이머가 도는 중인가(재생 중).</summary>
+    public bool Playing => _tm.IsEnabled;
+    /// <summary>«terrace» 장면용 — 산지 대소단 체크 상태(꺼짐이면 옅게 + «꺼짐»).</summary>
+    public bool TerraceOn { get; set; } = true;
 
     public FixDemoView(string idle = "단추에 마우스 → 예시", string first = "add")
     {
@@ -144,7 +157,127 @@ internal sealed class FixDemoView : Border
             case "pfDel": PfDel(t); break;
             case "pfRev": PfRev(t); break;
             case "xsView": XsView(t); break;
+            case "pickPlan": PickPlan(t); break;
+            case "pickGround": PickGround(t); break;
+            case "shapeMiter": Shape(t, false); break;
+            case "shapeRound": Shape(t, true); break;
+            case "terrace": Terrace(t); break;
         }
+    }
+
+    // ══ ★[JACK 1112 «계획부지 정지 도킹창 맨 위 설명»] 선택 · 사면형상 · 산지 대소단 — 모두 평면 ══
+    static readonly Brush Bench = Fz(0x8A, 0x6A, 0x3A);
+
+    static List<Point> Blob(double cx, double cy, double rx, double ry, double ph)
+    {
+        var l = new List<Point>();
+        for (int i = 0; i < 36; i++)
+        {
+            double a = Math.PI * 2 * i / 36, k = 1 + 0.07 * Math.Sin(3 * a + ph) + 0.04 * Math.Sin(5 * a + 2 * ph);
+            l.Add(new Point(cx + rx * k * Math.Cos(a), cy + ry * k * Math.Sin(a)));
+        }
+        return l;
+    }
+
+    void PlanBg()
+    {
+        Tx(10, 8, "평면", 13, Dim, true);
+        _cv.Children.Add(new Rectangle { Width = 380, Height = 250, Fill = A(Color.FromRgb(0xEE, 0xF1, 0xEA), 1) });
+        Canvas.SetLeft(_cv.Children[^1], 20); Canvas.SetTop(_cv.Children[^1], 30);
+    }
+
+    // 계획 경계 선택 — 계획고가 든 닫힌 폴리선(회색 점선) → 클릭 → 빨강 · «계획 경계»
+    void PickPlan(double t)
+    {
+        PlanBg();
+        var poly = new[] { new Point(130, 100), new Point(250, 85), new Point(310, 140), new Point(290, 210), new Point(180, 225), new Point(115, 170) };
+        double pick = Seg(t, 1.3, 1.5);
+        if (pick < 1) _cv.Children.Add(new Polygon { Points = new PointCollection(poly), Stroke = Dim, StrokeThickness = 1.8, StrokeDashArray = new DoubleCollection { 4, 3 } });
+        if (pick > 0) Pl(poly, A(RedC, 0.12 * pick), A(RedC, pick), 3.2);
+        Tx(158, 142, "계획고 EL 100.0", 13, Txt, true);
+        if (pick > 0) Tx(128, 62, "계획 경계", 14, A(RedC, pick), true);
+        var home = new Point(395, 270);
+        double press = t >= 1.2 && t < 1.6 ? (t - 1.2) / 0.4 : 0;
+        if (t < 4.0) Ptr(L(home, new Point(280, 112), Seg(t, 0.3, 1.2)), press);
+    }
+
+    // 원지반 선택 — 등고선이 든 원지반 지표면 → 클릭 → 면이 흙색으로 · 등고선 진해짐 · «원지반 지표면»
+    void PickGround(double t)
+    {
+        PlanBg();
+        double pick = Seg(t, 1.3, 1.6);
+        var edge = Blob(210, 155, 175, 105, 0.4);
+        if (pick < 1) _cv.Children.Add(new Polygon { Points = new PointCollection(edge), Stroke = Dim, StrokeThickness = 1.4, StrokeDashArray = new DoubleCollection { 4, 3 } });
+        if (pick > 0) Pl(edge, A(SoilC, 0.40 * pick), A(GroundC, pick), 2.6);
+        double[] sc = { 0.78, 0.56, 0.34, 0.14 };
+        for (int i = 0; i < sc.Length; i++)
+            Pl(Blob(215 + 6 * i, 150, 175 * sc[i], 105 * sc[i], 0.4 + 0.5 * i), null, pick > 0.5 ? A(GroundC, 0.45 + 0.55 * pick) : A(Color.FromRgb(0x99, 0x99, 0x99), 0.8), 1.2 + pick);
+        if (pick > 0) Tx(284, 36, "원지반 지표면", 13, A(Color.FromRgb(0x7A, 0x5B, 0x2F), pick), true);
+        var home = new Point(395, 270);
+        double press = t >= 1.2 && t < 1.6 ? (t - 1.2) / 0.4 : 0;
+        if (t < 4.2) Ptr(L(home, new Point(150, 205), Seg(t, 0.3, 1.2)), press);
+    }
+
+    // 사면형상 — 부지 볼록 모서리에서 사면 띠가 자람: 직각 = 모서리가 각짐 · 라운드 = 원호
+    void Shape(double t, bool round)
+    {
+        Tx(10, 8, "평면", 13, Dim, true);
+        double grow = Seg(t, 0.4, 1.8), d = 70 * grow;
+        const double px0 = 40, px1 = 250, py0 = 130, py1 = 300;   // 부지(왼쪽 아래로 이어짐) · 볼록 모서리 = (px1, py0)
+        var outer = new List<Point> { new(px0, py0 - d), new(px1, py0 - d) };
+        if (round) for (int i = 1; i < 12; i++) { double a = -Math.PI / 2 + Math.PI / 2 * i / 12; outer.Add(new Point(px1 + d * Math.Cos(a), py0 + d * Math.Sin(a))); }
+        outer.Add(new Point(px1 + d, py0)); outer.Add(new Point(px1 + d, py1));
+        var band = new List<Point>(outer) { new(px1, py1), new(px1, py0), new(px0, py0) };
+        Pl(band, A(SoilC, 0.42), null, 0);
+        var hatch = A(Color.FromRgb(0x9A, 0x7B, 0x4F), 1);
+        for (int i = 1; i < 10; i++) { double x = px0 + (px1 - px0) * i / 10; Ln(new Point(x, py0), new Point(x, py0 - d * (i % 2 == 0 ? 0.9 : 0.5)), hatch, 1.1); }
+        for (int i = 1; i < 8; i++) { double y = py0 + (py1 - py0) * i / 8; Ln(new Point(px1, y), new Point(px1 + d * (i % 2 == 0 ? 0.9 : 0.5), y), hatch, 1.1); }
+        if (round) for (int i = 1; i < 6; i++) { double a = -Math.PI / 2 + Math.PI / 2 * i / 6; Ln(new Point(px1 + 4 * Math.Cos(a), py0 + 4 * Math.Sin(a)), new Point(px1 + d * 0.8 * Math.Cos(a), py0 + d * 0.8 * Math.Sin(a)), hatch, 1.1); }
+        else if (grow > 0) Ln(new Point(px1, py0), new Point(px1 + d, py0 - d), Bench, 1.4, dash: true);
+        Pl(new[] { new Point(px0, py0), new Point(px1, py0), new Point(px1, py1), new Point(px0, py1) }, Pad, Dim, 1.2);
+        Tx(100, 200, "부지", 15, Txt, true);
+        Pl(outer, null, Green, 2.4, closed: false, flatEnds: true);
+        double la = Seg(t, 1.8, 2.3);
+        if (la > 0)
+        {
+            Tx(px1 + 14, py0 - d - 22, "경계", 12, A(GreenC, la), true);
+            Tx(px1 + 82, py0 - 100, round ? "라운드" : "직각", 16, A(round ? RedC : Color.FromRgb(0x20, 0x60, 0xB0), la), true);
+            Tx(px1 + 82, py0 - 78, "볼록한 모서리", 11, A(InkC, la));
+            Ln(new Point(px1 + 78, py0 - 84), round ? new Point(px1 + d * 0.72, py0 - d * 0.72) : new Point(px1 + d - 2, py0 - d + 2), A(InkC, la), 1.2);
+        }
+    }
+
+    // 산지 대소단 — 부지 둘레 소단 고리: 세 번째마다 간격이 넓음(대소단) · «간격» = 넓은 소단 사이 · 꺼짐이면 옅게
+    void Terrace(double t)
+    {
+        double al = TerraceOn ? 1 : 0.35;
+        Tx(10, 8, "평면", 13, Dim, true);
+        const double pl = 180, pr = 240, pt = 115, pb = 185;
+        double[] ds = { 12, 24, 52, 64, 76, 104 };   // 소단 고리까지의 거리 · 24→52, 76→104 = 넓은 소단
+        Point[] R(double d) => new[] { new Point(pl - d, pt - d), new Point(pr + d, pt - d), new Point(pr + d, pb + d), new Point(pl - d, pb + d) };
+        Pl(R(104), A(SoilC, 0.30 * al), null, 0);
+        double wb = Seg(t, 0.4 + 0.3 * 6 + 0.1, 0.4 + 0.3 * 6 + 0.6);
+        foreach (var (a, b) in new[] { (24.0, 52.0), (76.0, 104.0) })
+        {
+            var oa = R(a); var ob = R(b);
+            Pl(new[] { ob[0], ob[1], ob[2], ob[3], ob[0], oa[0], oa[3], oa[2], oa[1], oa[0] }, A(Color.FromRgb(0xE0, 0x7A, 0x1F), 0.22 * wb * al), null, 0);
+        }
+        for (int i = 0; i < ds.Length; i++)
+        {
+            double a = Seg(t, 0.4 + 0.3 * i, 0.4 + 0.3 * i + 0.4) * al;
+            if (a > 0) Pl(R(ds[i]), null, A(Color.FromRgb(0x8A, 0x6A, 0x3A), a), (i == 2 || i == 5) ? 2.2 : 1.3);
+        }
+        Pl(R(0), Pad, Dim, 1.2);
+        Tx(194, 140, "부지", 14, Txt, true);
+        if (wb > 0)
+        {
+            Tx(150, 214, "대소단(넓은 소단)", 11, A(Color.FromRgb(0xC0, 0x5A, 0x10), wb * al), true);
+            Ln(new Point(300, 63), new Point(300, 11), A(InkC, wb * al), 1.4);
+            Ln(new Point(294, 63), new Point(306, 63), A(InkC, wb * al), 1.4);
+            Ln(new Point(294, 11), new Point(306, 11), A(InkC, wb * al), 1.4);
+            Tx(310, 28, "간격", 12, A(InkC, wb * al), true);
+        }
+        if (!TerraceOn) Key(184, 158, "꺼짐", 1);
     }
 
     // ── ★[v117.12 · JACK 1112 «사면→옹벽 · 옹벽→사면 영상은 평면뷰에서 보는 형태로»] 평면 — 부지 둘레 소단선 두 줄 · 초록 경계.

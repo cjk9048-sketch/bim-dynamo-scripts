@@ -24,11 +24,11 @@ internal static class CursorLabel
     /// <param name="hint">둘째 줄(작고 흐린 글) — 그 질문에서 듣는 키만(예: «Enter 지난 자리 · Esc 그만») · 빈 글이면 한 줄 카드.</param>
     /// <param name="extra">★[v112.4 · JACK 1104 «경로 찍다가 휠로 줌하면 전에 찍은 게 없어져»] 이름표 밑에 함께 그릴 것(WCS 커서 자리 · 커서를 받았나) — 지그가 화면마다 다시 그려 줌 · 확대 · 축소에도 안 사라짐(DrawVector는 Regen에서 사라짐).</param>
     /// <param name="live">★[v113.3 · JACK 1105 «다음 점이 클릭이 안 돼»] 화면마다 카드 글을 바꿀 때(<paramref name="extra"/> 뒤에 불림 — 그 자리의 거절 까닭 등) · null 또는 빈 글이면 <paramref name="label"/>.</param>
-    internal static Result GetPoint(Editor ed, PromptPointOptions ppo, string label, string hint = "", System.Action<WorldDraw, Point3d, bool>? extra = null, System.Func<string?>? live = null)
+    internal static Result GetPoint(Editor ed, PromptPointOptions ppo, string label, string hint = "", System.Action<WorldDraw, Point3d, bool>? extra = null, System.Func<string?>? live = null, CursorType? cursor = null)
     {
         if (SelfCheckLog.Headless || ppo.UseBasePoint || string.IsNullOrWhiteSpace(label)) return Plain(ed, ppo);
         LabelJig jig;
-        try { jig = new LabelJig(ed, ppo, label, hint ?? "") { Extra = extra, Live = live }; }
+        try { jig = new LabelJig(ed, ppo, label, hint ?? "") { Extra = extra, Live = live }; if (cursor != null) jig.SetCursor(cursor.Value); }   // ★[v117.14 · JACK 1112 «선택 마우스가 선 그리기 모양 — 선택 모양이 되어야»] 고르는 질문은 픽박스(EntitySelect)
         catch (System.Exception ex) { try { DiagLog.Append("\n[커서 이름표] 못 만듦 — 그냥 찍기: " + ex.Message); } catch { } return Plain(ed, ppo); }
         using (jig)
         {
@@ -53,6 +53,19 @@ internal static class CursorLabel
                 return new Result(st, Point3d.Origin, "");
             }
         }
+    }
+
+    /// <summary>화면 1 px = 도면 몇 단위(VIEWSIZE / SCREENSIZE.Y × 배율) — 지그 밖에서 px 크기 글 · 해치 간격에 쓴다. 못 읽으면 1.</summary>
+    internal static double PixelUnit()
+    {
+        try
+        {
+            double vs = System.Convert.ToDouble(AcadApp.GetSystemVariable("VIEWSIZE"));
+            var sc = (Point2d)AcadApp.GetSystemVariable("SCREENSIZE");
+            if (vs > 0 && sc.Y > 1) return vs / sc.Y * DpiScale();
+        }
+        catch { }
+        return 1.0;
     }
 
     static Result Plain(Editor ed, PromptPointOptions ppo)
@@ -158,6 +171,8 @@ internal static class CursorLabel
         internal PromptStatus LastStatus = PromptStatus.Cancel;
         internal string LastString = "";
         internal bool Asked;      // 이번 Drag에서 질문을 띄웠나(Sampler가 한 번이라도 불림)
+
+        internal void SetCursor(CursorType c) { try { _opt.Cursor = c; } catch { } }
 
         internal LabelJig(Editor ed, PromptPointOptions ppo, string label, string hint)
         {

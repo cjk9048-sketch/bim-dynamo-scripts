@@ -2010,13 +2010,15 @@ internal static class ZoneEditCommon
             }
             return best;
         }
+        // ★[v117.14 · JACK 1112 «옹벽 삭제 시 옹벽 추가로 만든 부분을 평면에서 보이게 · 선택 모양 커서»] 옹벽마다 주황 칠 + «옹벽 N» · 마우스 올린 옹벽 빨강 · 픽박스
+        var cands = bound.Select(w => new WallPickUi.Cand { No = w.No, Ring = w.Poly.ToList(), Line = w.Line?.ToList() }).ToList();
         int no = 0;
         while (no == 0)
         {
-            var ppo = new PromptPointOptions($"\n[{lbl}] 되돌릴 옹벽 자리 클릭 〈옹벽 {string.Join(", ", bound.Select(w => w.No))}〉 [번호(N)]: ");
+            var ppo = new PromptPointOptions($"\n[{lbl}] 지울 옹벽 자리 클릭 〈옹벽 {string.Join(", ", bound.Select(w => w.No))}〉 [번호(N)]: ");
             ppo.Keywords.Add("N", "N", "번호(N)");
             ppo.AllowNone = false; ppo.AppendKeywordsToMessage = false;
-            var pr = ed.GetPoint(ppo);
+            var pr = WallPickUi.Ask(ed, ppo, "지울 옹벽 클릭", cands, At);
             if (pr.Status == PromptStatus.Cancel) { ed.WriteMessage($"\n[{lbl}] 취소 — 안 바뀜"); return; }
             int pick = 0;
             if (pr.Status == PromptStatus.Keyword)

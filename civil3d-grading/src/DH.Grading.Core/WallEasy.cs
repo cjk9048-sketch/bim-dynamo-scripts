@@ -48,15 +48,15 @@ public static class WallEasy
                 if (why.Contains("못 쟀")) return Bug;
                 return $"다른 옹벽 · 구조물과 겹침{Who(why)} → 선 옮기기 · 또는 그 옹벽 먼저 [옹벽 삭제]" + (why.Contains("다단") ? " · 또는 수직만(V)" : "");
             case "구간":
-                if (why.Contains("모든 구간이 단 없이")) return "나눈 구간 모두 단 필요 없음 → 한 구간(O) · 또는 수직만(V)";
-                if (why.Contains("꺾은점")) return "구간 경계가 선 꺾인 곳 · 끝에 너무 가까움 → 구간 경계 옮기기(수동 구간 M)";
-                return "구간 나눔 불가 → 수동 구간(M) · 또는 한 구간(O)";
-            case "단 수": return "단을 아무리 내려도 사면 아래에 안 닿음 → 단높이 · 첫 소단 값 확인 · 또는 수직만(V)";
+                if (why.Contains("모든 구간이 단 없이")) return "저장된 구간 모두 단 필요 없음 → 다시 그리기(S) · 또는 수직만(V)";
+                if (why.Contains("꺾은점")) return "저장된 구간 경계가 선 꺾인 곳 · 끝에 너무 가까움 → 다시 그리기(S)";
+                return "저장된 구간 쓸 수 없음 → 다시 그리기(S)";
+            case "단 수": return "단을 아무리 내려도 사면 아래에 안 닿음 → 단높이(H) 늘리기 · 또는 수직만(V)";
             case "도달": return "벽이 땅(원지반)에 안 닿음 — 선 바깥 땅이 계속 높아짐 → 선 옮기기 · 또는 단높이 늘리기";
             case "바깥 벽":
             {
                 string? h = Num(why, @"바깥 벽 ([0-9.]+) m"), lim = Num(why, @"단높이 ([0-9.]+) m");
-                return $"맨 바깥 벽이 단높이보다 높음{(h != null && lim != null ? $"({h} m > {lim} m)" : "")} → 첫 소단(Z) 높이 조정 · 또는 선 옮기기";
+                return $"맨 바깥 벽이 단높이보다 높음{(h != null && lim != null ? $"({h} m > {lim} m)" : "")} → 단높이(H) 늘리기 · 또는 선 옮기기";
             }
             case "바닥": return "벽이 부지 바닥(계획선)에 닿음 — 벽 들어갈 폭 없음 → 선을 바닥에서 더 떼기";
             case "방향": return "선 위 땅 높이 = 부지 바닥 높이 — 옹벽 높이 0 → 땅과 바닥 높이가 다른 사면 위에 다시 그리기";
@@ -74,7 +74,7 @@ public static class WallEasy
             case "끝": return "선 끝 높이 없음 → 선 끝을 초록 경계선 위로 다시";
             case "마구리": return "선 끝 마감면이 선을 못 따름 — 오목한(U자) 선의 안쪽 끝 → 선 끝 옮기기";
             case "바닥 높이 끊김": return "굽은 안쪽 · 오목한 바닥 곁에서 바닥 높이가 끊김 → 선 옮기기";
-            case "턱": return why.Contains("첫 소단") ? "첫 소단이 땅보다 너무 높거나 낮음 → 첫 소단(Z) 값 조정 · 또는 수직만(V)" : Bug;
+            case "턱": return why.Contains("첫 소단") ? "첫 소단이 땅보다 너무 높거나 낮음 → 단높이(H) 바꾸기 · 또는 수직만(V)" : Bug;
             case "계단": return "천단 계단(블록)을 이 선에 못 맞춤 → 블록 길이 바꾸기 · 또는 천단 경사로";
             case "단 표": return "소단 기준 높이 없음 → [계획부지 생성] 다시";
             case "옛 소단": case "소단 높이": case "면 높이": return "옛 소단 높이와 안 맞는 자리 → 선 옮기기";
