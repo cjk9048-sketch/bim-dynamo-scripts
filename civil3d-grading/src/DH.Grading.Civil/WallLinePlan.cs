@@ -37,9 +37,19 @@ internal static class WallLinePlan
         return r.Count >= 2 ? r : null;
     }
 
-    static double ZNear(List<Point3> src, double x, double y)
+    static double ZNear(List<Point3> src, double x, double y) => ZNear(src, x, y, out _);
+
+    /// <summary>가장 가까운 옛 선 위 높이 + 그 거리(m).</summary>
+    static double ZNear(List<Point3> src, double x, double y, out double dist)
     {
         double bd = double.MaxValue, bz = src[0].Z;
+        double z = ZNearCore(src, x, y, ref bd, ref bz);
+        dist = System.Math.Sqrt(bd);
+        return z;
+    }
+
+    static double ZNearCore(List<Point3> src, double x, double y, ref double bd, ref double bz)
+    {
         for (int i = 0; i + 1 < src.Count; i++)
         {
             var a = src[i]; var b = src[i + 1];
@@ -98,7 +108,7 @@ internal static class WallLinePlan
     /// <remarks>★[v114.0 · 설치 전 검토 2] 안쪽 트랜잭션에서 한다 — 중간에 실패하면(잠긴 레이어 eOnLockedLayer 등) 안쪽만 되돌려 평면은 하나도 안 바뀐 채 예외를 던진다(부른 쪽 ⚠ · 합성은 그대로).
     /// ★[검토 5] NTS 셈은 첫 점을 뺀 지역 좌표로(현장 좌표 20만 · 55만에서 위상 예외를 피한다 — Core와 같은 꼴). ★[검토 9] 찍기 꼬리표가 다른 구역(planHandle)인 사면 · 소단선은 안 건드린다
     /// (노리선 · 정지경계에는 구역 꼬리표가 없어 바꿀 자리와 닿는가로만 고른다).</remarks>
-    internal static string Apply(Database db, Transaction outer, IEnumerable<WallRec> walls, string region)
+    internal static string Apply(Database db, Transaction outer, IEnumerable<WallRec> walls, string region, System.Func<double, double, double?>? groundZ = null)
     {
         var ws = walls.Where(w => w.Kind == 2 && w.Poly.Count >= 3).ToList();
         if (ws.Count == 0) return "";
@@ -148,7 +158,16 @@ internal static class WallLinePlan
                 if (big == null) { bDropped++; continue; }
                 if (poly.NumGeometries > 1) bDropped += poly.NumGeometries - 1;   // 가장 큰 조각만 그린다 — 나머지 조각은 빠진다
                 var rc = big.ExteriorRing.Coordinates;
-                Draw(ms, tr, e, rc.Take(rc.Length - 1).Select(c => new Point3(c.X + ox, c.Y + oy, ZNear(pts, c.X + ox, c.Y + oy))).ToList(), true);
+                // ★[v117.13 · JACK 1112 «옹벽 추가 후 평면에선 초록 경계가 맞는데 3D로 보면 옹벽선에 안 맞음»] 원인: 새 꼭짓점(옹벽 선 위) 높이를
+                //   «가장 가까운 옛 경계 점 높이»로 줌 → 옛 사면 경계 높이라 3D에서 뜸. 고침: 옛 경계 위(1 mm 안) 꼭짓점은 옛 높이 그대로 · 새 꼭짓점은 원지반 높이
+                //   (선 바깥 = 원지반 — 경계가 땅과 만나는 자리 = 옹벽 윗선) · 원지반을 못 읽으면 옛 방식
+                double Zb(double x, double y)
+                {
+                    double zo = ZNear(pts, x, y, out double d);
+                    if (d <= 1e-3 || groundZ == null) return zo;
+                    try { return groundZ(x, y) ?? zo; } catch { return zo; }
+                }
+                Draw(ms, tr, e, rc.Take(rc.Length - 1).Select(c => new Point3(c.X + ox, c.Y + oy, Zb(c.X + ox, c.Y + oy))).ToList(), true);
                 e.Erase(); bnd++;
                 continue;
             }

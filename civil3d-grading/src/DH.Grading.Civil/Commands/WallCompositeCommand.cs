@@ -1247,7 +1247,15 @@ public sealed class WallCompositeCommand
             : "";
         // ★[v114.0 · JACK 1105] 선 옹벽 — 평면(노리 · 사면선 · 정지경계 · 옹벽선)을 F에 맞춘다(같은 트랜잭션 · 실패해도 합성은 그대로 · ⚠ 한 줄)
         //   ★[v114.0 · 설치 전 검토 2] Apply는 안쪽 트랜잭션 — 중간에 실패하면(잠긴 레이어 등) 안쪽만 되돌려 평면은 하나도 안 바뀐다(합성은 그대로)
-        try { string pn = WallLinePlan.Apply(db, tr, useOk, head.PlanHandle ?? ""); if (pn.Length > 0) log.AppendLine("   " + pn); }
+        // ★[v117.13 · JACK 1112] 새 정지경계 꼭짓점 높이 = 원지반(옛 경계 높이를 빌려 3D에서 뜨던 것 고침)
+        System.Func<double, double, double?>? gZ = null;
+        try
+        {
+            if (!groundId.IsNull && tr.GetObject(groundId, OpenMode.ForRead) is Autodesk.Civil.DatabaseServices.Surface gS)
+                gZ = (x, y) => { try { return gS.FindElevationAtXY(x, y); } catch { return null; } };
+        }
+        catch { }
+        try { string pn = WallLinePlan.Apply(db, tr, useOk, head.PlanHandle ?? "", gZ); if (pn.Length > 0) log.AppendLine("   " + pn); }
         catch (System.Exception px) { log.AppendLine($"   ⚠선 옹벽 평면 맞추기 실패({px.GetType().Name}: {px.Message}) — 평면(사면 · 소단 · 정지경계 · 옹벽선)은 하나도 안 바꿨습니다(합성은 됨)"); }
         // ★[v114.0 · 설치 전 검토 8] 넣었던 선 옹벽이 이번 합성에서 빠졌다(보류 · 쉼) — 지난 합성이 자른 평면(사면 · 소단 · 정지경계)은 그대로 남는다
         var heldLine = walls.Where(x => x.Kind == 2 && x.State == 1 && !useOk.Any(u => u.No == x.No)).Select(x => x.No).ToList();

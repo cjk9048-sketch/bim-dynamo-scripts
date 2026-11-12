@@ -122,7 +122,7 @@ public class SheetBookCommand
         }
         var rs = RoadSession.Of(doc);
         int erased = rs?.TicksErased ?? 0;
-        if (have > 0 && erased == 0) return "";
+        if ((have > 0 && erased == 0) || !NoriSetting.IsOn(db)) return "";   // ★[JACK 1112] «노리선 그리기» 꺼져 있으면 평면도에도 안 그림
         string res = NoriCommand.Draw(doc, quiet: true, out int drawn);
         rs?.NoteTicksDrawn();
         return $"노리선 먼저 그림({(have == 0 ? "없었음" : $"진입도로 면을 다시 만들며 {erased}개 지움")}) — {drawn}개 · {res}";

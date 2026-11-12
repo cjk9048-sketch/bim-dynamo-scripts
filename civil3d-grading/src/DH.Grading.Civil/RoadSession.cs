@@ -1302,14 +1302,16 @@ internal sealed class RoadSession
         //   (면은 이미 만들어짐 — 지우기에서 무엇이 터져도 «도로 면 실패»로 알리지 않게 · 설치 전 검토 L6과 같은 뜻)
         try
         {
-            int nT = EraseAllTicks(_doc.Database, out int nLocked);
-            TicksErased += nT;   // ★[v111.7.1 · 검토 중간 2] 도킹창 상태 줄에도(다음 [노리선]까지)
-            if (nT > 0) msg += $" · 노리선 {nT}개 지움(옛 모양 — [노리선]으로 다시)";
+            int nT = EraseAllTicks(_doc.Database, out int nLocked);   // ★[JACK 1112] 지운 만큼 아래 AutoDraw가 새로 그림 — 도킹창 «노리선 지움» 안 셈
+            if (nT > 0) msg += $" · 노리선 {nT}개 지움(옛 모양)";
             if (nLocked > 0) msg += $" · ⚠노리선 {nLocked}개 못 지움(레이어 잠금?)";
         }
         catch (Exception exN) { msg += " · ⚠옛 노리선 못 지움 — " + exN.Message; }
         // ★★★[v111.8 · 계획_v111_8.md 4장 · JACK Q3 = A «매번 최종지표면까지»] 도로 면을 만든 같은 명령 안에서 최종지표면_DH(같은 실행 취소 묶음) — 실패해도 도로 면은 그대로 성공(M2: 글로 알림)
         msg += " · " + MakeFinalCore();
+        // ★[JACK 1112 «노리선은 첫생성이나 업데이트 때마다 저절로»] 부지 · 모든 도로 노리선을 새 모양으로(도면 설정 «노리선 그리기» 꺼져 있으면 안 함)
+        string nori = Commands.NoriCommand.AutoDraw(_doc);
+        if (nori.Length > 0) msg += " · " + nori;
         return msg;
     }
 

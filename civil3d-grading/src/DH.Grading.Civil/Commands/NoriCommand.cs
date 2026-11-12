@@ -34,6 +34,28 @@ public sealed class NoriCommand
         rs?.NoteTicksDrawn();   // ★[v111.7.1] 도킹창 «노리선 지움 n» 끔
     }
 
+    /// <summary>≥1이면 저절로 그리기를 미룬다 — 한 명령이 여러 번 부르는 길(<see cref="SiteSheetsRefresh.Run"/>)이 끝에서 한 번만 그리게.</summary>
+    internal static int AutoHold;
+
+    /// <summary>★[JACK 1112 «노리선은 첫생성이나 업데이트 때마다 저절로»] 부지 · 진입도로 지표면을 만들거나 고친 뒤 노리선을 같이 그린다(팝업 없음).
+    /// 도면 설정 «노리선 그리기»가 꺼져 있으면 안 함. [노리선] 명령(<see cref="Run"/>)은 이 설정과 상관없이 그린다. 돌려줌 = 한 줄(안 했으면 빈 글).</summary>
+    internal static string AutoDraw(Document doc)
+    {
+        if (doc == null || AutoHold > 0) return "";
+        try
+        {
+            if (!NoriSetting.IsOn(doc.Database)) return "";
+            string res = Draw(doc, quiet: true, out _);
+            RoadSession.Of(doc)?.NoteTicksDrawn();
+            return res;
+        }
+        catch (System.Exception ex)
+        {
+            try { DiagLog.Append("\n■ 노리선 저절로 — ⚠" + ex + "\n"); } catch { }
+            return "⚠노리선 못 그림 — " + ex.Message;
+        }
+    }
+
     /// <summary>★[v111.1 · 계획_v111_1.md 2.3 · 2.4] 노리선 그리기 몸통 — [노리선] 단추와 [도로 면 만들기] 뒤 저절로(<paramref name="quiet"/> = 팝업 없음) 공용.
     /// 진입도로 면이 있으면 그 자리(발자국) 안의 부지 선은 빼고 경계에서 끊는다(JACK 1030 «합쳐진 노리선»). 돌려줌 = 한 줄 요약.</summary>
     internal static string Draw(Document doc, bool quiet, out int drawn)
@@ -249,6 +271,30 @@ public sealed class NoriCommand
             // 틱은 기존 노랑 레이어 재사용. 구 흰색 'DH-소단' 잔재는 빈 목록으로 청소(사면선/소단선 레이어로 대체).
             GradingBuilder.DrawSlopeHatch(db, tr, ticks,
                 System.Array.Empty<System.Collections.Generic.IReadOnlyList<Point3>>());
+            // ★[v117.13 · 설치 전 검토 HIGH] 번들로 사면선 · 소단선 · 노리선 · 옹벽선을 다시 그리면 [옹벽 추가] 옹벽 자리 잘림(WallLinePlan)이 풀리고
+            //   그 옹벽의 빨간 옹벽선이 지워진다(노리선 자동이 합성 뒤마다 돌며 늘 걸림) → 넣은 선 옹벽(종류 2 · 보류 아님)에 평면 맞추기를 다시 한다
+            try
+            {
+                if (WallListStore.TryLoad(db, tr, out var wHead, out var wList, out _))
+                {
+                    var lineWalls = wList.Where(w => w.Kind == 2 && w.State == 1 && w.Hold.Length == 0).ToList();
+                    if (lineWalls.Count > 0)
+                    {
+                        System.Func<double, double, double?>? gZ = null;
+                        try
+                        {
+                            var gId = FindByHandle(db, GradingSettings.LastGroundHandle);
+                            if (gId.IsNull && regions.Count > 0) gId = FindByHandle(db, regions[^1].GroundHandle);
+                            if (!gId.IsNull && tr.GetObject(gId, OpenMode.ForRead) is Autodesk.Civil.DatabaseServices.Surface gS)
+                                gZ = (x, y) => { try { return gS.FindElevationAtXY(x, y); } catch { return null; } };
+                        }
+                        catch { }
+                        string pn = WallLinePlan.Apply(db, tr, lineWalls, wHead.PlanHandle ?? "", gZ);
+                        if (pn.Length > 0) detail += "\n선 옹벽 평면 다시 맞춤 — " + pn;
+                    }
+                }
+            }
+            catch (System.Exception pex) { detail += $"\n⚠선 옹벽 평면 다시 맞추기 실패({pex.GetType().Name})"; }
             tr.Commit();
             // ★★[v111.3] 진입도로 노리선 — 도로마다 그 면을 만든 입력으로 다시 셈(부지 선은 위에서 도로 자리를 뺐다)
             string roadSum = ""; int roadTicks = 0, roadsDrawn = 0;
@@ -539,5 +585,47 @@ public sealed class NoriCommand
         }
         catch { }
         return ObjectId.Null;
+    }
+}
+
+/// <summary>★[JACK 1112] 도면 설정 «노리선 그리기» — 도면에 저장(도면 사전 XRecord «DH_NORIDRAW» · 등고선 간격과 같은 길). 기록이 없으면 켜짐.</summary>
+internal static class NoriSetting
+{
+    const string Key = "DH_NORIDRAW";
+
+    internal static bool IsOn(Database db)
+    {
+        try
+        {
+            using var tr = db.TransactionManager.StartTransaction();
+            var nod = (DBDictionary)tr.GetObject(db.NamedObjectsDictionaryId, OpenMode.ForRead);
+            bool on = true;
+            if (nod.Contains(Key) && tr.GetObject(nod.GetAt(Key), OpenMode.ForRead) is Xrecord xr && xr.Data != null)
+            {
+                var v = xr.Data.AsArray();
+                if (v.Length > 0 && v[0].Value is short s) on = s != 0;
+            }
+            tr.Commit();
+            return on;
+        }
+        catch { return true; }
+    }
+
+    /// <summary>명령 안(문서 잠김)에서 부른다.</summary>
+    internal static void Write(Database db, bool on)
+    {
+        using var tr = db.TransactionManager.StartTransaction();
+        var nod = (DBDictionary)tr.GetObject(db.NamedObjectsDictionaryId, OpenMode.ForRead);
+        Xrecord xr;
+        if (nod.Contains(Key)) xr = (Xrecord)tr.GetObject(nod.GetAt(Key), OpenMode.ForWrite);
+        else
+        {
+            nod.UpgradeOpen();
+            xr = new Xrecord();
+            nod.SetAt(Key, xr);
+            tr.AddNewlyCreatedDBObject(xr, true);
+        }
+        xr.Data = new ResultBuffer(new TypedValue((int)DxfCode.Int16, (short)(on ? 1 : 0)));
+        tr.Commit();
     }
 }

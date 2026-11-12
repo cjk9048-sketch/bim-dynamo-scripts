@@ -31,12 +31,36 @@ public sealed class SheetSettingsCommand
         double drawnH = RoadSession.Of(doc) is RoadSession road ? road.Design.SheetScale : 0;
         var rs = RoadSheets.Setting(doc.Database, "", drawnH);
         double rh0 = rs.Plan.PinH, rv0 = rs.V2 ? rs.Plan.PinV : DH.Grading.Core.ProfileScaleFit.SameAsH;
-        var dlg = new SheetDialog("저장", rp0, rx0, cm0, cM0, rh0, rv0);
+        bool nori0 = NoriSetting.IsOn(doc.Database);
+        var dlg = new SheetDialog("저장", rp0, rx0, cm0, cM0, rh0, rv0, nori0);
         AcadApp.ShowModalWindow(dlg);
         if (dlg.DialogResult != true) return;
+        SavedNori(doc, nori0, dlg.NoriDraw);
         SavedContour(doc, cm0, cM0, dlg.ContourMinor, dlg.ContourMajor);
         SavedRoadVH(doc, rs.V2, rh0, rv0, dlg.RoadH, dlg.RoadV);
         Saved(doc, rp0, rx0, dlg.RoadProfileScale, dlg.RoadXsecScale, lay0, layR0);
+    }
+
+    /// <summary>★[JACK 1112] «노리선 그리기» [저장] 뒤 — 바뀌었을 때만: 끄면 그려 둔 노리선(부지 · 진입도로)을 지우고, 켜면 지금 그린다(면이 있으면). 창 없이 시험이 같은 길을 부른다.</summary>
+    internal static void SavedNori(Document doc, bool before, bool after)
+    {
+        if (before == after) return;
+        try
+        {
+            NoriSetting.Write(doc.Database, after);
+            if (!after)
+            {
+                int n = RoadSession.EraseAllTicks(doc.Database, out int locked);
+                RoadSession.Of(doc)?.NoteTicksDrawn();
+                doc.Editor.WriteMessage($"\n[도면 설정] 노리선 끔 — {n}개 지움" + (locked > 0 ? $" · ⚠{locked}개 못 지움(레이어 잠금?)" : ""));
+            }
+            else
+            {
+                string res = NoriCommand.AutoDraw(doc);
+                doc.Editor.WriteMessage("\n[도면 설정] 노리선 켬" + (res.Length > 0 ? " — " + res : ""));
+            }
+        }
+        catch (System.Exception ex) { doc.Editor.WriteMessage("\n[도면 설정] 노리선 저장 실패 — " + ex.Message); }
     }
 
     /// <summary>★★[v113.1 · 계획_종단방향_축척.md 3] 진입도로 종단 H · V — 판 2로 적음(바뀌었거나 판 2가 없던 도면에서 값이 옛 규칙과 다를 때). 창 없이 시험이 같은 길을 부른다.</summary>

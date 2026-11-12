@@ -1786,7 +1786,7 @@ internal static class ZoneEditCommon
             // ★[v103.1.4] 정지면을 다시 안 만들었으면(되돌리기만) 사면 · 소단이 그대로라 노리선도 그대로다 — 다시 그리지 않는다
             if (GradingSettings.LastRegenSkipped)
                 Log($"■ {cmdLabel} — 정지면을 다시 안 만들어 노리선 갱신도 건너뜀");
-            else if (HasNoriLines(db))
+            else if (!NoriSetting.IsOn(db) && HasNoriLines(db))   // ★[JACK 1112] 켜져 있으면 정지면 생성 끝(SiteSheetsRefresh.Run)이 저절로 그림
             {
                 ed.WriteMessage($"\n[{cmdLabel}] 노리선을 새 형상에 맞춰 다시 그립니다…");
                 Log($"■ {cmdLabel} — 노리선이 있어 자동 갱신(DHNORI)");

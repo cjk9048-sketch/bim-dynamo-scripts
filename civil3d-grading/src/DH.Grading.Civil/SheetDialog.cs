@@ -60,11 +60,15 @@ public sealed class SheetDialog : Window
     /// <summary>★[v111.11 · JACK 1103] 등고선(주곡선) · 계곡선 간격(도면에 저장 — 부르는 쪽이 <see cref="ContourInterval.Write"/> · <see cref="ContourInterval.Apply"/>) · 열 때 값 = 그 도면 값.</summary>
     internal double ContourMinor { get; private set; }
     internal double ContourMajor { get; private set; }
+    /// <summary>★[JACK 1112] «노리선 그리기» — 도면에 저장(부르는 쪽이 <see cref="Commands.NoriSetting.Write"/>) · 열 때 값 = 그 도면 값(기본 켜짐).</summary>
+    internal bool NoriDraw { get; private set; }
+    private readonly CheckBox _noriDraw;
 
     public SheetDialog(string okText = "저장", double roadProfileScale = 0, double roadXsecScale = 0,
                        double contourMinor = ContourInterval.DefaultMinor, double contourMajor = ContourInterval.DefaultMajor,
-                       double roadH = 0, double roadV = 0)
+                       double roadH = 0, double roadV = 0, bool noriDraw = true)
     {
+        NoriDraw = noriDraw;
         RoadProfileScale = roadProfileScale; RoadXsecScale = roadXsecScale;
         RoadH = roadH; RoadV = roadV;
         ContourMinor = contourMinor; ContourMajor = contourMajor;
@@ -191,6 +195,15 @@ public sealed class SheetDialog : Window
         // ★★[v111.11 · JACK 1103 «원지형 및 모든 지형의 등고선 간격을 … 3. 공통에»] 지표면 스타일의 간격 — 도면에 저장
         const string contourTip = "원지반 · 정지면 · 최종지표면 · 진입도로 지표면의 등고선 간격\n"
                                 + "가져온 수치지도 등고선(선)은 원본 자료라 그대로입니다";
+        // ★[JACK 1112 «노리선 단추 없애고 도면설정에 켜고 끄는 칸 · 기본 켜기»] 노리선 그리기 — 도면에 저장(Commands.NoriSetting)
+        _noriDraw = new CheckBox
+        {
+            Content = "노리선 그리기",
+            IsChecked = noriDraw,
+            Margin = new Thickness(0, 0, 0, 8),
+            ToolTip = "계획부지 · 진입도로 지표면을 만들거나 업데이트할 때 노리선을 같이 그림",
+        };
+        root.Children.Add(_noriDraw);
         _contourMinor = GradingDialog.AddRow(root, "등고선 간격 (m)", contourMinor, "");
         _contourMajor = GradingDialog.AddRow(root, "계곡선 간격 (m)", contourMajor, "", out _contourMsg);
         _contourMinor.ToolTip = contourTip;
@@ -380,6 +393,7 @@ public sealed class SheetDialog : Window
         GradingSettings.BasemapRes = GradingSettings.BasemapResValues[
             System.Math.Clamp(_basemapRes.SelectedIndex, 0, GradingSettings.BasemapResValues.Length - 1)];
         ContourMinor = cmi; ContourMajor = cma;
+        NoriDraw = _noriDraw.IsChecked == true;
 
         DialogResult = true;
         Close();

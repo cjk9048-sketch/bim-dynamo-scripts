@@ -193,11 +193,13 @@ public sealed class ResetCommand
         {
             inv ??= Inventory(db, scope);
             var rep = Wipe(doc, scope, includeImported: false, keepGround: true);
+            // ★[v117.13 · 설치 전 검토 MED] 진입도로를 지우면 부지 노리선까지 지운다(도로 자리를 빼고 그려졌으므로) — [노리선] 단추가 없어졌으니 바로 다시 그림(설정 «노리선 그리기»를 따름)
+            if (scope == Scope.Road && rep.Ticks > 0) { try { NoriCommand.AutoDraw(doc); } catch { } }
             try { ed.Regen(); } catch { }
             string left = Survivors(doc, scope);
             string ourLeft = scope == Scope.Site ? OurLeft(db) : "";
             string msg = scope == Scope.Road
-                ? $"도로 {inv.Roads.Count} · 지표면 {rep.Surfs} · 객체 {rep.Ents} 지움" + (rep.Ticks > 0 ? $" · 노리선 {rep.Ticks} 지움 — [노리선]으로 다시" : "")
+                ? $"도로 {inv.Roads.Count} · 지표면 {rep.Surfs} · 객체 {rep.Ents} 지움" + (rep.Ticks > 0 ? $" · 노리선 {rep.Ticks} 지움" : "")
                 : $"지표면 {rep.Surfs} · 객체 {rep.Ents}" + (inv.Roads.Count > 0 ? $" · 진입도로 {inv.Roads.Count}" : "") + " 지움";
             if (rep.Tabs > 0) msg += $" · 도면화 탭 {rep.Tabs} 지움";
             string ret = rep.Ret.Retired.Count + rep.Ret.Failed.Count > 0 ? rep.RetireLine : "";

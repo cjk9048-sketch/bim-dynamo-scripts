@@ -212,16 +212,17 @@ internal sealed class RoadPanel : UserControl
         _host.Children.Add(kindRow); _needRoad.Add(_ditchKind);
         var hostD = _host;
         _ditchU = new StackPanel(); _host = _ditchU; hostD.Children.Add(_ditchU);
-        Row(("안폭", d => d.DitchU[0], (d, v) => d.DitchU[0] = v, 1000, 50, 3000), ("안높이", d => d.DitchU[1], (d, v) => d.DitchU[1] = v, 1000, 50, 3000), ("벽", d => d.DitchU[2], (d, v) => d.DitchU[2] = v, 1000, 10, 1000));
-        Row(("바닥", d => d.DitchU[3], (d, v) => d.DitchU[3] = v, 1000, 10, 1000), ("기초", d => d.DitchU[4], (d, v) => d.DitchU[4] = v, 1000, 0, 1000), ("기초 내밈", d => d.DitchU[5], (d, v) => d.DitchU[5] = v, 1000, 0, 1000));
-        Row(("뚜껑 자리 폭", d => d.DitchU[6], (d, v) => d.DitchU[6] = v, 1000, 0, 500), ("깊이", d => d.DitchU[7], (d, v) => d.DitchU[7] = v, 1000, 0, 500));
+        // ★[v117.13] 칸 상자를 따로 받아 둔다 — 팝업이 자기 줄(묶음별 표)에 다시 붙임(저장 · 범위 · 켜짐 규칙은 Row 그대로)
+        _ditchUBoxes.AddRange(Row(("안폭", d => d.DitchU[0], (d, v) => d.DitchU[0] = v, 1000, 50, 3000), ("안높이", d => d.DitchU[1], (d, v) => d.DitchU[1] = v, 1000, 50, 3000), ("벽", d => d.DitchU[2], (d, v) => d.DitchU[2] = v, 1000, 10, 1000)));
+        _ditchUBoxes.AddRange(Row(("바닥", d => d.DitchU[3], (d, v) => d.DitchU[3] = v, 1000, 10, 1000), ("기초", d => d.DitchU[4], (d, v) => d.DitchU[4] = v, 1000, 0, 1000), ("기초 내밈", d => d.DitchU[5], (d, v) => d.DitchU[5] = v, 1000, 0, 1000)));
+        _ditchUBoxes.AddRange(Row(("뚜껑 자리 폭", d => d.DitchU[6], (d, v) => d.DitchU[6] = v, 1000, 0, 500), ("깊이", d => d.DitchU[7], (d, v) => d.DitchU[7] = v, 1000, 0, 500)));
         _ditchLid = new CheckBox { Content = "그레이팅", FontSize = 11, Margin = new Thickness(2, 0, 0, 6), ToolTip = "U형 뚜껑(그레이팅) — 3D에 어두운 격자 띠 · 없으면 물길 띠" };
         _ditchLid.Click += (_, __) => DitchLidChanged();
         _ditchU.Children.Add(_ditchLid); _needRoad.Add(_ditchLid);
         _ditchL = new StackPanel(); _host = _ditchL; hostD.Children.Add(_ditchL);
-        Row(("배수면 폭", d => d.DitchL[0], (d, v) => d.DitchL[0] = v, 1000, 50, 3000), ("경사 %", d => d.DitchL[1], (d, v) => d.DitchL[1] = v, 100, 0, 30), ("경계석 폭", d => d.DitchL[2], (d, v) => d.DitchL[2] = v, 1000, 10, 1000));
-        Row(("경계석 높이", d => d.DitchL[3], (d, v) => d.DitchL[3] = v, 1000, 10, 2000), ("보이는 높이", d => d.DitchL[4], (d, v) => d.DitchL[4] = v, 1000, 10, 2000), ("밑", d => d.DitchL[5], (d, v) => d.DitchL[5] = v, 1000, 10, 1000));
-        Row(("뒤 폭", d => d.DitchL[6], (d, v) => d.DitchL[6] = v, 1000, 0, 1000), ("뒤 턱", d => d.DitchL[7], (d, v) => d.DitchL[7] = v, 1000, 0, 1000), ("끝 두께", d => d.DitchL[8], (d, v) => d.DitchL[8] = v, 1000, 10, 2000));
+        _ditchLBoxes.AddRange(Row(("배수면 폭", d => d.DitchL[0], (d, v) => d.DitchL[0] = v, 1000, 50, 3000), ("경사 %", d => d.DitchL[1], (d, v) => d.DitchL[1] = v, 100, 0, 30), ("경계석 폭", d => d.DitchL[2], (d, v) => d.DitchL[2] = v, 1000, 10, 1000)));
+        _ditchLBoxes.AddRange(Row(("경계석 높이", d => d.DitchL[3], (d, v) => d.DitchL[3] = v, 1000, 10, 2000), ("보이는 높이", d => d.DitchL[4], (d, v) => d.DitchL[4] = v, 1000, 10, 2000), ("밑", d => d.DitchL[5], (d, v) => d.DitchL[5] = v, 1000, 10, 1000)));
+        _ditchLBoxes.AddRange(Row(("뒤 폭", d => d.DitchL[6], (d, v) => d.DitchL[6] = v, 1000, 0, 1000), ("뒤 턱", d => d.DitchL[7], (d, v) => d.DitchL[7] = v, 1000, 0, 1000), ("끝 두께", d => d.DitchL[8], (d, v) => d.DitchL[8] = v, 1000, 10, 2000)));
         _host = hostD;
         _ditchWarn = new TextBlock { FontSize = 11, Foreground = DhBrand.Warn, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(2, 0, 0, 4), Visibility = Visibility.Collapsed };
         _host.Children.Add(_ditchWarn);
@@ -276,23 +277,27 @@ internal sealed class RoadPanel : UserControl
     }
 
     StackPanel _ditchBody = null!;
+    readonly List<TextBox> _ditchUBoxes = new(), _ditchLBoxes = new();
     RoadDitchWindow? _ditchWin;
 
     /// <summary>★[v117.12] «측구 단면» 팝업 — 칸 묶음(<see cref="_ditchBody"/>)을 창에 붙임 · 닫으면 칸 값을 받고(Commit) 떼어 냄 · 이미 열려 있으면 앞으로.</summary>
     void OpenDitchWindow()
     {
+        RoadDitchWindow? win = null;
         try
         {
             if (_ditchWin != null) { _ditchWin.Activate(); return; }
-            var win = new RoadDitchWindow(_ditchBody, Commit);
-            win.Closed += (_, __) => _ditchWin = null;
+            // ★[v117.13] 창이 칸들을 자기 줄에 붙인다(묶음별 표 · 그림 · 저장 형식) — 값 저장 · 켜짐은 그대로 이쪽 처리기
+            win = new RoadDitchWindow(new RoadDitchWindow.Parts(_ditchKind, _ditchLid, _ditchWarn, _ditchUBoxes, _ditchLBoxes, Commit, DitchLidChanged));
+            var w0 = win;
+            win.Closed += (_, __) => { if (ReferenceEquals(_ditchWin, w0)) _ditchWin = null; };
             _ditchWin = win;
             AcadApp.ShowModelessWindow(win);
         }
         catch (System.Exception ex)
         {
             // ★[v117.12 · 설치 전 검토 LOW] 창을 지은 뒤 못 띄웠으면 칸들을 그 창에서 떼어 둔다(안 떼면 다음 [측구 단면…]이 «부모 둘»로 계속 실패)
-            try { if (_ditchBody.Parent is System.Windows.Controls.Border b) b.Child = null; } catch { }
+            try { win?.Release(); } catch { }
             _ditchWin = null; _note.Text = "측구 단면 창 못 엶 — " + ex.Message;
         }
     }
