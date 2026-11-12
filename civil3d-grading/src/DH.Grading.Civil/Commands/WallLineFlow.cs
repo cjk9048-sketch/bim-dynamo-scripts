@@ -384,18 +384,25 @@ internal static class WallLineFlow
         var bdF = bd; var blF = bl; var regF = region;
         // ★[v114.0 · 계획 2절 기능 스위치] 켜면 선 길을 숨긴다(옛 기록은 지우지 않음)
         if (GradingSettings.WallLineOff || WallByLine.Off) { ed.WriteMessage($"\n[{Tag}] ⚠선 옹벽(v114) 꺼짐(정지옵션 WallLineOff) — 안 바뀜"); return; }
-        var got = WallLineDraw.Run(doc, Tag, bdF, regF.Boundary, pts => BoundaryCut.Classify(pts, bdF, regF.Boundary, blF));
-        if (got == null) return;
-        // ★★[v117.0 · JACK 1111 «선 그은 부분은 그냥 수직 1:0.01로 끝까지» · 계획 3절] 새로 그리는 부지 옹벽 = 수직 옹벽 — 묻는 것 없음([다시그리기(S)] · Enter = 적용).
-        //   옛 «제원 절토(C) · 성토(F) · 천단(P)» 묻기는 없앰(소단 · 단높이 · 천단 계단이 없다) — 옛 기록(Shape 0)은 다시 짓기(Rebuild)에서 옛 모양 그대로
+        // ★[v117.14 · JACK 1112] 그리는 동안 쓰는 값(제원 · 단높이 · 소단폭)을 그리기 앞으로 — 경계 위 커서에서 어림 소단 미리보기(WallBenchPreview)가 같은 값을 쓴다
         var p = GradingSettings.ToParams();
         double slopeW = System.Math.Max(GradingSettings.MinSlope, 0), faceRun = p.MinFaceRun, grid = System.Math.Max(1.0, p.VertexSpacing), margin = System.Math.Max(0, GradingSettings.WallPolygonMargin);
         var rp = regF.Params;
         double hc = rp.BenchHeightOf(true), tc = rp.BenchWidthOf(true), hf = rp.BenchHeightOf(false), tf = rp.BenchWidthOf(false);
-        // ★★[v117.3 · JACK 1111 «거기서 경계 중심 방향으로 소단» · 계획 4절] 기본 = 다단(1차 최고 ≤ 단높이면 저절로 수직 그대로) · [수직만(V)] = v117 수직 옹벽
         bool tierMode = true; double tH = double.NaN, tB = double.NaN, tZ = double.NaN;
         List<WallByLine.TierSec>? tSecs = null; bool tEnd = false;   // ★[v117.x A · B] 구간(승인 · 수동 — Z1 NaN = 그 구간 자동) · 끝 비탈
         WallByLine.WallShape shape = WallByLine.WallShape.Tiered;
+        System.Func<double, double, double?> deltaAt = (x, y) => gC.TryGetElevation(x, y, out double gz) && pC.TryGetElevation(x, y, out double pz) ? gz - pz : null;
+        WallBenchPreview.Result? BenchPrev(BoundaryCut.Result c, int n = 0, double h = double.NaN, double bw = double.NaN) => !tierMode ? null : WallBenchPreview.Compute(new WallBenchPreview.Input
+        {
+            Line = c.Line, NewRing = c.NewRing, CutRing = c.CutRing, Plan = regF.Boundary, Delta = deltaAt, Hc = hc, Bc = tc, Hf = hf, Bf = tf, SlopeW = slopeW,
+            HOverride = double.IsNaN(h) ? tH : h, BOverride = double.IsNaN(bw) ? tB : bw, N = n,
+        });
+        var got = WallLineDraw.Run(doc, Tag, bdF, regF.Boundary, pts => BoundaryCut.Classify(pts, bdF, regF.Boundary, blF), c => BenchPrev(c));
+        if (got == null) return;
+        // ★★[v117.0 · JACK 1111 «선 그은 부분은 그냥 수직 1:0.01로 끝까지» · 계획 3절] 새로 그리는 부지 옹벽 = 수직 옹벽 — 묻는 것 없음([다시그리기(S)] · Enter = 적용).
+        //   옛 «제원 절토(C) · 성토(F) · 천단(P)» 묻기는 없앰(소단 · 단높이 · 천단 계단이 없다) — 옛 기록(Shape 0)은 다시 짓기(Rebuild)에서 옛 모양 그대로
+        // ★★[v117.3 · JACK 1111 «거기서 경계 중심 방향으로 소단» · 계획 4절] 기본 = 다단(1차 최고 ≤ 단높이면 저절로 수직 그대로) · [수직만(V)] = v117 수직 옹벽
         WallByLine.Built Geo() { shape = tierMode ? WallByLine.WallShape.Tiered : WallByLine.WallShape.Vertical; return BuildGeom(got.Cut, bdF, regF, blF, hc, tc, hf, tf, slopeW, faceRun, grid, margin, gC, pC, false, 9, shape, tH, tB, tZ, tierMode ? tSecs : null, tierMode && tEnd); }
         var b = Geo();
         double mk = System.Math.Max(0.3, System.Math.Sqrt(System.Math.Pow(bdF.Max(q => q.X) - bdF.Min(q => q.X), 2) + System.Math.Pow(bdF.Max(q => q.Y) - bdF.Min(q => q.Y), 2)) * 0.006);
@@ -414,9 +421,16 @@ internal static class WallLineFlow
                 live = WallLineDraw.Show(b.Points.Select(q => (q.X, q.Y)).Concat(b.BreakAt), got.Cut.Line, mk, 2, more, 3);
                 live.AddRange(WallLineDraw.Show(System.Array.Empty<(double, double)>(), null, mk, 2, b.Foot.Cast<IReadOnlyList<Point3>>(), 1));
                 // ★[v117.x A] 구간 경계(지은 구간 · 구간안) — 큰 X
-                if (b.TierSecMarks.Count + b.TierProposeMarks.Count > 0) live.AddRange(WallLineDraw.Show(b.TierSecMarks.Concat(b.TierProposeMarks), null, mk * 2));
+                if (b.TierSecMarks.Count > 0) live.AddRange(WallLineDraw.Show(b.TierSecMarks, null, mk * 2));   // ★[v117.14 · 검토 LOW] 구간안 X는 안 그림(구간나눔(P) 없앰 — 설명 없는 X가 남지 않게)
             }
-            else live = WallLineDraw.Show(b.Marks, got.Cut.Line.Count >= 2 ? got.Cut.Line : got.Pts, mk);   // ★[v117.9.2 · JACK 1112 «경계 밖으로 노란 선 길어짐»] 거절 때도 경계 위 A..B 선(판정용 1 m 늘임은 안 보임)
+            else
+            {
+                // ★[v117.14 · JACK 1112 «소단 예시도 해치와 텍스트로 · X자 말고 부지경계 침범 글»] «자리» 거절은 아래 소단 해치 · 글이 자리를 알려 주므로 X를 안 그린다(해치가 안 그려질 때만 X)
+                var bp = b.Code == "자리" ? BenchPrev(got.Cut, b.TierN, b.TierH, b.TierB) : null;
+                var bl2 = bp != null && (bp.Ok.Count + bp.Hit.Count) > 0 ? WallLineDraw.ShowBench(bp) : new List<Autodesk.AutoCAD.DatabaseServices.Entity>();
+                live = WallLineDraw.Show(bl2.Count > 0 ? System.Array.Empty<(double, double)>() : b.Marks, got.Cut.Line.Count >= 2 ? got.Cut.Line : got.Pts, mk);
+                live.AddRange(bl2);
+            }   // ★[v117.9.2 · JACK 1112 «경계 밖으로 노란 선 길어짐»] 거절 때도 경계 위 A..B 선(판정용 1 m 늘임은 안 보임)
             if (!b.Ok) { try { DiagLog.AppendCarry($"\n  [{Tag}] 거절(기술) — {b.Code}: {b.Why}"); } catch { } }
             // ★[v117.9.3 · JACK 1112 «침범했을 경우만 소단선 미리보기 — 소단선이 그 선 위에 보이면서 침범하는 걸»] 다단 «자리» 거절 — 소단선(초록) · 부지 바닥 침범 몫(빨강)
             bool benchHit = !b.Ok && b.TierBenchHit.Count > 0;
@@ -426,29 +440,25 @@ internal static class WallLineFlow
                 live.AddRange(WallLineDraw.Show(System.Array.Empty<(double, double)>(), null, mk, 2, b.TierBenchHit, 1));
             }
             string spec = !b.Ok ? $"〈⚠{WallEasy.Build(b.Code, b.Why)}{(benchHit ? " · 빨간 소단선 = 부지 침범 자리" : "")}〉"
-                : b.Shape == 3 ? string.Format(ic, "〈다단 {0}단 · 단높이 {1:0.##} · 소단 {2:0.##} · 첫 소단 {3:F2}({4}) · 바깥 최고 {5:F2} m · 끊김 {6}곳{7}〉", b.TierN, b.TierH, b.TierB, b.TierZ1,
-                    double.IsNaN(tZ) ? "자동" : "손", b.OuterHMax, b.BreakN, (b.BreakN > 0 ? " — 구간 나눔 권함" + (b.TierPropose != null ? "(P)" : "(M)") : "")
-                    + (b.TierSecsUsed.Count >= 2 ? string.Format(ic, " · 구간 {0}(옆벽 최고 {1:F2} m)", b.TierSecsUsed.Count, b.TierSideHMax) : "") + (b.TierEnd ? " · 끝 비탈" : ""))
+                : b.Shape == 3 ? string.Format(ic, "〈다단 {0}단 · 단높이 {1:0.##} · 소단 {2:0.##} · 바깥 최고 {3:F2} m{4}〉", b.TierN, b.TierH, b.TierB,
+                    b.OuterHMax, (b.BreakN > 0 ? string.Format(ic, " · 끊김 {0}곳 → 선을 둘로 나눠 그리기 권함", b.BreakN) : "")
+                    + (b.TierSecsUsed.Count >= 2 ? string.Format(ic, " · 구간 {0}(저장된 구간)", b.TierSecsUsed.Count) : "") + (b.TierEnd ? " · 끝 비탈" : ""))   // ★[v117.14 · JACK 1112 «수동구간 · 구간나눔 · 한구간 · 첫소단 — 안 쓰면 없애 · 복잡하면 어려워져»] 구간 · 첫 소단 글 뺌
                 : string.Format(ic, "〈수직 1:{0} · 길이 {1:F2} m(절토 {2:F2} · 성토 {3:F2}) · 최고 {4:F2} m · 면적 {5:F1} ㎡{6}〉", slopeW.ToString("0.###", ic), b.LineLen, b.LenC, b.LenF, b.HMax, b.Area,
                     b.TierNone ? string.Format(ic, " · 단높이 {0:0.##} 안 — 단 없이 됨", b.TierH) : "");
             if (b.Ok && b.Profile is { Preview.Length: > 0 } pf) ed.WriteMessage($"\n[{Tag}] {pf.Preview}");   // ★[로드맵 2-2 · 2-3] 측점표 한 줄(보고만)
             // ★[v117.12 · JACK 1112] 용지 경계 · 구조물 외곽 미리보기 없앰(용지 경계 기능 없앰)
             // ★[v117.x A] 구간안(한 구간이 안 맞을 때만) · 지은 구간 · 끝 비탈 판정 — 한 줄씩
-            if (tierUi && tSecs == null && b.TierPropose != null) foreach (var t in b.TierProposeText) ed.WriteMessage($"\n[{Tag}] 구간안 {t}");
-            if (tierUi && b.Ok && b.TierSecsUsed.Count >= 2)
-                for (int k = 0; k < b.TierSecsUsed.Count; k++) { var q = b.TierSecsUsed[k]; ed.WriteMessage(string.Format(ic, "\n[{0}] 구간 {1}: STA {2:F2}~{3:F2} · {4}", Tag, k + 1, q.S0, q.S1, q.NoTier ? "단 없음(수직만)" : string.Format(ic, "단 {0} · 첫 소단 {1:F2}({2})", q.N, q.Z1, q.Hand ? "손" : "자동"))); }
+            // ★[v117.14 · JACK 1112] 구간안 · 구간 줄 글 없앰(수동구간 · 구간나눔 · 한구간 없앰 — 사용 기록 0 · 진단이력 212개)
             if (tierUi && b.TierEnd && b.TierEndText.Length > 0) ed.WriteMessage($"\n[{Tag}] {b.TierEndText}");
             PromptResult r;
             try
             {
-                bool canP = tierUi && tSecs == null && b.TierPropose != null, canO = tierMode && tSecs != null;
-                var pk = new PromptKeywordOptions(tierUi || canO ? $"\n[{Tag}] {spec} [{(canP ? "구간나눔(P)/" : "")}{(canO ? "한구간(O)/" : "")}수동구간(M)/끝비탈(E)/단높이(H)/소단폭(B)/첫소단(Z)/수직만(V)/다시그리기(S)] (Enter = 적용): "
+                // ★[v117.14 · JACK 1112] 구간나눔(P) · 한구간(O) · 수동구간(M) · 첫소단(Z) 없앰 — 남은 것: 끝비탈 · 단높이 · 소단폭 · 수직만 · 다시그리기(첫 소단은 늘 자동 · 저장된 구간은 다시 지을 때 그대로)
+                var pk = new PromptKeywordOptions(tierUi ? $"\n[{Tag}] {spec} [끝비탈(E)/단높이(H)/소단폭(B)/수직만(V)/다시그리기(S)] (Enter = 적용): "
                     : !tierMode ? $"\n[{Tag}] {spec} [다단(T)/다시그리기(S)] (Enter = 적용): " : $"\n[{Tag}] {spec} [다시그리기(S)] (Enter = 적용): ");
                 pk.Keywords.Add("S", "S", "다시그리기(S)");
-                if (tierUi || canO) { pk.Keywords.Add("H", "H", "단높이(H)"); pk.Keywords.Add("B", "B", "소단폭(B)"); pk.Keywords.Add("Z", "Z", "첫소단(Z)"); pk.Keywords.Add("V", "V", "수직만(V)"); pk.Keywords.Add("M", "M", "수동구간(M)"); pk.Keywords.Add("E", "E", "끝비탈(E)"); }
-                if (canP) pk.Keywords.Add("P", "P", "구간나눔(P)");
-                if (canO) pk.Keywords.Add("O", "O", "한구간(O)");
-                if (!(tierUi || canO)) pk.Keywords.Add("V", "V", "수직만(V)", false, true);   // ★[v117.9 · 설치 전 검토 HIGH] 위에서 V를 안 넣었을 때만(두 번 넣으면 GetKeywords 예외) · 숨김 — 스크립트의 V 한 줄이 단이 필요 없는 선에서도 그대로 지나가게
+                if (tierUi) { pk.Keywords.Add("H", "H", "단높이(H)"); pk.Keywords.Add("B", "B", "소단폭(B)"); pk.Keywords.Add("V", "V", "수직만(V)"); pk.Keywords.Add("E", "E", "끝비탈(E)"); }
+                if (!tierUi) pk.Keywords.Add("V", "V", "수직만(V)", false, true);   // ★[v117.9 · 설치 전 검토 HIGH] 위에서 V를 안 넣었을 때만(두 번 넣으면 GetKeywords 예외) · 숨김 — 스크립트의 V 한 줄이 단이 필요 없는 선에서도 그대로 지나가게
                 if (!tierMode) pk.Keywords.Add("T", "T", "다단(T)");
                 pk.AllowNone = true; pk.AppendKeywordsToMessage = false;
                 r = ed.GetKeywords(pk);
@@ -458,7 +468,7 @@ internal static class WallLineFlow
             string kw = r.Status == PromptStatus.None ? "" : (r.StringResult ?? "").Trim().ToUpperInvariant();
             if (kw == "S")
             {
-                var g2 = WallLineDraw.Run(doc, Tag, bdF, regF.Boundary, pts => BoundaryCut.Classify(pts, bdF, regF.Boundary, blF));
+                var g2 = WallLineDraw.Run(doc, Tag, bdF, regF.Boundary, pts => BoundaryCut.Classify(pts, bdF, regF.Boundary, blF), c => BenchPrev(c));
                 if (g2 == null) return;
                 got = g2;
                 b = Geo();
@@ -466,49 +476,19 @@ internal static class WallLineFlow
             }
             if (kw == "V") { if (tierMode) { tierMode = false; b = Geo(); } continue; }
             if (kw == "T") { tierMode = true; b = Geo(); continue; }
-            // ★[v117.x A] 구간안 승인 — 경계 그대로 · 구간 Z1은 자동(NaN · 다시 지을 때도 지금 면으로) · 한 구간으로 되돌림
-            if (kw == "P" && b.TierPropose != null) { tSecs = b.TierPropose.Select(q => new WallByLine.TierSec { S0 = q.S0, S1 = q.S1 }).ToList(); b = Geo(); continue; }
-            if (kw == "O") { tSecs = null; b = Geo(); continue; }
             if (kw == "E") { tEnd = !tEnd; ed.WriteMessage($"\n → 끝 비탈 {(tEnd ? "켬(원뿔 비탈 · 단 높이 소단)" : "끔(단별 자연 종료)")}"); b = Geo(); continue; }
-            if (kw == "M")
+            if (kw is "H" or "B")
             {
-                // 수동 구간 — 경계 측점(쉼표) · 구간마다 첫 소단(Enter = 자동)
-                string now = tSecs == null ? "" : string.Join(",", tSecs.Skip(1).Select(q => q.S0.ToString("0.##", ic)));
-                var ps = new PromptStringOptions($"\n구간 경계 측점 (m · 선 0~{b.LineLen:F2} · 쉼표로{(now.Length > 0 ? " · 지금 " + now : "")}): ") { AllowSpaces = false };
-                var sr = ed.GetString(ps);
-                if (sr.Status != PromptStatus.OK) continue;
-                var cuts = new List<double>();
-                foreach (var t in (sr.StringResult ?? "").Split(new[] { ',', ';' }, System.StringSplitOptions.RemoveEmptyEntries))
-                    if (double.TryParse(t.Trim(), System.Globalization.NumberStyles.Float, ic, out double v) && v > 0 && v < b.LineLen) cuts.Add(v);
-                cuts = cuts.Distinct().OrderBy(v => v).ToList();
-                if (cuts.Count == 0) { ed.WriteMessage("\n → 경계 없음 — 그대로"); continue; }
-                var ns2 = new List<WallByLine.TierSec>();
-                for (int k = 0; k <= cuts.Count; k++)
-                {
-                    double s0 = k == 0 ? 0 : cuts[k - 1], s1 = k == cuts.Count ? b.LineLen : cuts[k];
-                    var pz = new PromptDoubleOptions(string.Format(ic, "\n구간 {0}(STA {1:F2}~{2:F2}) 첫 소단 높이 (m · Enter = 자동)", k + 1, s0, s1)) { AllowNegative = true, AllowZero = true, AllowNone = true };
-                    var zr = ed.GetDouble(pz);
-                    if (zr.Status == PromptStatus.Cancel) { ns2 = null; break; }
-                    ns2.Add(new WallByLine.TierSec { S0 = s0, S1 = s1, Z1 = zr.Status == PromptStatus.OK ? zr.Value : double.NaN });
-                }
-                if (ns2 != null) { tSecs = ns2; b = Geo(); }
-                continue;
-            }
-            if (kw is "H" or "B" or "Z")
-            {
-                double cur = kw == "H" ? b.TierH : kw == "B" ? b.TierB : b.TierZ1;
-                string now = double.IsFinite(cur) ? cur.ToString(kw == "Z" ? "0.###" : "0.##", ic) : "—";
+                double cur = kw == "H" ? b.TierH : b.TierB;
+                string now = double.IsFinite(cur) ? cur.ToString("0.##", ic) : "—";
                 // Enter = 그대로(None — 기본값을 쓰지 않는다: 자동 첫 소단이 Enter 한 번에 손 값으로 바뀌지 않게)
-                var pdo = new PromptDoubleOptions(kw == "H" ? $"\n단높이 (m · 지금 {now} · Enter = 그대로)" : kw == "B" ? $"\n소단 폭 (m · 지금 {now} · Enter = 그대로)" : $"\n첫 소단 높이 (m · 지금 {now}{(double.IsNaN(tZ) ? " 자동" : "")} · Enter = 그대로) [자동(A)]")
-                { AllowNegative = kw == "Z", AllowZero = kw != "H", AllowNone = true };
-                if (kw == "Z") { pdo.Keywords.Add("A", "A", "자동(A)"); pdo.AppendKeywordsToMessage = false; }
+                var pdo = new PromptDoubleOptions(kw == "H" ? $"\n단높이 (m · 지금 {now} · Enter = 그대로)" : $"\n소단 폭 (m · 지금 {now} · Enter = 그대로)")
+                { AllowNegative = false, AllowZero = kw != "H", AllowNone = true };
                 var dr = ed.GetDouble(pdo);
-                if (dr.Status == PromptStatus.Keyword && (dr.StringResult ?? "").Trim().ToUpperInvariant() == "A") tZ = double.NaN;
-                else if (dr.Status == PromptStatus.OK)
+                if (dr.Status == PromptStatus.OK)
                 {
                     if (kw == "H") { if (dr.Value < 0.5 || dr.Value > 30) ed.WriteMessage("\n → 범위 밖 값(단높이 0.5~30 m) — 그대로"); else tH = dr.Value; }
                     else if (kw == "B") { if (dr.Value > 20) ed.WriteMessage("\n → 범위 밖 값(소단 폭 0~20 m) — 그대로"); else tB = dr.Value; }
-                    else tZ = dr.Value;
                 }
                 b = Geo();
                 continue;

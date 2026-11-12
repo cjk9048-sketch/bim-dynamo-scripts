@@ -19,6 +19,8 @@ namespace DH.Grading.Civil.Commands;
 internal static class WallLineDraw
 {
     static readonly List<object> _stranded = new();
+    /// <summary>소단 미리보기 걸린 시간을 로그에 적은 수(AutoCAD가 도는 동안 처음 몇 번만 — 현장 시간 재기).</summary>
+    static int _benchLogged;
 
     internal sealed class Got
     {
@@ -63,13 +65,14 @@ internal static class WallLineDraw
     /// <param name="tag">명령 이름(«옹벽 변환» · «진입도로 옹벽 변환»).</param>
     /// <param name="bd">생성된 지표면 경계(시안으로 보인다).</param>
     /// <param name="floor">바닥(계획선 · 도로 띠) — 회색으로.</param>
-    internal static Got? Run(Document doc, string tag, IReadOnlyList<Point3> bd, IReadOnlyList<Point3>? floor, System.Func<List<Point3>, BoundaryCut.Result> classify)
+    internal static Got? Run(Document doc, string tag, IReadOnlyList<Point3> bd, IReadOnlyList<Point3>? floor, System.Func<List<Point3>, BoundaryCut.Result> classify,
+        System.Func<BoundaryCut.Result, WallBenchPreview.Result?>? benchPreview = null)
     {
         // ★★[v116.11 · JACK 1110 «옹벽 추가할 때 스냅 좀 잡혔으면 — 스냅이 안 잡혀»] 객체 스냅(OSMODE)을 끄지 않는다.
         //   v113.0은 찍는 동안 OSMODE를 0으로 껐다 — 기운 3D 화면에서 높이 있는 객체(지표면 등)에 붙은 점을 «시선 따라 Z = 0 평면으로 내림»(Flat)이
         //   높이 × 기울기만큼 옮겨 평면 자리가 수백 m 어긋났기 때문(1104 화면 없는 시험 338~346 m). 원인은 스냅이 아니라 내림이었다 —
         //   객체에 붙은 점은 그 X · Y가 곧 평면 자리이므로 내리지 않는다(<see cref="RunCore"/>의 Plan). 스냅 안 된 커서 점만 지금처럼 내린다.
-        return RunCore(doc, tag, bd, floor, classify);
+        return RunCore(doc, tag, bd, floor, classify, benchPreview);
     }
 
     /// <summary>화면 시선 방향으로 경계 평면(Z = 0)에 내린 점 — 기운 3D 화면에서 커서가 가리키는 평면 자리(위에서 본 화면이면 X · Y 그대로).</summary>
@@ -79,7 +82,8 @@ internal static class WallLineDraw
         return new Point3d(f.X, f.Y, 0);
     }
 
-    static Got? RunCore(Document doc, string tag, IReadOnlyList<Point3> bd, IReadOnlyList<Point3>? floor, System.Func<List<Point3>, BoundaryCut.Result> classify)
+    static Got? RunCore(Document doc, string tag, IReadOnlyList<Point3> bd, IReadOnlyList<Point3>? floor, System.Func<List<Point3>, BoundaryCut.Result> classify,
+        System.Func<BoundaryCut.Result, WallBenchPreview.Result?>? benchPreview)
     {
         // ★[v116.11] 객체 스냅이 잡힌 점인가 — AutoCAD가 알려 주는 «객체 스냅됨»(PointMonitor) · 지그는 지금 커서 점마다 이 값을 새로 받는다
         var edS = doc.Editor;
@@ -90,12 +94,12 @@ internal static class WallLineDraw
             catch { snapNow = false; }
         };
         edS.PointMonitor += onPm;
-        try { return RunCore2(doc, tag, bd, floor, classify, () => (snapNow, snapAt)); }
+        try { return RunCore2(doc, tag, bd, floor, classify, () => (snapNow, snapAt), benchPreview); }
         finally { try { edS.PointMonitor -= onPm; } catch { } }
     }
 
     static Got? RunCore2(Document doc, string tag, IReadOnlyList<Point3> bd, IReadOnlyList<Point3>? floor, System.Func<List<Point3>, BoundaryCut.Result> classify,
-        System.Func<(bool On, Point3d At)> snapState)
+        System.Func<(bool On, Point3d At)> snapState, System.Func<BoundaryCut.Result, WallBenchPreview.Result?>? benchPreview)
     {
         var ed = doc.Editor; var db = doc.Database;
         var ucs = ed.CurrentUserCoordinateSystem;
@@ -147,6 +151,54 @@ internal static class WallLineDraw
             try { var vh = System.Convert.ToDouble(Autodesk.AutoCAD.ApplicationServices.Core.Application.GetSystemVariable("VIEWSIZE")); return System.Math.Clamp(vh * 0.015, 0.2, 15); }
             catch { return 1.0; }
         }
+        // ★[v117.14 · JACK 1112 «경계 위에 마우스를 올리면 실시간으로 소단 · 침범이 보이게»] 끝 자리(경계 위)에 커서가 오면 어림 소단 미리보기를 그린다.
+        //   같은 자리(점 수 · 끝 점 1 cm · 마지막 찍은 점 1 cm)는 다시 안 셈 · 한 번이라도 50 ms 넘으면 이 명령 동안 끔(DiagLog).
+        bool benchOff = false; int benchSlow = 0;
+        (int N, long X, long Y, long LX, long LY)? bKey = null; WallBenchPreview.Result? bRes = null;
+        double hxSp = -1; List<(double X0, double Y0, double X1, double Y1)> hxOk = new(), hxHit = new();
+        WallBenchPreview.Result? BenchAt(List<(double X, double Y)> drawn, double x, double y)
+        {
+            if (benchPreview == null) return null;
+            var key = (drawn.Count, (long)System.Math.Round(x * 100), (long)System.Math.Round(y * 100), (long)System.Math.Round(drawn[^1].X * 100), (long)System.Math.Round(drawn[^1].Y * 100));
+            if (bKey is { } k0 && k0 == key) return bRes;   // ★[설치 전 검토 MED] 같은 자리는 끈 뒤에도 방금 셈을 그대로 보임(한 번 번쩍이고 사라지지 않게)
+            if (benchOff) return null;
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            WallBenchPreview.Result? r = null;
+            try
+            {
+                var lst = BoundaryDraw.ExtendSafe(geo, drawn.Append((x, y)).ToList(), 1.0, out _, out _);
+                var ct = classify(lst);
+                if (ct.Ok) r = benchPreview(ct);
+            }
+            catch { r = null; }
+            bKey = key; bRes = r; hxSp = -1;
+            // ★[설치 전 검토 MED] 첫 셈(도면 연 뒤 처음 — 코드 적재)은 느릴 수 있다 → 3번 잇달아 50 ms 넘을 때만 끔 · 처음 몇 번 걸린 시간은 로그(현장 시간 재기)
+            long ms = sw.ElapsedMilliseconds;
+            benchSlow = ms > 50 ? benchSlow + 1 : 0;
+            if (benchSlow >= 3)
+            {
+                benchOff = true;
+                try { DiagLog.AppendCarry($"\n  [{tag}] 소단 미리보기 {ms} ms(3번 잇달아 50 ms 넘음) — 이 명령 동안 끔"); } catch { }
+            }
+            else if (_benchLogged < 5) { _benchLogged++; try { DiagLog.AppendCarry($"\n  [{tag}] 소단 미리보기 {ms} ms"); } catch { } }
+            return r;
+        }
+        void DrawBench(WorldDraw wd, WallBenchPreview.Result r)
+        {
+            double px = CursorLabel.PixelUnit();
+            double sp = System.Math.Round(px * 7, 6);
+            if (hxSp != sp) { hxSp = sp; hxOk = WallBenchPreview.Hatch(r.Ok, sp); hxHit = WallBenchPreview.Hatch(r.Hit, sp); }
+            var tr = wd.SubEntityTraits;
+            tr.TrueColor = new Autodesk.AutoCAD.Colors.EntityColor(110, 190, 130);
+            foreach (var h in hxOk) wd.Geometry.WorldLine(new Point3d(h.X0, h.Y0, 0), new Point3d(h.X1, h.Y1, 0));
+            foreach (var ln in r.Lines) for (int i = 0; i + 1 < ln.Count; i++) wd.Geometry.WorldLine(new Point3d(ln[i].X, ln[i].Y, 0), new Point3d(ln[i + 1].X, ln[i + 1].Y, 0));
+            tr.Color = 1;
+            foreach (var h in hxHit) wd.Geometry.WorldLine(new Point3d(h.X0, h.Y0, 0), new Point3d(h.X1, h.Y1, 0));
+            tr.TrueColor = new Autodesk.AutoCAD.Colors.EntityColor(70, 150, 90);
+            foreach (var (x, y, k) in r.BenchLabels) Label(wd, x, y, "소단 " + k, px, 11);
+            tr.Color = 1;
+            foreach (var (x, y) in r.HitLabels) Label(wd, x, y, HitText, px, 13);
+        }
         while (true)
         {
             var pts = new List<Point3d>();
@@ -194,7 +246,11 @@ internal static class WallLineDraw
                     var to = st.Ok ? new Point3d(st.X, st.Y, 0) : cf;
                     wd.SubEntityTraits.Color = (short)(st.Kind == BoundaryDraw.Kind.End ? 3 : st.Ok ? 2 : 1);
                     wd.Geometry.WorldLine(new Point3d(drawn[^1].X, drawn[^1].Y, 0), to);
-                    if (st.Kind == BoundaryDraw.Kind.End) Box(wd, st.X, st.Y, 3);   // 경계 위에 붙는 끝 자리
+                    if (st.Kind == BoundaryDraw.Kind.End)
+                    {
+                        Box(wd, st.X, st.Y, 3);   // 경계 위에 붙는 끝 자리
+                        if (st.Ok && BenchAt(drawn, st.X, st.Y) is { } br) DrawBench(wd, br);
+                    }
                     else if (!st.Ok && st.At != null) Cross(wd, st.At.Value.X, st.At.Value.Y, 1);
                 }
                 string label = first ? "시작점 · 가까운 경계에 붙음" : "다음 점 · 경계 위·밖 = 끝";
@@ -264,6 +320,43 @@ internal static class WallLineDraw
             }
             finally { Drop(live); }
         }
+    }
+
+    internal const string HitText = "부지경계 침범";
+
+    static Autodesk.AutoCAD.GraphicsInterface.TextStyle? _bts;
+    /// <summary>지그 안 글(화면 px 크기 — 가운데 맞춤) · 글꼴은 이름표와 같은 맑은 고딕(따로 만든 글꼴 — 이름표 것과 크기를 섞지 않게).</summary>
+    static void Label(WorldDraw wd, double x, double y, string text, double px, double sizePx)
+    {
+        if (_bts == null) { var t = new Autodesk.AutoCAD.GraphicsInterface.TextStyle(); t.Font = new Autodesk.AutoCAD.GraphicsInterface.FontDescriptor("Malgun Gothic", true, false, 129, 34); _bts = t; }
+        var ts = _bts; ts.TextSize = sizePx * px;
+        double w = text.Length * ts.TextSize * 0.9;
+        try { var e = ts.ExtentsBox(text, true, true, null); if (e.MaxPoint.X > e.MinPoint.X) w = e.MaxPoint.X - e.MinPoint.X; } catch { }
+        wd.Geometry.Text(new Point3d(x - w / 2, y - ts.TextSize / 2, 0), Vector3d.ZAxis, Vector3d.XAxis, text, true, ts);
+    }
+
+    /// <summary>★[v117.14] «자리» 거절 — 소단 띠 해치(연초록) · 침범 몫 빨간 해치 + 글 «부지경계 침범»(임시 그림 · <see cref="Drop"/>으로 걷음). 헤드리스는 빈 목록.</summary>
+    internal static List<Entity> ShowBench(WallBenchPreview.Result r)
+    {
+        var live = new List<Entity>();
+        if (SelfCheckLog.Headless) return live;
+        var tm = TransientManager.CurrentTransientManager;
+        var noIds = new IntegerCollection();
+        void Add(Entity e) { bool ok = false; try { ok = tm.AddTransient(e, TransientDrawingMode.DirectShortTerm, 128, noIds); } catch { } if (ok) live.Add(e); else e.Dispose(); }
+        double px = CursorLabel.PixelUnit(), sp = px * 7;
+        void Hatch(IReadOnlyList<WallBenchPreview.Poly> polys, short aci)
+        {
+            foreach (var h in WallBenchPreview.Hatch(polys, sp)) Add(new Line(new Point3d(h.X0, h.Y0, 0), new Point3d(h.X1, h.Y1, 0)) { ColorIndex = aci });
+        }
+        Hatch(r.Ok, 3); Hatch(r.Hit, 1);
+        foreach (var (x, y) in r.HitLabels)
+        {
+            var mt = new MText();
+            try { mt.SetDatabaseDefaults(HostApplicationServices.WorkingDatabase); } catch { }   // ★[설치 전 검토 MED] 도면 기본(글꼴 스타일 등) — 도면 밖 글이 안 그려지는 일 없게
+            mt.Contents = "{\\fMalgun Gothic|b1|c129;" + HitText + "}"; mt.Location = new Point3d(x, y, 0); mt.TextHeight = 13 * px; mt.Attachment = AttachmentPoint.MiddleCenter; mt.ColorIndex = 1;
+            Add(mt);
+        };
+        return live;
     }
 
     /// <summary>질문 동안 보일 임시 그림(빨간 X · 그린 폴리선) — 걷기는 <see cref="Drop"/>(못 걷으면 붙잡는다 — WallPolyDraw와 같은 _stranded 규칙).</summary>

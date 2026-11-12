@@ -38,6 +38,11 @@ internal sealed class GradingPanel : UserControl
     /// <para>종전(§77 ⑧)엔 맨 위에 한 장만 크게 두고 라디오로 갈아 끼웠다.
     /// 칸 접기가 생기면서 자리 문제가 풀렸고, <b>고치는 값 옆에 그 그림</b>이 있는 편이 낫다.</para></summary>
     private readonly Canvas _canvasCut, _canvasFill;
+    // ★[JACK 1112 «모든 도킹창 맨 위 = 설명 애니메이션 창 · 계획부지 정지부터»] 도화 로고 아래 고정 한 칸 — 한 번에 하나만 보인다:
+    //   _demo(애니메이션 장면) · _hostCut/_hostFill(절토 · 성토 예시 그림) · _hostExcav(옹벽 · 터파기 그림). 그림 캔버스와 그리는 코드는 그대로(옮겨 담기만).
+    //   마우스를 내리면: 애니메이션은 멈추고(마지막 그림 · 안내 글) 그림 칸은 «마지막으로 본 것» 그대로 둔다.
+    private readonly FixDemoView _demo;
+    private readonly Border _hostCut, _hostFill, _hostExcav;
     // ★[JACK 0910] 안내문·결과 줄은 화면에서 걷었다 — <see cref="Say"/>는 명령창으로만 적는다.
 
     // ── ★[5b] 대상 ────────────────────────────────────────────────────────
@@ -124,6 +129,7 @@ internal sealed class GradingPanel : UserControl
     internal GradingPanel()
     {
         var root = new StackPanel { Margin = new Thickness(10, 4, 10, 10) };
+        _demo = new FixDemoView("칸 · 단추에 마우스 → 설명") { HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Top };
         DhBrand.Apply(this);
         Background = DhBrand.Wall;
 
@@ -171,10 +177,27 @@ internal sealed class GradingPanel : UserControl
                                                      //   ★묶음을 둔 까닭은 <b>다섯 칸이 850px을 넘던 것</b>이었는데
                                                      //     이제 <b>칸이 둘</b>이라 그 까닭이 사라졌다.
                                                      key: "정지:계획부지생성", group: null);
-        _pickPlan = PickRow(secTarget, "계획 경계 선택", out _planWhat,
-                            () => PickSession.Send(Doc, PickCommands.CmdPlan));
-        _pickGround = PickRow(secTarget, "원지반 선택", out _groundWhat,
-                              () => PickSession.Send(Doc, PickCommands.CmdGround));
+        // ★[JACK 1112 «경계 선택 · 원지반 선택을 한 줄로 · 미선택 선택 그 부분도»] 한 줄에 둘(단추 + 상태) — 좁으면 아래로 내려간다. 단추에 올리면 맨 위 설명 칸에 장면.
+        var pickGrid = new Grid { Margin = new Thickness(0, 0, 0, 8) };
+        pickGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        pickGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        pickGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        pickGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        _pickPlan = PickRow(pickGrid, "계획 경계 선택", out _planWhat,
+                            () => PickSession.Send(Doc, PickCommands.CmdPlan), "pickPlan", this);
+        _pickGround = PickRow(pickGrid, "원지반 선택", out _groundWhat,
+                              () => PickSession.Send(Doc, PickCommands.CmdGround), "pickGround", this);
+        pickGrid.SizeChanged += (_, e) =>
+        {
+            bool narrow = e.NewSize.Width < 340;
+            pickGrid.ColumnDefinitions[1].Width = narrow ? new GridLength(0) : new GridLength(1, GridUnitType.Star);
+            for (int i = 0; i < pickGrid.Children.Count; i++)
+            {
+                Grid.SetColumn(pickGrid.Children[i], narrow ? 0 : i);
+                Grid.SetRow(pickGrid.Children[i], narrow ? i : 0);
+            }
+        };
+        secTarget.Children.Add(pickGrid);
 
         // ★[계획 §5.1] <b>이어서/새로시작</b> — 기존 정지 결과가 있을 때만 보인다.
         //   종전 명령은 계획선을 찍은 <b>뒤</b> 이것을 묻고, 그 답에 따라 원지반을 아예 안 물었다.
@@ -230,13 +253,18 @@ internal sealed class GradingPanel : UserControl
         picGrid.Children.Add(colFill);
         secSlope.Children.Add(picGrid);
 
-        colCut.Children.Add(Example("절토", out _canvasCut));
+        // ★[JACK 1112 «예시 그림은 맨 위 설명 칸으로 · 절토 단높이 칸에 커서가 가면 절토 그림»] 그림 캔버스는 맨 위 칸(_hostCut/_hostFill)에 담고, 여기엔 작은 제목 + 값 세 칸만.
+        _hostCut = DiagHost(SlopeDiagram.Wrap(out _canvasCut), "절토 — 단높이 · 소단폭 · 구배 1:n으로 올라가는 사면");
+        _hostFill = DiagHost(SlopeDiagram.Wrap(out _canvasFill), "성토 — 단높이 · 소단폭 · 구배 1:n으로 내려가는 사면");
+        colCut.Children.Add(SubHead("절토", first: true));
         _trioCut = Trio(colCut, GradingSettings.CutBenchHeight, GradingSettings.CutBenchWidth,
                         GradingForm.SlopeShown(GradingSettings.CutSlope), out _cutH, out _cutW, out _cutS);
+        HookTop(_trioCut, "cut");
 
-        colFill.Children.Add(Example("성토", out _canvasFill));
-        Trio(colFill, GradingSettings.FillBenchHeight, GradingSettings.FillBenchWidth,
-             GradingForm.SlopeShown(GradingSettings.FillSlope), out _fillH, out _fillW, out _fillS);
+        colFill.Children.Add(SubHead("성토", first: true));
+        var trioFill = Trio(colFill, GradingSettings.FillBenchHeight, GradingSettings.FillBenchWidth,
+                            GradingForm.SlopeShown(GradingSettings.FillSlope), out _fillH, out _fillW, out _fillS);
+        HookTop(trioFill, "fill");
 
         var secEtc = GradingDialog.AddCollapsible(secTarget, "기타 설정", out _etcBadge,
             "사면형상 · 산지 대소단 · 옹벽", open: false, key: "정지:기타설정", group: SetGroup, level: 2);
@@ -249,6 +277,11 @@ internal sealed class GradingPanel : UserControl
             out Panel shapeRow);
         // 제목을 위로 뺐으니 왼쪽 이름칸(150px)은 자리를 안 차지하게 한다.
         if (shapeRow.Children.Count > 0 && shapeRow.Children[0] is TextBlock shapeLab) shapeLab.Width = 0;
+        // ★[JACK 1112 «사면형상도 평면뷰를 기준으로 설명 애니메이션»] 올리거나 고르면 그 모양 장면(고르면 고른 쪽)
+        HookScene(_shapeMiter, "shapeMiter");
+        HookScene(_shapeRound, "shapeRound");
+        _shapeMiter.Checked += (_, __) => { if (!_loading) Scene("shapeMiter"); };
+        _shapeRound.Checked += (_, __) => { if (!_loading) Scene("shapeRound"); };
 
         // ── 산지 대소단 — ★[v103.3.1] 기타 설정 안의 칸(종전 중간 제목의 풍선 글은 칸 제목 풍선으로)
         var secTerr = GradingDialog.AddCollapsible(secEtc, "산지 대소단", out _terrBadge,
@@ -265,6 +298,8 @@ internal sealed class GradingPanel : UserControl
         _tInt = Cell(tRow, "대소단 간격(m)", GradingSettings.TerraceInterval);
         _tW = Cell(tRow, "대소단 폭(m)", GradingSettings.TerraceWidth);
         secTerr.Children.Add(tRow);
+        HookScene(_terrace, "terrace");   // ★[JACK 1112] 대소단 체크 · 값 칸 → 평면 장면(꺼짐이면 옅게 + «꺼짐»)
+        HookScene(tRow, "terrace");
 
         // ── 옹벽 — ★★★[v103.3 · JACK 1021] 형식(기타 설정에서 옮김) + «뒷채움 터파기» ────────────
         //   형식은 3D 모양만 정한다(InfraWorks · 노리선 · 예시 그림) — 레지스트리 그대로(사용자 전역).
@@ -276,16 +311,9 @@ internal sealed class GradingPanel : UserControl
         //   «절토/성토 3D 모양» 콤보 두 줄을 없앴다 — InfraWorks 3D는 단면 덩어리(WallSolidDwg) · 노리선은 경사 ≤ 게이트 · 사면 그림의 옹벽은 단면 형식에서.
         // ★★[v105 · JACK 1022 «옹벽 관련 그림은 뒷채움 터파기 사용 유무와 관계없이 기본적으로 소제목 옹벽 밑에 나오고 그 아래 설정들에 따라 달라졌음»] 그림이 맨 위 ·
         //   터파기 꺼짐이면 옹벽 세 단 + 땅만(옅게 하지 않는다) · 켬이면 터파기선 · 되메우기 · 배면까지.
-        secWall.Children.Add(new Border
-        {
-            BorderBrush = DhBrand.Line, BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(6), Background = DhBrand.Card, Padding = new Thickness(4),
-            Margin = new Thickness(0, 0, 0, 6),
-            Child = _excavBox = ExcavDiagram.Wrap(out _canvasExcav),
-        });
-        // ★[v103.3.3 · JACK 1021 «뒷채움 터파기 그림을 사면설정의 그림과 같은 높이사이즈로 키울 것»] 사면 그림이 실제로 그려진 높이를 그대로 따른다(창 폭이 바뀌어도)
-        if (_canvasCut.Parent is FrameworkElement slopeBox)
-            slopeBox.SizeChanged += (_, e) => { if (e.NewSize.Height > 1) _excavBox.Height = e.NewSize.Height; };
+        // ★[JACK 1112] 옹벽 그림도 맨 위 설명 칸으로 — 옹벽 칸의 무엇을 만져도 그 그림(사면 그림 높이에 맞추던 코드는 칸이 달라져 뺐다)
+        _hostExcav = DiagHost(_excavBox = ExcavDiagram.Wrap(out _canvasExcav), "옹벽 — 형식 · 뒷채움 터파기 · 소단 · 배면사면 값이 그림에 바로 반영");
+        HookTop(secWall, "excav");
         var exDef = DH.Grading.Core.WallExcav.Settings.Default;
         // ★★★[v104 · JACK 1021 «옹벽 형태별 일반단면도 · 매개변수로 단면 모양 조종 → 그 값으로 여유폭 · 구배 터파기»] 단면 형식(이 도면 · WALLEXCAV 판 3) + [단면 표]
         var kRow = new WrapPanel { Margin = new Thickness(2, 0, 0, 2) };
@@ -373,16 +401,16 @@ internal sealed class GradingPanel : UserControl
         // ★[설치 전 검토 중간 3] 타이머 안의 예외는 받는 곳이 없어 AutoCAD 치명 오류가 된다 — 통째로 감싼다
         _exTimer.Tick += (_, __) => { _exTimer.Stop(); try { SaveExcav(null); } catch (System.Exception ex) { try { DiagLog.Append("\n■ 옹벽 터파기 설정 적기 실패 — " + ex.Message + "\n"); } catch { } } };
         foreach (var b in new[] { _exMargin, _exTLean, _exELean, _exBenchH, _exBenchW, _exBackSlope })
-            b.TextChanged += (_, __) => { RedrawExcav(); if (_loading) return; if (ExcavFromUi(out var _ok)) { _exDoc ??= Doc; _exTimer.Stop(); _exTimer.Start(); } };
-        _exOn.Checked += (_, __) => { SyncExcavLock(); RedrawExcav(); if (!_loading) { _exDoc ??= Doc; SaveExcav("on"); } };
-        _exOn.Unchecked += (_, __) => { SyncExcavLock(); RedrawExcav(); if (!_loading) { _exDoc ??= Doc; SaveExcav("on"); } };
-        _exBenchOn.Checked += (_, __) => { SyncExcavLock(); RedrawExcav(); if (!_loading) { _exDoc ??= Doc; SaveExcav("bench"); } };
-        _exBenchOn.Unchecked += (_, __) => { SyncExcavLock(); RedrawExcav(); if (!_loading) { _exDoc ??= Doc; SaveExcav("bench"); } };
-        _exBackOn.Checked += (_, __) => { SyncExcavLock(); RedrawExcav(); if (!_loading) { _exDoc ??= Doc; SaveExcav("back"); } };
-        _exBackOn.Unchecked += (_, __) => { SyncExcavLock(); RedrawExcav(); if (!_loading) { _exDoc ??= Doc; SaveExcav("back"); } };
-        _exSlope.SelectionChanged += (_, __) => { RedrawExcav(); if (!_loading) { _exDoc ??= Doc; SaveExcav("slope"); } };
-        _exCutKind.SelectionChanged += (_, __) => { RedrawExcav(); Redraw(); if (!_loading) { _exDoc ??= Doc; SaveExcav("kind"); } };
-        _exFillKind.SelectionChanged += (_, __) => { RedrawExcav(); Redraw(); if (!_loading) { _exDoc ??= Doc; SaveExcav("kind"); } };
+            b.TextChanged += (_, __) => { RedrawExcav(); ShowExcavOnEdit(); if (_loading) return; if (ExcavFromUi(out var _ok)) { _exDoc ??= Doc; _exTimer.Stop(); _exTimer.Start(); } };
+        _exOn.Checked += (_, __) => { SyncExcavLock(); RedrawExcav(); ShowExcavOnEdit(); if (!_loading) { _exDoc ??= Doc; SaveExcav("on"); } };
+        _exOn.Unchecked += (_, __) => { SyncExcavLock(); RedrawExcav(); ShowExcavOnEdit(); if (!_loading) { _exDoc ??= Doc; SaveExcav("on"); } };
+        _exBenchOn.Checked += (_, __) => { SyncExcavLock(); RedrawExcav(); ShowExcavOnEdit(); if (!_loading) { _exDoc ??= Doc; SaveExcav("bench"); } };
+        _exBenchOn.Unchecked += (_, __) => { SyncExcavLock(); RedrawExcav(); ShowExcavOnEdit(); if (!_loading) { _exDoc ??= Doc; SaveExcav("bench"); } };
+        _exBackOn.Checked += (_, __) => { SyncExcavLock(); RedrawExcav(); ShowExcavOnEdit(); if (!_loading) { _exDoc ??= Doc; SaveExcav("back"); } };
+        _exBackOn.Unchecked += (_, __) => { SyncExcavLock(); RedrawExcav(); ShowExcavOnEdit(); if (!_loading) { _exDoc ??= Doc; SaveExcav("back"); } };
+        _exSlope.SelectionChanged += (_, __) => { RedrawExcav(); ShowExcavOnEdit(); if (!_loading) { _exDoc ??= Doc; SaveExcav("slope"); } };
+        _exCutKind.SelectionChanged += (_, __) => { RedrawExcav(); Redraw(); ShowExcavOnEdit(); if (!_loading) { _exDoc ??= Doc; SaveExcav("kind"); } };
+        _exFillKind.SelectionChanged += (_, __) => { RedrawExcav(); Redraw(); ShowExcavOnEdit(); if (!_loading) { _exDoc ??= Doc; SaveExcav("kind"); } };
         SyncExcavLock();
 
         // ══ ★★★[JACK 0910] <b>만들기는 값을 다 정한 뒤에</b> ═══════════════
@@ -431,17 +459,10 @@ internal sealed class GradingPanel : UserControl
             open: true, key: "정지:계획부지수정", group: null);   // ★묶음 없음 — 위 주석과 같은 까닭
         // ★[v117.11 · JACK 1112 «사면 옹벽 변환 단추 두 개를 한 열 · 다음 열에 옹벽 추가 · 제거를 한 열 · 예시 영상은 단추 옆 한 칸 안에서 4개 단추를 다 반영»]
         //   왼쪽 = 단추(1줄 사면→옹벽 · 옹벽→사면 / 2줄 옹벽 추가 · 옹벽 삭제 / 3줄 옛 옹벽 옮기기(있을 때만)) · 오른쪽 = 예시 칸(FixDemoView — 올린 단추의 그림 애니메이션)
-        var demo = new FixDemoView { Margin = new Thickness(6, 0, 0, 4), VerticalAlignment = VerticalAlignment.Top };
-        var fixGrid = new Grid { Margin = new Thickness(0, 0, 0, 2) };
-        fixGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        fixGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        var btnCol = new StackPanel();
+        // ★[JACK 1112] 예시 칸은 창 맨 위(_demo)로 옮겼다 — 여기는 단추만(2×2 + 옛 옹벽 옮기기)
         var row1 = new StackPanel { Orientation = Orientation.Horizontal };
         var row2 = new StackPanel { Orientation = Orientation.Horizontal };
-        var wRow = new WrapPanel { MaxWidth = 210 };   // 3줄 — 옛 옹벽 옮기기(있을 때만)
-        btnCol.Children.Add(row1); btnCol.Children.Add(row2); btnCol.Children.Add(wRow);
-        Grid.SetColumn(btnCol, 0); Grid.SetColumn(demo, 1);
-        fixGrid.Children.Add(btnCol); fixGrid.Children.Add(demo);
+        var wRow = new WrapPanel();   // 3줄 — 옛 옹벽 옮기기(있을 때만)
         Panel target = wRow;
         Button WBtn(string t, string cmd, string tip, string? demoKey = null)
         {
@@ -450,8 +471,7 @@ internal sealed class GradingPanel : UserControl
             {
                 // 꺼진 단추는 마우스 일을 안 받는다 — 감싼 테두리가 받아 예시를 돌린다(정지면 생성 전에도 예시는 보이게)
                 var hit = new Border { Background = Brushes.Transparent, Child = b };
-                hit.MouseEnter += (_, __) => demo.Play(demoKey);
-                hit.MouseLeave += (_, __) => demo.Idle();
+                HookScene(hit, demoKey);
                 target.Children.Add(hit);
             }
             // ★★★[JACK 0910 질문 <i>"사면수정에 문제가생기나?"</i>] <b>그렇다 — 그래서 여기도 먼저 반영한다.</b>
@@ -477,7 +497,7 @@ internal sealed class GradingPanel : UserControl
         // ★[v117.12 · JACK 1112 «용지 경계 기능은 없애»] [용지 경계] 단추 없앰(DHLANDBOUND 명령 · 기초 외곽 검사도 없앰)
         // ★[v102.2 · JACK 0930 «옹벽합성 버튼은 없애고 노선 선정과정이 끝나면 자동으로 진행되게»] [옹벽 합성] 버튼 없앰 —
         //   옹벽 변환(부분 지정)이 옹벽을 끝까지 지으면 합성이 이어서 돈다(ZoneEditCommon). DHWALLCOMP 명령은 남는다(손으로 다시 합성 · 복구용)
-        secFix.Children.Add(fixGrid);
+        secFix.Children.Add(row1); secFix.Children.Add(row2); secFix.Children.Add(wRow);
         // ★★★[v103.1.12 · JACK 1014 · 1015] «옹벽 합성 미루기» — 끔(기본) = 종전(변환마다 바로 합성) · 켬 = 옹벽만 짓고 합성은 [옹벽 합성] 한 번에
         //   (내보내기 · 터파기 · «이어서» 직전에는 합성이 빠졌으면 먼저 합성한다). [옹벽 합성] · «대기 N»은 켬이거나 빠진 옹벽이 있을 때만 보인다(설명 글 없음 — JACK 1014)
         _defer = new CheckBox
@@ -539,8 +559,8 @@ internal sealed class GradingPanel : UserControl
             bool on = _terrace.IsChecked == true;
             _tInt.IsEnabled = on; _tW.IsEnabled = on;
         }
-        _terrace.Checked += (_, __) => { SyncTerrace(); PushValues(); Redraw(); };
-        _terrace.Unchecked += (_, __) => { SyncTerrace(); PushValues(); Redraw(); };
+        _terrace.Checked += (_, __) => { SyncTerrace(); PushValues(); Redraw(); if (!_loading) Scene("terrace"); };
+        _terrace.Unchecked += (_, __) => { SyncTerrace(); PushValues(); Redraw(); if (!_loading) Scene("terrace"); };
         SyncTerrace();
         // ★[v103.3 · JACK 1021] 옹벽 형태가 <b>이 창으로 돌아왔다</b>(0910엔 [기타 설정]으로 갔었다) — 고르는 즉시
         //   GradingSettings · 레지스트리에 넣고 예시 그림을 다시 그렸다. ★[v105] 3D 모양 콤보를 없앴다 — 사면 그림의 옹벽은 단면 형식에서(<see cref="WallLook"/>).
@@ -566,6 +586,10 @@ internal sealed class GradingPanel : UserControl
 
         var top = new StackPanel { Margin = new Thickness(10, 10, 10, 0) };
         top.Children.Add(head);
+        // ★[JACK 1112 «도킹창 맨 위 = 설명 애니메이션 창»] 도화 로고 아래 고정(스크롤 밖) — 한 번에 하나: 애니메이션 · 절토 · 성토 · 옹벽 그림
+        var topHost = new Grid { MinHeight = 256, Margin = new Thickness(0, 0, 0, 6) };   // 높이 고정(그림이 바뀌어도 아래 칸이 안 출렁이게)
+        topHost.Children.Add(_demo); topHost.Children.Add(_hostCut); topHost.Children.Add(_hostFill); topHost.Children.Add(_hostExcav);
+        top.Children.Add(topHost);
         DockPanel.SetDock(top, Dock.Top);
         deck.Children.Add(top);
 
@@ -609,6 +633,7 @@ internal sealed class GradingPanel : UserControl
         {
             try { PickSession.Changed -= RefreshPicks; } catch { }
             try { AcadApp.DocumentManager.DocumentToBeDestroyed -= OnDocClosing; } catch { }
+            try { _demo?.Idle(); } catch { }   // ★[v117.14 · 검토 LOW] 창을 숨기면 예시 타이머도 멈춤
         };
         Wire();
         RefreshPicks();
@@ -1329,24 +1354,89 @@ internal sealed class GradingPanel : UserControl
 
     
     /// <summary>찍기 한 줄 — [단추] 와 <b>고른 것 이름</b>.</summary>
-    private static Button PickRow(Panel parent, string label, out TextBlock what, System.Action onClick)
+    private static Button PickRow(Panel parent, string label, out TextBlock what, System.Action onClick, string sceneKey, GradingPanel owner)
     {
-        var row = new DockPanel { Margin = new Thickness(0, 0, 0, 8), LastChildFill = true };
-        var b = new Button { Content = label, MinWidth = 130, Height = 30 };
+        var row = new DockPanel { Margin = new Thickness(0, 0, 6, 4), LastChildFill = true };
+        var b = new Button { Content = label, Padding = new Thickness(10, 0, 10, 0), Height = 30 };
         b.Click += (_, __) => onClick();
-        DockPanel.SetDock(b, Dock.Left);
-        row.Children.Add(b);
+        // 꺼진 단추는 마우스 일을 안 받는다 — 감싼 투명 테두리가 받아 설명 장면을 돌린다
+        var hit = new Border { Background = Brushes.Transparent, Child = b };
+        owner.HookScene(hit, sceneKey);
+        DockPanel.SetDock(hit, Dock.Left);
+        row.Children.Add(hit);
         what = new TextBlock
         {
             Text = "○ 미선택",
-            Margin = new Thickness(10, 0, 0, 0),
+            Margin = new Thickness(8, 0, 0, 0),
             VerticalAlignment = VerticalAlignment.Center,
             Foreground = DhBrand.Sub,
             TextTrimming = TextTrimming.CharacterEllipsis,
         };
+        what.SetBinding(FrameworkElement.ToolTipProperty, new System.Windows.Data.Binding(nameof(TextBlock.Text)) { Source = what });
         row.Children.Add(what);
+        Grid.SetColumn(row, parent.Children.Count);
         parent.Children.Add(row);
         return b;
+    }
+
+    // ── ★[JACK 1112] 맨 위 설명 칸 ──────────────────────────────────────
+    /// <summary>맨 위 칸에 하나만 보인다 — "demo" · "cut" · "fill" · "excav".</summary>
+    private void ShowTop(string which)
+    {
+        if (which != "demo" && _demo.Playing) _demo.Idle();
+        _demo.Visibility = which == "demo" ? Visibility.Visible : Visibility.Collapsed;
+        _hostCut.Visibility = which == "cut" ? Visibility.Visible : Visibility.Collapsed;
+        _hostFill.Visibility = which == "fill" ? Visibility.Visible : Visibility.Collapsed;
+        _hostExcav.Visibility = which == "excav" ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    /// <summary>옹벽 칸 값이 바뀌면(손으로) 옹벽 그림을 맨 위에 — 불러오는 중이면 건드리지 않는다.</summary>
+    private void ShowExcavOnEdit() { if (!_loading) ShowTop("excav"); }
+
+    /// <summary>애니메이션 장면 재생(이미 같은 장면이 돌면 그대로).</summary>
+    private void Scene(string key)
+    {
+        _demo.TerraceOn = _terrace?.IsChecked == true;
+        if (_demo.Visibility == Visibility.Visible && _demo.Playing && _demo.Current == key) return;
+        ShowTop("demo");
+        _demo.Play(key);
+    }
+
+    /// <summary>마우스 · 포커스가 나감 — 그 장면이면 멈추고 마지막 그림 + 안내 글.</summary>
+    private void SceneEnd(string key)
+    {
+        if (_demo.Current == key && _demo.Playing) _demo.Idle();
+    }
+
+    private void HookScene(UIElement el, string key)
+    {
+        el.MouseEnter += (_, __) => Scene(key);
+        el.MouseLeave += (_, __) => SceneEnd(key);
+        el.GotKeyboardFocus += (_, __) => Scene(key);
+        el.LostKeyboardFocus += (_, __) => SceneEnd(key);
+    }
+
+    /// <summary>예시 그림 칸 — 올리거나 포커스가 가면 보인다(나가도 그대로 둔다).</summary>
+    private void HookTop(UIElement el, string which)
+    {
+        el.MouseEnter += (_, __) => ShowTop(which);
+        el.GotKeyboardFocus += (_, __) => ShowTop(which);
+    }
+
+    /// <summary>그림 캔버스를 맨 위 칸 크기(70 %)로 담는다 — 그리는 코드는 그대로.</summary>
+    private static Border DiagHost(Viewbox vb, string caption)
+    {
+        vb.Height = double.NaN; vb.Stretch = Stretch.Uniform; vb.StretchDirection = StretchDirection.Both;
+        vb.MaxWidth = 420 * 0.7; vb.HorizontalAlignment = HorizontalAlignment.Center;
+        var st = new StackPanel();
+        st.Children.Add(vb);
+        st.Children.Add(new TextBlock { Text = caption, MaxWidth = 420 * 0.7, FontSize = 11, Foreground = DhBrand.Ink, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(2, 4, 2, 0) });
+        return new Border
+        {
+            BorderBrush = DhBrand.Line, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(6), Background = DhBrand.Card,
+            Padding = new Thickness(4), HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Top,
+            Visibility = Visibility.Collapsed, Child = st,
+        };
     }
 
     private static TextBox Row(Panel parent, string label, double value)

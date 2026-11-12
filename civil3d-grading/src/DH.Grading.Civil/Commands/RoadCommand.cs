@@ -986,13 +986,22 @@ public class RoadCommand
                 }
                 return best;
             }
+            // ★[v117.14 · JACK 1112 «옹벽 삭제 시 옹벽 추가로 만든 부분을 평면에서 보이게 · 선택 모양 커서»] 부지와 같은 고르기(WallPickUi) — 조각마다 주황 · 가장 큰 조각에 «옹벽 N» · 지은 고리가 없으면 기록 선
+            var cands = new List<WallPickUi.Cand>();
+            foreach (var b in recs)
+            {
+                var rings = RingsOf(b.No).OrderByDescending(r => Area2(r)).ToList();
+                for (int i = 0; i < rings.Count; i++) cands.Add(new WallPickUi.Cand { No = b.No, Ring = rings[i].ToList(), ShowLabel = i == 0 });
+                if (rings.Count == 0 && b.X.Length >= 2 && b.X.Length == b.Y.Length)
+                    cands.Add(new WallPickUi.Cand { No = b.No, Line = b.X.Select((x, i) => new Point3(x, b.Y[i], 0)).ToList() });
+            }
             int no = 0;
             while (no == 0)
             {
                 var ppo = new PromptPointOptions($"\n[{lbl}] 지울 옹벽 자리 클릭 〈옹벽 {string.Join(", ", nos)}〉 [번호(N)]: ");
                 ppo.Keywords.Add("N", "N", "번호(N)");
                 ppo.AllowNone = false; ppo.AppendKeywordsToMessage = false;
-                var pr = ed.GetPoint(ppo);
+                var pr = WallPickUi.Ask(ed, ppo, "지울 옹벽 클릭", cands, At);
                 if (pr.Status == PromptStatus.Cancel) { ed.WriteMessage($"\n[{lbl}] 취소 — 안 바뀜"); return; }
                 int pick = 0;
                 if (pr.Status == PromptStatus.Keyword)

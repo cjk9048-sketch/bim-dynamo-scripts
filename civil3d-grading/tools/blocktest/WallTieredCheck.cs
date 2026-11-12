@@ -194,6 +194,23 @@ static class WallTieredCheck
             Check("(t6b) «자리» 거절 — 침범 소단선(바닥 안) 있음 · 나머지는 바닥 밖 · 지어진 옹벽은 미리보기 없음", hitIn && okOut && cleanOk,
                 b6 == null ? "null" : $"침범 {b6.TierBenchHit.Count}토막 · 그대로 {b6.TierBenchOk.Count}토막 · 침범 x {(b6.TierBenchHit.Count > 0 ? b6.TierBenchHit.SelectMany(l => l).Min(p => p.X).ToString("F3") + "~" + b6.TierBenchHit.SelectMany(l => l).Max(p => p.X).ToString("F3") : "-")}");
         }
+        // (t6c) ★[v117.14 · JACK 1112 «경계 위에 마우스를 올리면 실시간으로»] 어림 미리보기(WallBenchPreview) — (t6)과 같은 판: 침범 다각형(바닥 x ≤ 49 안) 있음 · (t5) 단높이 9면 n = 1 · 소단 없음
+        {
+            WallBenchPreview.Input PIn(BoundaryCut.Result c, double h, double bb, List<Point3>? plan) => new()
+            {
+                Line = c.Line, NewRing = c.NewRing, CutRing = c.CutRing, Plan = plan, Delta = (x, y) => G(x, y) - P0(x, y), Hc = h, Bc = bb, Hf = h, Bf = bb, SlopeW = S,
+            };
+            var sw6 = System.Diagnostics.Stopwatch.StartNew();
+            var p6 = WallBenchPreview.Compute(PIn(c6, 5, 1, Rect(0, -60, 49.0, 60, 100)));
+            long ms6 = sw6.ElapsedMilliseconds;
+            var p5 = WallBenchPreview.Compute(PIn(c5, 9, 1, Rect(0, -60, 40, 60, 100)));
+            bool hit6 = p6 != null && p6.Hit.Count > 0 && p6.Hit.All(q => q.Outer.All(v => v.X <= 49.0 + 1e-6)) && p6.HitLabels.Count == p6.Hit.Count && p6.N >= 2;
+            bool ok6 = p6 != null && p6.Ok.All(q => q.Outer.All(v => v.X >= 49.0 - 1e-6));
+            bool one5 = p5 != null && p5.N == 1 && p5.Ok.Count == 0 && p5.Hit.Count == 0 && p5.Lines.Count == 0;
+            var hl = p6 == null ? new() : WallBenchPreview.Hatch(p6.Hit, 0.2);
+            Check("(t6c) 어림 소단 미리보기 — (t6) 침범 다각형(바닥 안) 있음 · 나머지는 바닥 밖 · 해치선 · (t5) n = 1 · 소단 없음 · 몇 ms", hit6 && ok6 && one5 && hl.Count > 0 && ms6 < 500,
+                p6 == null ? "null" : $"{ms6} ms · n {p6.N} · 침범 {p6.Hit.Count}조각(x {p6.Hit.SelectMany(q => q.Outer).Min(v => v.X):F3}~{p6.Hit.SelectMany(q => q.Outer).Max(v => v.X):F3}) · 바닥 밖 {p6.Ok.Count}조각 · 해치 {hl.Count}줄 · (t5) n {p5?.N}");
+        }
         // (t7) 굽은 선 R 20(0.5 m 현) — 짓고 깨끗 · 합성 왕복
         var arc = new List<Point3>();
         for (double t = -21; t <= 21 + 1e-9; t += 0.5) { double a = Math.Asin(Math.Clamp(t / 20.5, -1, 1)); arc.Add(new Point3(70.1 - 20.5 * Math.Cos(a), t, 0)); }
