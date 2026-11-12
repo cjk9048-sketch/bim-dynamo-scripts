@@ -977,7 +977,7 @@ public sealed class RibbonApp : IExtensionApplication
             // ★★[v115 · JACK 1105 «Revit 구조물을 투영하는 기능을 [기타]에»] [구조물] 스플릿 — 불러오기 · 좌표계 내보내기(v116.9) · 지우기
             var splitStruct = new RibbonSplitButton
             {
-                Text = "구조물", ShowText = true, ShowImage = true, LargeImage = MakeGlyph("구조물"), Image = MakeGlyph("구조물"),
+                Text = "구조물", ShowText = true, ShowImage = true, LargeImage = MakeGlyph("구조물"), Image = MakeGlyphSmall("구조물"),
                 Size = RibbonItemSize.Large, Orientation = System.Windows.Controls.Orientation.Vertical,
                 IsSplit = true, IsSynchronizedWithCurrentItem = false, ListStyle = RibbonSplitButtonListStyle.List,
                 ToolTip = MakeTip("구조물", "Revit 3D DWG(공유 좌표)를 xref로 붙이고\n평면 외곽 · 종단 · 횡단에 자른 면을 넣습니다.", null),
@@ -1037,8 +1037,32 @@ public sealed class RibbonApp : IExtensionApplication
         dc.DrawEllipse(Brushes.Transparent, pen, new Point(cx, cy), w * 0.33, w * 0.33);
     }
 
+    /// <summary>★[v117.10 · JACK 1112 «UI 단추 그림을 전문 프로그램 수준으로» · 고른 스타일 E(아이소메트릭)] 벡터 그림을 비트맵으로 굽는다 —
+    /// 리본이 BitmapSource를 기대하는 자리(흐린 단추 · 툴팁)에서도 안전하게 · 2배 해상도(높은 DPI 화면에서 안 흐림 · 크기는 그대로 <paramref name="dip"/>).</summary>
+    private static ImageSource? Bake(ImageSource? img, int dip)
+    {
+        if (img == null) return null;
+        try
+        {
+            const double k = 2;
+            var dv = new DrawingVisual();
+            using (var dc = dv.RenderOpen()) dc.DrawImage(img, new Rect(0, 0, dip, dip));
+            var rtb = new RenderTargetBitmap((int)(dip * k), (int)(dip * k), 96 * k, 96 * k, PixelFormats.Pbgra32);
+            rtb.Render(dv);
+            rtb.Freeze();
+            return rtb;
+        }
+        catch { return null; }
+    }
+
+    /// <summary>작은 단추(16) 그림 — 새 그림의 16 단순판 · 없으면 큰 그림.</summary>
+    private static ImageSource? MakeGlyphSmall(string kind) => Bake(RibbonIcons.Get(kind, true) ?? RibbonIcons.Get("default", true), 16) ?? MakeGlyph(kind);
+
     private static ImageSource? MakeGlyph(string kind)
     {
+        // ★[v117.10 · JACK 1112] 새 그림(스타일 E) 먼저 — 모르는 이름은 새 그림의 default · 새 그림이 안 되면(예외) 아래 옛 선 그림
+        var neo = Bake(RibbonIcons.Get(kind) ?? RibbonIcons.Get("default"), 32);
+        if (neo != null) return neo;
         try
         {
             const int S = 32;

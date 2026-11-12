@@ -36,15 +36,15 @@ internal static class WallLineFlow
         if (region.CutClipRing is { Count: >= 3 }) Add(region.CutClipRing); else if (region.CutFinalRings != null) foreach (var r in region.CutFinalRings) Add(r);
         if (region.FillClipRing is { Count: >= 3 }) Add(region.FillClipRing); else if (region.FillFinalRings != null) foreach (var r in region.FillFinalRings) Add(r);
         Add(region.Boundary);
-        if (parts.Count == 0) return (null, bl, "구역 경계를 못 읽었습니다");
+        if (parts.Count == 0) return (null, bl, "구역 경계 읽기 실패");
         Geometry u;
-        try { u = NetTopologySuite.Operation.Union.CascadedPolygonUnion.Union(parts); } catch (System.Exception ex) { return (null, bl, $"경계를 못 합쳤습니다({ex.GetType().Name})"); }
+        try { u = NetTopologySuite.Operation.Union.CascadedPolygonUnion.Union(parts); } catch (System.Exception ex) { return (null, bl, $"경계 합치기 실패({ex.GetType().Name})"); }
         var planP = NtsSupport.ToCleanPolygon(region.Boundary, gf);
-        if (planP == null) return (null, bl, "계획선을 다각형으로 못 만들었습니다");
+        if (planP == null) return (null, bl, "계획선 다각형 만들기 실패");
         var ip = planP.InteriorPoint;
         Polygon? hold = null;
         for (int i = 0; i < u.NumGeometries; i++) if (u.GetGeometryN(i) is Polygon pg && pg.Contains(ip)) { hold = pg; break; }
-        if (hold == null) return (null, bl, "계획선을 품는 경계 조각이 없습니다");
+        if (hold == null) return (null, bl, "계획선을 품는 경계 조각 없음");
         List<Point3> R(LineString l) => l.Coordinates.Take(l.NumPoints - 1).Select(c => new Point3(c.X, c.Y, 0)).ToList();
         var bd = R(hold.ExteriorRing);
         for (int i = 0; i < hold.NumInteriorRings; i++) bl.Add(($"경계 안 구멍 {i + 1}", R(hold.GetInteriorRingN(i))));
@@ -91,13 +91,13 @@ internal static class WallLineFlow
     {
         var civ = Autodesk.Civil.ApplicationServices.CivilApplication.ActiveDocument;
         var (cIds, cNames) = WallCompositeCommand.Candidates(civ, tr, WallCompositeCommand.PlanName, groundId);
-        if (cIds.Count != 1) return (null, cIds.Count == 0 ? "정지면_DH가 없습니다" : $"정지면_DH 후보가 {cIds.Count}개입니다({string.Join(", ", cNames)})");
+        if (cIds.Count != 1) return (null, cIds.Count == 0 ? "정지면_DH 없음" : $"정지면_DH 후보 {cIds.Count}개({string.Join(", ", cNames)})");
         if (tr.GetObject(cIds[0], OpenMode.ForRead) is not TinSurface cur) return (null, "정지면이 TIN이 아닙니다");
         if (!WallCompositeCommand.IsComposite(tr, cur)) return (cur, "");
         string bh = WallCompositeCommand.CompositeBaseHandle(tr, cur);
         var (bIds, _) = WallCompositeCommand.Candidates(civ, tr, WallCompositeCommand.BaseName, groundId);
         if (bIds.Count != 1 || bIds[0].Handle.ToString() != bh || tr.GetObject(bIds[0], OpenMode.ForRead) is not TinSurface b0)
-            return (null, "정지면_DH는 옹벽 합성인데 그 합성 전 면을 못 찾았습니다");
+            return (null, "합성 전 면 못 찾음 — 정지면_DH가 옹벽 합성 면");
         return (b0, "");
     }
 
@@ -185,7 +185,7 @@ internal static class WallLineFlow
             vm.Append(string.Format(System.Globalization.CultureInfo.InvariantCulture, " · {0} 꼭짓점 일치 {1}/{2}", nm, hit, n));
             if (n >= 8 && hit < 0.9 * n)
             {
-                var no = new WallByLine.Built { Ok = false, Code = "옛 소단", Why = string.Format(System.Globalization.CultureInfo.InvariantCulture, "옛 사면 링이 정지면과 다름({0} 꼭짓점 {1}/{2}만 겹침) — 정지면을 다시 만든 뒤 하세요(구간 · 제원이 정지면을 만든 때와 다름)", nm, hit, n) };
+                var no = new WallByLine.Built { Ok = false, Code = "옛 소단", Why = string.Format(System.Globalization.CultureInfo.InvariantCulture, "옛 사면 링이 정지면과 다름({0} 꼭짓점 {1}/{2}만 겹침) — 정지면 다시 만든 뒤 하기(구간 · 제원이 정지면을 만든 때와 다름)", nm, hit, n) };
                 if (miss is { } m) no.Marks.Add(m);
                 no.Log = $"  ⓪ 옛 소단 링 — {rnote}{vm}\n";
                 return no;
@@ -257,17 +257,17 @@ internal static class WallLineFlow
         using var tr = db.TransactionManager.StartTransaction();
         (int, string) Stop(string why) { tr.Abort(); log.Append("  ⚠멈춤(안 바꿈) — " + why + "\n"); Log(log.ToString()); SelfCheckLog.Line(Tag, '⚠', "멈춤 — " + why, doc.Name); return (0, why); }
         var regions = GradingBundleStore.TryLoadAll(db, tr, out string rwhy);
-        if (regions == null || regions.Count == 0) return Stop("정지면 번들이 없습니다 — " + rwhy);
+        if (regions == null || regions.Count == 0) return Stop("정지면 번들 없음 — " + rwhy);
         var region = regions[^1];
         if (!WallListStore.TryLoad(db, tr, out var head, out var walls, out string lwhy)) return Stop("옹벽 목록을 못 읽어 덮지 않고 멈춘다 — " + lwhy);
         var groundId = NoriCommand.FindByHandle(db, GradingSettings.LastGroundHandle);
         if (groundId.IsNull) groundId = NoriCommand.FindByHandle(db, region.GroundHandle);
-        if (groundId.IsNull || tr.GetObject(groundId, OpenMode.ForRead) is not TinSurface gTin) return Stop("원지반을 못 찾았습니다");
+        if (groundId.IsNull || tr.GetObject(groundId, OpenMode.ForRead) is not TinSurface gTin) return Stop("원지반 못 찾음");
         var (p0, pwhy) = P0Of(tr, groundId);
         if (p0 == null) return Stop(pwhy);
         string p0h = p0.ObjectId.Handle.ToString();
         if (head.VerifiedP0.Length > 0 && head.VerifiedP0 != p0h)
-            return Stop($"정지면_DH가 끝까지 만든 정지면이 아니다(확인된 {head.VerifiedP0} · 지금 {p0h}) — 정지면을 다시 만든 뒤 하세요");
+            return Stop($"정지면_DH가 끝까지 만든 정지면이 아니다(확인된 {head.VerifiedP0} · 지금 {p0h}) — 정지면 다시 만든 뒤 하기");
         string regionH = region.PlanHandle ?? "";
         // 지난 «대기»(합성에 안 든 것) 치우기 — 옹벽 더하기(BuildWallAdd ②)와 같은 규칙
         var stale = walls.Where(w => w.State != 1).ToList();
@@ -287,7 +287,7 @@ internal static class WallLineFlow
         var (bd, bl, bwhy) = BoundaryOf(db, tr, regions, walls, head, 0, out var clipM);
         if (bd == null) return Stop(bwhy);
         var cut = BoundaryCut.Classify(src, bd, region.Boundary, bl);
-        if (!cut.Ok) return Stop($"{BoundaryCut.CodeName(cut.Code)} — {cut.Why}");
+        if (!cut.Ok) { try { DiagLog.AppendCarry($"\n  [{Tag}] 거절(기술) — {BoundaryCut.CodeName(cut.Code)}: {cut.Why}"); } catch { } return Stop(WallEasy.Cut(cut.Code, cut.Why)); }
         var p = GradingSettings.ToParams();
         double slopeW = System.Math.Max(GradingSettings.MinSlope, 0), faceRun = p.MinFaceRun, grid = System.Math.Max(1.0, p.VertexSpacing);
         var gC = new CachedGroundSurface(gTin); var pC = new CachedGroundSurface(p0);
@@ -296,7 +296,7 @@ internal static class WallLineFlow
         if (vert) SelfCheckLog.Line(Tag, b.Ok, b.SelfCheck, doc.Name);   // ★[v117.0 · 계획 1-6] 자가검증 한 줄(키트가 읽음 · 거절도)
         if (vert && b.Ok && b.Profile != null) SelfCheckLog.Line(Tag, '✔', b.Profile.Probe, doc.Name);   // ★[로드맵 2-2] 측점표 탐침 한 줄(보고만 — 늘 ✔: 검토 높이 넘음은 경고일 뿐 · ⚠ 줄을 세는 키트 판정을 안 바꿈)
         if (vert && b.Ok && b.Profile is { LandProbe.Length: > 0 } lpf) SelfCheckLog.Line(Tag, '✔', lpf.LandProbe, doc.Name);   // ★[v117.3 · D1 ③] 기초 외곽 · 용지 경계 한 줄(경계 밖이어도 ✔ — 경고만)
-        if (!b.Ok) return Stop($"{b.Code} — {b.Why}");
+        if (!b.Ok) { try { DiagLog.AppendCarry($"\n  [{Tag}] 거절(기술) — {b.Code}: {b.Why}"); } catch { } return Stop(WallEasy.Build(b.Code, b.Why)); }
         // 번호 — 목록 · 남은 가상옹벽 면 중 큰 것 + 1(다시 안 쓴다)
         int maxNo = walls.Count > 0 ? walls.Max(w => w.No) : 0;
         var civ = Autodesk.Civil.ApplicationServices.CivilApplication.ActiveDocument;
@@ -368,23 +368,23 @@ internal static class WallLineFlow
         using (var tr = db.TransactionManager.StartTransaction())
         {
             var regions = GradingBundleStore.TryLoadAll(db, tr, out string rwhy);
-            if (regions == null || regions.Count == 0) { ed.WriteMessage($"\n[{Tag}] 정지면 번들이 없습니다 — [정지면 생성]을 먼저 하세요."); return; }
+            if (regions == null || regions.Count == 0) { ed.WriteMessage($"\n[{Tag}] 정지면 번들 없음 → [정지면 생성] 먼저"); return; }
             region = regions[^1];
-            if (!WallListStore.TryLoad(db, tr, out var head, out var walls, out string lwhy)) { ed.WriteMessage($"\n[{Tag}] 옹벽 목록을 못 읽었습니다 — {lwhy}"); return; }
+            if (!WallListStore.TryLoad(db, tr, out var head, out var walls, out string lwhy)) { ed.WriteMessage($"\n[{Tag}] 옹벽 목록 읽기 실패 — {lwhy}"); return; }
             string err;
             (bd, bl, err) = BoundaryOf(db, tr, regions, walls.Where(w => w.State == 1), head, 0, out clipR);
-            if (bd == null) { ed.WriteMessage($"\n[{Tag}] {err} — 아무것도 안 바꿨습니다."); return; }
+            if (bd == null) { ed.WriteMessage($"\n[{Tag}] {err} — 안 바뀜"); return; }
             var groundId = NoriCommand.FindByHandle(db, GradingSettings.LastGroundHandle);
             if (groundId.IsNull) groundId = NoriCommand.FindByHandle(db, region.GroundHandle);
-            if (groundId.IsNull || tr.GetObject(groundId, OpenMode.ForRead) is not TinSurface gTin) { ed.WriteMessage($"\n[{Tag}] 원지반을 못 찾았습니다."); return; }
+            if (groundId.IsNull || tr.GetObject(groundId, OpenMode.ForRead) is not TinSurface gTin) { ed.WriteMessage($"\n[{Tag}] 원지반 못 찾음"); return; }
             var (p0, pwhy) = P0Of(tr, groundId);
-            if (p0 == null) { ed.WriteMessage($"\n[{Tag}] {pwhy} — 아무것도 안 바꿨습니다."); return; }
+            if (p0 == null) { ed.WriteMessage($"\n[{Tag}] {pwhy} — 안 바뀜"); return; }
             gC = new CachedGroundSurface(gTin); pC = new CachedGroundSurface(p0);
             tr.Commit();
         }
         var bdF = bd; var blF = bl; var regF = region;
         // ★[v114.0 · 계획 2절 기능 스위치] 켜면 선 길을 숨긴다(옛 기록은 지우지 않음)
-        if (GradingSettings.WallLineOff || WallByLine.Off) { ed.WriteMessage($"\n[{Tag}] ⚠선 옹벽(v114)이 꺼져 있습니다(정지옵션 WallLineOff) — 아무것도 안 바꿨습니다."); return; }
+        if (GradingSettings.WallLineOff || WallByLine.Off) { ed.WriteMessage($"\n[{Tag}] ⚠선 옹벽(v114) 꺼짐(정지옵션 WallLineOff) — 안 바뀜"); return; }
         var got = WallLineDraw.Run(doc, Tag, bdF, regF.Boundary, pts => BoundaryCut.Classify(pts, bdF, regF.Boundary, blF));
         if (got == null) return;
         // ★★[v117.0 · JACK 1111 «선 그은 부분은 그냥 수직 1:0.01로 끝까지» · 계획 3절] 새로 그리는 부지 옹벽 = 수직 옹벽 — 묻는 것 없음([다시그리기(S)] · Enter = 적용).
@@ -418,7 +418,15 @@ internal static class WallLineFlow
                 if (b.TierSecMarks.Count + b.TierProposeMarks.Count > 0) live.AddRange(WallLineDraw.Show(b.TierSecMarks.Concat(b.TierProposeMarks), null, mk * 2));
             }
             else live = WallLineDraw.Show(b.Marks, got.Cut.Line.Count >= 2 ? got.Cut.Line : got.Pts, mk);   // ★[v117.9.2 · JACK 1112 «경계 밖으로 노란 선 길어짐»] 거절 때도 경계 위 A..B 선(판정용 1 m 늘임은 안 보임)
-            string spec = !b.Ok ? $"〈⚠{b.Why}〉"
+            if (!b.Ok) { try { DiagLog.AppendCarry($"\n  [{Tag}] 거절(기술) — {b.Code}: {b.Why}"); } catch { } }
+            // ★[v117.9.3 · JACK 1112 «침범했을 경우만 소단선 미리보기 — 소단선이 그 선 위에 보이면서 침범하는 걸»] 다단 «자리» 거절 — 소단선(초록) · 부지 바닥 침범 몫(빨강)
+            bool benchHit = !b.Ok && b.TierBenchHit.Count > 0;
+            if (benchHit)
+            {
+                live.AddRange(WallLineDraw.Show(System.Array.Empty<(double, double)>(), null, mk, 2, b.TierBenchOk, 3));
+                live.AddRange(WallLineDraw.Show(System.Array.Empty<(double, double)>(), null, mk, 2, b.TierBenchHit, 1));
+            }
+            string spec = !b.Ok ? $"〈⚠{WallEasy.Build(b.Code, b.Why)}{(benchHit ? " · 빨간 소단선 = 부지 침범 자리" : "")}〉"
                 : b.Shape == 3 ? string.Format(ic, "〈다단 {0}단 · 단높이 {1:0.##} · 소단 {2:0.##} · 첫 소단 {3:F2}({4}) · 바깥 최고 {5:F2} m · 끊김 {6}곳{7}〉", b.TierN, b.TierH, b.TierB, b.TierZ1,
                     double.IsNaN(tZ) ? "자동" : "손", b.OuterHMax, b.BreakN, (b.BreakN > 0 ? " — 구간 나눔 권함" + (b.TierPropose != null ? "(P)" : "(M)") : "")
                     + (b.TierSecsUsed.Count >= 2 ? string.Format(ic, " · 구간 {0}(옆벽 최고 {1:F2} m)", b.TierSecsUsed.Count, b.TierSideHMax) : "") + (b.TierEnd ? " · 끝 비탈" : ""))
@@ -447,7 +455,7 @@ internal static class WallLineFlow
                 r = ed.GetKeywords(pk);
             }
             finally { WallLineDraw.Drop(live); }
-            if (r.Status == PromptStatus.Cancel) { ed.WriteMessage($"\n[{Tag}] 그만두었습니다 — 아무것도 안 바꿨습니다."); return; }
+            if (r.Status == PromptStatus.Cancel) { ed.WriteMessage($"\n[{Tag}] 취소 — 안 바뀜"); return; }
             string kw = r.Status == PromptStatus.None ? "" : (r.StringResult ?? "").Trim().ToUpperInvariant();
             if (kw == "S")
             {
@@ -474,7 +482,7 @@ internal static class WallLineFlow
                 foreach (var t in (sr.StringResult ?? "").Split(new[] { ',', ';' }, System.StringSplitOptions.RemoveEmptyEntries))
                     if (double.TryParse(t.Trim(), System.Globalization.NumberStyles.Float, ic, out double v) && v > 0 && v < b.LineLen) cuts.Add(v);
                 cuts = cuts.Distinct().OrderBy(v => v).ToList();
-                if (cuts.Count == 0) { ed.WriteMessage("\n → 경계가 없습니다 — 그대로."); continue; }
+                if (cuts.Count == 0) { ed.WriteMessage("\n → 경계 없음 — 그대로"); continue; }
                 var ns2 = new List<WallByLine.TierSec>();
                 for (int k = 0; k <= cuts.Count; k++)
                 {
@@ -499,23 +507,23 @@ internal static class WallLineFlow
                 if (dr.Status == PromptStatus.Keyword && (dr.StringResult ?? "").Trim().ToUpperInvariant() == "A") tZ = double.NaN;
                 else if (dr.Status == PromptStatus.OK)
                 {
-                    if (kw == "H") { if (dr.Value < 0.5 || dr.Value > 30) ed.WriteMessage("\n → 범위 밖 값입니다(단높이 0.5~30 m) — 그대로."); else tH = dr.Value; }
-                    else if (kw == "B") { if (dr.Value > 20) ed.WriteMessage("\n → 범위 밖 값입니다(소단 폭 0~20 m) — 그대로."); else tB = dr.Value; }
+                    if (kw == "H") { if (dr.Value < 0.5 || dr.Value > 30) ed.WriteMessage("\n → 범위 밖 값(단높이 0.5~30 m) — 그대로"); else tH = dr.Value; }
+                    else if (kw == "B") { if (dr.Value > 20) ed.WriteMessage("\n → 범위 밖 값(소단 폭 0~20 m) — 그대로"); else tB = dr.Value; }
                     else tZ = dr.Value;
                 }
                 b = Geo();
                 continue;
             }
-            if (!b.Ok) { ed.WriteMessage($"\n[{Tag}] {b.Why} — {(tierUi ? "단을 바꾸거나 수직만(V) · " : "")}다시 그리세요(S)."); continue; }
+            if (!b.Ok) { ed.WriteMessage($"\n[{Tag}] {WallEasy.Build(b.Code, b.Why)} · {(tierUi ? "단 값 바꾸기 · " : "")}다시 그리기(S)"); continue; }
             break;
         }
-        ed.WriteMessage($"\n[{Tag}] {(b.Shape == 3 ? "다단 옹벽" : "수직 옹벽")}을 짓습니다…");
+        ed.WriteMessage($"\n[{Tag}] {(b.Shape == 3 ? "다단 옹벽" : "수직 옹벽")} 짓는 중…");
         var (no, note) = Make(doc, got.Pts, got.SrcHandle, hc, tc, hf, tf, false, 9, shape, tH, tB, tZ, tierMode ? tSecs : null, tierMode && tEnd);
         if (no == 0)
         {
             string why = GradingSettings.LastAddNote.Length > 0 ? GradingSettings.LastAddNote : note;
-            ed.WriteMessage($"\n[{Tag}] ⚠{why} — 아무것도 안 바꿨습니다.");
-            if (!SelfCheckLog.Headless) try { BusyPopup.Close(); AcadApp.ShowAlertDialog($"폴리선 옹벽을 짓지 않았습니다(정지면_DH · 지난 옹벽은 그대로).\n\n{why}"); } catch { }
+            ed.WriteMessage($"\n[{Tag}] ⚠{why} — 안 바뀜");
+            if (!SelfCheckLog.Headless) try { BusyPopup.Close(); AcadApp.ShowAlertDialog($"옹벽 안 지음(정지면_DH · 지난 옹벽은 그대로)\n\n{why}"); } catch { }
             return;
         }
         Kick(doc, no);
@@ -547,17 +555,17 @@ internal static class WallLineFlow
         var ed = doc.Editor;
         if (GradingSettings.LastAddDeferred)
         {
-            ed.WriteMessage($"\n[{Tag}] 옹벽 {no}를 지었습니다 — 합성은 미룹니다(정지 창 [옹벽 합성]).");
+            ed.WriteMessage($"\n[{Tag}] 옹벽 {no} 지음 — 합성은 미룸(정지 창 [옹벽 합성])");
             if (!SelfCheckLog.Headless) try { GradingPalette.RefreshComposite(); } catch { }
             return;
         }
-        ed.WriteMessage($"\n[{Tag}] 옹벽 {no}를 지었습니다 — 이어서 정지면_DH에 합성합니다(바꿔 끼움 · 지난 옹벽과 함께)…");
+        ed.WriteMessage($"\n[{Tag}] 옹벽 {no} 지음 — 이어서 정지면_DH에 합성 중(바꿔 끼움 · 지난 옹벽과 함께)…");
         GradingSettings.AutoCompDoc = doc.Name; GradingSettings.AutoCompNo = no;
         try { doc.SendStringToExecute("DHWALLCOMP ", true, false, true); }
         catch (System.Exception sx)
         {
             GradingSettings.AutoCompDoc = ""; GradingSettings.AutoCompNo = 0;
-            ed.WriteMessage($"\n[{Tag}] ⚠합성을 못 태웠다({sx.GetType().Name}) — 명령줄에 DHWALLCOMP를 치세요");
+            ed.WriteMessage($"\n[{Tag}] ⚠합성 못 태움({sx.GetType().Name}) → 명령줄에 DHWALLCOMP 입력");
         }
     }
 
@@ -598,7 +606,7 @@ internal static class WallLineFlow
             if (lo.Length > 0 && lo != ln) drift += (drift.Length > 0 ? " · " : "") + $"⚠옹벽 {w.No} 모양 바뀜(소단 {lo} → {ln})";
         }
         string moved = WallByLine.SamePlace(w, cut);
-        if (moved.Length > 0) return "폴리선 옹벽 자리가 움직였다 — " + moved + " · [옹벽→사면]으로 되돌리거나 다시 그리세요";
+        if (moved.Length > 0) return "폴리선 옹벽 자리가 움직였다 — " + moved + " → [옹벽→사면]으로 되돌리기 · 또는 다시 그리기";
         var er = WallTags.Erase(db, tr, (n, r) => n == w.No && (r.Length == 0 || r == region), false, groundId);
         var (wh, blk, note) = BuildSurface(db, tr, b, w.No, region, groundId);
         if (wh.Length == 0) return note;

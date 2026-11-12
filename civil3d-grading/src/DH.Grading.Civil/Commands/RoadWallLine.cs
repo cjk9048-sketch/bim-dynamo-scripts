@@ -41,10 +41,10 @@ internal static class RoadWallLine
     internal static Trial OutlineOf(Document doc, RoadSession s, int exceptNo = 0)
     {
         var t = new Trial();
-        if (GradingSettings.WallLineOff || WallByLine.Off || RoadGrade.WallOff) { t.Why = "⚠선 옹벽(v114)이 꺼져 있습니다(정지옵션 WallLineOff)"; return t; }
+        if (GradingSettings.WallLineOff || WallByLine.Off || RoadGrade.WallOff) { t.Why = "⚠선 옹벽(v114) 꺼짐(정지옵션 WallLineOff)"; return t; }
         var (inp, r, p0, lines, path, why, ring) = s.P0Now();
         if (inp == null || r == null || p0 == null || lines == null) { t.Why = why; return t; }
-        if (path == "칸 면") { t.Why = "칸 면 위에는 선 옹벽을 안 짓습니다(이 도로는 선 면 · 선 따라 TIN을 못 지음)"; return t; }
+        if (path == "칸 면") { t.Why = "칸 면 위에는 선 옹벽 안 지음(이 도로는 선 면 · 선 따라 TIN을 못 지음)"; return t; }
         t.Bl = SiteBlockers(doc.Database);
         var prev = inp.LineWalls.Where(w => w.No != exceptNo).ToList();
         var cur = p0;
@@ -96,14 +96,14 @@ internal static class RoadWallLine
         string srcHandle = "", bool redraw = true)
         => shape is WallByLine.WallShape.Vertical or WallByLine.WallShape.Tiered
             ? MakeCore(doc, src, double.NaN, double.NaN, srcHandle, redraw, 40, false, 9, shape, tierH, tierB, tierZ1)
-            : Stop(doc, $"모양 {shape}는 이 길에서 안 짓습니다(수직 · 다단만)");
+            : Stop(doc, $"모양 {shape}는 이 길에서 안 지음(수직 · 다단만)");
 
     static (int No, string Note) MakeCore(Document doc, IReadOnlyList<Point3> src, double tc, double tf, string srcHandle, bool redraw, double reach, bool topStep, double blockLen,
         WallByLine.WallShape shape, double tierH, double tierB, double tierZ1)
     {
         var ci = System.Globalization.CultureInfo.InvariantCulture;
         var s = RoadSession.Of(doc);
-        if (s == null) return (0, "열린 진입도로가 없습니다(진입도로 창)");
+        if (s == null) return (0, "열린 진입도로 없음(진입도로 창)");
         s.RecomputeIfDirty();
         bool ringWas = s.Pieces.Any(p => p.Ring != null);   // ★[v116 · 고리 엔진 §5] 벽을 넣기 전 고리 엔진이었나(넣으면 옛 엔진 — 안내 한 줄)
         var d = s.Fresh();
@@ -118,7 +118,8 @@ internal static class RoadWallLine
             SelfCheckLog.Line(Tag, b0.Ok, b0.SelfCheck, doc.Name);
             if (b0.Ok && b0.Profile != null) SelfCheckLog.Line(Tag, '✔', b0.Profile.Probe, doc.Name);
         }
-        if (t.St == null || !t.St.Ok) return Stop(doc, t.Why.Length > 0 ? t.Why : "못 지음");
+        if (t.St != null && !t.St.Ok) { try { DiagLog.AppendCarry($"\n  [{Tag}] 거절(기술) — {t.St.Code}: {t.St.Why}"); } catch { } return Stop(doc, WallEasy.Build(t.St.Code, t.St.Why)); }
+        if (t.St == null) return Stop(doc, t.Why.Length > 0 ? t.Why : "못 지음");
         var st = t.St;
         var b = st.Built!;
         var rec = new RoadDesign.BoundWallRec
@@ -135,7 +136,7 @@ internal static class RoadWallLine
             if (rec.Shape == 3)
             {
                 if (!double.IsFinite(b.TierH) || !double.IsFinite(b.TierB) || !double.IsNaN(tierZ1) && !double.IsFinite(tierZ1))
-                    return Stop(doc, string.Format(ci, "다단 값이 숫자가 아닙니다(단높이 {0} · 소단 {1} · 첫 소단 {2}) — 기록하지 않음", b.TierH, b.TierB, tierZ1));
+                    return Stop(doc, string.Format(ci, "다단 값이 숫자 아님(단높이 {0} · 소단 {1} · 첫 소단 {2}) — 기록 안 함", b.TierH, b.TierB, tierZ1));
                 rec.TierH = b.TierH; rec.TierB = b.TierB; rec.TierZ1 = double.IsNaN(tierZ1) ? null : tierZ1;
             }
         }
@@ -163,7 +164,7 @@ internal static class RoadWallLine
               + (topStep ? string.Format(ci, " · 천단 계단 {0:0.##} m", blockLen) : "")
               + $" · 선 바깥 최대 {b.FootMax:F2} m";
         note += $" · 교차각 {st.Cut.AngleA:F0}°/{st.Cut.AngleB:F0}°" + (b.Warn.Count > 0 ? " · ⚠" + string.Join(" · ⚠", b.Warn) : "") + (st.Cut.Warn.Count > 0 ? " · ⚠" + string.Join(" · ⚠", st.Cut.Warn) : "")
-                + (ringWas && s.Last != null && s.Pieces.All(p => p.Ring == null) ? " · 고리 면을 못 지어 옛 방식으로 다시 지었습니다" : "");   // ★[v116 · D2] 벽 기록 → 옛 엔진
+                + (ringWas && s.Last != null && s.Pieces.All(p => p.Ring == null) ? " · 고리 면 못 지어 옛 방식으로 다시 지음" : "");   // ★[v116 · D2] 벽 기록 → 옛 엔진
         try { DiagLog.Append($"\n■ {Tag} {System.DateTime.Now:HH:mm:ss} — {note} · 옛 경계 {st.Cut.AreaOld:F1} = 새 {st.Cut.AreaNew:F1} + 잘라낼 {st.Cut.AreaCut:F1}㎡ · {st.Ms} ms\n{st.Log.TrimEnd()}"); } catch { }
         SelfCheckLog.Line(Tag, true, note, doc.Name);
         if (redraw) RoadCommand.RedrawStale(doc, s);
@@ -182,7 +183,7 @@ internal static class RoadWallLine
     {
         var ed = doc.Editor;
         var ol = OutlineOf(doc, s);
-        if (ol.Bd == null || ol.Band == null) { ed.WriteMessage($"\n[{Tag}] {ol.Why} — 아무것도 안 바꿨습니다."); return false; }
+        if (ol.Bd == null || ol.Band == null) { ed.WriteMessage($"\n[{Tag}] {ol.Why} — 안 바뀜"); return false; }
         var bd = ol.Bd; var band = ol.Band; var bl = ol.Bl;
         var got = WallLineDraw.Run(doc, Tag, bd, band, pts => BoundaryCut.Classify(pts, bd, band, bl));
         if (got == null) return false;
@@ -214,7 +215,18 @@ internal static class RoadWallLine
                 live.AddRange(WallLineDraw.Show(System.Array.Empty<(double, double)>(), null, mk, 2, b.Foot.Cast<IReadOnlyList<Point3>>(), 1));
             }
             else live = WallLineDraw.Show((st?.Cut?.Marks ?? new List<(double, double)>()).Concat(b?.Marks ?? new List<(double, double)>()), got.Cut.Line.Count >= 2 ? got.Cut.Line : got.Pts, mk);   // ★[v117.9.2] 거절 때도 경계 위 A..B 선(판정용 1 m 늘임은 안 보임)
-            string spec = !ok ? $"〈⚠{t.Why}〉"
+            string easyWhy = st != null && !st.Ok ? WallEasy.Build(st.Code, st.Why) : t.Why;
+            if (!ok && st != null && !st.Ok) { try { DiagLog.AppendCarry($"\n  [{Tag}] 거절(기술) — {st.Code}: {st.Why}"); } catch { } }
+            // ★[v117.9.3 · JACK 1112 «침범했을 경우만 소단선 미리보기»] 다단 «자리» 거절 — 소단선(초록) · 바닥 침범 몫(빨강)
+            var bb = !ok && st != null && !st.Ok ? st.Built : null;   // 다단 짓기 결과(실패도 실림 · 없으면 null)
+            bool benchHit = bb != null && bb.TierBenchHit.Count > 0;
+            if (benchHit)
+            {
+                live.AddRange(WallLineDraw.Show(System.Array.Empty<(double, double)>(), null, mk, 2, bb!.TierBenchOk, 3));
+                live.AddRange(WallLineDraw.Show(System.Array.Empty<(double, double)>(), null, mk, 2, bb!.TierBenchHit, 1));
+            }
+            if (benchHit) easyWhy += " · 빨간 소단선 = 바닥 침범 자리";
+            string spec = !ok ? $"〈⚠{easyWhy}〉"
                 : b!.Shape == 3 ? string.Format(ic, "〈다단 {0}단 · 단높이 {1:0.##} · 소단 {2:0.##} · 첫 소단 {3:F2}({4}) · 바깥 최고 {5:F2} m · 끊김 {6}곳{7}〉", b.TierN, b.TierH, b.TierB, b.TierZ1,
                     double.IsNaN(tZ) ? "자동" : "손", b.OuterHMax, b.BreakN, b.BreakN > 0 ? " — 구간 나눔 권함(다음 판)" : "")
                 : string.Format(ic, "〈수직 1:{0} · 길이 {1:F2} m(절토 {2:F2} · 성토 {3:F2}) · 최고 {4:F2} m · 면적 {5:F1} ㎡{6}〉", b.Batter.ToString("0.###", ic), b.LineLen, b.LenC, b.LenF, b.HMax, b.Area,
@@ -233,7 +245,7 @@ internal static class RoadWallLine
                 r = ed.GetKeywords(pk);
             }
             finally { WallLineDraw.Drop(live); }
-            if (r.Status == PromptStatus.Cancel) { ed.WriteMessage($"\n[{Tag}] 그만두었습니다 — 아무것도 안 바꿨습니다."); return false; }
+            if (r.Status == PromptStatus.Cancel) { ed.WriteMessage($"\n[{Tag}] 취소 — 안 바뀜"); return false; }
             string kw = r.Status == PromptStatus.None ? "" : (r.StringResult ?? "").Trim().ToUpperInvariant();
             if (kw == "S")
             {
@@ -256,19 +268,19 @@ internal static class RoadWallLine
                 if (dr.Status == PromptStatus.Keyword && (dr.StringResult ?? "").Trim().ToUpperInvariant() == "A") tZ = double.NaN;
                 else if (dr.Status == PromptStatus.OK)
                 {
-                    if (kw == "H") { if (dr.Value < 0.5 || dr.Value > 30) ed.WriteMessage("\n → 범위 밖 값입니다(단높이 0.5~30 m) — 그대로."); else tH = dr.Value; }
-                    else if (kw == "B") { if (dr.Value > 20) ed.WriteMessage("\n → 범위 밖 값입니다(소단 폭 0~20 m) — 그대로."); else tB = dr.Value; }
+                    if (kw == "H") { if (dr.Value < 0.5 || dr.Value > 30) ed.WriteMessage("\n → 범위 밖 값(단높이 0.5~30 m) — 그대로"); else tH = dr.Value; }
+                    else if (kw == "B") { if (dr.Value > 20) ed.WriteMessage("\n → 범위 밖 값(소단 폭 0~20 m) — 그대로"); else tB = dr.Value; }
                     else tZ = dr.Value;
                 }
                 t = Geo();
                 continue;
             }
-            if (!ok) { ed.WriteMessage($"\n[{Tag}] {t.Why} — {(tierUi ? "단을 바꾸거나 수직만(V) · " : "")}다시 그리세요(S)."); continue; }
+            if (!ok) { ed.WriteMessage($"\n[{Tag}] {easyWhy} · {(tierUi ? "단 값 바꾸기 · " : "")}다시 그리기(S)"); continue; }
             break;
         }
-        ed.WriteMessage($"\n[{Tag}] {(t.St?.Built?.Shape == 3 ? "다단 옹벽" : "수직 옹벽")}을 짓습니다…");
+        ed.WriteMessage($"\n[{Tag}] {(t.St?.Built?.Shape == 3 ? "다단 옹벽" : "수직 옹벽")} 짓는 중…");
         var (made, note) = MakeShaped(doc, got.Pts, Shape(), tH, tB, tZ, got.SrcHandle, redraw: false);
-        ed.WriteMessage(made > 0 ? $"\n[{Tag}] {note}" : $"\n[{Tag}] ⚠{note} — 아무것도 안 바꿨습니다.");
+        ed.WriteMessage(made > 0 ? $"\n[{Tag}] {note}" : $"\n[{Tag}] ⚠{note} — 안 바뀜");
         return made > 0;
     }
 }

@@ -256,6 +256,7 @@ if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "wline")
     WallLineCheck.Run(Check);
     RoadBoundCheck.Run(Check);   // S203 진입도로 좌표 바꾸기
     BoundaryDrawCheck.Run(Check);   // S208 옹벽 추가 — 찍는 규칙
+    WallEasyCheck.Run(Check);   // S208b 옹벽 추가 — 거절 화면 글(초보 · 단답형)
     Console.WriteLine(fails == 0 ? "\n== 전부 통과 ==" : $"\n== 실패 {fails}건 ==");
     return fails == 0 ? 0 : 1;
 }
@@ -479,6 +480,7 @@ AltCheck.Run(Check);            // ★[v112.1] S193 AL — 대안(폴더 · 목�
 ContourLabelCheck.Run(Check);   // ★[v112.5] S194 CL — 등고선 잇기 · 값 자리
 WallLineCheck.Run(Check);       // ★[v113.0] S195~S199 · S201 — 경계 폴리선 옹벽(판정 · 띠 · 줄 · 합성 바꿔 끼움 · 목록 판 6)
 RoadBoundCheck.Run(Check);      // ★[v113.0] S203~S207 — 진입도로 폴리선 옹벽(좌표 바꾸기 · 엔진 바닥 + 단면 · 선 면 · 옹벽선 · 쉬는 기록 · 비스듬한 다리 턱)
+WallEasyCheck.Run(Check);   // ★[v117.9.3] S208b — [옹벽 추가] 거절 화면 글(WallEasy)
 BoundaryDrawCheck.Run(Check);   // ★[v113.0] S208 — [옹벽 추가] 찍는 규칙(경계 위 첫 점 · 안쪽 · 경계 위 끝 점)
 ProfileFlipCheck.Run(Check);    // ★[v113.1] S210 PF · S211 PS — 종단 방향 바꾸기(측점 기록 · 되돌림 기록 · 엔진 대칭) · 종단 축척 H · V(옛 규칙 · 전수 · 나눔)
 RoadBendCheck.Run(Check);       // ★[v113.1 · JACK 1104] S212 BD — 급한 굽은 안쪽 진입도로 면(선 면 검사 통과 · 곡선 중심 낭떠러지 · 섬 · Civil 바늘 접기)
