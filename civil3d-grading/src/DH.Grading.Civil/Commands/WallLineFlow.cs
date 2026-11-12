@@ -223,7 +223,7 @@ internal static class WallLineFlow
         }
         try { using var tc = tin.GetTriangles(false); note += $" · 삼각형 {tc.Count}개"; } catch { }
         try { note += " · " + GradingBuilder.MakeSurfaceVisible(db, tr, name, "DH-가상옹벽면", "DH-가상옹벽", 6); } catch { }
-        // 줄(DH-가상옹벽선) · 바꿀 자리(DH-가상폴리곤) — 번호 표지(사면 변환으로 되돌릴 때 이 선을 고른다)
+        // 줄(DH-가상옹벽선) — 번호 표지(되돌릴 때 이 선을 고른다)
         var bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
         var ms = (BlockTableRecord)tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForWrite);
         void Draw(IReadOnlyList<Point3> l, string layer, short aci, bool close)
@@ -237,8 +237,10 @@ internal static class WallLineFlow
         }
         foreach (var r in b.Rows) Draw(r, "DH-가상옹벽선", 6, false);
         foreach (var r in b.EndFaces) Draw(r, "DH-가상옹벽선", 6, false);
-        Draw(b.Poly, "DH-가상폴리곤", 4, true);
-        if (b.Profile != null) foreach (var o in b.Profile.Outline) Draw(o, LandBound.OutlineLayer, 30, true);   // ★[v117.3 · D1 ③] 구조물 외곽(형식 단면 · 기초 포함) — 평면 확인용 가는 선 · 번호 표지(옹벽과 함께 지워짐)
+        // ★[v117.9.2 · JACK 1112 «변환 뒤 남는 하늘색 · 주황색 3D 폴리선 보기 싫어 — 꼭 있어야 하면 숨기고 아니면 아예 삭제»] 바꾼 자리(하늘색 DH-가상폴리곤) ·
+        //   구조물 외곽(주황 DH-옹벽-구조물외곽)은 <b>안 그린다</b> — 둘 다 읽는 곳이 없다(계산 · 다시 짓기 · 되돌리기는 목록 기록 w.Poly · Profile을 씀).
+        //   구조물 외곽은 [옹벽 추가] 미리보기(질문 동안)에서만 보인다 · 옹벽 고르기는 자홍 옹벽선 또는 옹벽 자리 클릭([옹벽 되돌리기]).
+        //   이미 그려진 것은 그 옹벽을 다시 지을 때(WallTags.Erase — 번호 표지) 지워진다.
         return (wid.Handle.ToString(), block, note);
     }
 
@@ -415,7 +417,7 @@ internal static class WallLineFlow
                 // ★[v117.x A] 구간 경계(지은 구간 · 구간안) — 큰 X
                 if (b.TierSecMarks.Count + b.TierProposeMarks.Count > 0) live.AddRange(WallLineDraw.Show(b.TierSecMarks.Concat(b.TierProposeMarks), null, mk * 2));
             }
-            else live = WallLineDraw.Show(b.Marks, got.Pts, mk);
+            else live = WallLineDraw.Show(b.Marks, got.Cut.Line.Count >= 2 ? got.Cut.Line : got.Pts, mk);   // ★[v117.9.2 · JACK 1112 «경계 밖으로 노란 선 길어짐»] 거절 때도 경계 위 A..B 선(판정용 1 m 늘임은 안 보임)
             string spec = !b.Ok ? $"〈⚠{b.Why}〉"
                 : b.Shape == 3 ? string.Format(ic, "〈다단 {0}단 · 단높이 {1:0.##} · 소단 {2:0.##} · 첫 소단 {3:F2}({4}) · 바깥 최고 {5:F2} m · 끊김 {6}곳{7}〉", b.TierN, b.TierH, b.TierB, b.TierZ1,
                     double.IsNaN(tZ) ? "자동" : "손", b.OuterHMax, b.BreakN, (b.BreakN > 0 ? " — 구간 나눔 권함" + (b.TierPropose != null ? "(P)" : "(M)") : "")

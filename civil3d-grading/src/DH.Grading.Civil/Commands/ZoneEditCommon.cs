@@ -1534,6 +1534,8 @@ internal static class ZoneEditCommon
                         if (sameBench && (cl > 0.5 || ownPiece)) covered.Add(w);
                         Log($"   옹벽 {w.No}({w.Side} {w.Bench + 1}단) — 고른 선이 폴리곤 안에 {cl:F2}m{(w.Up != pick.Value.up ? "(다른 방향)" : !sameBench ? "(다른 단 — 안 되돌림)" : "")}"
                             + (ownPiece && cl <= 0.5 ? " · 고른 것이 이 옹벽의 주황 조각 → 덮음(0.5m 문턱 안 씀)" : ""));
+                        // ★[v117.9.2 · JACK 1112 — 사면 선을 눌러 [옹벽 추가] 옹벽을 되돌리려다 «다른 단 — 안 되돌림»] 길을 알린다
+                        if (w.Kind != 0 && cl > 0.5 && !covered.Contains(w)) ed.WriteMessage($"\n[{cmdLabel}] 옹벽 {w.No}은(는) [옹벽 추가]로 만든 옹벽입니다 — [옹벽 되돌리기]로 되돌리세요.");
                     }
                 }
             }
@@ -1949,37 +1951,110 @@ internal static class ZoneEditCommon
         catch { }
     }
 
+    /// <summary>★[v117.9.2 · JACK 1112 «옹벽 추가로 만든 옹벽을 되돌릴 방법도 마련해줘»] [옹벽 되돌리기](DHWALLREVERT) — [옹벽→사면]의 숨은 W 길과 같은 일을
+    /// 단추 하나로: 옹벽 자리 클릭(또는 번호) → 확인 → 그 옹벽만 지우고 옛 사면 · 옛 경계로(<see cref="RevertBound"/>).</summary>
+    public static void RunWallRevert(Document doc)
+    {
+        const string lbl = "옹벽 되돌리기";
+        var ed = doc.Editor; var db = doc.Database;
+        GradingBundle? region = null;
+        string activePlan = GradingSettings.LastPlanHandle;
+        var listWalls = new System.Collections.Generic.List<WallRec>();
+        using (var tr = db.TransactionManager.StartTransaction())
+        {
+            var regs = GradingBundleStore.TryLoadAll(db, tr, out string reason);
+            if (regs == null || regs.Count == 0) { tr.Commit(); Refuse(ed, lbl, $"{lbl}을(를) 실행할 수 없습니다.\n{reason}\n\n[계획부지 생성]을 먼저 실행하세요."); return; }
+            region = regs[^1];
+            if (string.IsNullOrEmpty(activePlan)) activePlan = region.PlanHandle;
+            try
+            {
+                if (WallListStore.TryLoad(db, tr, out var wHead0, out var wList0, out _) && (wHead0.PlanHandle.Length == 0 || wHead0.PlanHandle == region.PlanHandle))
+                    listWalls = wList0.Where(w => w.State == 1).ToList();
+            }
+            catch { }
+            tr.Commit();
+        }
+        Log($"■ {lbl} 시작 {System.DateTime.Now:HH:mm:ss} — [옹벽 추가] 옹벽 {listWalls.Count(w => w.Kind != 0)}개");
+        RevertBound(doc, region!, listWalls, activePlan, lbl);
+    }
+
     /// <summary>★★[v113.0 · JACK 1104 «옹벽 폴리선» · 계획 4-5] 사면 변환 W — 폴리선 옹벽 하나를 통째로 지우고 옛 사면 · 옛 경계로.
-    /// 그 옹벽의 선(DH-가상옹벽선 · DH-가상폴리곤 — 번호 표지)을 클릭하거나 번호(N)를 친다 → 구간 · 제원은 그대로(덮인 옹벽만) → 정지면 생성 «되돌리기만»(같으면 다시 안 만듦 · 남은 옹벽 다시 합성).</summary>
-    private static void RevertBound(Document doc, GradingBundle region, System.Collections.Generic.List<WallRec> listWalls, string activePlan)
+    /// 옹벽 자리를 클릭(목록 Poly 안 · 곁)하거나 번호(N)를 친다 → 빨간 테두리 + 확인 → 구간 · 제원은 그대로(덮인 옹벽만) → 정지면을 다시 만든다
+    /// (★v117.9.2 — «되돌리기만» 길은 평면 선을 안 되살려 안 씀 · 남은 옹벽은 다시 짓고 합성).</summary>
+    private static void RevertBound(Document doc, GradingBundle region, System.Collections.Generic.List<WallRec> listWalls, string activePlan, string lbl = "옹벽→사면")
     {
         var ed = doc.Editor; var db = doc.Database;
-        const string lbl = "옹벽→사면";
         var bound = listWalls.Where(w => w.Kind != 0).ToList();   // ★[v114.0] 선 옹벽(종류 2)
-        if (bound.Count == 0) { ed.WriteMessage($"\n[{lbl}] 폴리선 옹벽이 없습니다."); return; }
+        if (bound.Count == 0) { ed.WriteMessage($"\n[{lbl}] [옹벽 추가]로 만든 옹벽이 없습니다."); return; }
+        // ★[v117.9.2 · JACK 1112 «옹벽 추가로 만든 옹벽을 되돌릴 방법»] 선 대신 <b>옹벽 자리를 클릭</b>(옹벽 폴리곤 안 · 곁 — 하늘색 선은 이제 안 그림) · 번호(N) ·
+        //   고른 옹벽을 빨간 테두리로 보이고 한 번 묻는다(Enter = 되돌림 — 잘못 누른 옹벽이 사라지지 않게)
+        double near = 0.5;
+        try { near = System.Math.Clamp(System.Convert.ToDouble(AcadApp.GetSystemVariable("VIEWSIZE")) * 0.01, 0.3, 5.0); } catch { }
+        static double Area2(System.Collections.Generic.IReadOnlyList<Point3> p) { double a = 0; for (int i = 0; i < p.Count; i++) { var u = p[i]; var v = p[(i + 1) % p.Count]; a += u.X * v.Y - v.X * u.Y; } return System.Math.Abs(a) / 2; }
+        int At(double x, double y)
+        {
+            int best = 0; double bestKey = double.MaxValue;
+            foreach (var w in bound)
+            {
+                if (w.Poly == null || w.Poly.Count < 3) continue;
+                bool inside = false;
+                for (int i = 0, j = w.Poly.Count - 1; i < w.Poly.Count; j = i++)
+                {
+                    var a = w.Poly[i]; var c = w.Poly[j];
+                    if ((a.Y > y) != (c.Y > y) && x < (c.X - a.X) * (y - a.Y) / (c.Y - a.Y) + a.X) inside = !inside;
+                }
+                double d = inside ? 0 : DH.Grading.Core.BoundaryDraw.Nearest(w.Poly, x, y).D;
+                if (d > near) continue;
+                double key = d * 1e9 + Area2(w.Poly);   // 안이면 작은 옹벽 먼저(겹친 자리) · 밖이면 가까운 것
+                if (key < bestKey) { bestKey = key; best = w.No; }
+            }
+            return best;
+        }
         int no = 0;
         while (no == 0)
         {
-            var peo = new PromptEntityOptions($"\n[{lbl}] 되돌릴 폴리선 옹벽의 선을 클릭하세요 〈폴리선 옹벽 {string.Join(", ", bound.Select(w => w.No))}〉 [번호(N)]: ");
-            peo.Keywords.Add("N", "N", "번호(N)");
-            peo.AllowNone = false;
-            var per = ed.GetEntity(peo);
-            if (per.Status == PromptStatus.Cancel) { ed.WriteMessage($"\n[{lbl}] 취소 — 아무것도 안 바꿨습니다."); return; }
-            if (per.Status == PromptStatus.Keyword)
+            var ppo = new PromptPointOptions($"\n[{lbl}] 되돌릴 옹벽 자리를 클릭하세요 〈옹벽 {string.Join(", ", bound.Select(w => w.No))}〉 [번호(N)]: ");
+            ppo.Keywords.Add("N", "N", "번호(N)");
+            ppo.AllowNone = false; ppo.AppendKeywordsToMessage = false;
+            var pr = ed.GetPoint(ppo);
+            if (pr.Status == PromptStatus.Cancel) { ed.WriteMessage($"\n[{lbl}] 취소 — 아무것도 안 바꿨습니다."); return; }
+            int pick = 0;
+            if (pr.Status == PromptStatus.Keyword)
             {
-                var pio = new PromptIntegerOptions($"\n폴리선 옹벽 번호") { AllowNone = false, LowerLimit = 1, UpperLimit = 100000 };
+                var pio = new PromptIntegerOptions($"\n옹벽 번호") { AllowNone = false, LowerLimit = 1, UpperLimit = 100000 };
                 if (bound.Count == 1) { pio.DefaultValue = bound[0].No; pio.UseDefaultValue = true; }
                 var ir = ed.GetInteger(pio);
                 if (ir.Status != PromptStatus.OK) continue;
-                if (bound.Any(w => w.No == ir.Value)) no = ir.Value; else ed.WriteMessage($"\n → 옹벽 {ir.Value}은 폴리선 옹벽이 아닙니다.");
-                continue;
+                if (bound.Any(w => w.No == ir.Value)) pick = ir.Value; else { ed.WriteMessage($"\n → 옹벽 {ir.Value}은 [옹벽 추가]로 만든 옹벽이 아닙니다."); continue; }
             }
-            if (per.Status != PromptStatus.OK) continue;
-            using var tr = db.TransactionManager.StartTransaction();
-            var tagW = tr.GetObject(per.ObjectId, OpenMode.ForRead) is Entity e ? WallTags.Read(e) : null;
-            tr.Commit();
-            if (tagW != null && bound.Any(w => w.No == tagW.Value.No)) no = tagW.Value.No;
-            else ed.WriteMessage("\n → 폴리선 옹벽의 선이 아닙니다 — 그 옹벽의 단 줄이나 바꿀 자리(청록)를 클릭하거나 번호(N)를 치세요.");
+            else if (pr.Status == PromptStatus.OK)
+            {
+                var wp = pr.Value.TransformBy(ed.CurrentUserCoordinateSystem);
+                pick = At(wp.X, wp.Y);
+                if (pick == 0) { ed.WriteMessage("\n → 그 자리에 [옹벽 추가]로 만든 옹벽이 없습니다 — 옹벽 자리를 클릭하거나 번호(N)를 치세요."); continue; }
+            }
+            else continue;
+            // 고른 옹벽 — 빨간 테두리 + 한 번 묻기
+            var wSel = bound.First(w => w.No == pick);
+            double mk = 0.5;
+            if (wSel.Poly.Count >= 3) { double dx = wSel.Poly.Max(q => q.X) - wSel.Poly.Min(q => q.X), dy = wSel.Poly.Max(q => q.Y) - wSel.Poly.Min(q => q.Y); mk = System.Math.Max(0.3, System.Math.Sqrt(dx * dx + dy * dy) * 0.006); }
+            var live = WallLineDraw.Show(System.Array.Empty<(double, double)>(), null, mk, 1,
+                wSel.Poly.Count >= 3 ? new[] { (System.Collections.Generic.IReadOnlyList<Point3>)wSel.Poly.Append(wSel.Poly[0]).ToList() } : null, 1);
+            // ★[v117.9.2 · 설치 전 검토 중간 2] 이 옹벽 가장자리에서 시작 · 끝나는 다른 선 옹벽 — 되돌리면 그 옹벽은 선이 경계에 안 닿아 «다시 짓기 실패» 보류가 될 수 있다 → 미리 알림
+            var chained = bound.Where(w => w.No != pick && w.Line != null && w.Line.Count >= 2 && wSel.Poly.Count >= 3
+                && (DH.Grading.Core.BoundaryDraw.Nearest(wSel.Poly, w.Line[0].X, w.Line[0].Y).D <= 0.05 || DH.Grading.Core.BoundaryDraw.Nearest(wSel.Poly, w.Line[^1].X, w.Line[^1].Y).D <= 0.05))
+                .Select(w => w.No).ToList();
+            if (chained.Count > 0) ed.WriteMessage($"\n[{lbl}] ⚠ 옹벽 {string.Join(", ", chained)}은(는) 옹벽 {pick}의 가장자리에서 이어 그렸습니다 — 되돌리면 그 옹벽은 다시 짓지 못해 보류될 수 있습니다(그때는 그 옹벽도 되돌리고 다시 그리세요).");
+            try
+            {
+                var pk = new PromptKeywordOptions($"\n[{lbl}] 옹벽 {pick}을(를) 지우고 원래 사면으로 되돌릴까요? [예(Y)/다른 옹벽(O)] <예>: ");
+                pk.Keywords.Add("Y", "Y", "예(Y)"); pk.Keywords.Add("O", "O", "다른 옹벽(O)");
+                pk.Keywords.Default = "Y"; pk.AllowNone = true; pk.AppendKeywordsToMessage = false;
+                var kr = ed.GetKeywords(pk);
+                if (kr.Status == PromptStatus.Cancel) { ed.WriteMessage($"\n[{lbl}] 취소 — 아무것도 안 바꿨습니다."); return; }
+                if (kr.Status == PromptStatus.None || (kr.Status == PromptStatus.OK && (kr.StringResult ?? "Y").Trim().ToUpperInvariant() == "Y")) no = pick;
+            }
+            finally { WallLineDraw.Drop(live); }
         }
         var planId = NoriCommand.FindByHandle(db, activePlan);
         var groundId = NoriCommand.FindByHandle(db, GradingSettings.LastGroundHandle);
@@ -1990,7 +2065,9 @@ internal static class ZoneEditCommon
         if (region.CutWallZones != null) foreach (var z in region.CutWallZones) cut.Add(new SlopeZone { T0 = z.T0, T1 = z.T1, Rules = new(z.Rules), Ref = z.Ref });
         if (region.FillWallZones != null) foreach (var z in region.FillWallZones) fill.Add(new SlopeZone { T0 = z.T0, T1 = z.T1, Rules = new(z.Rules), Ref = z.Ref });
         GradingSettings.ZoneOverride = (cut, fill);
-        GradingSettings.WallRerunSpec = new GradingSettings.WallRerunInfo(doc.Name, new[] { no }, "사면 변환이 폴리선 옹벽을 되돌림") { RevertOnly = true };
+        // ★[v117.9.2 · 원인: «되돌리기만» 길(정지면 안 다시 만듦)은 정지면만 합성 전으로 풀고, 합성이 잘라 둔 평면 선(사면선 · 소단선 · 노리선 · 정지경계 — WallLinePlan)은
+        //   다시 안 그렸다 → 되돌린 뒤에도 평면이 옹벽 자리에서 잘린 채 남음(키트 wrev C4 «slope · bench · bnd +0 −0»)] 선 옹벽은 정지면을 다시 만든다(평면 선을 번들 고리로 다시 그림)
+        GradingSettings.WallRerunSpec = new GradingSettings.WallRerunInfo(doc.Name, new[] { no }, "사면 변환이 폴리선 옹벽을 되돌림") { RevertOnly = false };
         Log($"■ {lbl} — 폴리선 옹벽 {no}를 통째로 되돌림(옛 사면 · 옛 경계 · 구간 그대로)");
         SelfCheckLog.Line(lbl + " — 폴리선 옹벽", '–', $"옹벽 {no} 되돌림", doc.Name);
         ed.WriteMessage($"\n[{lbl}] 폴리선 옹벽 {no}를 지우고 옛 사면 · 옛 경계로 되돌립니다…");

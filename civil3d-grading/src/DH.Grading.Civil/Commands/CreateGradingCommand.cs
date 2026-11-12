@@ -1416,8 +1416,7 @@ public sealed class CreateGradingCommand
         triedNo = no;
         try
         {
-            var plM = new System.Collections.Generic.List<Point3>(mp) { mp[0] };
-            DrawLinesOnLayer(db, tr, new System.Collections.Generic.List<System.Collections.Generic.List<Point3>> { plM }, "DH-가상폴리곤", PolyAci, no, region);
+            // ★[v117.9.2 · JACK 1112 «변환 뒤 남는 하늘색 폴리선 — 꼭 있어야 하면 숨기고 아니면 삭제»] 옹벽 자리 폴리곤(청록)은 안 그린다 — 읽는 곳이 없다(목록 기록 Poly를 씀)
             sb.Append($"    ★<b>옹벽 {no}</b>({(wUp ? "절토" : "성토")} · {spec.Bench + 1}단 · 단높이 {spec.H:0.##}m · 소단 {spec.T:0.##}m) — 손으로 그린 폴리곤 {mp.Count}점 / {mA:F1}㎡ · 머리 {zBase:F3}m"
                     + (extNos != null ? $" · 옹벽 {string.Join(" · ", extNos)}에 <b>이어 짓는다</b>(합성이 되면 옛 옹벽을 지우고 이 옹벽이 번호 {spec.KeepNo}를 쓴다)"
                        : repNo > 0 ? $" · 같은 선의 옹벽 {repNo}을 <b>바꾼다</b>(합성이 되면 옛 옹벽을 지운다)" : "") + "\n");
