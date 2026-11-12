@@ -150,7 +150,7 @@ static class WallEasyCheck
         var d = WallEasy.Build("다단 합성", "소단 자리가 한 고리가 아닙니다(조각 2 · 구멍 0)");
         check("S208b ④ 안쪽 계산 실패 → «계산 실패(프로그램 문제)»", d == WallEasy.Bug && Terse(d), d);
         var e = WallEasy.Build("겹침", "다단 소단 자리가 옹벽 3과 겹칩니다(2.00㎡) — 수직만(V) 또는 선을 옮기세요");
-        check("S208b ⑤ 겹침 — 상대 이름 · 되돌리기 · 수직만(V)", Terse(e) && e.Contains("(옹벽 3)") && e.Contains("[옹벽 되돌리기]") && e.Contains("수직만(V)"), e);
+        check("S208b ⑤ 겹침 — 상대 이름 · 되돌리기 · 수직만(V)", Terse(e) && e.Contains("(옹벽 3)") && e.Contains("[옹벽 삭제]") && e.Contains("수직만(V)"), e);
         var f = WallEasy.Build("다단 수직", "P0′에 대고 바깥 벽을 못 지었습니다 — 바닥: 벽 띠가 부지 바닥(계획선)에 닿습니다 (1.0, 2.0) — 높이 3.00 m 벽은 띠 폭 0.030 m가 필요합니다");
         check("S208b ⑥ 다단 수직 — 안쪽 까닭(바닥)을 풀어 씀", Terse(f) && f.Contains("부지 바닥"), f);
         var g = WallEasy.Cut(BoundaryCut.Code.Many, "경계를 4번 지납니다 — 정확히 두 번만 지나게 그리세요");

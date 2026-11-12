@@ -624,12 +624,19 @@ public class RoadCommand
         if (nos.Count == 1) { pio.DefaultValue = nos[0]; pio.UseDefaultValue = true; }
         var ir = ed.GetInteger(pio);
         if (ir.Status != PromptStatus.OK) return false;
-        int rm = d.BoundWalls!.RemoveAll(b => b.No == ir.Value);
-        if (rm == 0) { ed.WriteMessage($"\n → 폴리선 옹벽 {ir.Value}이 없습니다."); return false; }
-        if (d.BoundWalls.Count == 0) d.BoundWalls = null;
+        return RemoveBoundByNo(ed, s, label, ir.Value);
+    }
+
+    /// <summary>★[v117.12] 폴리선 옹벽 기록 하나를 번호로 지우고 다시 계산 — W(위)와 [옹벽 삭제](DHROADWALLDEL)가 같이 씀 · 지웠으면 참.</summary>
+    static bool RemoveBoundByNo(Editor ed, RoadSession s, string label, int no)
+    {
+        var d = s.Fresh();
+        int rm = d.BoundWalls?.RemoveAll(b => b.No == no) ?? 0;
+        if (rm == 0) { ed.WriteMessage($"\n → 폴리선 옹벽 {no} 없음"); return false; }
+        if (d.BoundWalls!.Count == 0) d.BoundWalls = null;
         s.SaveDesign(); s.Recompute();
-        ed.WriteMessage($"\n[{label}] 폴리선 옹벽 {ir.Value}를 지우고 사면으로 되돌렸습니다.");
-        try { DiagLog.Append($"\n■ [{label}] 폴리선 옹벽 {ir.Value} 번호로 지움(W)"); } catch { }
+        ed.WriteMessage($"\n[{label}] 옹벽 {no} 지움 → 원래 사면");
+        try { DiagLog.Append($"\n■ [{label}] 폴리선 옹벽 {no} 번호로 지움(W)"); } catch { }
         return true;
     }
 
@@ -905,6 +912,131 @@ public class RoadCommand
         // ★★★[v111.7.1] 기록이 바뀌었으면 이 명령 안에서 바로 [업데이트]와 같은 차례(지표면 → 종단도 → 횡단도 — 변환과 함께 실행 취소 한 번 · 자리는 안 물음)
         //   지표면이 아직 없던 도로도 만든다(옛: 있을 때만) · 못 만들면 도킹창 상태 줄에 까닭 + [업데이트]
         RedrawStale(AcadApp.DocumentManager.MdiActiveDocument, s);
+    }
+
+    /// <summary>★[v117.12 · JACK 1112] [옹벽 삭제] — 부지 [옹벽 삭제](DHWALLREVERT)의 도로 쌍둥이. 옹벽 자리 클릭(폴리곤 안 · 곁) 또는 번호(N) → 빨간 테두리 + 확인 →
+    /// 그 옹벽 기록만 지우고 도로 면 다시(<see cref="RemoveBoundByNo"/> · <see cref="RedrawStale"/> — [옹벽→사면] W와 같은 길).
+    /// 자리 판정 = 지금 도로 면에 지은 옹벽의 바꿀 자리 폴리곤(WallState.Built.ZoneF/ZoneC) · 없으면(쉬는 옹벽) 기록 선(BoundWallRec.X/Y)까지 거리.</summary>
+    [CommandMethod("DHROADWALLDEL")]
+    public void WallDelete()
+    {
+        const string lbl = "옹벽 삭제";
+        var doc = AcadApp.DocumentManager.MdiActiveDocument;
+        if (doc == null) return;
+        var ed = doc.Editor;
+        RoadSession? s = null;
+        bool changed = false;
+        try
+        {
+            s = Need(ed); if (s == null) return;
+            var recs = s.Fresh().BoundWalls ?? new List<RoadDesign.BoundWallRec>();
+            if (recs.Count == 0) { ed.WriteMessage($"\n[{lbl}] [옹벽 추가] 옹벽 없음"); return; }
+            var nos = recs.Select(b => b.No).OrderBy(n => n).ToList();
+            double near = 0.5;
+            try { near = System.Math.Clamp(System.Convert.ToDouble(AcadApp.GetSystemVariable("VIEWSIZE")) * 0.01, 0.3, 5.0); } catch { }
+            // 옹벽마다 폴리곤(지은 것만) · 없으면 선
+            List<IReadOnlyList<Point3>> RingsOf(int no)
+            {
+                var o = new List<IReadOnlyList<Point3>>();
+                var st = s.Walls?.Walls.FirstOrDefault(w => w.No == no && w.Ok && w.Built != null);
+                if (st?.Built != null) foreach (var z in st.Built.ZoneF.Concat(st.Built.ZoneC)) if (z != null && z.Count >= 3) o.Add(z);
+                return o;
+            }
+            static double Area2(IReadOnlyList<Point3> p) { double a = 0; for (int i = 0; i < p.Count; i++) { var u = p[i]; var v = p[(i + 1) % p.Count]; a += u.X * v.Y - v.X * u.Y; } return System.Math.Abs(a) / 2; }
+            static bool Inside(IReadOnlyList<Point3> p, double x, double y)
+            {
+                bool inside = false;
+                for (int i = 0, j = p.Count - 1; i < p.Count; j = i++)
+                {
+                    var a = p[i]; var c = p[j];
+                    if ((a.Y > y) != (c.Y > y) && x < (c.X - a.X) * (y - a.Y) / (c.Y - a.Y) + a.X) inside = !inside;
+                }
+                return inside;
+            }
+            static double SegD(double x, double y, double x0, double y0, double x1, double y1)
+            {
+                double dx = x1 - x0, dy = y1 - y0, l2 = dx * dx + dy * dy;
+                double t = l2 < 1e-12 ? 0 : System.Math.Clamp(((x - x0) * dx + (y - y0) * dy) / l2, 0, 1);
+                return System.Math.Sqrt((x - x0 - t * dx) * (x - x0 - t * dx) + (y - y0 - t * dy) * (y - y0 - t * dy));
+            }
+            int At(double x, double y)
+            {
+                int best = 0; double bestKey = double.MaxValue;
+                foreach (var b in recs)
+                {
+                    var rings = RingsOf(b.No);
+                    double d = double.MaxValue, ar = 0;
+                    if (rings.Count > 0)
+                    {
+                        foreach (var r in rings)
+                        {
+                            double dr = Inside(r, x, y) ? 0 : DH.Grading.Core.BoundaryDraw.Nearest(r, x, y).D;
+                            if (dr < d) d = dr;
+                            ar += Area2(r);
+                        }
+                    }
+                    else if (b.X != null && b.Y != null && b.X.Length >= 2 && b.X.Length == b.Y.Length)
+                    {
+                        for (int i = 0; i + 1 < b.X.Length; i++) d = System.Math.Min(d, SegD(x, y, b.X[i], b.Y[i], b.X[i + 1], b.Y[i + 1]));
+                        ar = 1e12;   // 선만 있는 옹벽은 폴리곤 옹벽보다 뒤
+                    }
+                    if (d > near) continue;
+                    double key = d * 1e9 + ar;   // 안이면 작은 옹벽 먼저(겹친 자리) · 밖이면 가까운 것
+                    if (key < bestKey) { bestKey = key; best = b.No; }
+                }
+                return best;
+            }
+            int no = 0;
+            while (no == 0)
+            {
+                var ppo = new PromptPointOptions($"\n[{lbl}] 지울 옹벽 자리 클릭 〈옹벽 {string.Join(", ", nos)}〉 [번호(N)]: ");
+                ppo.Keywords.Add("N", "N", "번호(N)");
+                ppo.AllowNone = false; ppo.AppendKeywordsToMessage = false;
+                var pr = ed.GetPoint(ppo);
+                if (pr.Status == PromptStatus.Cancel) { ed.WriteMessage($"\n[{lbl}] 취소 — 안 바뀜"); return; }
+                int pick = 0;
+                if (pr.Status == PromptStatus.Keyword)
+                {
+                    var pio = new PromptIntegerOptions("\n옹벽 번호") { AllowNone = false, LowerLimit = 1, UpperLimit = 100000 };
+                    if (nos.Count == 1) { pio.DefaultValue = nos[0]; pio.UseDefaultValue = true; }
+                    var ir = ed.GetInteger(pio);
+                    if (ir.Status != PromptStatus.OK) continue;
+                    if (nos.Contains(ir.Value)) pick = ir.Value; else { ed.WriteMessage($"\n → 옹벽 {ir.Value}은 [옹벽 추가]로 만든 옹벽 아님"); continue; }
+                }
+                else if (pr.Status == PromptStatus.OK)
+                {
+                    var wp = pr.Value.TransformBy(ed.CurrentUserCoordinateSystem);
+                    pick = At(wp.X, wp.Y);
+                    if (pick == 0) { ed.WriteMessage("\n → 그 자리에 [옹벽 추가] 옹벽 없음 → 옹벽 자리 클릭 · 또는 번호(N)"); continue; }
+                }
+                else continue;
+                // 고른 옹벽 — 빨간 테두리(폴리곤 · 없으면 기록 선) + 한 번 묻기
+                var rec = recs.First(b => b.No == pick);
+                var rg = RingsOf(pick).Select(r => (IReadOnlyList<Point3>)r.Append(r[0]).ToList()).ToList();
+                if (rg.Count == 0 && rec.X.Length >= 2 && rec.X.Length == rec.Y.Length)
+                    rg.Add(rec.X.Select((x, i) => new Point3(x, rec.Y[i], 0)).ToList());
+                double mk = 0.5;
+                if (rg.Count > 0) { var all = rg.SelectMany(r => r).ToList(); double dx = all.Max(q => q.X) - all.Min(q => q.X), dy = all.Max(q => q.Y) - all.Min(q => q.Y); mk = System.Math.Max(0.3, System.Math.Sqrt(dx * dx + dy * dy) * 0.006); }
+                var live = WallLineDraw.Show(System.Array.Empty<(double, double)>(), null, mk, 1, rg.Count > 0 ? rg : null, 1);
+                try
+                {
+                    var pk = new PromptKeywordOptions($"\n[{lbl}] 옹벽 {pick}을(를) 지우고 원래 사면으로 되돌리기 [예(Y)/다른 옹벽(O)] <예>: ");
+                    pk.Keywords.Add("Y", "Y", "예(Y)"); pk.Keywords.Add("O", "O", "다른 옹벽(O)");
+                    pk.Keywords.Default = "Y"; pk.AllowNone = true; pk.AppendKeywordsToMessage = false;
+                    var kr = ed.GetKeywords(pk);
+                    if (kr.Status == PromptStatus.Cancel) { ed.WriteMessage($"\n[{lbl}] 취소 — 안 바뀜"); return; }
+                    if (kr.Status == PromptStatus.None || (kr.Status == PromptStatus.OK && (kr.StringResult ?? "Y").Trim().ToUpperInvariant() == "Y")) no = pick;
+                }
+                finally { WallLineDraw.Drop(live); }
+            }
+            changed = RemoveBoundByNo(ed, s, lbl, no);
+        }
+        catch (System.Exception ex)
+        {
+            ed.WriteMessage($"\n[{lbl}] 실패 — " + ex.Message);
+            try { DiagLog.Append($"\n[{lbl}] 실패 — " + ex); } catch { }
+        }
+        if (changed && s != null) RedrawStale(doc, s);
     }
 
     /// <summary>★[v110.3.1] 계단선 위에서 한 점 — 부지 구간지정(ZoneEditCommon.PickOnRing)과 같은 꼴: 시작점은 선을 가로지르는 짧고 굵은 빨간 표시,

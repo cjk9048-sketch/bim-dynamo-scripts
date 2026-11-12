@@ -750,7 +750,7 @@ internal static class ZoneEditCommon
             ed.WriteMessage(wallMode
                 ? $"\n[{cmdLabel}] ① 계단선을 클릭(그 선 전체) → ② 단높이·소단길이 정하고 Enter. (전체해제=C · Esc=취소)"
                 : $"\n[{cmdLabel}] ① 계단선을 클릭 → ② 전체구간/구간지정(이미 변환한 자리는 전체만) → ③ 단높이·사면구배·소단길이 정하고 Enter."
-                  + (listWalls.Any(w => w.Kind != 0) ? " (폴리선 옹벽 되돌리기=W · 전체해제=C · Esc=취소)" : " (전체해제=C · Esc=취소)"));
+                  + (listWalls.Any(w => w.Kind != 0) ? " ([옹벽 추가] 옹벽 삭제=W · 전체해제=C · Esc=취소)" : " (전체해제=C · Esc=취소)"));
 
             PickGuard.Enter(doc, "DH-옹벽선");
 
@@ -1535,7 +1535,7 @@ internal static class ZoneEditCommon
                         Log($"   옹벽 {w.No}({w.Side} {w.Bench + 1}단) — 고른 선이 폴리곤 안에 {cl:F2}m{(w.Up != pick.Value.up ? "(다른 방향)" : !sameBench ? "(다른 단 — 안 되돌림)" : "")}"
                             + (ownPiece && cl <= 0.5 ? " · 고른 것이 이 옹벽의 주황 조각 → 덮음(0.5m 문턱 안 씀)" : ""));
                         // ★[v117.9.2 · JACK 1112 — 사면 선을 눌러 [옹벽 추가] 옹벽을 되돌리려다 «다른 단 — 안 되돌림»] 길을 알린다
-                        if (w.Kind != 0 && cl > 0.5 && !covered.Contains(w)) ed.WriteMessage($"\n[{cmdLabel}] 옹벽 {w.No}은(는) [옹벽 추가]로 만든 옹벽 → [옹벽 되돌리기]로 되돌리기");
+                        if (w.Kind != 0 && cl > 0.5 && !covered.Contains(w)) ed.WriteMessage($"\n[{cmdLabel}] 옹벽 {w.No}은(는) [옹벽 추가]로 만든 옹벽 → [옹벽 삭제]로 지우기");
                     }
                 }
             }
@@ -1955,7 +1955,7 @@ internal static class ZoneEditCommon
     /// 단추 하나로: 옹벽 자리 클릭(또는 번호) → 확인 → 그 옹벽만 지우고 옛 사면 · 옛 경계로(<see cref="RevertBound"/>).</summary>
     public static void RunWallRevert(Document doc)
     {
-        const string lbl = "옹벽 되돌리기";
+        const string lbl = "옹벽 삭제";   // ★[v117.12 · JACK 1112 «옹벽 되돌리기 → 옹벽 삭제»]
         var ed = doc.Editor; var db = doc.Database;
         GradingBundle? region = null;
         string activePlan = GradingSettings.LastPlanHandle;
