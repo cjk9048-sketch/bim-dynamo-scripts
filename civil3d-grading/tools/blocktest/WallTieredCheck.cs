@@ -186,6 +186,14 @@ static class WallTieredCheck
         // (t6) 바닥이 선에서 0.6 m → «자리»
         var (c6, b6) = Make(U, pT, gT, plan: Rect(0, -60, 49.0, 60, 100));
         Check("(t6) 바닥 0.6 m → «자리»", b6 != null && !b6.Ok && b6.Code == "자리", Brief(b6, c6));
+        // (t6b) ★[v117.9.3 · JACK 1112 «침범했을 경우만 소단선 미리보기»] «자리» 거절 — 소단선 중 바닥(x ≤ 49) 안 몫 = 침범(빨강) · 밖 몫 = 그대로 · 붙어 있는 다른 시험(지어진 것)은 비어 있음
+        {
+            bool hitIn = b6 != null && b6.TierBenchHit.Count > 0 && b6.TierBenchHit.All(l => l.All(p => p.X <= 49.0 + 1e-6));
+            bool okOut = b6 != null && b6.TierBenchOk.All(l => l.All(p => p.X >= 49.0 - 1e-6));
+            bool cleanOk = b5 != null && b5.TierBenchHit.Count == 0 && b5.TierBenchOk.Count == 0;
+            Check("(t6b) «자리» 거절 — 침범 소단선(바닥 안) 있음 · 나머지는 바닥 밖 · 지어진 옹벽은 미리보기 없음", hitIn && okOut && cleanOk,
+                b6 == null ? "null" : $"침범 {b6.TierBenchHit.Count}토막 · 그대로 {b6.TierBenchOk.Count}토막 · 침범 x {(b6.TierBenchHit.Count > 0 ? b6.TierBenchHit.SelectMany(l => l).Min(p => p.X).ToString("F3") + "~" + b6.TierBenchHit.SelectMany(l => l).Max(p => p.X).ToString("F3") : "-")}");
+        }
         // (t7) 굽은 선 R 20(0.5 m 현) — 짓고 깨끗 · 합성 왕복
         var arc = new List<Point3>();
         for (double t = -21; t <= 21 + 1e-9; t += 0.5) { double a = Math.Asin(Math.Clamp(t / 20.5, -1, 1)); arc.Add(new Point3(70.1 - 20.5 * Math.Cos(a), t, 0)); }

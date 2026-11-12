@@ -249,6 +249,9 @@ public static partial class WallByLine
         /// <summary>첫 합성(P0′) 한 줄 · 단 머리 줄(미리보기 초록).</summary>
         public string TierCompText = "";
         public List<List<Point3>> TierRows = new();
+        /// <summary>★[v117.9.3 · JACK 1112 «선을 그렸을 때 부지 경계 안으로 침범하는 걸 직관적으로 — 침범했을 경우만 소단선 미리보기»] 다단 «자리» 거절 때만 채움 —
+        /// 선 안쪽 소단선(L에서 k·(소단 + 벽 기울기 폭), k = 1..n−1 · 새 경계 안 · 선 측점 안 · z = 0) 중 부지 바닥(계획선) <b>밖</b> 몫(<see cref="TierBenchOk"/>) · <b>안</b> 몫(<see cref="TierBenchHit"/> = 침범).</summary>
+        public List<List<Point3>> TierBenchOk = new(), TierBenchHit = new();
         /// <summary>★[v117.4 설치 전 검토 중간 1] 테라스 T 세모(합성 전 · 하네스가 소단 높이를 바로 잰다).</summary>
         internal List<Tri> TierT = new();
         /// <summary>★[v117.x A] 지은 구간(2개 이상일 때만 · Z1 실제 z) · 구간 경계 자리(L 위 · 미리보기) · 옆벽(구간 경계 1:s 면) 최고.</summary>

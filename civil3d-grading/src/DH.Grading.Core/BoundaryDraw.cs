@@ -164,15 +164,16 @@ public static class BoundaryDraw
     public static Step First(IReadOnlyList<Point3> bd, IReadOnlyList<Point3>? floor, double x, double y, double snap)
     {
         var g = Prepare(bd, floor);
-        return g == null ? No("경계가 없습니다", x, y) : First(g, x, y, snap);
+        return g == null ? No("계획지표면 경계 없음 → [계획부지 생성] 먼저", x, y) : First(g, x, y, snap);
     }
 
     /// <summary>첫 점 — 경계 위(snap 안)여야 한다 · 바닥에 0.1 m 안으로 붙은 경계 자리는 안 된다.</summary>
     public static Step First(Ctx g, double x, double y, double snap)
     {
         var n = Nearest(g, x, y);
-        if (n.D > snap) return No("첫 점은 경계 위를 클릭하세요", x, y);
-        if (g.Floor != null && g.Floor.Distance(g.Gf.CreatePoint(g.C(n.X, n.Y))) < 0.1) return No("이 경계 자리는 바닥(계획선 · 도로 띠)에 붙어 있습니다 — 다른 자리를 클릭하세요", n.X, n.Y);
+        // ★[v117.9.3 · JACK 1112 «초보가 알게 · 단답형»] 점마다 거절 글 = «무엇이 문제 → 할 일»(습니다체 · 하세요체 안 씀)
+        if (n.D > snap) return No("첫 점 = 초록 경계 위 클릭", x, y);
+        if (g.Floor != null && g.Floor.Distance(g.Gf.CreatePoint(g.C(n.X, n.Y))) < 0.1) return No("이 경계 자리 = 부지 바닥(계획선 · 도로)에 붙음 → 다른 자리 클릭", n.X, n.Y);
         return new Step { Kind = Kind.Start, X = n.X, Y = n.Y };
     }
 
@@ -180,7 +181,7 @@ public static class BoundaryDraw
     public static Step Next(IReadOnlyList<Point3> bd, IReadOnlyList<Point3>? floor, IReadOnlyList<(double X, double Y)> pts, double x, double y, double snap, double minGap = 0.5)
     {
         var g = Prepare(bd, floor);
-        return g == null ? No("경계가 없습니다", x, y) : Next(g, pts, x, y, snap, minGap);
+        return g == null ? No("계획지표면 경계 없음 → [계획부지 생성] 먼저", x, y) : Next(g, pts, x, y, snap, minGap);
     }
 
     /// <summary>다음 점 — 경계 밖 클릭이면 앞 점에서 그쪽으로 가는 선이 처음 경계를 지나는 자리에서 끝 · 경계에서 min(snap, 0.5 m) 안이면 가장 가까운 경계 점에서 끝 ·
@@ -224,26 +225,26 @@ public static class BoundaryDraw
         {
             // ① 경계 밖 클릭 — 앞 점에서 그쪽으로 가는 선이 처음 경계를 지나는 자리
             var hs = Hits(g.C(x, y));
-            if (hs.Count == 0) return No("경계 밖입니다 — 경계 안을 클릭하세요", x, y);
+            if (hs.Count == 0) return No("경계 밖 → 경계 안 클릭", x, y);
             end = true; cx = hs[0].H.X + g.Ox; cy = hs[0].H.Y + g.Oy;
         }
         else { end = false; cx = x; cy = y; }
-        if (Math.Sqrt((cx - prev.X) * (cx - prev.X) + (cy - prev.Y) * (cy - prev.Y)) < minGap) return No("앞 점과 너무 가깝습니다", cx, cy);
+        if (Math.Sqrt((cx - prev.X) * (cx - prev.X) + (cy - prev.Y) * (cy - prev.Y)) < minGap) return No(string.Format(ci, "앞 점과 너무 가까움({0:0.##} m 안) → 조금 더 떨어진 자리 클릭", minGap), cx, cy);
         if (end)
         {
             var s = pts[0];
-            if (Math.Sqrt((cx - s.X) * (cx - s.X) + (cy - s.Y) * (cy - s.Y)) < 1.0) return No("끝 점이 시작 자리와 너무 가깝습니다 — 경계의 다른 자리를 클릭하세요", cx, cy);
-            if (g.Floor != null && g.Floor.Distance(g.Gf.CreatePoint(g.C(cx, cy))) < 0.1) return No("이 경계 자리는 바닥(계획선 · 도로 띠)에 붙어 있습니다 — 다른 자리를 클릭하세요", cx, cy);
+            if (Math.Sqrt((cx - s.X) * (cx - s.X) + (cy - s.Y) * (cy - s.Y)) < 1.0) return No("끝 점이 시작점과 너무 가까움 → 경계의 다른 자리 클릭", cx, cy);
+            if (g.Floor != null && g.Floor.Distance(g.Gf.CreatePoint(g.C(cx, cy))) < 0.1) return No("이 경계 자리 = 부지 바닥(계획선 · 도로)에 붙음 → 다른 자리 클릭", cx, cy);
         }
         // 토막 a → b — 경계와 만나는 자리는 경계 위 끝 점(첫 토막의 a · 끝 토막의 b)만
         var b0 = g.C(cx, cy);
         foreach (var (h, _) in Hits(b0))
         {
             if (end && h.Distance(b0) <= allow) continue;
-            return No(end ? "끝 점까지 가는 선이 경계를 먼저 지납니다" : "선이 경계를 지납니다 — 경계 안에서 이어 그리세요", h.X + g.Ox, h.Y + g.Oy);
+            return No(end ? "끝 점 가는 길에 경계를 먼저 지남 → 가운데 점 하나 더" : "선이 경계를 지남 → 경계 안에서 이어 그리기", h.X + g.Ox, h.Y + g.Oy);
         }
         var mid = new Coordinate((a.X + b0.X) / 2, (a.Y + b0.Y) / 2);
-        if (!g.Bd.Contains(g.Gf.CreatePoint(mid))) return No("선이 경계 밖으로 나갑니다", mid.X + g.Ox, mid.Y + g.Oy);
+        if (!g.Bd.Contains(g.Gf.CreatePoint(mid))) return No("선이 경계 밖으로 나감 → 경계 안으로", mid.X + g.Ox, mid.Y + g.Oy);
         if (g.Floor != null)
         {
             var seg = g.Gf.CreateLineString(new[] { a, b0 });
@@ -251,7 +252,7 @@ public static class BoundaryDraw
             if (dF < 0.1)
             {
                 var np = NetTopologySuite.Operation.Distance.DistanceOp.NearestPoints(seg, g.Floor);
-                return No(dF <= 1e-9 ? "선이 바닥(계획선 · 도로 띠)을 지납니다" : string.Format(ci, "선이 바닥(계획선 · 도로 띠)에 {0:F2} m까지 붙습니다", dF), np[0].X + g.Ox, np[0].Y + g.Oy);
+                return No(dF <= 1e-9 ? "선이 부지 바닥(계획선 · 도로)을 지남 → 사면 띠 안에서만" : string.Format(ci, "선이 부지 바닥(계획선 · 도로)에 너무 붙음({0:F2} m) → 0.1 m 넘게 떼기", dF), np[0].X + g.Ox, np[0].Y + g.Oy);
             }
         }
         // 앞 토막과 엇갈림(바로 앞 토막은 끝 점만 닿음)
@@ -259,7 +260,7 @@ public static class BoundaryDraw
         {
             var p = g.C(pts[i].X, pts[i].Y); var q2 = g.C(pts[i + 1].X, pts[i + 1].Y);
             li.ComputeIntersection(a, b0, p, q2);
-            if (li.HasIntersection) { var h = li.GetIntersection(0); return No("앞에 그린 선과 엇갈립니다", h.X + g.Ox, h.Y + g.Oy); }
+            if (li.HasIntersection) { var h = li.GetIntersection(0); return No("앞에 그린 선과 엇갈림 → 되돌리기(U) 뒤 다른 자리", h.X + g.Ox, h.Y + g.Oy); }
         }
         return new Step { Kind = end ? Kind.End : Kind.Inside, X = cx, Y = cy };
     }

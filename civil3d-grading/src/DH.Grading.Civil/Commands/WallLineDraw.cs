@@ -115,7 +115,7 @@ internal static class WallLineDraw
         }
         // ★[설치 전 검토 4] 경계 · 바닥 다각형은 한 번만 짓는다(지그가 화면마다 다시 짓지 않게) · 붙이기는 그 고친 고리에(Classify와 같은 고리)
         var geo = BoundaryDraw.Prepare(bd, floor);
-        if (geo == null) { ed.WriteMessage($"\n[{tag}] 경계를 다각형으로 못 만들었습니다 — 아무것도 안 바꿨습니다."); return null; }
+        if (geo == null) { ed.WriteMessage($"\n[{tag}] 경계 다각형 만들기 실패 — 안 바뀜"); return null; }
         var bdD = bd.Select(q => new Point3d(q.X, q.Y, 0)).ToList();
         var flD = floor?.Select(q => new Point3d(q.X, q.Y, 0)).ToList();
         double diag;
@@ -205,8 +205,8 @@ internal static class WallLineDraw
                     if (kw == "U") { if (pts.Count > 0) pts.RemoveAt(pts.Count - 1); continue; }
                     if (kw == "S" && pts.Count == 0)
                     {
-                        var peo = new PromptEntityOptions($"\n[{tag}] 폴리선을 고르세요(폴리선 · 3D 폴리선): ");
-                        peo.SetRejectMessage("\n폴리선만 고를 수 있습니다.");
+                        var peo = new PromptEntityOptions($"\n[{tag}] 폴리선 고르기(폴리선 · 3D 폴리선): ");
+                        peo.SetRejectMessage("\n폴리선만 가능");
                         peo.AddAllowedClass(typeof(AcadPoly), true); peo.AddAllowedClass(typeof(Polyline2d), true); peo.AddAllowedClass(typeof(Polyline3d), true);
                         var per = ed.GetEntity(peo);
                         if (per.Status != PromptStatus.OK) continue;
@@ -219,13 +219,13 @@ internal static class WallLineDraw
                         }
                         tr.Commit();
                         if (pts.Count >= 2) { drawnMode = false; break; }
-                        ed.WriteMessage("\n  폴리선 점을 못 읽었습니다.");
+                        ed.WriteMessage("\n  폴리선 점 읽기 실패");
                         pts.Clear();
                         continue;
                     }
                     continue;
                 }
-                if (lr.Status != PromptStatus.OK) { ed.WriteMessage($"\n[{tag}] 아무것도 안 바꿨습니다."); return null; }
+                if (lr.Status != PromptStatus.OK) { ed.WriteMessage($"\n[{tag}] 안 바뀜"); return null; }
                 var w = Plan(lr.Value.TransformBy(ucs), out bool snapped);   // UCS → WCS → 스냅 잡힌 점은 X · Y 그대로 · 아니면 시선 따라 경계 평면(Z = 0)
                 try { DiagLog.AppendCarry($"\n  [{tag}] 점 {pts.Count + 1} ({w.X:F4}, {w.Y:F4}){(snapped ? " · 객체 스냅" : "")}"); } catch { }
                 var stp = Try(w.X, w.Y);
@@ -238,7 +238,7 @@ internal static class WallLineDraw
                 pts.Add(new Point3d(stp.X, stp.Y, 0));
                 if (stp.Kind == BoundaryDraw.Kind.End) break;
             }
-            if (pts.Count < 2) { ed.WriteMessage($"\n[{tag}] 점이 모자랍니다 — 아무것도 안 바꿨습니다."); return null; }
+            if (pts.Count < 2) { ed.WriteMessage($"\n[{tag}] 점 부족 — 안 바뀜"); return null; }
             // 찍어 그린 선은 첫 · 끝 토막을 경계 밖으로 1 m 늘여 판정(Classify는 양 끝이 경계 밖이어야 — 경계 위 두 점이 그대로 교점)
             // ★[v117.2 · JACK 1111 13:5x «끝 점이 경계 안»] 늘인 점이 경계 안(뾰족한 V 자리)이거나 늘인 토막이 경계에 또 닿으면 그 끝은 안 늘임 — 경계 위 클릭 점 그대로(Classify가 1 mm 안 끝을 받음)
             bool extA = true, extB = true;
@@ -252,7 +252,7 @@ internal static class WallLineDraw
                 return new Got { Pts = list, SrcHandle = src, Cut = cut };
             }
             // ── 거절 — 까닭 + 빨간 X(질문 동안 · 명령당 한 번 걷기) ──
-            ed.WriteMessage($"\n[{tag}] {cut.Why} — 아무것도 안 바꿨습니다.");
+            ed.WriteMessage($"\n[{tag}] {WallEasy.Cut(cut.Code, cut.Why)} — 안 바뀜");
             var live = Show(cut.Marks, pts.Select(q => new Point3(q.X, q.Y, 0)).ToList(), mk);   // ★[v117.9.2 · JACK 1112 «경계 밖으로 노란 선 길어짐»] 찍은 선 그대로 보임(1 m 늘인 판정용 선은 안 보임)
             try
             {

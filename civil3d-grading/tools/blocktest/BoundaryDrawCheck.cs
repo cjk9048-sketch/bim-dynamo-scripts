@@ -32,7 +32,7 @@ static class BoundaryDrawCheck
 
         var us = new List<(double X, double Y)> { (0, 80), (15, 50) };
         var n3 = BoundaryDraw.Next(u, ufl, us, 85, 50, snap);
-        check("S208 ⑥ 선이 홈(경계)을 지남 → 거절 · 자리", n3.Kind == BoundaryDraw.Kind.No && n3.Why.Contains("지납") && n3.At != null && (Math.Abs(n3.At.Value.X - 30) < 1e-6 || Math.Abs(n3.At.Value.X - 70) < 1e-6) && Math.Abs(n3.At.Value.Y - 50) < 1e-6, $"{n3.Why} @{n3.At}");
+        check("S208 ⑥ 선이 홈(경계)을 지남 → 거절 · 자리", n3.Kind == BoundaryDraw.Kind.No && n3.Why.Contains("지남") && n3.At != null && (Math.Abs(n3.At.Value.X - 30) < 1e-6 || Math.Abs(n3.At.Value.X - 70) < 1e-6) && Math.Abs(n3.At.Value.Y - 50) < 1e-6, $"{n3.Why} @{n3.At}");
         var us2 = new List<(double X, double Y)> { (0, 80), (15, 25) };
         var n4 = BoundaryDraw.Next(u, ufl, us2, 100.3, 26, snap);
         check("S208 ⑦ 끝 점 — 경계 0.3 m 곁 → 붙여 끝", n4.Kind == BoundaryDraw.Kind.End && Math.Abs(n4.X - 100) < 1e-12 && Math.Abs(n4.Y - 26) < 1e-12, $"{n4.Kind} ({n4.X:F4}, {n4.Y:F4}) {n4.Why}");
@@ -131,5 +131,39 @@ static class BoundaryDrawCheck
                       $"찍기 {dw}· 옛 {BoundaryCut.CodeName(old.Code)} {old.Why} · 새 늘임 A {ea} · B {eb} · {BoundaryCut.CodeName(cv.Code)} {cv.Why} · A({cv.A.X:F4},{cv.A.Y:F4}) B({cv.B.X:F4},{cv.B.Y:F4}) · 교차 {cv.Crossings}");
             }
         }
+    }
+}
+
+// ── S208b ★[v117.9.3 · JACK 1112 «안 되면 안 되는 사유를 직관적으로 — 초보 · 단답형»] [옹벽 추가] 거절 화면 글(WallEasy) — 습니다체 없음 · 할 일(→) 있음 · 숫자 옮김
+static class WallEasyCheck
+{
+    public static void Run(Action<string, bool, string> check)
+    {
+        Console.WriteLine("\n== S208b 옹벽 추가 — 거절 화면 글(WallEasy) ==");
+        static bool Terse(string s) => !s.Contains("니다") && !s.Contains("세요") && !s.Contains("어요") && !s.Contains("해요") && s.Contains("→");
+        var a = WallEasy.Build("자리", "자리 모자람 — 소단이 바닥보다 0.784 m 높습니다(바닥까지 필요 1.06 m · 있는 거리 0.65 m) (1.0, 2.0) — 선을 바닥에서 더 떼거나 수직만(V)");
+        check("S208b ① 자리(다단) — 필요 1.06 · 있음 0.65 · 수직만(V) · 단답", Terse(a) && a.Contains("필요 1.06 m") && a.Contains("있음 0.65 m") && a.Contains("수직만(V)"), a);
+        var b = WallEasy.Build("자리", "자리 모자람 — 선에서 부지 바닥까지 0.60 m · 필요 2.20 m(2단 · 소단 1.0 m) (1.0, 2.0) — 선을 바깥으로 옮기거나 소단을 줄이세요");
+        check("S208b ② 자리(옛 모양) — 필요 2.20 · 있음 0.60", Terse(b) && b.Contains("필요 2.20 m") && b.Contains("있음 0.60 m"), b);
+        var c = WallEasy.Build("자리", "자리 모자람 — 소단 줄이 부지 바닥에 0.050 m까지 붙습니다(필요 ≥ 0.100 m · 2단 · 깊이 2.15 m) (1.0, 2.0) — 선을 바깥으로 옮기거나 소단을 줄이세요");
+        check("S208b ③ 자리(소단 줄) — 필요 0.10 · 있음 0.05", Terse(c) && c.Contains("필요 0.10 m") && c.Contains("있음 0.05 m"), c);
+        var d = WallEasy.Build("다단 합성", "소단 자리가 한 고리가 아닙니다(조각 2 · 구멍 0)");
+        check("S208b ④ 안쪽 계산 실패 → «계산 실패(프로그램 문제)»", d == WallEasy.Bug && Terse(d), d);
+        var e = WallEasy.Build("겹침", "다단 소단 자리가 옹벽 3과 겹칩니다(2.00㎡) — 수직만(V) 또는 선을 옮기세요");
+        check("S208b ⑤ 겹침 — 상대 이름 · 되돌리기 · 수직만(V)", Terse(e) && e.Contains("(옹벽 3)") && e.Contains("[옹벽 되돌리기]") && e.Contains("수직만(V)"), e);
+        var f = WallEasy.Build("다단 수직", "P0′에 대고 바깥 벽을 못 지었습니다 — 바닥: 벽 띠가 부지 바닥(계획선)에 닿습니다 (1.0, 2.0) — 높이 3.00 m 벽은 띠 폭 0.030 m가 필요합니다");
+        check("S208b ⑥ 다단 수직 — 안쪽 까닭(바닥)을 풀어 씀", Terse(f) && f.Contains("부지 바닥"), f);
+        var g = WallEasy.Cut(BoundaryCut.Code.Many, "경계를 4번 지납니다 — 정확히 두 번만 지나게 그리세요");
+        check("S208b ⑦ 판정 — 경계 4번 지남", Terse(g) && g.Contains("4번"), g);
+        var h = WallEasy.Cut(BoundaryCut.Code.Floor, "폴리선이 부지 바닥(계획선)에 0.05 m까지 붙습니다(0.1 m 안)");
+        check("S208b ⑧ 판정 — 바닥에 0.05 m", Terse(h) && h.Contains("0.05 m"), h);
+        var i = WallEasy.Cut(BoundaryCut.Code.Blocked, "옹벽 2과 겹칩니다(폴리선이 그 안을 지남)");
+        check("S208b ⑨ 판정 — 겹침 상대 이름", Terse(i) && i.Contains("(옹벽 2)"), i);
+        // 모든 판정 코드 · 모든 짓기 코드가 단답형(습니다체 없음 · 할 일 있음)
+        bool all = true; string bad = "";
+        foreach (BoundaryCut.Code k in Enum.GetValues(typeof(BoundaryCut.Code))) { if (k == BoundaryCut.Code.Ok) continue; var s = WallEasy.Cut(k, ""); if (!Terse(s)) { all = false; bad += $"{k}:{s} | "; } }
+        foreach (var k in new[] { "자리", "섞인 선", "섞임 겹침", "겹침", "구간", "단 수", "도달", "바깥 벽", "바닥", "방향", "원지반", "정지면", "정지면 밖", "옛 사면", "끝 높이", "끝", "마구리", "바닥 높이 끊김", "턱", "계단", "단 표", "옛 소단", "소단 높이", "면 높이", "상자", "재료", "다단 수직", "다단 합성", "고리", "자가검증", "줄", "측선", "가로대", "띠" })
+        { var s = WallEasy.Build(k, ""); if (!Terse(s)) { all = false; bad += $"{k}:{s} | "; } }
+        check("S208b ⑩ 모든 코드 — 습니다체 없음 · 할 일(→) 있음", all, bad);
     }
 }

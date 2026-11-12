@@ -201,13 +201,41 @@ public static partial class WallByLine
                 }
             return mn;
         }
+        // ★[v117.9.3 · JACK 1112 «부지 경계 안으로 침범하는 걸 직관적으로 — 침범했을 경우만 소단선 미리보기»] 소단선(L에서 k·step 떨어진 선 · 새 경계 안 · 선 측점 0..Len 안)을
+        //   부지 바닥 밖(그대로) · 안(침범 = 빨강)으로 갈라 둔다 — «자리» 거절 때만 부른다(지을 때는 TierRows가 진짜 단 줄)
+        void BenchPreview(int nShow)
+        {
+            try
+            {
+                double e0 = plE.Near(pl.C[0].X, pl.C[0].Y).S;
+                bool InLine(Coordinate c) { double sx = plE.Near(c.X, c.Y).S - e0; return sx > -1e-6 && sx < pl.Len + 1e-6; }
+                void Put(Geometry g, List<List<Point3>> to)
+                {
+                    for (int i = 0; i < g.NumGeometries; i++)
+                        if (g.GetGeometryN(i) is LineString ls && ls.Length > 0.05)
+                        {
+                            var cs = ls.Coordinates;
+                            if (!InLine(cs[cs.Length / 2]) || SD(cs[cs.Length / 2].X, cs[cs.Length / 2].Y) <= 0) continue;   // 선 안쪽 · 선 측점 안 몫만
+                            to.Add(cs.Select(c => new Point3(c.X + ox, c.Y + oy, 0)).ToList());
+                        }
+                }
+                for (int k = 1; k < Math.Max(2, nShow); k++)
+                {
+                    var ring = Buf(k * step).Boundary.Intersection(nP);
+                    if (floorP != null) { Put(ring.Difference(floorP), R.TierBenchOk); Put(ring.Intersection(floorP), R.TierBenchHit); }
+                    else Put(ring, R.TierBenchOk);
+                }
+                log.Append(string.Format(ci, "  [다단] 소단선 미리보기(거절) — 단 {0} · 줄 {1} · 침범 {2}토막\n", nShow, R.TierBenchOk.Count + R.TierBenchHit.Count, R.TierBenchHit.Count));
+            }
+            catch (Exception ex) { log.Append($"  [다단] 소단선 미리보기 못 함({ex.GetType().Name})\n"); }
+        }
         for (; n <= 60; n++)
         {
             DT = (n - 1) * step + sH + TOut;
             Geometry c = nP.Intersection(Buf(DT));
             if (floorP != null) c = c.Difference(floorP);
             c = TouchL(c);
-            if (c.IsEmpty) return No("자리", "선 안쪽에 소단 자리가 없습니다(바닥 · 경계)", (b1.A.X, b1.A.Y));
+            if (c.IsEmpty) { BenchPreview(n); return No("자리", "선 안쪽에 소단 자리가 없습니다(바닥 · 경계)", (b1.A.X, b1.A.Y)); }
             minP = MinP0(c);
             if (z1p - (n - 1) * H <= minP) { zIn = c; break; }
         }
@@ -371,6 +399,7 @@ public static partial class WallByLine
             {
                 double need = 0;
                 for (int k = 2; k <= n; k++) if (Zk(k) <= wP) { need = (k - 1) * step + (Zk(k - 1) - wP) * s; break; }
+                BenchPreview(n);
                 return No("자리", string.Format(ci, "자리 모자람 — 소단이 바닥보다 {0:F3} m 높습니다(바닥까지 필요 {1:F2} m · 있는 거리 {2:F2} m) ({3:F1}, {4:F1}) — 선을 바닥에서 더 떼거나 수직만(V)", worst, need, wD, wAt.X, wAt.Y), wAt);
             }
         }
