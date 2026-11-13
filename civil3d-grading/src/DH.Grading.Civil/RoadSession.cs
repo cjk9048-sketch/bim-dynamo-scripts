@@ -46,8 +46,12 @@ internal sealed class RoadSession
     /// <summary>★[v116 · D2] 벽 기록이 하나도 없는 토막만 고리 엔진(옹벽 든 토막은 옛 엔진 그대로 — 비트 같음).</summary>
     internal static bool RingOk(RoadGrade.Input inp) => inp.Walls.Count == 0 && inp.TierWalls.Count == 0 && inp.LineWalls.Count == 0;
     /// <summary>★★[v116.7 · JACK 1110 «옹벽 추가 — 어디든 폴리선을 그으면 작성이 되어야» · 계획 `2026-11-10_진입도로_옹벽2단계_고리면.md`] 도로 면 = 고리 엔진(추가한 선 옹벽은 그 위에 얹음).
-    /// 가장자리 옹벽 · [사면→옹벽] 벽 기록이 있는 토막만 옛 엔진(옛 판은 선 옹벽만 있어도 옛 엔진 — 반경 7 m 굽이에서 옛 면이 깨져 합성이 막혔다).</summary>
-    internal static bool RingBase(RoadGrade.Input inp) => inp.Walls.Count == 0 && inp.TierWalls.Count == 0;
+    /// 가장자리 옹벽 · [사면→옹벽] 벽 기록이 있는 토막만 옛 엔진(옛 판은 선 옹벽만 있어도 옛 엔진 — 반경 7 m 굽이에서 옛 면이 깨져 합성이 막혔다).
+    /// ★★[v117.16 · JACK 1112] 2단부터 [옹벽 변환](Tier ≥ 1)도 고리 면(측점별 단면) — 옛 엔진은 가장자리 옹벽(inp.Walls) · 1단 변환(Tier 0)만.</summary>
+    internal static bool RingBase(RoadGrade.Input inp) => inp.Walls.Count == 0 && (RoadRing.Corridor ? inp.TierWalls.All(t => t.Tier >= 1) : inp.TierWalls.Count == 0);   // ★[설치 전 검토 MED] 코리더 스위치를 끄면 옹벽 변환 도로는 옛 엔진(시험한 조합으로 되돌림)
+    /// <summary>★★[v117.16 · JACK 1112 «[옹벽 변환]도 고리 엔진 — 옛 엔진으로 안 물러섬»] 2단부터 [옹벽 변환] 기록(<see cref="RoadGrade.TierWall"/> Tier ≥ 1)이 있는 토막 —
+    /// 고리 면(측점별 단면 · 코리더식 소단)으로만 짓는다. 못 지으면 옛 엔진 대신 단답형 거절(<see cref="TierRingWhy"/>). 1단(가장자리) 옹벽 기록은 이번 판도 옛 엔진(가드가 깨진 면을 막음).</summary>
+    internal static bool RingTier(RoadGrade.Input inp) => inp.TierWalls.Count > 0 && RingBase(inp);
     /// <summary>★[v116] 면 노트 머리 → 길 이름(고리 면 · 선 따라 TIN · 칸 면 · 선 면) — 옛 노트는 옛 판정 그대로.</summary>
     internal static string PathOf(string note) => note.StartsWith(RingPath) ? RingPath : note.StartsWith("선 따라 TIN") ? "선 따라 TIN" : note.StartsWith("⚠") ? "칸 면" : "선 면";
     /// <summary>★[v116] 설계 기록 SurfacePath(토막 차례 «|» 목록 · 옛 기록 = 길 하나 = 모든 토막)의 토막 k 길 · 없으면 null(옛 엔진).</summary>
@@ -115,13 +119,31 @@ internal sealed class RoadSession
         finally { for (int i = 0; i < pcs.Count; i++) pcs[i].Inp.LineWalls = keep[i]; }
     }
 
+    /// <summary>★[v117.15 · JACK 1112 «진입도로 옹벽 추가 버튼 누르면 잠시 동안 프로그램이 멈춰»] 바탕면 높이 표를 다시 읽을 때마다 +1 — P0 캐시 열쇠에 넣어
+    /// 바탕면이 바뀌면(지문의 곁 높이 표본이 못 잡는 먼 자리 편집도) 옛 P0를 안 씀.</summary>
+    int _baseGen;
+    /// <summary>★[v117.15 · JACK 1112 «잠시 멈춤»] P0 캐시 열쇠 = 벽 뺀 지문(노선 · 종단 · 횡단 · 사면 · 옹벽 기록 · 바탕 곁 높이) + 칸 · 시작 범위 + 바탕 판(다시 읽은 차례 · 가지 바탕 열쇠).
+    /// <see cref="P0Now"/> · <see cref="MakeSurfaceCore"/>가 같은 열쇠로 채우고 읽는다.</summary>
+    string P0Key(List<Piece> pcs)
+    {
+        var ci = System.Globalization.CultureInfo.InvariantCulture;
+        var inp = pcs[0].Inp;
+        string g = ReferenceEquals(inp.Base, _base) ? "" : "|가지:" + _engKey;
+        return KeyNoWalls(pcs) + "|칸 " + inp.Cell.ToString("R", ci) + "|범위 " + inp.Reach.ToString("R", ci) + "|바탕 " + _baseGen + g;
+    }
+    /// <summary>★[v117.15 · JACK 1112 «잠시 멈춤»] 지난 <see cref="P0Now"/> 단계 시간 · 캐시 맞음/새로 — [옹벽 추가] 준비 한 줄(진단 로그).</summary>
+    internal string P0Note = "";
+
     /// <summary>★[v114.3] 지금 설계의 벽 없는 면 P0(MakeSurface와 같은 입력 — 칸 0.5 · 시작 범위 · 사업 경계) · 그 길 이름. 빈 구간 도로면 까닭.</summary>
     /// <remarks>★[v116.7] 고리 면이면 <c>Ring</c> = 그 꾸러미(선 옹벽 단 표 · <see cref="RoadGrade.ApplyWalls"/>의 ring) · 옛 엔진이면 null.</remarks>
     internal (RoadGrade.Input? Inp, RoadGrade.Result? R, List<WallDaylight.Tri>? P0, List<RoadGrade.TierLine>? Lines, string Path, string Why, RoadRing.Built? Ring) P0Now()
     {
         var db = _doc.Database;
+        // ★[v117.15 · JACK 1112 «잠시 멈춤»] 단계 시간(바탕 · 끝 · 토막 · 지문 · 면) — [옹벽 추가] 준비 한 줄
+        var swP = System.Diagnostics.Stopwatch.StartNew(); long tBase, tPcs, tKey;
         var d = Fresh();
         EnsureBase();
+        tBase = swP.ElapsedMilliseconds;
         List<Piece> pcs; List<(double, double)>? limit;
         using (var tr = db.TransactionManager.StartTransaction())
         {
@@ -130,19 +152,24 @@ internal sealed class RoadSession
             limit = ReadLimit(tr);
             tr.Commit();
         }
+        tPcs = swP.ElapsedMilliseconds;
         if (pcs.Count != 1) return (null, null, null, null, "", "빈 구간이 있는 도로(토막 둘 이상)는 이번 판에 옹벽 추가를 못 합니다", null);
         double reach = Last != null && Last.Error.Length == 0 && !Last.ReachHit && Last.ReachUsed > 40 ? Last.ReachUsed : 40;
         var inp = pcs[0].Inp; inp.Cell = SurfCell; inp.Reach = reach; inp.Limit = limit;
         string key = "";
-        try { key = KeyNoWalls(pcs); } catch { }
+        try { key = P0Key(pcs); } catch { }
+        tKey = swP.ElapsedMilliseconds;
+        string Steps(string face) => $"{face} · 바탕 {tBase} · 끝 · 토막 {tPcs - tBase} · 지문 {tKey - tPcs} · 면 {swP.ElapsedMilliseconds - tKey} ms";
         if (key.Length > 0 && P0Cache is { } c && c.Key == key)
         {
             c.Inp.LineWalls = inp.LineWalls;
             // ★[v115 · R7] 캐시한 r의 데이라잇은 Try가 벽 든 것으로 바꿨을 수 있다 — 벽 없는 사본으로 되돌려 넘긴다
             c.R.DaylightZ = c.Dl.Select(l => l.ToList()).ToList(); c.R.Daylight = c.R.DaylightZ.Select(l => l.Select(q => (q.X, q.Y)).ToList()).ToList();
             RoadGrade.GridSet(c.R, null);   // ★[v116.7] 앞 [업데이트]가 벽 층을 얹은 격자 — 벽 없는 P0로 되돌림(고리 결과는 B1 층 없음 · 옛 결과는 B1 그대로)
+            P0Note = Steps($"면 캐시 맞음({c.Path})");
             return (c.Inp, c.R, c.P0, c.Lines, c.Path, "", c.Ring);
         }
+        string miss = key.Length > 0 ? (P0Cache == null ? "면 새로(캐시 없음" : "면 새로(설계 · 바탕이 바뀜") : "면 새로(지문 못 셈";
         // ★★[v116.7] 고리 면 먼저(MakeSurface와 같은 입력 · 같은 범위 넓힘) — 못 지으면 옛 엔진(지금 그대로).
         //   ★[설치 전 검토 L] 지금 면이 이 설계 그대로인데(지문 같음) 옛 엔진 길로 지어졌으면(Civil이 고리 면을 거절 등) 판정도 옛 엔진 — 미리보기(CalcPiece)와 같은 법
         bool oldBuilt = false;
@@ -160,6 +187,7 @@ internal sealed class RoadSession
                     {
                         // ★[설치 전 검토 M] 캐시엔 가벼운 사본(0.25 m 격자 · 세모 버림 — 단 표는 셈만 씀 · P0 세모는 따로 둠)
                         if (key.Length > 0) P0Cache = (key, inp, rr, b.Tris, b.Lines, RingPath, rr.DaylightZ.Select(l => l.ToList()).ToList(), Light(b));
+                        P0Note = Steps(miss + " · " + RingPath + ")");
                         return (inp, rr, b.Tris, b.Lines, RingPath, "", b);
                     }
                     whyR = rr.Error;
@@ -173,6 +201,7 @@ internal sealed class RoadSession
         var p0 = RoadGrade.ExactSurface(inp, r, out string note, out var lines);
         string path = PathOf(note);
         if (key.Length > 0) P0Cache = (key, inp, r, p0, lines, path, r.DaylightZ.Select(l => l.ToList()).ToList(), null);
+        P0Note = Steps(miss + " · 옛 엔진 " + path + ")");
         return (inp, r, p0, lines, path, "", null);
     }
 
@@ -186,7 +215,7 @@ internal sealed class RoadSession
         if (lw.Count == 0) return string.Join(" · ", bad);
         if (pcs.Count > 1) { bad.Add($"⚠추가한 옹벽 {lw.Count}개 — 빈 구간이 있는 도로는 이번 판에 선 옹벽을 안 지음"); return string.Join(" · ", bad); }
         if (Walls != null && WallsSig.Length > 0 && WallsSig == d.SurfaceSig)
-            foreach (var w in Walls.Walls) if (!w.Ok) bad.Add(w.Text + " · 다시 그리거나 지우세요([옹벽→사면] W)");
+            foreach (var w in Walls.Walls) if (!w.Ok) bad.Add(w.Text + " · 다시 그리거나 지우세요([사면 변환] W)");
         return string.Join(" · ", bad);
     }
     List<RoadEnds.Floor>? _floors; string _floorNote = "";
@@ -804,18 +833,19 @@ internal sealed class RoadSession
     }
     /// <summary>★[v115 · 설치 전 검토 R8] 도로 면 엔진 판 — 지문에 넣어 엔진이 바뀐 판의 옛 면을 한 번 «수정됨»으로(값을 바꿀 때마다 판을 올림).
     /// ★[v116 · 고리 엔진] v115 → v116(앞 판 토큰은 <see cref="OldEngineTags"/>).</summary>
-    const string EngineTag = "|엔진 v116.4";   // ★[v116.4 · JACK 1109 반경 · 곡률 깨짐] 바늘이 남아도 고쳐 다시 잼(옛 엔진으로 안 물러섬) · 맞춤 뒤집기 · 꺾임 밖 점 뺌 · 선 높이 맞춤 — 세모가 바뀜
+    const string EngineTag = "|엔진 v117.16";   // ★[v117.16 · 설치 전 검토 MED] 코리더식 소단 · 정확한 데이라잇 — 모든 고리 도로 면이 바뀜 → 옛 면을 한 번 «수정됨»으로
+    // 앞: "|엔진 v116.4"   // ★[v116.4 · JACK 1109 반경 · 곡률 깨짐] 바늘이 남아도 고쳐 다시 잼(옛 엔진으로 안 물러섬) · 맞춤 뒤집기 · 꺾임 밖 점 뺌 · 선 높이 맞춤 — 세모가 바뀜
     // 앞: "|엔진 v116.3"   // ★[v116.3] 설치 전 검토 M1 · M3(조각 합친 뒤 빼기 · 골 따라가기 짝 확인) — 세모가 바뀔 수 있음
     // 앞: "|엔진 v116.2"(가는 사면 띠 · 골 줄 따라가기 · T자는 틈 변만) · "|엔진 v116.1"   // ★[v116.1 · JACK 1109 «여전히 오목부 뭉개져»] 골 찾기 0.6 m + 보조 고리 끊김선 — 세모가 바뀜
     /// <summary>★[v116] 앞 판 엔진 토큰(그 판 면의 지문을 다시 셀 때 — 토막 엔진 토큰 없음).</summary>
-    static readonly string[] OldEngineTags = { "|엔진 v115", "|엔진 v116", "|엔진 v116.1", "|엔진 v116.2", "|엔진 v116.3" };
+    static readonly string[] OldEngineTags = { "|엔진 v115", "|엔진 v116", "|엔진 v116.1", "|엔진 v116.2", "|엔진 v116.3", "|엔진 v116.4" };
     /// <summary>★[v116 · 고리 엔진 §4 M5a] 토막 엔진 토큰 — 벽 기록 없음 = 고리 · 있음 = 옛(실제로 지은 길은 설계 기록 SurfacePath).</summary>
     /// ★[v116.7] 선 옹벽만 있는 토막도 고리(<see cref="RingBase"/>) — 그런 도로의 앞 판 지문(«|옛»)은 <see cref="EngineOnly"/>가 «엔진만 다름»으로 본다.
     static string EngineOf(RoadGrade.Input inp) => RingBase(inp) ? "|고리" : "|옛";
     /// <summary>★[v116.7] <see cref="SigOf"/> tag 끝 표지 — 선 옹벽 도로의 앞 판 토큰(그때 판 EngineOf: 벽 없음 «|고리» · 있음 «|옛»)으로 셈.</summary>
     const string OldWallSfx = "|옛!";
     /// <summary>★[v115 · 검토 M1] 엔진 판만 바뀐 옛 면 알림.</summary>
-    const string EngineNote = "애드인 판(v116.7)이 바뀌어 지표면을 한 번 다시 만들어야 합니다 — [업데이트]";
+    const string EngineNote = "애드인 판(v117.16 · 코리더식 소단)이 바뀜 — 지표면 한 번 다시 → [업데이트]";
     /// <summary>★[v115 · 검토 M1 → ★v116] 엔진 판만 다른가(입력은 그대로) — 판 토큰 없는 지문(v115 전) · 앞 판 토큰 지문(v115)과 견줌.</summary>
     internal static bool EngineOnly(List<Piece> pcs, ObjectId baseSurf, string sig)
     {
@@ -824,6 +854,8 @@ internal sealed class RoadSession
         {
             if (SigOfAll(pcs, baseSurf, engine: false) == sig) return true;
             foreach (var t in OldEngineTags) if (SigOfAll(pcs, baseSurf, tag: t) == sig) return true;
+            // ★[v117.16] 2단부터 [옹벽 변환] 기록 든 도로 — 앞 판(~ v117.15)은 옛 엔진 토큰(«|옛») · 입력은 그대로(지문 엔진 몫만 «|고리»로)
+            if (pcs.Any(p => RingTier(p.Inp)) && SigOfAll(pcs, baseSurf, tag: "|엔진 v116.4" + OldWallSfx) == sig) return true;   // ★[설치 전 검토] 앞 판 토큰으로
             // ★[v116.7] 선 옹벽만 있는 도로 — 앞 판(v116 ~ v116.6)은 옛 엔진 토큰(«|옛»)
             if (pcs.Any(p => p.Inp.LineWalls.Count > 0 && RingBase(p.Inp)))
                 foreach (var t in OldEngineTags.Where(q => q.StartsWith("|엔진 v116")).Append(EngineTag))
@@ -1126,6 +1158,7 @@ internal sealed class RoadSession
     void EnsureBase()
     {
         if (!(_baseDirty || _base == null || BaseSurfId.IsErased)) return;
+        _baseGen++;   // ★[v117.15] P0 캐시 열쇠 — 바탕을 다시 읽으면 옛 P0 안 씀
         _floors = null;   // ★[도로 마무리 ① · 계획 5.1] 바닥 캐시 = 바탕 바뀜 때만 다시
         _eng = null; _engKey = "";   // ★[계획 5.5] 가지 바탕도
         if (!ResolveBase()) throw new InvalidOperationException("바탕면(정지면_DH 또는 원지반)이 없습니다");
@@ -1287,8 +1320,29 @@ internal sealed class RoadSession
         // ★[v111.3 · JACK 1030 스샷 «자꾸 정보 오류창이 뜨는데 안 뜨게»] LandXML 면 가져오기 정보(«V1.1 이전 알고리즘 … 인접이 없습니다») 한 줄에 이벤트 뷰어 창이 뜸 —
         //   계획부지 생성 · 옹벽 합성 · 터파기 면과 같은 법(EventViewerMute — 자동 알림만 끔 · 기록은 남음 · 끝나면 원래 설정)
         var evPrev = EventViewerMute.Begin();
+        var keep = (P0Cache, RingCache, Walls, WallsSig);   // ★[v117.15] [옹벽 변환] 거절이면 면을 안 바꿨다 — 캐시 · 지난 벽 상태 그대로
         try { return MakeSurfaceMuted(); }
+        catch when (TierGuardWhy.Length > 0) { (P0Cache, RingCache, Walls, WallsSig) = keep; throw; }
         finally { EventViewerMute.End(evPrev); }
+    }
+
+    /// <summary>★★[v117.15 · JACK 1112 · 검토 실측 «[옹벽 변환] 뒤 굽은 안쪽에서 옛 엔진 면이 깨짐 + 톱니»] [옹벽 변환]이 부르는 [업데이트] 동안 참 —
+    /// 옹벽 기록이 생겨 옛 엔진으로 지은 면이 깨졌으면(<see cref="TierBroken"/>) <see cref="CreateSurface"/>가 Civil에 넣기 «전에» 멈춘다(XML · 면 · 선 · 최종면 · 노리선 안 바꿈).
+    /// 까닭(기술) = <see cref="TierGuardWhy"/> — 부르는 쪽(<see cref="Commands.RoadCommand"/> Convert)이 기록을 되돌리고 알린다.</summary>
+    internal bool TierGuard;
+    internal string TierGuardWhy = "";
+    /// <summary>★[v117.16] 옹벽 변환 기록 든 도로의 고리 면을 못 지은 까닭 머리(단답형 · 기술 까닭은 로그) — <see cref="Commands.RoadCommand"/>가 이 머리로 알림을 가름.</summary>
+    internal const string TierRingWhy = "고리 면 못 지음";
+    /// <summary>★[v117.15] 옛 엔진 면 노트 → 깨진 까닭(빈 글 = 멀쩡) — 굽은 안쪽 «→ 옛 흘러내림 길» 물러섬 · 선 따라 TIN 틈 칸(0.5 m 계단) · 칸 면(0.5 m 모자이크).</summary>
+    internal static string TierBroken(string tnote)
+    {
+        var w = new List<string>();
+        if (tnote.Contains("→ 옛 흘러내림 길")) w.Add("굽은 안쪽 → 옛 흘러내림 길");
+        int gap = 0;
+        foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(tnote, @"틈 칸 (\d+)")) gap += int.Parse(m.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture);
+        if (gap > 0) w.Add($"틈 칸 {gap}");
+        if (tnote.StartsWith("⚠")) w.Add("칸 면");
+        return string.Join(" · ", w);
     }
 
     string MakeSurfaceMuted()
@@ -1388,8 +1442,19 @@ internal sealed class RoadSession
         //   ★★[v116.7] 선 옹벽만 있는 도로도 고리 면 위에 벽(RingBase) — 옛 판은 벽 기록이 있으면 늘 옛 엔진이라 굽은 곳 옛 면이 깨져 합성이 막혔다
         if (RingBase(inp))
         {
-            string keyR = ""; if (inp.LineWalls.Count > 0) try { keyR = KeyNoWalls(pcs); } catch { }
+            // ★[v117.15 · JACK 1112 «진입도로 옹벽 추가 버튼 누르면 잠시 동안 프로그램이 멈춰»] 열쇠는 늘 셈 — 벽 없는 도로도 지은 고리 P0를 캐시에(옛 판은 벽 든 도로만 · [옹벽 추가]가 고리 면을 매번 새로 지어 18 초)
+            string keyR = ""; try { keyR = P0Key(pcs); } catch { }
             if (TryRingSurface(d, inp, sw, out string ringMsg, keyR)) return ringMsg;
+            // ★★[v117.16 · JACK 1112 «[옹벽 변환]은 옛 엔진으로 안 물러섬»] 2단부터 옹벽 기록이 있으면 옛 엔진 사슬로 안 감 — 단답형 거절([옹벽 변환] 중이면 부르는 쪽이 기록을 되돌림)
+            if (RingTier(inp))
+            {
+                string whyT = _pendingRingNote.Replace(" · ⚠고리 면 못 지음(", "").Replace(") → 옛 엔진", "");
+                _pendingRingNote = "";
+                if (TierGuard) { TierGuardWhy = TierRingWhy + " — " + whyT; throw new InvalidOperationException("옹벽 변환 거절 — " + TierRingWhy); }
+                // ★[설치 전 검토 LOW] 화면엔 단답형만 · 기술 까닭(whyT)은 진단 로그로
+                try { DiagLog.Append("\n[진입도로] 고리 면 못 지음(옹벽 변환 든 도로) — " + whyT); } catch { }
+                throw new InvalidOperationException(TierRingWhy + " → [사면 변환]으로 옹벽 되돌리기");
+            }
         }
         var r = RoadGrade.Run(inp);
         if (r.Error.Length > 0) throw new InvalidOperationException(r.Error);
@@ -1427,7 +1492,7 @@ internal sealed class RoadSession
         }
         // ★[v115 · 설치 전 검토 R7] P0 캐시는 Civil이 받은 뒤 · 실제로 보낸 길로(옛 판은 Civil에 보내기 전에 채워, 거절되어 길을 내려도 [옹벽 추가] 판정이 옛 길 P0를 썼다).
         //   데이라잇은 사본을 둔다(GridSet · Try가 r.DaylightZ를 벽 든 것으로 바꾼다)
-        string keyNW = ""; try { keyNW = KeyNoWalls(pcs); } catch { }
+        string keyNW = ""; try { keyNW = P0Key(pcs); } catch { }   // ★[v117.15] P0Now와 같은 열쇠(칸 · 범위 · 바탕 판 포함)
         var dl0c = dl0.Select(l => l.ToList()).ToList();
         string Try(List<WallDaylight.Tri> p0, List<RoadGrade.TierLine> ls, string note, RoadGrade.WallSurface? ws, string pathK, RoadGrade.Result? lineR = null)
         {
@@ -1546,6 +1611,7 @@ internal sealed class RoadSession
         try
         {
             var b = RingRun(inp, true, out double used);
+            if (b.Ok) try { DiagLog.Append(System.Environment.NewLine + $"[진입도로] {Name} — {b.Count.Text}"); } catch { }   // ★[v117.16 · 계획 1단계] 셈 한 줄(단계 ms · 소단 조각 · M1 · 경계 |P0−G|)
             if (b.Ok && b.Tris.Count > 0)
             {
                 var rr = RoadRing.ToResult(b, inp); rr.ReachUsed = used;
@@ -1558,6 +1624,8 @@ internal sealed class RoadSession
                     {
                         msg = CreateSurface(d, rr, b.Tris, b.Note, DispLines(b, b.Lines), sw);
                         RingCache = (d.SurfaceSig, new RoadRing.Built?[] { Light(b) });
+                        // ★[v117.15 · JACK 1112 «잠시 멈춤»] Civil이 받은 뒤 — 벽 없는 고리 P0(= 지금 면)를 [옹벽 추가] 판정 캐시에(벽 든 길 TryW와 같은 꼴 · 데이라잇 사본)
+                        if (keyNW.Length > 0) P0Cache = (keyNW, inp, rr, b.Tris, b.Lines, RingPath, rr.DaylightZ.Select(l => l.ToList()).ToList(), Light(b));
                         return true;
                     }
                     // 고리 세모를 Civil이 그대로 안 받음(되읽기 대조) · 그 밖 Civil 예외 — 커밋 전이라 만든 면은 CreateSurface가 지움 → 옛 엔진으로
@@ -1693,7 +1761,7 @@ internal sealed class RoadSession
                 RingCache = (d.SurfaceSig, ringB.Select(b => b == null ? null : Light(b)).ToArray());
                 return m;
             }
-            catch (System.Exception exC)
+            catch (System.Exception exC) when (TierGuardWhy.Length == 0)   // ★[v117.15] [옹벽 변환] 거절은 옛 사슬로 넘기지 않고 바로 밖으로
             {
                 why.Add(CivilWhy(exC));
                 _pendingPath = null;
@@ -1745,6 +1813,8 @@ internal sealed class RoadSession
     /// <paramref name="lineR"/> = 선 · 노리선을 뽑을 결과(없으면 <paramref name="r"/>).</summary>
     string CreateSurface(RoadDesign d, RoadGrade.Result r, List<WallDaylight.Tri> tris, string tnote, List<RoadGrade.TierLine> lines, System.Diagnostics.Stopwatch sw, RoadGrade.Result? lineR = null, string wallNote = "")
     {
+        // ★[v117.15 · JACK 1112] [옹벽 변환] 뒤 깨진 옛 엔진 면은 Civil에 안 넣음 — XML 정리 · 면 · 선보다 먼저(부르는 쪽이 기록을 되돌림)
+        if (TierGuard && TierBroken(tnote) is { Length: > 0 } tb) { TierGuardWhy = tb + " — " + tnote; throw new InvalidOperationException("옹벽 변환 거절 — " + tb); }
         var db = _doc.Database;
         long msGrid = sw.ElapsedMilliseconds;
         // ★[v111.7.1 · 검토 낮음] 고칠 때마다 저절로 새 면 = 새 XML 파일 — 새 파일을 쓰기 «앞»에서 아무 면도 안 무는 옛 원본을 치운다(부지 생성 · 옹벽 합성과 같은 TidyXml · 되돌리기 여유는 XmlStore가 지킴)

@@ -75,7 +75,8 @@ async function main() {
     l.on = on;
     // 자르는 동안 측점 층은 숨겨 둔다(끝나면 이 체크대로 — 설치 전 검토 낮음)
     if (l.obj) l.obj.visible = on && !((id === 'align' || id === 'ralign') && section && section.on);
-    if (id === 'sat' || id === 'cutfill' || id === 'wall' || id === 'ground' || id === 'pattern' || id === 'slope') applyTerrainMode(L);
+    // ★[v117.16] U형 측구를 켜고 끄면 지형 구멍도(applyTerrainMode가 구멍 지형 ↔ 원래 지형)
+    if (id === 'sat' || id === 'cutfill' || id === 'wall' || id === 'ground' || id === 'pattern' || id === 'slope' || id === 'uditch') applyTerrainMode(L);
     if (id === 'cutfill') ui.legend(on, L.terrain ? L.terrain.cfLim : 1);
     if (id === 'drain') { ui.drainLegend(on, L.drain.summary); if (on) L.drain.replay(); }
     if (id === 'slope' || id === 'ground') ui.slopeLegend(!!(L.slope && L.slope.on && !(L.ground && L.ground.on)));   // 원지반 보기에서는 화살표와 함께 숨김
@@ -273,9 +274,10 @@ async function main() {
 
   // 시험 훅(화면 없는 Edge 시험이 쓴다) — 화면을 바꾸지 않는 읽기 위주
   const counts = {};
+  // ★[v117.16] 지형은 원래 세모 수(측구 구멍 지형이 켜져 있어도) · 측구 꾸밈(물 자국 · 마구리 · 그레이팅 = deco)은 안 셈 — C#에 보내는 값은 그대로
   view.scene.traverse((o) => {
-    if (!o.isMesh || !o.userData.layer) return;
-    const g = o.geometry, k = o.userData.layer;
+    if (!o.isMesh || !o.userData.layer || o.userData.deco) return;
+    const g = o.userData.geomFull || o.geometry, k = o.userData.layer;
     const tris = (g.index ? g.index.count : g.attributes.position.count) / 3;
     counts[k] = (counts[k] || 0) + tris;
   });
@@ -291,7 +293,8 @@ async function main() {
       struct: L.struct ? { n: L.struct.n } : null,
       // ★[JACK 1111 옹벽 겉모습] 무늬 메시마다 옹벽 번호 · 층 · 겉모습(null = 옛 한 색) · 조각 수 — 시험(키트)이 형식별 겉모습을 확인
       faces: L.pattern ? L.pattern.obj.children.map(m => ({ wall: m.userData.wall, pat: m.userData.pat, face: m.userData.face || null, pieces: m.userData.pieces || 0 })) : [],
-      uditch: L.uditch ? { n: L.uditch.n } : null,
+      // ★[v117.16] 측구 수 · 구멍(모양 수 · 자른 세모 · 못 셈) · 그레이팅 · 집수정 · 관로 · 지금 구멍 지형인지
+      uditch: L.uditch ? { n: L.uditch.n, ...L.uditch.stats, holeOn: !!(L.terrain && L.terrain.holeGeom && L.terrain.obj.geometry === L.terrain.holeGeom) } : null,
       forest: L.tree ? (L.tree.missing ? { missing: L.tree.missing, quiet: !!L.tree.quiet } : { n: L.tree.n, note: L.tree.note, legend: L.tree.legend }) : null,
       align: L.align ? { name: L.align.name, st: L.align.st.length, views: L.align.views } : null, build: !!head.build, geo: head.geo || null,
       ralign: L.ralign ? L.ralign.roads.map(a => ({ name: a.name, st: a.st.length, views: a.views })) : null,

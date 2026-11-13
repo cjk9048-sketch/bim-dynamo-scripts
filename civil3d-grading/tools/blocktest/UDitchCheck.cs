@@ -221,6 +221,223 @@ static class UDitchCheck
                   okA && okM && okB && okJ,
                   string.Format(ci, "자동 {0} 손 {1}(첫 점 x {2} · {3:F3} → {4:F3}) 두 번 {5} 기록 {6}", okA, okM, m.Pts[0][0], m.StartInvert, m.EndInvert, okB, okJ));
         }
+
+        // ── ★[v117.16 · JACK 1112 «애초에 폴리선이 단차 있게 만든 부지거든?»] 지표 따라감 · 낙차 · 단차(집수정 + 관로) · 스틸 그레이팅 — 좌표 · 높이 모두 지어낸 것
+        double ox2 = 300000, oy2 = 450000;
+        UDitch.Ditch Follow(double len, Func<double, double, double> g, bool follow = true)
+        {
+            var d = new UDitch.Ditch { Id = "D-010", Pts = new() { new[] { ox2, oy2, g(ox2, oy2) }, new[] { ox2 + len, oy2, g(ox2 + len, oy2) } }, Size = S.Sizes[0].Copy(), C = 0.9, Follow = follow };
+            UDitch.FillSamples(d, g, S);
+            UDitch.ApplyAuto(d, S);
+            return d;
+        }
+        var rainF = new UDitch.Rain { ReturnYears = 30, DurationMin = 10, IntensityMmh = 100, Source = "지어냄" };
+        double covP = Math.Max(S.Cover, S.PipeCover);
+        // ★[v117.16 검토 HIGH] 관이 묻혔나 — 다리마다 40등분(끝 포함)해 «참» 지표 함수와 견줌: 관 윗면 + 흙덮개 − 지표 최대(≤ 0 = 묻힘)
+        double PipeExcess(UDitch.Layout lay, Func<double, double, double> g)
+        {
+            double m = double.NegativeInfinity;
+            foreach (var p in lay.Pipes)
+                foreach (var l in p.Legs)
+                    for (int k = 0; k <= 40; k++)
+                    {
+                        double t = k / 40.0, x = l.X1 + (l.X2 - l.X1) * t, y = l.Y1 + (l.Y2 - l.Y1) * t, z = l.Z1 + (l.Z2 - l.Z1) * t;
+                        m = Math.Max(m, z + p.Dout / 2 + covP - g(x, y));
+                    }
+            return m;
+        }
+        string PipeText(UDitch.Layout lay) => string.Join(" ; ", lay.Pipes.Select(p => string.Format(ci, "관 {0:F3}→{1:F3} m · 다리 {2} · L {3:F3} m · 관 바닥 {4:F3}→{5:F3} · 덮개 여유 {6:F3} m [{7}]", p.S0, p.S1, p.Legs.Count, p.Length, p.InvIn, p.InvOut, -p.CrownExcess,
+                                                                    string.Join(" | ", p.Legs.Select(l => string.Format(ci, "{0:F3}→{1:F3} z {2:F3}→{3:F3} {4:0.##}%", l.S0, l.S1, l.Z1, l.Z2, l.SlopePct)))))
+                                                       .Concat(lay.Basins.Select(b => string.Format(ci, "집수정({0}) {1:F3}~{2:F3} 윗면 {3:F3} 안바닥 {4:F3}", b.Lower ? "아래" : "위", b.S0, b.S1, b.ZTop, b.Floor))));
+
+        // ⑩ 곧은 선(점 2개 · 60 m)이 9 m 수직 단차(위 81.40 · 아래 72.50 평지)를 가로지름 → 집수정 둘(위 · 아래) · 관로 1(다리 여럿 · 위 땅 속으로 내려간 뒤 아래 부지 밑) · 구간 2 · 낙차 0
+        //   ★[v117.16 검토 HIGH «관이 공중에»] 옛 판 = 관 하나가 1.06 m 수평에 8.75 m 내려가 단차 면에서 지표 위 약 4 m → 이제 관 윗면 + 흙덮개 ≤ 지표(다리마다 40등분 · 참 지표)
+        {
+            Func<double, double, double> g = (x, y) => x - ox2 < 30 ? 81.4 : 72.5;
+            var d = Follow(60, g); d.AreaHa = 0.1;
+            var lay = UDitch.LayoutOf(d, S);
+            var pr = UDitch.ProfileOf(d, S);
+            var sols = UDitch.Meshes(d, S, out string why);
+            var h = UDitch.Check(d, rainF, S);
+            var (bs, ps) = UDitch.SceneParts(d, S, ox2, oy2);
+            var (pos, idx) = UDitch.SceneMesh(d, S, ox2, oy2, out var parts);
+            string rep = UDitch.Report(new UDitch.Record { Rain = rainF, Ditches = { d } }, S, "시험.dwg", "");
+            var b = lay.Basins.FirstOrDefault(q => !q.Lower); var dn = lay.Basins.FirstOrDefault(q => q.Lower); var p = lay.Pipes.FirstOrDefault();
+            double outer = S.BasinInner + 2 * S.BasinWall;
+            double ex = PipeExcess(lay, g);
+            bool okL = lay.Follow && lay.Error == "" && lay.Segs.Count == 2 && lay.Drops.Count == 0 && lay.Basins.Count == 2 && lay.Pipes.Count == 1
+                       && b != null && dn != null && p != null && p.Legs.Count >= 2
+                       && Math.Abs(b.S1 - (30 - S.StepSetback)) < 0.1 && b.S1 <= 30 - S.StepSetback + 1e-6 && Math.Abs(b.S1 - b.S0 - outer) < 1e-9
+                       && Math.Abs(dn.S0 - (30 + S.StepSetback)) < 1e-6 && Math.Abs(dn.S1 - dn.S0 - outer) < 1e-9
+                       && Math.Abs(lay.Segs[0].S1 - b.S0) < 1e-9 && Math.Abs(lay.Segs[1].S0 - dn.S1) < 1e-9 && Math.Abs(p.S0 - b.S1) < 1e-9 && Math.Abs(p.S1 - dn.S0) < 1e-9
+                       && lay.Segs.All(q => Math.Abs(q.SMinPct - S.MinSlopePct) < 1e-6 && Math.Abs(q.SMaxPct - S.MinSlopePct) < 1e-6)   // 평지 = 최소 경사로 묻힘
+                       && Math.Abs(d.StartInvert - 81.1) < 1e-9 && Math.Abs(lay.Segs[1].V0 - 72.2) < 1e-9
+                       && Math.Abs(b.ZTop - 81.4) < 1e-9 && b.Floor <= lay.Segs[0].V1 - S.BasinSump + 1e-9 && Math.Abs(b.Floor - p.InvIn) < 1e-9 && Math.Abs(b.ZBottom - (b.Floor - S.BasinFloor)) < 1e-9
+                       && p.InvOut <= 72.2 + 1e-9 && Math.Abs(dn.InV - p.InvOut) < 1e-9 && Math.Abs(dn.OutV - 72.2) < 1e-9 && Math.Abs(dn.Floor - (Math.Min(p.InvOut, 72.2) - S.BasinSump)) < 1e-9 && Math.Abs(dn.ZTop - 72.5) < 1e-9
+                       && p.Legs.All(l => l.Z1 >= l.Z2 && l.SlopePct >= S.MinSlopePct - 1e-6) && Math.Abs(p.Length - p.Legs.Sum(l => l.Length)) < 1e-12
+                       && lay.PipeCrownExcess <= 1e-9 && p.CrownAbove < 0 && ex <= 1e-9 && !lay.Warn.Any(w => w.Contains("관로"))
+                       && lay.MaxAbove <= 1e-9 && pr.Error == "" && !pr.Warn.Any(w => w.Contains("솟은"))
+                       && lay.Log.Any(l => l.Contains("단차(집수정 + 관로)"));
+            bool okS = why == "" && sols.Count == 2 * 2 + 2 * 2 + p!.Legs.Count && sols.All(Closed) && sols.Count(q => q.Part == "집수정") == 2 && sols.Count(q => q.Part == "집수정 덮개") == 2
+                       && sols.Count(q => q.Part == "관로") == p.Legs.Count && sols.All(q => q.Volume > 0);
+            int meshTri = sols.Where(q => q.Part is "본체" or "기초").Sum(q => q.F.Sum(f => f.Length - 2));
+            var bv = bs.Count > 0 ? bs[0].V : new double[8]; var pv = ps.Count > 0 ? ps[0].V : new double[7];
+            var l0 = p.Legs[0];
+            bool okH = bs.Count == 2 && ps.Count == p.Legs.Count && Math.Abs(bv[0] - (b!.X - ox2)) < 1e-9 && Math.Abs(bv[1]) < 1e-9 && bv[2] == b.ZTop && bv[3] == b.ZBottom && bv[4] == outer && bv[5] == outer
+                       && Math.Abs(bv[6]) < 1e-12 && bv[7] == S.BasinInner
+                       && Math.Abs(pv[0] - (l0.X1 - ox2)) < 1e-9 && pv[2] == l0.Z1 && Math.Abs(pv[3] - (l0.X2 - ox2)) < 1e-9 && pv[5] == l0.Z2 && Math.Abs(pv[6] - (S.PipeD + 2 * S.PipeWall)) < 1e-12
+                       && ps[0].Rows.Any(x => x.K == "지름" && x.V.StartsWith("D300")) && ps[0].Rows.Any(x => x.K == "판정") == false && bs[0].Name == "D-010 집수정 1(위)" && bs[1].Name == "D-010 집수정 2(아래)"
+                       && idx.Length == meshTri * 3 && pos.Max(Math.Abs) < 100
+                       && parts.Count == 4 && parts.Select(q => q.Seg).SequenceEqual(new[] { 1, 1, 2, 2 }) && parts.Sum(q => q.N) * 3 == pos.Length && parts[2].V0 == parts[0].N + parts[1].N;
+            var (_, ps2) = UDitch.SceneParts(d, S, ox2, oy2, rainF);
+            okH &= ps2.Count == p.Legs.Count && ps2.All(q => q.Rows.Any(x => x.K == "판정" && x.V == "OK"));
+            var pc = h.Pipes.FirstOrDefault();
+            bool okQ = h.Segs.Count == 2 && h.Pipes.Count == 1 && pc != null && pc.Verdict == UDitch.Verdict.Ok && h.Segs.All(c => Math.Abs(c.Qcap - UDitch.ManningQ(0.3, 0.24, S.MinSlopePct / 100, S.ManningN)) < 1e-9)
+                       && Math.Abs(pc.SFlat - p.SlopeMinPct / 100) < 1e-12 && Math.Abs(pc.Qfull - UDitch.PipeFullQ(S.PipeD, pc.SFlat, S.ManningN)) < 1e-12 && pc.FallLegs >= 1 && pc.VelMax > 0
+                       && rep.Contains("짜임: 구간 2 · 낙차 0") && rep.Contains("집수정 1(위): 측점") && rep.Contains("집수정 2(아래): 측점") && rep.Contains("관로 1: 측점") && rep.Contains("다리 1-1:") && rep.Contains("(낙하)")
+                       && rep.Contains("관로 1: 가득 흐름") && rep.Contains("집수정 2 · 관로");
+            // 거꾸로(아래 → 위) — 지표가 솟음 → 묻힘 알림(집수정 안 만듦)
+            var r = Follow(60, g); UDitch.Reverse(r); UDitch.ApplyAuto(r, S);
+            var rl = UDitch.LayoutOf(r, S); var rp = UDitch.ProfileOf(r, S);
+            bool okR = rl.Basins.Count == 0 && rp.Warn.Any(w => w.Contains("솟은")) && Math.Abs(r.Samp[0][1] - 72.5) < 1e-9 && r.Samp[0][0] == 0;
+            check("S260 UD⑩ 곧은 선이 9 m 수직 단차 → 집수정 둘(위 · 아래) · 관로 1(위 땅 속으로 낙하 → 아래 부지 밑 · 관 윗면 + 흙덮개 ≤ 지표 · 관구 ≤ 아래 U 바닥) · 구간 2(평지 = 최소 경사) · 솔리드 닫힘 · 3D 칸 · 수리(완만한 다리 · 급한 다리) · 보고서 · 거꾸로 = 솟음 알림",
+                  okL && okS && okH && okQ && okR,
+                  string.Format(ci, "짜임 {0} 솔리드 {1}({2}) 머리 {3} 수리 {4}(Qfull {5:F4} · V {6:F2}) 거꾸로 {7} · 참 지표 덮개 여유 {8:F3} m · {9}",
+                                okL, okS, why, okH, okQ, pc?.Qfull, pc?.VelMax, okR, -ex, PipeText(lay)));
+        }
+
+        // ⑪ 25 % 내리막 40 m(단차 없음) → 낙차 여러 개 · 구간마다 ≤ 10 % · 낙차 ≤ 0.5 m · 측구 윗면이 지표 위로 안 나옴 · 낙차 합 + 구간 낙하 = 시점 − 종점 · 낙차벽 솔리드
+        {
+            Func<double, double, double> g = (x, y) => 80 - 0.25 * (x - ox2);
+            var d = Follow(40, g);
+            var lay = UDitch.LayoutOf(d, S);
+            var sols = UDitch.Meshes(d, S, out string why);
+            double fall = lay.Drops.Sum(x => x.H) + lay.Segs.Sum(q => q.V0 - q.V1);
+            bool ok = lay.Follow && lay.Error == "" && lay.Basins.Count == 0 && lay.Pipes.Count == 0 && lay.Drops.Count >= 5 && lay.Segs.Count == lay.Drops.Count + 1
+                      && lay.Segs.All(q => q.SMaxPct <= S.MaxSlopePct + 1e-6 && q.SMinPct >= S.MinSlopePct - 1e-6)
+                      && lay.Drops.All(x => x.H <= S.DropMax + 1e-9 && x.H >= S.DropMin - 1e-9)
+                      && lay.MaxAbove <= 1e-6 && lay.MaxBelow <= S.DropMax + 1e-6
+                      && Math.Abs(fall - (lay.StartInv - lay.EndInv)) < 1e-6
+                      && Math.Abs(lay.EndInv - (g(ox2 + 40, 0) - S.Cover - 0.3)) < 1e-6
+                      && why == "" && sols.All(Closed) && sols.Count(q => q.Part == "낙차벽") == lay.Drops.Count && !lay.Log.Any(l => l.Contains("단차("));
+            // ★[v117.16 검토 MEDIUM] U 덩어리 측점 사이 ≥ 2 mm(1~2 mm 조각 없음 — 솔리드 바꾸기 · 뷰어 구멍)
+            double minGap = double.PositiveInfinity;
+            foreach (var q in sols.Where(q => q.Part == "본체"))
+                for (int j = 0; j + 1 < q.V.Count / 8; j++)
+                {
+                    double ax = 0, ay = 0, bx = 0, by = 0;
+                    for (int i = 0; i < 8; i++) { ax += q.V[j * 8 + i].X; ay += q.V[j * 8 + i].Y; bx += q.V[(j + 1) * 8 + i].X; by += q.V[(j + 1) * 8 + i].Y; }
+                    minGap = Math.Min(minGap, Math.Sqrt((ax - bx) * (ax - bx) + (ay - by) * (ay - by)) / 8);
+                }
+            ok &= minGap >= 2e-3 - 1e-9;
+            var old = Follow(40, g, follow: false);
+            var po = UDitch.ProfileOf(old, S);
+            bool okOld = UDitch.LayoutOf(old, S).Segs.Count == 1 && Math.Abs(po.SlopePct - 25) < 1e-6 && po.Warn.Any(w => w.Contains("최대 경사"));
+            check("S260 UD⑪ 25 % 내리막(단차 없음) → 낙차(≤ 0.5 m) · 구간마다 0.3~10 % · 윗면이 지표 위로 안 나옴 · 묻힘 ≤ 0.5 m · 낙차 합 + 구간 낙하 = 시점 − 종점 · 끝 = 지표에 맞음 · 낙차벽 · 옛 방식은 한 경사 25 %",
+                  ok && okOld,
+                  string.Format(ci, "구간 {0} 낙차 {1}(합 {2:F3}) 경사 {3:F3}~{4:F3} % 위로 {5:F6} 묻힘 {6:F3} 낙하 {7:F6}/{8:F6} 끝 {9:F3} 솔리드 {10}({11}) 옛 {12}",
+                                lay.Segs.Count, lay.Drops.Count, lay.Drops.Sum(x => x.H), lay.Segs.Min(q => q.SMinPct), lay.Segs.Max(q => q.SMaxPct), lay.MaxAbove, lay.MaxBelow,
+                                fall, lay.StartInv - lay.EndInv, lay.EndInv, sols.Count, why, okOld));
+        }
+
+        // ⑫ 1 % 완만 50 m — 지표 따라감도 한 구간 · 바닥고 · 수리 · 메시가 옛 방식과 같음(뒤로 맞음) · 옛 기록(새 칸 없음) = 한 경사 · 새 칸 왕복
+        {
+            Func<double, double, double> g = (x, y) => 50 - 0.01 * (x - ox2);
+            var f = Follow(50, g); f.AreaHa = 0.3;
+            var o = Follow(50, g, follow: false); o.AreaHa = 0.3;
+            var lf = UDitch.LayoutOf(f, S);
+            var hf = UDitch.Check(f, rainF, S); var ho = UDitch.Check(o, rainF, S);
+            var mf = UDitch.Meshes(f, S, out _); var mo = UDitch.Meshes(o, S, out _);
+            bool same = lf.Follow && lf.Segs.Count == 1 && lf.Drops.Count == 0 && lf.Basins.Count == 0
+                        && Math.Abs(f.StartInvert - o.StartInvert) < 1e-9 && Math.Abs(f.EndInvert - o.EndInvert) < 1e-9
+                        && hf.Verdict == ho.Verdict && hf.Status == ho.Status && Math.Abs(hf.Q - ho.Q) < 1e-12 && Math.Abs(hf.Qcap - ho.Qcap) < 1e-6 * ho.Qcap && Math.Abs(hf.Vel - ho.Vel) < 1e-6 * ho.Vel
+                        && mf.Count == mo.Count && mf.Zip(mo).All(t => Math.Abs(t.First.Volume - t.Second.Volume) < 1e-6 && t.First.V.Count == t.Second.V.Count)
+                        && Math.Abs(UDitch.Qty(f, S).Length - UDitch.Qty(o).Length) < 1e-9;
+            var r = new UDitch.Record(); r.Ditches.Add(f);
+            string js = UDitch.ToJson(r);
+            bool okJ = js.Contains("\"Follow\": true") && UDitch.TryParse(js, out var rb, out _) && rb.Ditches[0].Follow && rb.Ditches[0].Samp.Count == f.Samp.Count
+                       && UDitch.LayoutOf(rb.Ditches[0], S).Segs.Count == 1;
+            // ★[v117.16 검토 LOW] 표본은 한 줄로 · NaN 왕복
+            int si = js.IndexOf("\"Samp\": [[", StringComparison.Ordinal), se = si < 0 ? -1 : js.IndexOf("]]", si, StringComparison.Ordinal);
+            bool okP = UDitch.TryParse(js, out var rb2, out _);
+            okJ &= okP && si >= 0 && se > si && !js.Substring(si, se - si).Contains('\n') && rb2.Ditches[0].Samp.Zip(f.Samp).All(t => t.First[0] == t.Second[0] && t.First[1] == t.Second[1]);
+            var rn = new UDitch.Record(); rn.Ditches.Add(new UDitch.Ditch { Samp = new() { new[] { 0.0, double.NaN }, new[] { 1.0, 2.5 } } });
+            string jn = UDitch.ToJson(rn);
+            okJ &= jn.Contains("[[0,\"NaN\"],[1,2.5]]") && UDitch.TryParse(jn, out var rnb, out _) && double.IsNaN(rnb.Ditches[0].Samp[0][1]) && rnb.Ditches[0].Samp[1][1] == 2.5;
+            // 옛 기록(v117.15까지 — Follow · Samp · Grating 칸 없음)
+            bool okOld = UDitch.TryParse("{\"Version\": 1, \"Ditches\": [ { \"Id\": \"D-001\", \"Pts\": [[0, 0, 50], [100, 0, 49]], \"StartInvert\": 49.7, \"EndInvert\": 48.7, \"InvertAuto\": true } ]}", out var ro, out _)
+                         && !ro.Ditches[0].Follow && !ro.Ditches[0].Grating && ro.Ditches[0].Samp.Count == 0
+                         && UDitch.ProfileOf(ro.Ditches[0], S).Lay == null && UDitch.LayoutOf(ro.Ditches[0], S).Segs.Count == 1 && Math.Abs(UDitch.ProfileOf(ro.Ditches[0], S).SlopePct - 1) < 1e-9;
+            check("S260 UD⑫ 1 % 완만 — 지표 따라감 = 한 구간 · 바닥고 · 수리(Q · 통수능 · 유속 · 판정) · 메시 · 길이 = 옛 방식 · Follow · 표본 왕복 · 옛 기록 = 한 경사(지표 따라감 아님)",
+                  same && okJ && okOld,
+                  string.Format(ci, "같음 {0}(구간 {1} · {2:F3}/{3:F3} → {4:F3}/{5:F3} · Qcap {6:F5}/{7:F5}) 왕복 {8} 옛 {9}", same, lf.Segs.Count, f.StartInvert, o.StartInvert, f.EndInvert, o.EndInvert, hf.Qcap, ho.Qcap, okJ, okOld));
+        }
+
+        // ⑬ ★[JACK 1112 «측구에 스틸그라우팅도 선택되게»] 덮개 — 기록 왕복 · 판 솔리드(안폭 × 두께 · 윗면 = 벽 윗면) · 보고서 · 풍선 줄 · 구간마다 · 옛 기록 = 없음
+        {
+            var d = Line(new[] { new[] { 0.0, 0.0 }, new[] { 10.0, 0.0 } }, (x, y) => 50);
+            d.Grating = true;
+            var r = new UDitch.Record(); r.Ditches.Add(d);
+            string js = UDitch.ToJson(r);
+            bool okJ = js.Contains("\"Grating\": true") && UDitch.TryParse(js, out var rb, out _) && rb.Ditches[0].Grating
+                       && UDitch.TryParse("{\"Version\": 1, \"Ditches\": [ { \"Id\": \"D-001\" } ]}", out var ro, out _) && !ro.Ditches[0].Grating;
+            var sols = UDitch.Meshes(d, S, out string why);
+            var gr = sols.FirstOrDefault(q => q.Part == "그레이팅");
+            bool okS = why == "" && sols.Count == 3 && sols.All(Closed) && gr != null && Math.Abs(gr.Volume - 0.3 * S.GrateT * 10) < 1e-9
+                       && Math.Abs(gr.V.Max(v => v.Z) - (d.StartInvert + 0.3)) < 1e-9 && Math.Abs(gr.V.Min(v => v.Z) - (d.StartInvert + 0.3 - S.GrateT)) < 1e-9
+                       && Math.Abs(gr.V.Max(v => v.Y) - 0.15) < 1e-9;
+            string rep = UDitch.Report(r, S, "시험.dwg", "");
+            var rows = UDitch.InfoRows(d, new UDitch.Rain(), S);
+            var (_, gi1) = UDitch.SceneMesh(d, S, 0, 0);
+            d.Grating = false;
+            string rep0 = UDitch.Report(r, S, "시험.dwg", "");
+            var (_, gi0) = UDitch.SceneMesh(d, S, 0, 0);
+            okS &= gi1.Length == gi0.Length && gi1.Length > 0;   // 3D 메시에는 판 없음 — 뷰어가 grating 칸으로 그림
+            // 단차 측구에 덮개 — 구간마다 판 · 길이 = U 길이(집수정 · 관 자리 뺌)
+            var st = Follow(60, (x, y) => x - ox2 < 30 ? 81.4 : 72.5); st.Grating = true;
+            var ls = UDitch.LayoutOf(st, S);
+            var ms = UDitch.Meshes(st, S, out _);
+            string reps = UDitch.Report(new UDitch.Record { Ditches = { st } }, S, "시험.dwg", "");
+            var ex = UDitch.Extras(st, S);
+            bool okF = ms.Count(q => q.Part == "그레이팅") == 2 && Math.Abs(ex.GrateLen - ls.ULength) < 1e-9 && ls.ULength < 60 - 1
+                       && reps.Contains("덮개: 스틸 그레이팅 · 구간 2개") && reps.Contains("(구간 1 ") && reps.Contains("스틸 그레이팅 " + ex.GrateLen.ToString("0.00", ci) + " m");
+            bool okR = rep.Contains("덮개: 스틸 그레이팅 · 구간 1개 · 길이 10.000 m") && rows.Any(x => x.K == "덮개" && x.V == "스틸 그레이팅 10.00 m") && rep0.Contains("덮개: 없음");
+            check("S260 UD⑬ 스틸 그레이팅 — 기록 왕복 · 옛 기록 = 없음 · 판 솔리드(0.3 × 0.05 × 10 m · 윗면 = 벽 윗면) 닫힘 · 보고서 «덮개: 스틸 그레이팅» · 풍선 줄 · 단차 측구 = 구간마다 판 · 길이 = U 길이",
+                  okJ && okS && okR && okF,
+                  string.Format(ci, "왕복 {0} 솔리드 {1}({2} · {3:F6}) 보고서 {4} 단차 {5}(판 {6} · {7:F3}/{8:F3})", okJ, okS, why, gr?.Volume, okR, okF, ms.Count(q => q.Part == "그레이팅"), ex.GrateLen, ls.ULength));
+        }
+
+        // ⑭ ★[v117.16 검토 HIGH] 1:1.5 법면 단차(위 81.40 · 법면 13.35 m · 아래 72.50) — 옛 판 = 관이 법면 위로 최대 1.5 m 드러남 · 끝에서 0.26 m 위 → 이제 법면 밑을 흙덮개 두고 따라 내려감
+        {
+            Func<double, double, double> g = (x, y) => { double t = x - ox2; return t < 30 ? 81.4 : t > 30 + 8.9 * 1.5 ? 72.5 : 81.4 - (t - 30) / 1.5; };
+            var d = Follow(80, g); d.AreaHa = 0.1;
+            var lay = UDitch.LayoutOf(d, S);
+            var sols = UDitch.Meshes(d, S, out string why);
+            var p = lay.Pipes.FirstOrDefault();
+            double ex = PipeExcess(lay, g);
+            bool ok = lay.Follow && lay.Error == "" && lay.Basins.Count == 2 && lay.Pipes.Count == 1 && p != null && p.Legs.Count >= 2
+                      && lay.PipeCrownExcess <= 1e-9 && ex <= 1e-9 && !lay.Warn.Any(w => w.Contains("관로"))
+                      && p.Legs.All(l => l.Z1 >= l.Z2 && l.SlopePct >= S.MinSlopePct - 1e-6) && p.InvOut <= lay.Segs[^1].V0 + 1e-9
+                      && why == "" && sols.All(Closed) && lay.MaxAbove <= 1e-9;
+            check("S260 UD⑭ 1:1.5 법면 단차 → 집수정 둘 · 관로가 법면 밑을 따라(관 윗면 + 흙덮개 ≤ 지표 · 다리마다 40등분 · 참 지표) · 최소 경사 이상 · 솔리드 닫힘",
+                  ok, string.Format(ci, "참 지표 덮개 여유 {0:F3} m · {1} · 경고 [{2}]", -ex, PipeText(lay), string.Join(" / ", lay.Warn)));
+        }
+
+        // ⑮ ★[v117.16 검토 HIGH] 단차 둘이 1.5 m 사이(90 → 88 → 86) — 관 하나로 이음 · 가운데 부지 밑으로 묻혀 지나감(옛 판은 검사 없이 가로지름)
+        {
+            Func<double, double, double> g = (x, y) => { double t = x - ox2; return t < 20 ? 90 : t < 21.5 ? 88 : 86; };
+            var d = Follow(40, g); d.AreaHa = 0.1;
+            var lay = UDitch.LayoutOf(d, S);
+            var sols = UDitch.Meshes(d, S, out string why);
+            var p = lay.Pipes.FirstOrDefault();
+            double ex = PipeExcess(lay, g);
+            bool ok = lay.Follow && lay.Error == "" && lay.Basins.Count == 2 && lay.Pipes.Count == 1 && lay.Segs.Count == 2 && p != null
+                      && lay.Log.Any(l => l.Contains("관 하나로")) && p.S0 < 20 && p.S1 > 21.5
+                      && lay.PipeCrownExcess <= 1e-9 && ex <= 1e-9 && !lay.Warn.Any(w => w.Contains("관로"))
+                      && p.Legs.All(l => l.Z1 >= l.Z2) && why == "" && sols.All(Closed);
+            check("S260 UD⑮ 단차 둘(1.5 m 사이) → 관 하나로 이음 · 가운데 부지 밑으로 묻힘(관 윗면 + 흙덮개 ≤ 지표) · 집수정 둘 · 구간 2",
+                  ok, string.Format(ci, "참 지표 덮개 여유 {0:F3} m · {1} · {2}", -ex, PipeText(lay), string.Join(" / ", lay.Log.Where(l => l.Contains("단차")))));
+        }
     }
 
     /// <summary>닫힌 다양체 — 모든 변이 반대 방향으로 정확히 한 번씩.</summary>

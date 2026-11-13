@@ -47,6 +47,14 @@ internal static class WallPolyDraw
     /// (<see cref="PickMark"/>의 「검토 0909 · 치명」과 같은 까닭).</para></summary>
     private static readonly List<object> _stranded = new();
 
+    /// <summary>★[v117.16 · JACK 1112 «가시설 변환 — 날개 찍었던 그 방식»] 찍은 날개 방향(단위) — 터파기 가시설이 받아 기록에 적는다.
+    /// <para><see cref="DirA"/> = 구간 끝(end1)에서 · <see cref="DirB"/> = 첫 끝(end0)에서 · <see cref="N"/> = 받은 수(2면 둘 다).</para></summary>
+    internal sealed class Picked
+    {
+        public (double X, double Y) DirA, DirB;
+        public int N;
+    }
+
     /// <summary>★시점·종점을 받아 <b>닫힌 폴리곤</b>을 돌려준다(취소·실패면 <c>null</c>).</summary>
     /// <param name="dayRing">데이라잇 경계 — 두 점 다 이 안이어야 한다.</param>
     /// <param name="seg">고른 구간의 점들(안쪽 변) — 첫 점이 T0, 끝 점이 T1.</param>
@@ -56,13 +64,17 @@ internal static class WallPolyDraw
     /// <param name="fixA">★★[v103.1.14 · JACK 1019 «새 쪽 끝 한 점만 — 옛 옹벽 반대쪽 측선은 지은 그대로»] 이어 짓기 — 구간 끝 끝(end1 · 시점 쪽)의 측선 방향을 이것으로 고정(찍지 않음 · 맞닿은 뒤 옹벽이 지은 방향).
     /// <paramref name="fixB"/>는 첫 끝(end0 · 종점 쪽 — 앞 옹벽). 고정한 방향이 데이라잇에 안 닿거나 조립이 찍은 방향대로 못 이으면(물러남) <b>null</b> — 지은 그대로를 못 지키면 짓지 않는다(계획 검토 중간 1).</param>
     /// <param name="extNote">이어 짓기 안내(찍을 끝 프롬프트에 붙임 — 예: «옹벽 1에 이어 짓습니다»).</param>
+    /// <param name="ask">★[v117.16] 걸음(0 = end1 · 1 = end0)마다 묻는 글 — 없으면 옹벽 폴리곤 글(종전).</param>
+    /// <param name="outDirs">★[v117.16] 찍은 날개 방향을 받을 그릇 — 없으면 안 채운다(종전).</param>
     internal static List<Point3>? Run(Document doc, IReadOnlyList<Point3> dayRing,
                                       IReadOnlyList<Point3> seg,
                                       (double X, double Y) nStart, (double X, double Y) nEnd, int outwardSide,
                                       out List<Point3>? wallChain, out List<bool>? isWall, out string log,
-                                      (double X, double Y)? fixA = null, (double X, double Y)? fixB = null, string extNote = "")
+                                      (double X, double Y)? fixA = null, (double X, double Y)? fixB = null, string extNote = "",
+                                      System.Func<int, string>? ask = null, Picked? outDirs = null)
     {
         log = ""; wallChain = null; isWall = null;
+        if (outDirs != null) outDirs.N = 0;
         Editor ed = doc.Editor;
         if (dayRing == null || dayRing.Count < 3)
         { log = "  ⚠데이라잇 경계가 없다 — 손으로 그리기를 건너뛴다(정지면 생성을 먼저).\n"; return null; }
@@ -205,7 +217,8 @@ internal static class WallPolyDraw
                     };
                     ed.PointMonitor += mon;
 
-                    var opt = new PromptPointOptions(extNote.Length > 0
+                    var opt = new PromptPointOptions(ask != null ? ask(step)
+                        : extNote.Length > 0
                         ? $"\n[옹벽 폴리곤] {extNote} — 새 쪽 끝({nm})을 찍으세요 — 데이라잇 안이어야 합니다 (Esc=취소): "
                         : $"\n[옹벽 폴리곤] {nm}을 찍으세요 — 데이라잇 안이어야 합니다 (Esc=취소): ")
                     { AllowNone = false, UseBasePoint = true, BasePoint = from };
@@ -237,6 +250,8 @@ internal static class WallPolyDraw
                     var got = new Point3(fx + ux * mg, fy + uy * mg, z);
                     if (step == 0) { pA = got; dayA = new Point3(fx, fy, z); dirA = (ux, uy); }
                     else { pB = got; dayB = new Point3(fx, fy, z); dirB = (ux, uy); }
+                    // ★[v117.16] 찍은 방향을 그릇에(터파기 가시설 날개)
+                    if (outDirs != null) { if (step == 0) outDirs.DirA = (ux, uy); else outDirs.DirB = (ux, uy); outDirs.N++; }
                     sb.Append($"\n      {nm} — 데이라잇 ({fx:F1},{fy:F1}) · 구간 끝에서 {run:F1}m · 찍은 방향 ({ux:F3},{uy:F3})"
                             + " → 측선은 이 방향 그대로 «데이라잇 + 여유» 테두리까지(모서리는 아래 조립 줄)");
 

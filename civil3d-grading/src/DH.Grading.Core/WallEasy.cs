@@ -27,7 +27,8 @@ public static class WallEasy
     }
 
     /// <summary>선 옹벽 짓기 거절(<see cref="WallByLine.Built"/>의 Code · Why) → 화면 글.</summary>
-    public static string Build(string? code, string? why)
+    /// <param name="road">★[v117.15] 진입도로 [옹벽 추가] — «끝 높이» 까닭에 «진입도로 면 오차»(옛 경계 = 도로 엔진이 셈한 데이라잇).</param>
+    public static string Build(string? code, string? why, bool road = false)
     {
         why ??= "";
         switch (code ?? "")
@@ -70,7 +71,7 @@ public static class WallEasy
             case "정지면 밖":
                 return why.Contains("넓은 소단") ? "넓은 소단이 계획 지표면 끝을 넘음 → 소단 폭 줄이기 · 또는 선 옮기기" : "옹벽 자리 일부가 계획 지표면 밖 → 선을 안쪽으로 옮기기";
             case "옛 사면": return why.Contains("못 쟀") ? Bug : "옹벽 자리가 선 안쪽(남는 사면 · 바닥)으로 넘어감 → 선 끝 옮기기";
-            case "끝 높이": return "선 끝이 사면과 땅이 만나는 자리(초록 경계)가 아님 → 선 끝을 초록 경계선 위로";
+            case "끝 높이": return EndStep(why, road);
             case "끝": return "선 끝 높이 없음 → 선 끝을 초록 경계선 위로 다시";
             case "마구리": return "선 끝 마감면이 선을 못 따름 — 오목한(U자) 선의 안쪽 끝 → 선 끝 옮기기";
             case "바닥 높이 끊김": return "굽은 안쪽 · 오목한 바닥 곁에서 바닥 높이가 끊김 → 선 옮기기";
@@ -84,10 +85,29 @@ public static class WallEasy
             {
                 // 안쪽 수직 짓기의 까닭을 그대로 풀어 쓴다 — «… 못 지었습니다 — {코드}: {까닭}»
                 var m = Regex.Match(why, @"— ([^:—]+): (.*)$");
-                return m.Success ? Build(m.Groups[1].Value.Trim(), m.Groups[2].Value) : "바깥 벽 짓기 실패 → 수직만(V) · 또는 선 조금 옮기기";
+                return m.Success ? Build(m.Groups[1].Value.Trim(), m.Groups[2].Value, road) : "바깥 벽 짓기 실패 → 수직만(V) · 또는 선 조금 옮기기";
             }
             default: return Bug;   // 다단 합성 · 고리 · 자가검증 · 줄 · 측선 · 가로대 · 띠 …
         }
+    }
+
+    /// <summary>★[v117.15 · JACK 1112 «끝이 초록 경계 위인데 "선 끝이 초록 경계가 아님"이라고 나옴»] «끝 높이»(1 cm 계약 — 한도는 그대로) 화면 글.
+    /// <para>그 관문이 재는 자리(선 끝 A · B · 잘라낼 자리 바깥 테두리 · 띠 끝 X)는 모두 옛 경계(초록) 위 · 곁이다(BoundaryCut이 선을 경계에서 자름) —
+    /// 걸린 것은 «선 끝이 경계 밖»이 아니라 «그 자리 경계가 땅과 어긋남»(정지면 − 원지반 · 부호 없는 양). 옛 글은 끝이 경계 위여도 «선 끝을 경계선 위로»라 거짓이었다.</para>
+    /// <para>진입도로(<paramref name="road"/>)의 바깥 테두리 = 도로 엔진이 셈한 데이라잇(검토 실측 1112: 끝은 경계 위 · 어긋남은 그 데이라잇 자리) → «진입도로 면 오차».
+    /// (데이라잇 점 사이 곧은 변이 그 사이 원지반 굴곡을 못 따르는 것으로 보임 — 기구는 아직 안 잼.)
+    /// 선 끝 자리는 도로 끝 마구리 단면 위일 수도 있어 까닭은 안 붙임(재지 않은 원인을 적지 않음).</para></summary>
+    static string EndStep(string why, bool road)
+    {
+        string? amt = null;
+        var m = Regex.Match(why, @"(?:원지반이|반대쪽으로) ([0-9.]+) m");
+        if (m.Success && double.TryParse(m.Groups[1].Value, NumberStyles.Float, Ci, out double v))
+            amt = v < 1 ? (v * 100).ToString("0.#", Ci) + " cm" : v.ToString("0.00", Ci) + " m";
+        string by = amt != null ? $"땅과 {amt} 어긋남" : "땅과 어긋남";
+        if (why.Contains("바깥 테두리"))   // 잘라낼 자리 바깥 테두리(옛 경계 A → B)
+            return road ? $"경계가 {by} — 진입도로 면 오차 → 선을 조금 옮기기(다음 판에서 고침)" : $"잘라낼 자리 경계가 {by} → 선을 조금 옮기기";
+        if (why.Length > 0) return $"선 끝 자리 경계가 {by} → 선 끝을 조금 옮기기";   // 끝 A · B · 띠 끝 X(경계 위 · 곁)
+        return $"경계가 {by} → 선을 조금 옮기기";
     }
 
     /// <summary>그린 선 판정 거절(<see cref="BoundaryCut.Result"/>의 Code · Why) → 화면 글.</summary>

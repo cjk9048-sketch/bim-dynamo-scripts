@@ -211,6 +211,50 @@ static class WallTieredCheck
             Check("(t6c) 어림 소단 미리보기 — (t6) 침범 다각형(바닥 안) 있음 · 나머지는 바닥 밖 · 해치선 · (t5) n = 1 · 소단 없음 · 몇 ms", hit6 && ok6 && one5 && hl.Count > 0 && ms6 < 500,
                 p6 == null ? "null" : $"{ms6} ms · n {p6.N} · 침범 {p6.Hit.Count}조각(x {p6.Hit.SelectMany(q => q.Outer).Min(v => v.X):F3}~{p6.Hit.SelectMany(q => q.Outer).Max(v => v.X):F3}) · 바닥 밖 {p6.Ok.Count}조각 · 해치 {hl.Count}줄 · (t5) n {p5?.N}");
         }
+        // (t6d) ★[v117.14.1 · JACK 1112 «미리보기 어디든 생기게(단수 포함) · 부지에 겹치면 겹치는 부분 빨간 해치»]
+        //   ① 보일 길이(그리는 중 커서까지) — 소단이 그 몫에만 · 부호는 판정한 선 전체로 ② 판정 없이(경계로 자름 · 부호 줌 / 바닥 쪽) = ①과 같은 소단
+        //   ③ 침범 = 발자국(선 ~ 안쪽 (n−1)·step + s·H) 중 바닥 안 — (t6) 바닥 x ≤ 49 · 발자국 x ≥ 48.5 ④ n = 1(단높이 20)이어도 선이 바닥에 들면 침범 칠 · 단 수 1
+        //   ⑤ 칠 조각 — 구멍 없으면 고리 그대로 · 세모 넓이 합 = 침범 넓이 · 구멍 있는 다각형 세모 ⑥ 가운데 자리 (49.6, 0) · 안쪽 법선 (−1, 0)
+        {
+            WallBenchPreview.Input PIn2(IReadOnlyList<Point3> line, IReadOnlyList<Point3> nr, IReadOnlyList<Point3> cr, double h, List<Point3>? plan, int side = 0, double show = double.NaN) => new()
+            {
+                Line = line, NewRing = nr, CutRing = cr, Plan = plan, Delta = (x, y) => G(x, y) - P0(x, y), Hc = h, Bc = 1, Hf = h, Bf = 1, SlopeW = S, Side = side, ShowLen = show,
+            };
+            var bdR = Rect(-20, -60, XD, 60);
+            double showL = (XD - 49.6) + 3;   // 아래 팔 + 세로 3 m → (49.6, −2)까지
+            var pFull = WallBenchPreview.Compute(PIn2(c1.Line, c1.NewRing, c1.CutRing, 5, Rect(0, -60, 40, 60, 100)));
+            var pPart = WallBenchPreview.Compute(PIn2(c1.Line, c1.NewRing, c1.CutRing, 5, Rect(0, -60, 40, 60, 100), show: showL));
+            var partLine = new List<Point3> { new(XD, -5, 0), new(49.6, -5, 0), new(49.6, -2, 0) };
+            var pOpen = WallBenchPreview.Compute(PIn2(partLine, bdR, Array.Empty<Point3>(), 5, Rect(0, -60, 40, 60, 100), side: pFull?.Side ?? 0));
+            var pOpen0 = WallBenchPreview.Compute(PIn2(partLine, bdR, Array.Empty<Point3>(), 5, Rect(0, -60, 40, 60, 100)));
+            double A(List<WallBenchPreview.Poly> ps) => ps.Sum(q => Math.Abs(Area(q.Outer)) - q.Holes.Sum(hh => Math.Abs(Area(hh))));
+            static double Area(List<Point3> r) { double s = 0; for (int i = 0; i < r.Count; i++) { var a = r[i]; var b = r[(i + 1) % r.Count]; s += a.X * b.Y - b.X * a.Y; } return s / 2; }
+            bool partOk = pFull != null && pPart != null && pPart.N == pFull.N && pPart.N == 2 && pPart.Side == pFull.Side && pPart.Ok.Count > 0
+                && pPart.Ok.All(q => q.Outer.All(v => v.Y <= -2 + 1e-6)) && pPart.Lines.All(l => l.All(v => v.Y <= -2 + 1e-6)) && A(pPart.Ok) < A(pFull.Ok) - 1;
+            bool openOk = pOpen != null && pOpen0 != null && pPart != null && pOpen.Side == pPart.Side && pOpen0.Side == pPart.Side && Math.Abs(A(pOpen.Ok) - A(pPart.Ok)) <= 1e-6 * Math.Max(1, A(pPart.Ok)) && pOpen.N == pPart.N;
+            Check("(t6d ①②) 그리는 중 — 커서까지만 소단(y ≤ −2) · 단 수 · 부호 같음 · 판정 없이(경계로 자름 · 부호 줌 · 바닥 쪽)도 같은 소단", partOk && openOk,
+                $"전체 n {pFull?.N} 부호 {pFull?.Side} 소단 {(pFull == null ? 0 : A(pFull.Ok)):F3}㎡ · 커서까지 n {pPart?.N} 부호 {pPart?.Side} 소단 {(pPart == null ? 0 : A(pPart.Ok)):F3}㎡ · 판정 없이 부호 {pOpen?.Side}/{pOpen0?.Side} 소단 {(pOpen == null ? 0 : A(pOpen.Ok)):F3}㎡");
+            var p6b = WallBenchPreview.Compute(PIn2(c6.Line, c6.NewRing, c6.CutRing, 5, Rect(0, -60, 49.0, 60, 100)));
+            double step6 = 1 + S * 5, dep6 = step6 + S * 5;
+            bool foot = p6b != null && p6b.N == 2 && Math.Abs(p6b.Depth - dep6) <= 1e-12 && p6b.Hit.Count > 0
+                && Math.Abs(p6b.Hit.SelectMany(q => q.Outer).Min(v => v.X) - (49.6 - dep6)) <= 1e-6 && p6b.Hit.All(q => q.Outer.All(v => v.X <= 49.0 + 1e-6));
+            var crossLine = new List<Point3> { new(XD, -5, 0), new(45, -5, 0), new(35, -5, 0) };
+            var p1n = WallBenchPreview.Compute(PIn2(crossLine, bdR, Array.Empty<Point3>(), 20, Rect(0, -60, 40, 60, 100)));
+            bool one = p1n != null && p1n.N == 1 && p1n.Ok.Count == 0 && p1n.Hit.Count > 0 && p1n.HitLabels.Count == p1n.Hit.Count && p1n.Depth <= S * 12 + 1e-12 && p1n.Depth >= S * 11.5
+                && p1n.Hit.All(q => q.Outer.All(v => v.X <= 40 + 1e-6 && v.X >= 35 - 1e-6));
+            Check("(t6d ③④) 침범 = 발자국 중 바닥 안 — (t6) 깊이 1.1 · 가장 안 x 48.5 · n = 1이어도 선이 바닥에 들면 침범(x 35~40 · 폭 s·12)", foot && one,
+                $"(t6) n {p6b?.N} 깊이 {p6b?.Depth:F4} 침범 x {(p6b == null || p6b.Hit.Count == 0 ? "-" : p6b.Hit.SelectMany(q => q.Outer).Min(v => v.X).ToString("F4"))} · n=1 {p1n?.N} 깊이 {p1n?.Depth:F4} 침범 {p1n?.Hit.Count}조각 {(p1n == null ? 0 : A(p1n.Hit)):F4}㎡");
+            var fr = p6b == null ? new() : WallBenchPreview.Fill(p6b.Hit, false);
+            var ft = p6b == null ? new() : WallBenchPreview.Fill(p6b.Hit, true);
+            var holed = new WallBenchPreview.Poly { Outer = Rect(0, 0, 10, 10), Holes = { Rect(4, 4, 6, 6) } };
+            var fh = WallBenchPreview.Fill(new[] { holed }, false);
+            double tA(List<List<Point3>> ts) => ts.Sum(t => Math.Abs(Area(t)));
+            bool fill = p6b != null && fr.Count == p6b.Hit.Count && ft.Count > 0 && ft.All(t => t.Count == 3) && Math.Abs(tA(ft) - A(p6b.Hit)) <= 1e-6 * Math.Max(1, A(p6b.Hit))
+                && fh.Count > 1 && fh.All(t => t.Count == 3) && Math.Abs(tA(fh) - 96) <= 1e-9;
+            bool mid = pFull != null && Math.Abs(pFull.MidX - 49.6) <= 1e-6 && Math.Abs(pFull.MidY) <= 1e-6 && Math.Abs(pFull.MidNx + 1) <= 1e-9 && Math.Abs(pFull.MidNy) <= 1e-9;
+            Check("(t6d ⑤⑥) 칠 조각 — 고리 그대로 · 세모 넓이 = 침범 넓이 · 구멍 있는 다각형 = 세모(96㎡) · 단 수 글 자리 (49.6, 0) 안쪽 (−1, 0)", fill && mid,
+                $"고리 {fr.Count} · 세모 {ft.Count}({tA(ft):F6} / {(p6b == null ? 0 : A(p6b.Hit)):F6}㎡) · 구멍 세모 {fh.Count}({tA(fh):F6}㎡) · 가운데 ({pFull?.MidX:F4}, {pFull?.MidY:F4}) 법선 ({pFull?.MidNx:F3}, {pFull?.MidNy:F3})");
+        }
         // (t7) 굽은 선 R 20(0.5 m 현) — 짓고 깨끗 · 합성 왕복
         var arc = new List<Point3>();
         for (double t = -21; t <= 21 + 1e-9; t += 0.5) { double a = Math.Asin(Math.Clamp(t / 20.5, -1, 1)); arc.Add(new Point3(70.1 - 20.5 * Math.Cos(a), t, 0)); }

@@ -19,17 +19,29 @@ public static partial class RoadRing
         public readonly double Tail;
         /// <summary>소단 하나 몫 높이(소단폭 × 1/n) — 원천 순위가 소단 때문에 바뀔 수 있는 크기.</summary>
         public readonly double BenchDrop;
-        public Prof(RoadGrade.SlopeRule r, double reach)
+        /// <summary>★[v117.16 · JACK 1112 «실무대로 바꿔»] 면(단 k · 가장자리에서 거리 [A, B] · 수직 옹벽인가) — 옛 <see cref="RoadGrade.Face"/>와 같은 꼴(소단선 · 옹벽선 역할).</summary>
+        public readonly List<RoadGrade.Face> Faces = new();
+        /// <summary>★[v117.16] 몇 번째 단부터 수직 옹벽(−1 = 기본 단면) · 옹벽 사이 소단 길이.</summary>
+        public readonly int Tier = -1; public readonly double BenchL;
+        public Prof(RoadGrade.SlopeRule r, double reach) : this(r, reach, -1, 0, 0.01) { }
+        /// <summary>★[v117.16 · JACK 1112 «[옹벽 변환]도 고리 엔진»] 변형 단면 — 단 <paramref name="tier"/>부터 수직 옹벽(평면폭 단높이 × <paramref name="minSlope"/>) + 소단 <paramref name="benchL"/>
+        /// (옛 <c>RoadGrade.Profile</c>과 같은 꺾임 · tier &lt; 0 = 기본 — 비트 같음).</summary>
+        public Prof(RoadGrade.SlopeRule r, double reach, int tier, double benchL, double minSlope)
         {
             double d = 0, rise = 0, bh = Math.Max(0.1, r.BenchH), n = Math.Max(0.01, r.Slope), bw = Math.Max(0, r.BenchW);
+            double ms = Math.Clamp(minSlope, 0.001, 0.2), bl = Math.Max(0, benchL);
+            Tier = tier; BenchL = bl;
             int fk = 0;
             while (d < reach + bh * n + bw && rise < r.MaxRise)
             {
-                d += bh * n; rise += bh; E.Add((d, rise)); K.Add(fk + 1);
-                if (bw > 0) { d += bw; E.Add((d, rise)); K.Add(fk + 1); }
+                bool wall = tier >= 0 && fk >= tier;
+                double w = bh * (wall ? ms : n), b = wall ? bl : bw;
+                Faces.Add(new RoadGrade.Face(fk, d, d + w, wall));
+                d += w; rise += bh; E.Add((d, rise)); K.Add(fk + 1);
+                if (b > 0) { d += b; E.Add((d, rise)); K.Add(fk + 1); }
                 fk++;
             }
-            Tail = 1.0 / n; BenchDrop = bw / n;
+            Tail = tier >= 0 ? 1.0 / ms : 1.0 / n; BenchDrop = bw / n;
         }
         /// <summary>F(d) — d ≤ 0이면 0.</summary>
         public double F(double d)
@@ -64,6 +76,26 @@ public static partial class RoadRing
         public bool[] Convex = Array.Empty<bool>();
         /// <summary>둘레 변 i(점 i → i+1)의 바깥 법선.</summary>
         public double[] NX = Array.Empty<double>(), NY = Array.Empty<double>();
+        // ★★[v117.16 · JACK 1112 «[옹벽 변환]도 고리 엔진 · 측점별 단면»] 계단선 변환 옹벽 기록(옛 엔진과 같은 정리 · 같은 단면 번호) — 둘레 변 · 꼭짓점마다 단면 번호
+        /// <summary>정리한 기록(S0 &lt; S1 · 쪽 ±1 · 나중 것이 이김).</summary>
+        public readonly List<RoadGrade.TierWall> Recs = new();
+        /// <summary>기록 → 단면 번호(0 = 기본 · −1 = 가장자리 옹벽(0단 · 소단 0) — 고리 엔진은 안 받음 · 1.. = 변형 · 옛 엔진 RecProf와 같은 번호).</summary>
+        public int[] RecProf = Array.Empty<int>();
+        /// <summary>단면 번호 → (옹벽 시작 단, 소단 길이) — 0 = 기본(−1, 0).</summary>
+        public readonly List<(int Tier, double BenchL)> ProfKeys = new() { (-1, 0) };
+        /// <summary>둘레 변 j(점 j → j+1)의 단면 번호 · 꼭짓점 j의 단면 번호(두 변이 다르면 옹벽이 덜한 쪽 — 벽 끝 날개가 그 꼭짓점에서 시작).</summary>
+        public int[] SegProf = Array.Empty<int>(), VtxProf = Array.Empty<int>();
+        /// <summary>둘레 변 j의 쪽(−1 · +1 · 0 = 마구리 또는 쪽이 바뀌는 변).</summary>
+        public sbyte[] SegSide = Array.Empty<sbyte>();
+        public double MinSlope = 0.01;
+        /// <summary>그 쪽 · 측점의 단면 번호(나중 기록이 이김 · 없으면 0).</summary>
+        public int ProfAt(int side, double s)
+        {
+            if (side == 0) return 0;
+            for (int i = Recs.Count - 1; i >= 0; i--)
+                if (Recs[i].Side == side && s >= Recs[i].S0 - 1e-9 && s <= Recs[i].S1 + 1e-9) return Math.Max(0, RecProf[i]);
+            return 0;
+        }
     }
 
     const double CurveDeg = 1.0, CurveStep = 0.25, DitchGap = 0.05;
@@ -148,8 +180,22 @@ public static partial class RoadRing
             foreach (var dt in inp.Ditches) { double a0 = Math.Min(dt.S0, dt.S1), a1 = Math.Max(dt.S0, dt.S1); st.Add(a0); st.Add(a0 - DitchGap); st.Add(a1); st.Add(a1 + DitchGap); }
             (X, Y, S, Z) = InsertStations(X, Y, S, Z, st);
         }
+        // ★★[v117.16 · JACK 1112 «[옹벽 변환]도 고리 엔진»] 계단선 변환 옹벽 기록 — 옛 엔진(RoadGrade.Run)과 같은 정리 · 같은 단면 번호 · 기록 끝 측점을 꼭짓점으로(단면이 꼭짓점에서 바뀜)
+        var recs = new List<RoadGrade.TierWall>(); var recProf = new List<int>(); var profKeys = new List<(int, double)> { (-1, 0) };
+        foreach (var t in inp.TierWalls)
+        {
+            if (!(Math.Abs(t.S1 - t.S0) > 1e-6) || (t.Side != -1 && t.Side != 1)) continue;
+            var tw = t with { S0 = Math.Min(t.S0, t.S1), S1 = Math.Max(t.S0, t.S1), Tier = Math.Max(0, t.Tier), BenchL = Math.Max(0, t.BenchL) };
+            recs.Add(tw);
+            if (tw.Tier <= 0 && tw.BenchL <= 0) { recProf.Add(-1); continue; }   // 가장자리 옹벽 — 고리 엔진은 안 받음(부르는 쪽 RingBase가 막음)
+            var key = (tw.Tier, Math.Round(tw.BenchL, 3));
+            int pi = profKeys.IndexOf(key); if (pi < 0) { pi = profKeys.Count; profKeys.Add(key); }
+            recProf.Add(pi);
+        }
+        if (recs.Count > 0) (X, Y, S, Z) = InsertStations(X, Y, S, Z, recs.SelectMany(r => new[] { r.S0, r.S1 }).ToList());
         int n = X.Length;
-        var d = new Deck { X = X, Y = Y, S = S, Z = Z, Length = S[^1] };
+        var d = new Deck { X = X, Y = Y, S = S, Z = Z, Length = S[^1], MinSlope = inp.MinSlope };
+        d.Recs.AddRange(recs); d.RecProf = recProf.ToArray(); d.ProfKeys.Clear(); d.ProfKeys.AddRange(profKeys);
         var sec = inp.Sec;
         // 측점마다 가로 점(왼쪽 바깥 → 오른쪽 바깥) — 옵셋(좌 −) · 높이 차
         var cols = new List<(double Off, double Dz)[]>(n);
@@ -228,6 +274,20 @@ public static partial class RoadRing
         {
             var a = d.B[(i - 1 + m) % m]; var c = d.B[i]; var e = d.B[(i + 1) % m];
             d.Convex[i] = (c.X - a.X) * (e.Y - c.Y) - (c.Y - a.Y) * (e.X - c.X) > 1e-12;
+        }
+        // ★[v117.16] 변 · 꼭짓점 쪽 · 단면 — 변 = 가운데 측점의 기록 · 꼭짓점 = 두 변이 같으면 그것 · 다르면 옹벽이 덜한(옹벽 시작 단이 큰 · 기본이 이김) 쪽
+        d.SegSide = new sbyte[m]; d.SegProf = new int[m]; d.VtxProf = new int[m];
+        for (int j = 0; j < m; j++)
+        {
+            int k = (j + 1) % m;
+            d.SegSide[j] = d.BSide[j] == d.BSide[k] ? d.BSide[j] : (sbyte)0;
+            d.SegProf[j] = d.SegSide[j] == 0 || d.Recs.Count == 0 ? 0 : d.ProfAt(d.SegSide[j], (d.BS[j] + d.BS[k]) / 2);
+        }
+        int Rank(int p) => p <= 0 || p >= d.ProfKeys.Count ? int.MaxValue : d.ProfKeys[p].Tier;
+        for (int j = 0; j < m; j++)
+        {
+            int a = d.SegProf[(j - 1 + m) % m], b = d.SegProf[j];
+            d.VtxProf[j] = a == b ? a : Rank(a) >= Rank(b) ? a : b;
         }
         var gf = new GeometryFactory();
         var cs = d.B.Select(p => new Coordinate(p.X, p.Y)).Append(new Coordinate(d.B[0].X, d.B[0].Y)).ToArray();

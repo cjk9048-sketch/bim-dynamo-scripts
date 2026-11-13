@@ -88,17 +88,25 @@ public static class ExcavBundleStore
     /// <para>★[JACK 0909] <b>v3 = v2 + 기준면(<see cref="ExcavBundle.Base"/>).</b>
     /// v1·v2를 읽으면 <c>Lower</c>로 채운다 — 그 시절 형상 그대로다.</para>
     /// <para>★[JACK 0909] <b>v4 = v3 + 가시설 구간(<see cref="ExcavBundle.WallZones"/>).</b>
-    /// v1~v3을 읽으면 비워 둔다 — 그 시절은 구조물 전체로만 갈랐으므로 형상이 안 바뀐다.</para></summary>
-    private const int Version = 4;
+    /// v1~v3을 읽으면 비워 둔다 — 그 시절은 구조물 전체로만 갈랐으므로 형상이 안 바뀐다.</para>
+    /// <para>★[v117.16 · JACK 1112 «찍고 노선상에서 마지막 선 찍고 날개 찍었던 그 방식»] <b>v5 = v4 + 구간마다 날개 방향</b>(<see cref="DH.Grading.Core.SlopeZone.WingT0"/> · T1).
+    /// 날개 단 구간이 하나도 없으면 <b>v4로 쓴다</b> — 옛 애드인이 그 도면을 그대로 읽게.</para></summary>
+    private const int Version = 5;
     private const string Sig = "DH_EXCAV";
 
     public static void SaveAll(Database db, Transaction tr,
                                System.Collections.Generic.IReadOnlyList<ExcavBundle> list)
     {
+        // ★[v117.16] 날개 단 구간이 있을 때만 v5 — 없으면 v4 그대로(옛 애드인 호환)
+        bool wings = false;
+        foreach (var e in list)
+            if (e.WallZones != null)
+                foreach (var z in e.WallZones) if (z != null && z.HasWings) { wings = true; break; }
+        int ver = wings ? Version : 4;
         var vals = new System.Collections.Generic.List<TypedValue>
         {
             new((int)DxfCode.Text, Sig),
-            new((int)DxfCode.Int32, Version),
+            new((int)DxfCode.Int32, ver),
             new((int)DxfCode.Int32, list.Count),
         };
         foreach (var e in list)
@@ -108,7 +116,7 @@ public static class ExcavBundleStore
             vals.Add(new((int)DxfCode.Real, e.Slope));
             vals.Add(new((int)DxfCode.Real, e.MinSlope));       // v2 — 그때의 하한을 함께 굳힌다
             vals.Add(new((int)DxfCode.Int32, e.Base));          // v3 — 그때의 기준면을 함께 굳힌다
-            WriteZones(vals, e.WallZones);                      // v4 — 가시설 구간
+            WriteZones(vals, e.WallZones, ver);                 // v4 — 가시설 구간 · v5 — 날개
             WritePts(vals, e.Bottom);
             WritePts(vals, e.FinalRing);
         }
@@ -188,7 +196,7 @@ public static class ExcavBundleStore
                 // ★v1·v2에는 기준면이 없다 — 그 시절은 <b>언제나 낮은 쪽</b>이었다(형상이 안 바뀐다).
                 e.Base = ver >= 3 ? I32(arr, ref i) : 0;
                 // ★v1~v3에는 가시설 구간이 없다 — 비워 두면 그 시절 형상 그대로다.
-                e.WallZones = ver >= 4 ? ReadZones(arr, ref i) : null;
+                e.WallZones = ver >= 4 ? ReadZones(arr, ref i, ver) : null;
                 e.Bottom = ReadPts(arr, ref i) ?? new System.Collections.Generic.List<Point3>();
                 e.FinalRing = ReadPts(arr, ref i);
                 if (e.Bottom.Count >= 3) list.Add(e);
@@ -240,7 +248,7 @@ public static class ExcavBundleStore
     /// <summary>가시설 구간 쓰기 — <b>정지 번들과 같은 형식</b>이다(<c>GradingBundleStore.WriteZones</c>).
     /// <para>★형식을 새로 만들지 않는다 — 같은 자료를 두 가지로 적으면 한쪽만 고쳐진다.</para></summary>
     private static void WriteZones(System.Collections.Generic.List<TypedValue> v,
-                                   System.Collections.Generic.List<DH.Grading.Core.SlopeZone>? zs)
+                                   System.Collections.Generic.List<DH.Grading.Core.SlopeZone>? zs, int ver)
     {
         v.Add(new((int)DxfCode.Int32, zs?.Count ?? 0));
         if (zs == null) return;
@@ -256,11 +264,21 @@ public static class ExcavBundleStore
                 v.Add(new((int)DxfCode.Real, r.BenchW));
             }
             WritePts(v, z.Ref);
+            // ★[v117.16] v5 — 날개 있음(1) + T0 끝 · T1 끝 방향 / 없음(0)
+            if (ver >= 5)
+            {
+                v.Add(new((int)DxfCode.Int32, z.HasWings ? 1 : 0));
+                if (z.HasWings)
+                {
+                    v.Add(new((int)DxfCode.Real, z.WingT0!.Value.X)); v.Add(new((int)DxfCode.Real, z.WingT0.Value.Y));
+                    v.Add(new((int)DxfCode.Real, z.WingT1!.Value.X)); v.Add(new((int)DxfCode.Real, z.WingT1.Value.Y));
+                }
+            }
         }
     }
 
     private static System.Collections.Generic.List<DH.Grading.Core.SlopeZone>? ReadZones(
-        TypedValue[] a, ref int i)
+        TypedValue[] a, ref int i, int ver)
     {
         int n = I32(a, ref i);
         if (n <= 0) return null;
@@ -272,6 +290,12 @@ public static class ExcavBundleStore
             for (int r = 0; r < nr; r++)
                 z.Rules.Add((I32(a, ref i), Dbl(a, ref i), Dbl(a, ref i)));
             z.Ref = ReadPts(a, ref i);
+            // ★[v117.16] v5 — 날개(v4 이하는 없음 = 종전 길)
+            if (ver >= 5 && I32(a, ref i) == 1)
+            {
+                z.WingT0 = (Dbl(a, ref i), Dbl(a, ref i));
+                z.WingT1 = (Dbl(a, ref i), Dbl(a, ref i));
+            }
             // ★[검토 0909 · 낮음] 정지 번들과 <b>정말로</b> 같은 형식이 되게 — 저쪽은 이 줄이 있다.
             z.Normalize();
             zs.Add(z);

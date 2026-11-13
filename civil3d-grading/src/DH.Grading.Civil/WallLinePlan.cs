@@ -203,7 +203,7 @@ internal static class WallLinePlan
              + (skipped > 0 ? $" · ⚠선이 아닌 사면 객체 {skipped}개는 못 자름(해치 등)" : "")
              + (bSkip > 0 ? $" · ⚠정지경계 {bSkip}곳을 못 맞춤(닫히지 않음 {bOpen} · 위상 예외 {bTopo} · 빠진 조각 {bDropped})" : "")
              + (lTopo > 0 ? $" · ⚠사면선 {lTopo}개는 위상 예외로 못 자름" : "")
-             + (xdLost > 0 ? $" · ⚠잘린 토막 {xdLost}개가 찍기 꼬리표를 잃음([사면→옹벽]이 못 찍는다)" : "")
+             + (xdLost > 0 ? $" · ⚠잘린 토막 {xdLost}개가 찍기 꼬리표를 잃음([옹벽 변환]이 못 찍는다)" : "")
              + (otherRegion > 0 ? $" · 다른 구역 사면 · 소단선 {otherRegion}개는 그대로" : "");
     }
 }

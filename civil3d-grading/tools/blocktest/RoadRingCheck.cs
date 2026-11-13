@@ -43,6 +43,8 @@ static class RoadRingCheck
     public static void Run(Action<string, bool, string> check0)
     {
         void Check(string n, bool ok, string d) => check0("S236 RR" + n, ok, d);
+        if (Environment.GetEnvironmentVariable("BLOCKTEST_CORRIDOR") == "0") RoadRing.Corridor = false;   // ★[v117.16] 개발 중 A/B(옛 E2)
+        if (Environment.GetEnvironmentVariable("BLOCKTEST_NOEXACT") == "1") RoadRing.NoExact = true;
         // ① 곧은 경사 도로 — 직각 횡단 식
         {
             var inp = Road(Line((0, 0), 0, 100), 60, 0.185, (x, y) => 60 - 0.0925 * x + 0.30 * y, 40);
@@ -99,6 +101,8 @@ static class RoadRingCheck
             var b = RoadRing.Build(inp);
             for (int w = 0; w < 2 && b.ReachHit; w++) { inp.Reach *= 1.6; b = RoadRing.Build(inp); }   // Civil RingRun과 같은 찾는 거리 넓힘
             Check($" {tag} 지어짐", b.Ok, b.Note.Length > 400 ? b.Note[..400] : b.Note);
+            if (b.Ok) Console.WriteLine($"   {tag} {b.Count.Text}");   // ★[v117.16 · 계획 1단계] 셈 한 줄
+            if (Environment.GetEnvironmentVariable("BLOCKTEST_RRNOTE") == "1") Console.WriteLine($"   {tag} 노트 {b.Note}");
             bool diag = Environment.GetEnvironmentVariable("BLOCKTEST_RRDIAG") == "1";
             if (diag) { RoadRing.DebugRing = s => Console.WriteLine($"   [단계 {tag}] {s}"); b = RoadRing.Build(inp); RoadRing.DebugRing = null; }
             if (diag && !b.Ok && b.Tris.Count > 0)

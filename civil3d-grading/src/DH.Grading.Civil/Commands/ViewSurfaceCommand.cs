@@ -290,6 +290,17 @@ public sealed class ViewSurfaceCommand
 
     const string StnRecName = "VIEW_STN_OFF";
 
+    /// <summary>★[v117.15 · JACK 1112 «종단도 그리기 했는데 평면에 측점선이 안 보여»] 종단도 · 측점을 새로 그린 뒤 — 측점 레이어를 켜고 «측점 숨김» 표시를 지운다(켠 레이어 수).</summary>
+    /// <para>★[JACK 1112 확인 «측점 보기가 꺼져 있었구나 — 기본은 켜져 있게»] 원인 = [측점 보기/숨기기]로 끈 상태(도면에 적힌 VIEW_STN_OFF)가 남아 새로 그린 측점도 꺼진 레이어에 들어감.
+    /// 이제 측점을 새로 그리면 늘 보임(숨김 표시 지움 · 꺼진 레이어 켬) — 숨기기는 그린 뒤에 [측점 보기/숨기기]로.</para>
+    internal static int ShowStationsAfterDraw(Database db, Transaction tr, out bool wasHidden)
+    {
+        wasHidden = StationsHidden(db, tr);
+        int n = SetStationLayers(db, tr, true);
+        if (wasHidden) SaveFlag(db, tr, StnRecName, false);
+        return n;
+    }
+
     static bool StationsHidden(Database db, Transaction tr)
     {
         try

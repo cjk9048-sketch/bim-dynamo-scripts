@@ -33,6 +33,14 @@ if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "pure")
     return fails == 0 ? 0 : 1;
 }
 
+// ★[v117.16 · JACK 1112] BLOCKTEST_ONLY=exwing — 터파기 가시설 날개(S290 — R · 링 깎기 · 날개 선)만
+if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "exwing")
+{
+    ExcavWingCheck.Run(Check);
+    Console.WriteLine(fails == 0 ? "\n== 전부 통과 ==" : $"\n== 실패 {fails}건 ==");
+    return fails == 0 ? 0 : 1;
+}
+
 // ★[v103.3] BLOCKTEST_ONLY=excav — 옹벽 뒷채움 터파기(S164 앞면 선 · 재기 · 띠 · S166 설정 · 목록 판 5 · S167 아래 껍질)만(개발 중 부분 시험)
 if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "excav")
 {
@@ -76,6 +84,14 @@ if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "uditch")
 if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "pave")
 {
     RoadPaveCheck.Run(Check);
+    Console.WriteLine(fails == 0 ? "\n== 전부 통과 ==" : $"\n== 실패 {fails}건 ==");
+    return fails == 0 ? 0 : 1;
+}
+
+// ★[v117.16 · JACK 1112 «실무대로 바꿔»] BLOCKTEST_ONLY=corr — 진입도로 코리더식 소단(S270)만
+if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "corr")
+{
+    RoadCorridorCheck.Run(Check);
     Console.WriteLine(fails == 0 ? "\n== 전부 통과 ==" : $"\n== 실패 {fails}건 ==");
     return fails == 0 ? 0 : 1;
 }
@@ -448,6 +464,7 @@ ZoneBlendCheck.Run(Check);   // ★[v103.1.15] S161 — 사면 구간 끝 전이
 ZoneRulerCheck.Run(Check);   // ★[v112.7 · JACK 1104] S202 — 구간 자 위 최근접 호길이(격자 색인 = 전수 셈) · 전이 띠 링 턱 0
 VerticalBudgetCheck.Run(Check);   // ★[v113.1 · JACK 1104] S213 — 부지 둘레 땅으로 잰 수직 예산(먼 산 · 닿는 언덕 · 모든 방향 데이라잇 · 성토 · 대소단 · 띠)
 PureWallsCheck.Run(Check);   // ★[v103.2] S162 · S163 — 옹벽이 든 순수면(뚜껑 · 고르기 · 목록 판 4 · 걷기)
+ExcavWingCheck.Run(Check);   // ★[v117.16] S290 — 터파기 가시설 날개
 ExcavCheck.Run(Check);   // ★[v103.3] S164 · S166 · S167 — 옹벽 뒷채움 터파기(앞면 선 · 재기 · 띠 · 설정 · 목록 판 5 · 아래 껍질)
 WallSectionCheck.Run(Check);   // ★[v104] S168 — 옹벽 형식별 일반단면(첫 표 · 단면 넓이 · 표 고르기 · 터파기 범위 · 기록)
 WallSecExcavCheck.Run(Check);   // ★[v104] S169 — 단면 → 터파기 띠(구간 · 꺾임 · 도랑) · 면 기록 · 구조물 공제(기둥법) · 표 지문
@@ -488,6 +505,9 @@ RoadEnvelopeCheck.Run(Check);   // ★[v113.3] S214 EV — 진입도로 점 평�
 // ★[JACK 1111 «빌드 속도»] BLOCKTEST_SKIP에 ring이 있으면(쉼표로 여럿 — 예: fill,ring) S236 고리 묶음을 건너뛴다 — 진입도로 엔진을 안 건드린 판
 if (!(Environment.GetEnvironmentVariable("BLOCKTEST_SKIP") ?? "").Split(',').Contains("ring"))
 RoadRingCheck.Run(Check);       // ★[v116 · JACK 1109 고리 엔진] S236 RR — 옹벽 없는 진입도로 고리 엔진(곧은 길 = 횡단 · V 굽이 · 헤어핀 · 세모 겹침 0 · 턱 0)
+// ★[v117.16] S270 RC — 코리더식 소단(헤어핀 R 7 · 10 · 15 · 마주 보는 다리 · 2단부터 옹벽 변환) · BLOCKTEST_SKIP에 corr면 건너뜀
+if (!(Environment.GetEnvironmentVariable("BLOCKTEST_SKIP") ?? "").Split(',').Contains("corr"))
+RoadCorridorCheck.Run(Check);
 RoadWedgeCheck.Run(Check);      // ★[v114.3 · JACK 1105 오목부] S217 RW — 급한 굽은 안쪽 쐐기(흘러내림 자르지 않기 · 주름 끝 너머 빈 사면 · B1 평가기 하나)
 MicroNeedleCheck.Run(Check);    // ★[v116.9 · JACK 1110 부지 옹벽 합성 실패] S241 MN — Civil이 뒤집을 짧은 변 바늘(118 µm · 짧은 변 0.27 mm · 11.8 mm)
 RoadPaveCheck.Run(Check);       // ★[v116.8 · JACK 1110 포장 종류] S237 PV — 층 · 고리 · 도장 · 줄눈 · 지형 가르기

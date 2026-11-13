@@ -29,6 +29,9 @@ public static class BoundaryDraw
         public string Why = "";
         /// <summary>거절 자리(빨간 X) — 없으면 null.</summary>
         public (double X, double Y)? At;
+        /// <summary>★[v117.14.1 · JACK 1112 «부지에 겹치면 겹치는 부분 빨간 해치 — 지금은 빨간 선 + X»] 거절 까닭이 부지 바닥(계획선 · 도로 띠)에 닿음 · 붙음 —
+        /// 부르는 쪽이 X 대신 겹침 미리보기(빨간 칠)를 보일 수 있게.</summary>
+        public bool Floor;
         public bool Ok => Kind != Kind.No;
     }
 
@@ -92,7 +95,32 @@ public static class BoundaryDraw
         return g;
     }
 
-    static Step No(string why, double x, double y) => new() { Kind = Kind.No, Why = why, At = (x, y) };
+    static Step No(string why, double x, double y, bool floor = false) => new() { Kind = Kind.No, Why = why, At = (x, y), Floor = floor };
+
+    /// <summary>★[v117.14.1 · JACK 1112 «미리보기 어디든 생기게»] (<paramref name="x"/>, <paramref name="y"/>)에서 (<paramref name="dx"/>, <paramref name="dy"/>) 쪽으로 간 반직선이
+    /// 경계 고리(고친 고리)를 처음 지나는 자리(세계 좌표) — 없으면 null. 그리는 중 커서 뒤를 경계까지 임시로 잇는 데(미리보기 판정용) 쓴다.</summary>
+    public static (double X, double Y)? RayExit(Ctx g, double x, double y, double dx, double dy)
+    {
+        double l = Math.Sqrt(dx * dx + dy * dy);
+        if (!(l > 1e-12)) return null;
+        var a = g.C(x, y);
+        var env = g.Bd.EnvelopeInternal;
+        double far = 2 * (env.Width + env.Height) + Math.Abs(a.X - env.Centre.X) + Math.Abs(a.Y - env.Centre.Y) + 1;
+        var b = new Coordinate(a.X + dx / l * far, a.Y + dy / l * far);
+        var li = new RobustLineIntersector();
+        var ring = g.Ring;
+        double best = double.MaxValue; Coordinate? hit = null;
+        for (int j = 0; j + 1 < ring.Length; j++)
+        {
+            li.ComputeIntersection(a, b, ring[j], ring[j + 1]);
+            for (int q = 0; q < li.IntersectionNum; q++)
+            {
+                var h = li.GetIntersection(q); double d = h.Distance(a);
+                if (d > 1e-9 && d < best) { best = d; hit = h; }
+            }
+        }
+        return hit == null ? null : (hit.X + g.Ox, hit.Y + g.Oy);
+    }
 
     /// <summary>찍은 점(WCS)을 화면 시선 방향(<paramref name="vx"/>, <paramref name="vy"/>, <paramref name="vz"/> — 대상 → 눈)으로 경계 평면 Z = 0에 내린 자리.
     /// 위에서 본 화면(시선 Z만) · Z = 0인 점은 X · Y 그대로 · 시선이 수평이면(내릴 수 없음) X · Y 그대로.</summary>
@@ -173,7 +201,7 @@ public static class BoundaryDraw
         var n = Nearest(g, x, y);
         // ★[v117.9.3 · JACK 1112 «초보가 알게 · 단답형»] 점마다 거절 글 = «무엇이 문제 → 할 일»(습니다체 · 하세요체 안 씀)
         if (n.D > snap) return No("첫 점 = 초록 경계 위 클릭", x, y);
-        if (g.Floor != null && g.Floor.Distance(g.Gf.CreatePoint(g.C(n.X, n.Y))) < 0.1) return No("이 경계 자리 = 부지 바닥(계획선 · 도로)에 붙음 → 다른 자리 클릭", n.X, n.Y);
+        if (g.Floor != null && g.Floor.Distance(g.Gf.CreatePoint(g.C(n.X, n.Y))) < 0.1) return No("이 경계 자리 = 부지 바닥(계획선 · 도로)에 붙음 → 다른 자리 클릭", n.X, n.Y, true);
         return new Step { Kind = Kind.Start, X = n.X, Y = n.Y };
     }
 
@@ -234,7 +262,7 @@ public static class BoundaryDraw
         {
             var s = pts[0];
             if (Math.Sqrt((cx - s.X) * (cx - s.X) + (cy - s.Y) * (cy - s.Y)) < 1.0) return No("끝 점이 시작점과 너무 가까움 → 경계의 다른 자리 클릭", cx, cy);
-            if (g.Floor != null && g.Floor.Distance(g.Gf.CreatePoint(g.C(cx, cy))) < 0.1) return No("이 경계 자리 = 부지 바닥(계획선 · 도로)에 붙음 → 다른 자리 클릭", cx, cy);
+            if (g.Floor != null && g.Floor.Distance(g.Gf.CreatePoint(g.C(cx, cy))) < 0.1) return No("이 경계 자리 = 부지 바닥(계획선 · 도로)에 붙음 → 다른 자리 클릭", cx, cy, true);
         }
         // 토막 a → b — 경계와 만나는 자리는 경계 위 끝 점(첫 토막의 a · 끝 토막의 b)만
         var b0 = g.C(cx, cy);
@@ -252,7 +280,7 @@ public static class BoundaryDraw
             if (dF < 0.1)
             {
                 var np = NetTopologySuite.Operation.Distance.DistanceOp.NearestPoints(seg, g.Floor);
-                return No(dF <= 1e-9 ? "선이 부지 바닥(계획선 · 도로)을 지남 → 사면 띠 안에서만" : string.Format(ci, "선이 부지 바닥(계획선 · 도로)에 너무 붙음({0:F2} m) → 0.1 m 넘게 떼기", dF), np[0].X + g.Ox, np[0].Y + g.Oy);
+                return No(dF <= 1e-9 ? "선이 부지 바닥(계획선 · 도로)을 지남 → 사면 띠 안에서만" : string.Format(ci, "선이 부지 바닥(계획선 · 도로)에 너무 붙음({0:F2} m) → 0.1 m 넘게 떼기", dF), np[0].X + g.Ox, np[0].Y + g.Oy, true);
             }
         }
         // 앞 토막과 엇갈림(바로 앞 토막은 끝 점만 닿음)

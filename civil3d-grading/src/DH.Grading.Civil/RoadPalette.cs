@@ -164,7 +164,7 @@ internal sealed class RoadPanel : UserControl
 
         // ── ■ 옹벽 ──
         // ★★[v111.7 · JACK 1102] [옹벽 변환] [사면 변환](옛 ■ 진입도로 수정에서 옮김 — 전체 해제는 명령 안 C · 부지와 같음) → 옹벽 제안 한 줄(제안 높이 · [사업 경계]) · 풍선 글은 쉬운 말로
-        _host = GradingDialog.AddCollapsible(_root, "■ 옹벽", "사면 → 옹벽 · 옹벽 → 사면 · 옹벽 추가 · 삭제", open: false, key: "도로:옹벽", group: GT);
+        _host = GradingDialog.AddCollapsible(_root, "■ 옹벽", "옹벽 변환 · 사면 변환 · 옹벽 추가 · 삭제", open: false, key: "도로:옹벽", group: GT);
         // ★★[v113.0 · JACK 1104 «옹벽 변환은 소단선 변형 · 폴리선 옹벽 추가는 별도 단추»] [사면→옹벽] · [옹벽→사면] · [옹벽 추가](풍선 글 짧게)
         // ★[v117.12 · JACK 1112] 부지 창과 같은 자리 — 왼쪽 단추(1줄 사면→옹벽 · 옹벽→사면 / 2줄 옹벽 추가 · 옹벽 삭제) · 오른쪽 예시 칸(FixDemoView). 단추 그대로 Buttons와 같이 Act로 명령을 보내고 _needRoad로 켜짐을 맞춘다
         {
@@ -178,7 +178,7 @@ internal sealed class RoadPanel : UserControl
             wCol.Children.Add(wRow1); wCol.Children.Add(wRow2);
             Grid.SetColumn(wCol, 0); Grid.SetColumn(demo, 1);
             wGrid.Children.Add(wCol); wGrid.Children.Add(demo);
-            void WB(Panel row, string text, string cmd, string tip, string key)
+            Button WB(Panel row, string text, string cmd, string tip, string key)
             {
                 var b = new Button { Content = text, MinWidth = 96, Height = 30, Margin = new Thickness(0, 0, 6, 4), VerticalContentAlignment = VerticalAlignment.Center, ToolTip = tip };
                 b.Click += (_, __) => Act(text, cmd);
@@ -188,11 +188,12 @@ internal sealed class RoadPanel : UserControl
                 hit.MouseEnter += (_, __) => demo.Play(key);
                 hit.MouseLeave += (_, __) => demo.Idle();
                 row.Children.Add(hit);
+                return b;
             }
-            WB(wRow1, "사면→옹벽", "DHROADWALLCONV", "계단선 클릭 → 그 단부터 바깥이 옹벽", "toWall");
-            WB(wRow1, "옹벽→사면", "DHROADSLOPECONV", "옹벽선 클릭 → 다시 사면", "toSlope");
+            WB(wRow1, "옹벽 변환", "DHROADWALLCONV", "계단선 클릭 → 그 단부터 바깥이 옹벽", "toWall");
+            WB(wRow1, "사면 변환", "DHROADSLOPECONV", "옹벽선 클릭 → 다시 사면", "toSlope");
             WB(wRow2, "옹벽 추가", "DHROADWALLADD", "경계 → 사면 띠 안 → 경계 클릭 → 선 따라 옹벽", "add");
-            WB(wRow2, "옹벽 삭제", "DHROADWALLDEL", "[옹벽 추가] 옹벽 자리 클릭 → Enter → 옹벽 지움 · 원래 사면", "delete");
+            _roadDel = WB(wRow2, "옹벽 삭제", "DHROADWALLDEL", "[옹벽 추가] 옹벽 자리 클릭 → Enter → 옹벽 지움 · 원래 사면", "delete");
             _host.Children.Add(wGrid);
         }
         // ★[v116.4 · JACK 1109 «옹벽 제안 기능은 필요 없으니 없앨 것»] 옹벽 제안 한 줄(제안 높이 · [사업 경계]) 없앰 — 옛 기록 칸(SuggestH · LimitHandle)은 읽기만 하고 안 씀
@@ -367,8 +368,12 @@ internal sealed class RoadPanel : UserControl
     {
         try { _resetBtn.IsEnabled = s != null || Commands.ResetCommand.AnyRoad(AcadApp.DocumentManager.MdiActiveDocument?.Database); }
         catch { _resetBtn.IsEnabled = true; }
+        // ★[v117.14.1 · JACK 1112 «옹벽 삭제 버튼은 옹벽 추가가 한 번이라도 수행돼 삭제시킬 게 있을 때만 활성화»] 이 도로의 [옹벽 추가] 기록이 있을 때만
+        try { if (_roadDel != null) _roadDel.IsEnabled = s != null && (s.Design?.BoundWalls?.Count ?? 0) > 0; } catch { }
     }
     TextBlock _autoState = null!;
+    /// <summary>★[v117.14.1] [옹벽 삭제](DHROADWALLDEL) — 지울 [옹벽 추가] 기록이 있을 때만 켬(<see cref="RefreshReset"/>).</summary>
+    Button? _roadDel;
 
     /// <summary>★★[v111.7.2 · JACK 1102] ■ 결과 상태 줄 — 최신(«✓ 최신 — 지표면 · 종단도 · 횡단도») · 고친 것이 있음(«고친 것이 있습니다 — [업데이트]를 누르세요» + [업데이트] 깜박) ·
     /// [업데이트]가 못 한 까닭(실패 · 자리 모름 · 겹침) · 다시 그리다 지워진 종단도 · 횡단도 · 다시 만든 지표면이 지운 노리선. 돌려줌 = 글 · 주황(경고 글자) · [업데이트] 깜박.</summary>

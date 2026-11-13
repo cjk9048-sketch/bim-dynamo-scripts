@@ -49,6 +49,12 @@ public sealed class VirtualSlope
     public (double X, double Y)? JumpOtherAt { get; set; }
     /// <summary>★[v103.1.15] 띠가 옹벽 판정 한도 가까이 가파른 자리(늘려도 모자람) — 자가점검 ⚠.</summary>
     public List<string> BlendWarnings { get; } = new();
+
+    /// <summary>★[v117.15 · JACK 1112 «톱니»] 전이 띠 면의 <b>정확한 데이라잇 양옆 좁은 띠</b>(닫힌 줄 · 폭 2 cm) — <b>TIN에만</b> 넣는다(링 · 옹벽선 판정에는 안 들어간다).
+    /// 교선이 이 띠 안을 지나 꼬인 면의 대각선 톱니가 사라진다(<c>GradingGeometry.AddBandDaylight</c>).</summary>
+    public List<List<Point3>> BandLines { get; } = new();
+    /// <summary>★[v117.15 · JACK 1112 «톱니»] 전이 띠 면에서 정확한 면(자 선 따라 높이 곧게)이 원지반과 만나는 선 — 자가검증 자(<c>GradingGeometry.BandTeeth</c>) · TIN에는 안 넣는다.</summary>
+    public List<List<Point3>> BandDaylight { get; } = new();
 }
 
 /// <summary>
@@ -1094,6 +1100,37 @@ public static class GradingGeometry
             dbg.AppendLine($"  단차경계선[{tl}] {transLines[tl].Count}점 시작({transLines[tl][0].X:F1},{transLines[tl][0].Y:F1})");
         }
 
+        // ★[v117.15 · JACK 1112 «톱니»] 전이 띠 면의 정확한 데이라잇 — 링은 그대로 두고 TIN 줄만 더한다(보조선이 다 정해진 뒤 · 띠가 없으면 안 부른다 — 종전과 비트 같음)
+        if (blend != null && blend.Active && result.HasSlope)
+        {
+            long tBD = System.Diagnostics.Stopwatch.GetTimestamp();
+            // ★[v117.15.1 · 설치 전 검토 LOW] 덧붙이는 기능 — 예외가 나도 정지 전체를 멈추지 않고 띠 없이 계속(로그 한 줄)
+            try {
+            AddBandDaylight(result, platform.Count >= 3 && !p.NoPlatform ? platform : null, ringSeq, shape, ground,
+                (x, y, eb, et) =>
+                {
+                    // 이 자리에서 모서리 eb · et의 링 거리가 섞였나(실제 값 ≠ 원래 값) — 링을 지은 DistOf와 같은 셈
+                    long tIn = System.Diagnostics.Stopwatch.GetTimestamp();
+                    (bool, bool) r = (false, false);
+                    long mk = MaskAt(x, y);
+                    if (mk != 0)
+                    {
+                        var pf = ProfOf(mk);
+                        r = (Moved(pf, mk, eb), Moved(pf, mk, et));
+                    }
+                    BandTestTicks += System.Diagnostics.Stopwatch.GetTimestamp() - tIn;
+                    return r;
+                    bool Moved(StepProfile pf, long mk, int ed)
+                    {
+                        if (ed < 0 || ed >= pf.Edges.Count) return false;
+                        double dn = pf.Edges[ed].dist;
+                        return Math.Abs(blend.DistAt(x, y, ed, dn, mk, tauBuf) - dn) > 1e-9;
+                    }
+                }, dbg);
+            } catch (Exception bx) { result.BandLines.Clear(); result.BandDaylight.Clear(); dbg.AppendLine($"  ⚠띠 데이라잇 실패 — 띠 없이 계속: {bx.GetType().Name}: {bx.Message}"); }
+            BandDaylightTicks += System.Diagnostics.Stopwatch.GetTimestamp() - tBD;
+        }
+
         if (ringN > 0)
             dbg.AppendLine($"  링 {ringN}개 요약 — 점 {ringLo}~{ringHi}개 · Z {ringZLo:F2}~{ringZHi:F2}m · 완화 평균 {(double)ringRelax / ringN:F1}점");
         // ★[v103.1.15] 전이 띠 요약 — 자가검증 한 줄(«그 밖» 이음은 0이어야 한다)
@@ -1426,6 +1463,342 @@ public static class GradingGeometry
         return made;
     }
 
+    /// <summary>★[v117.15 · JACK 1112 «톱니»] 하네스 전용 — 참이면 띠 면 정확한 데이라잇을 재기만 하고 TIN 줄(<see cref="VirtualSlope.BandLines"/>)은 안 넣는다(종전 판 재현 · 옛 길이면 실패).</summary>
+    internal static bool DebugNoBandStrips;
+
+    /// <summary>★[v117.15 · JACK 1112 «톱니»] 정확한 데이라잇 양옆 좁은 띠의 반폭(자 선 위 평면 m).
+    /// 교선은 이 띠 안을 지나므로 남는 꺾임 ≈ ¼ × 띠 폭 안의 비틀림(1 mm 안 — 현장 판 셈 0.5 mm) · Civil이 0.1 mm 안 점을 합치고 0.25 mm 변을 접는 것보다 훨씬 크다.</summary>
+    private const double BandStripHalf = 0.01;
+
+    /// <summary>★★[v117.15 · JACK 1112 «사면 변환으로 구배를 1.5 바꿨다가 그 다음 사면은 0.5 바꾸고 … 마지막 원지반과 만나는 마무리가 톱니같이 되었어»]
+    /// <b>전이 띠 면의 정확한 데이라잇.</b>
+    /// <para><b>원인(1112 현장 덤프 실측).</b> 띠 안의 단 사면은 아래 링(곧음)과 위 링(곧지만 나란하지 않음 — 사면폭이 자리마다 섞여서) 사이의 <b>꼬인 면</b>이다.
+    /// TIN은 링 점 사이 칸(≈ 1 m)을 대각선 하나로 두 세모로 가르고, 두 세모의 기울기 방향이 달라(현장 0° / −18° · tan 18° = (5×1.151 − 5×0.5)/10)
+    /// 원지반과 만나는 선이 대각선마다 꺾인다 → 칸마다 톱니 하나(¼ × 칸 × tan 비틀림 ≈ 8 cm · 실측 ±7~11.5 cm · 전부 띠 안).</para>
+    /// <para><b>고침.</b> 띠 면에서 아래 링 점 A마다 <b>자 선</b>(A에서 계획 경계 법선으로 위 링까지 — 링을 민 그 법선 · 부채꼴은 꼭짓점에서 뻗는 방향)을 긋고,
+    /// 정확한 면(자 선 따라 높이가 곧게 — 링 거리를 섞은 뜻 그대로)이 원지반과 만나는 점을 찾는다. 그 점 양옆 ±<see cref="BandStripHalf"/>(자 선 위 · 정확한 면 높이)를
+    /// 이웃 자 선끼리 이은 <b>좁은 띠</b>(닫힌 줄)를 TIN에 넣으면 교선이 그 띠 안을 지나 톱니가 1 mm 안으로 준다.
+    /// 만나는 점 자체를 꼭짓점으로 넣지 않는 까닭 — 원지반 위에 딱 놓인 꼭짓점은 교선 셈(부호 판정)이 0 곁에서 갈려 선이 끊길 수 있다.</para>
+    /// <para>링 간격을 줄이는 것은 톱니를 작게 할 뿐 원인(꼬인 면의 대각선)을 그대로 둔다 — 하지 않는다. 링 · 옹벽선 판정 · 노리선은 그대로(링을 안 건드린다).</para>
+    /// <para>띠 자리 = 아래 링 점에서 면의 위 · 아래 모서리 중 하나라도 섞인 값(<see cref="ZoneBlend.DistAt"/> ≠ 원래 값) + 이웃 한 점(띠 끝 칸까지 — 띠 밖 면은 평면이라 자 선이 그대로 정확하다).
+    /// 자 선이 다른 변 몫으로 넘어가면(오목 꼭짓점 곁) · 원지반이 없거나 두 번 이상 만나면 · 링에 2δ보다 붙으면 그 자 선은 건너뛴다(띠가 끊긴다).
+    /// 좁은 띠가 링 · 코너 능선 · 단차 경계선 · 이음매 선에 닿으면 거기서 끊는다(Civil 교차 경고 · 높이 다툼 없음).</para></summary>
+    private static void AddBandDaylight(VirtualSlope result, List<Point3>? platform,
+        List<(int e, double dist, double rise, List<Point3> ring)> ringSeq, IReadOnlyList<Point3> shape, IGroundSurface ground,
+        Func<double, double, int, int, (bool Bot, bool Top)> inBand, System.Text.StringBuilder dbg)
+    {
+        // 층(아래 → 위) — 평지 링(모서리 −1 · 높이 0) 다음 링마다
+        var lv = new List<(int E, double Rise, List<Point3> Ring)>();
+        if (platform != null) lv.Add((-1, 0, platform));
+        foreach (var (e, _, rise, ring) in ringSeq) lv.Add((e, rise, ring));
+
+        // 계획 경계 변 · 바깥 법선(AddBandRuns · OutwardAt과 같은 규칙 — 반시계면 바깥 = 진행의 오른쪽)
+        int nS = shape.Count;
+        if (nS >= 2 && Math.Abs(shape[0].X - shape[nS - 1].X) < 1e-9 && Math.Abs(shape[0].Y - shape[nS - 1].Y) < 1e-9) nS--;
+        if (nS < 3) return;
+        bool ccwS = SignedArea(shape) >= 0;
+        var snx = new double[nS]; var sny = new double[nS];
+        for (int j = 0; j < nS; j++)
+        {
+            var a = shape[j]; var b = shape[(j + 1) % nS];
+            double dx = b.X - a.X, dy = b.Y - a.Y, l = Math.Sqrt(dx * dx + dy * dy);
+            if (l < 1e-12) continue;
+            snx[j] = ccwS ? dy / l : -dy / l; sny[j] = ccwS ? -dx / l : dx / l;
+        }
+        // 가장 가까운 경계 자리 — 변 속이면 변 번호(≥ 0) · 꼭짓점이면 −1 − 꼭짓점 번호
+        int FootKey(double x, double y)
+        {
+            double best = double.MaxValue; int key = int.MinValue;
+            for (int j = 0; j < nS; j++)
+            {
+                var a = shape[j]; var b = shape[(j + 1) % nS];
+                double ex = b.X - a.X, ey = b.Y - a.Y, l2 = ex * ex + ey * ey;
+                if (l2 < 1e-18) continue;
+                double t = ((x - a.X) * ex + (y - a.Y) * ey) / l2;
+                int k = t <= 1e-9 ? -1 - j : (t >= 1 - 1e-9 ? -1 - (j + 1) % nS : j);
+                t = t < 0 ? 0 : (t > 1 ? 1 : t);
+                double px = a.X + ex * t - x, py = a.Y + ey * t - y, d2 = px * px + py * py;
+                if (d2 < best - 1e-12) { best = d2; key = k; }
+            }
+            return key;
+        }
+
+        // 좁은 띠가 닿으면 안 되는 선 — 모든 링 · 코너 능선 · 단차 경계선 · 이음매 선(처음 쓸 때 한 번 짓는다)
+        NetTopologySuite.Index.Strtree.STRtree<(Point3 A, Point3 B)>? obst = null;
+        bool Blocked(Point3 a, Point3 b)
+        {
+            if (obst == null)
+            {
+                obst = new NetTopologySuite.Index.Strtree.STRtree<(Point3, Point3)>();
+                void AddLine(List<Point3> l, bool closed)
+                {
+                    int n = l.Count;
+                    for (int i = 0; i + 1 < n; i++) obst.Insert(new Envelope(l[i].X, l[i + 1].X, l[i].Y, l[i + 1].Y), (l[i], l[i + 1]));
+                    if (closed && n >= 3) obst.Insert(new Envelope(l[n - 1].X, l[0].X, l[n - 1].Y, l[0].Y), (l[n - 1], l[0]));
+                }
+                foreach (var r in result.Rings) AddLine(r, true);
+                foreach (var l in result.CornerLines) AddLine(l, false);
+                foreach (var l in result.SeamLines) AddLine(l, false);
+                obst.Build();
+            }
+            foreach (var (c, d) in obst.Query(new Envelope(a.X, b.X, a.Y, b.Y)))
+                if (SegTouch(a, b, c, d)) return true;
+            return false;
+        }
+
+        double h = BandStripHalf;
+        int nFace = 0, nRul = 0, nRoot = 0, nMulti = 0, nNoGnd = 0, nNear = 0, nCut = 0, nStrip = 0, nStripPts = 0;
+        var tierText = new System.Text.StringBuilder();
+        double twAll = 0, toothAll = 0; int twTier = -1;
+        for (int f = 0; f + 1 < lv.Count; f++)
+        {
+            var (eb, rb, ra) = lv[f];
+            var (et, rt, rtop) = lv[f + 1];
+            if (et != eb + 1 || Math.Abs(rt - rb) < 1e-9) continue;     // 사면 면만(소단은 수평 — 꼬여도 평면)
+            int m = ra.Count;
+            if (m >= 2 && Math.Abs(ra[0].X - ra[m - 1].X) < 1e-9 && Math.Abs(ra[0].Y - ra[m - 1].Y) < 1e-9) m--;
+            int mt = rtop.Count;
+            if (mt >= 2 && Math.Abs(rtop[0].X - rtop[mt - 1].X) < 1e-9 && Math.Abs(rtop[0].Y - rtop[mt - 1].Y) < 1e-9) mt--;
+            if (m < 3 || mt < 3) continue;
+            // ⓪ 원지반이 이 면을 지나나 — 아래 · 위 링 점이 모두 원지반 한쪽이면(원지반 없는 점 없이) 자 선 두 끝도 같은 쪽이라 한 번 만나는 자 선이 없다
+            //   (위 링 점 사이 ≤ 1 m에서 원지반이 링을 살짝 넘는 자리는 링에 붙은 만남 — 어차피 안 쓴다). 땅에 안 닿는 면의 띠 자리 판정(MaskAt)을 건너뛴다.
+            {
+                int neg = 0, pos = 0;
+                foreach (var rr in new[] { ra, rtop })
+                    foreach (var q in rr)
+                    {
+                        if (!ground.TryGetElevation(q.X, q.Y, out double gq)) { neg++; pos++; break; }
+                        if (q.Z - gq < 0) neg++; else pos++;
+                        if (neg > 0 && pos > 0) break;
+                    }
+                if (neg == 0 || pos == 0) continue;
+            }
+            // ① 띠 자리 + 이웃 한 점
+            var band = new bool[m]; bool any = false;
+            for (int i = 0; i < m; i++) { var (bb, tb) = inBand(ra[i].X, ra[i].Y, eb, et); band[i] = bb || tb; any |= band[i]; }
+            if (!any) continue;
+            nFace++;
+            var cand = new bool[m];
+            for (int i = 0; i < m; i++) if (band[i]) { cand[i] = true; cand[(i - 1 + m) % m] = true; cand[(i + 1) % m] = true; }
+            // ② 자 선(A → B) · 정확한 면이 원지반과 만나는 점
+            var run = new double[m]; var dm = new Point3[m]; var dp = new Point3[m]; var d0 = new Point3[m]; var ok = new bool[m]; var foot = new int[m];
+            System.Array.Fill(run, double.NaN);
+            for (int i = 0; i < m; i++)
+            {
+                if (!cand[i]) continue;
+                var A = ra[i];
+                int key = FootKey(A.X, A.Y);
+                if (key == int.MinValue) continue;
+                double nx, ny;
+                if (key >= 0) { nx = snx[key]; ny = sny[key]; }
+                else
+                {
+                    int v = -1 - key;
+                    double dx = A.X - shape[v].X, dy = A.Y - shape[v].Y, dl = Math.Sqrt(dx * dx + dy * dy);
+                    if (dl > 1e-6) { nx = dx / dl; ny = dy / dl; }                    // 부채꼴 · 마이터 쐐기 — 꼭짓점에서 뻗는 방향(자 위 매개가 한 점이라 면이 평면 · 원뿔)
+                    else
+                    {
+                        // 평지 링의 꼭짓점 — 볼록일 때만 두 변 법선의 가운데로
+                        int jp = (v - 1 + nS) % nS;
+                        var pv = shape[jp]; var pc = shape[v]; var pn = shape[(v + 1) % nS];
+                        double cr = (pc.X - pv.X) * (pn.Y - pc.Y) - (pc.Y - pv.Y) * (pn.X - pc.X);
+                        double cx = snx[jp] + snx[v], cy = sny[jp] + sny[v], cl = Math.Sqrt(cx * cx + cy * cy);
+                        if (!(ccwS ? cr > 1e-12 : cr < -1e-12) || cl < 1e-9) continue;
+                        nx = cx / cl; ny = cy / cl;
+                    }
+                }
+                // 위 링과 처음 만나는 자리 — 그 변이 이음(> RingSegMaxM · TIN 브레이크라인에서 빠진 변)이면 높이가 TIN이 아니라 건너뛴다
+                double bestT = double.PositiveInfinity, bz = 0, bseg = 0;
+                for (int k = 0; k < mt; k++)
+                {
+                    var p0 = rtop[k]; var p1 = rtop[(k + 1) % mt];
+                    double sx = p1.X - p0.X, sy = p1.Y - p0.Y;
+                    double den = nx * sy - ny * sx;
+                    if (Math.Abs(den) < 1e-12) continue;
+                    double wx = p0.X - A.X, wy = p0.Y - A.Y;
+                    double t = (wx * sy - wy * sx) / den;
+                    if (t <= 1e-9 || t >= bestT) continue;
+                    double u = (wx * ny - wy * nx) / den;
+                    if (u < -1e-12 || u > 1 + 1e-12) continue;
+                    bestT = t; bz = p0.Z + (p1.Z - p0.Z) * Math.Clamp(u, 0, 1); bseg = Math.Sqrt(sx * sx + sy * sy);
+                }
+                if (double.IsInfinity(bestT) || bseg > BreaklinePrep.RingSegMaxM) continue;
+                double L = bestT, bx = A.X + nx * L, by = A.Y + ny * L;
+                if (FootKey(bx, by) != key) continue;                                    // 자 선이 다른 변 몫으로 넘어감(오목 꼭짓점 곁)
+                run[i] = L; foot[i] = key; nRul++;
+                double za = A.Z;
+                double Fz(double s, out bool okG)
+                {
+                    double x = A.X + (bx - A.X) * s, y = A.Y + (by - A.Y) * s;
+                    okG = ground.TryGetElevation(x, y, out double g);
+                    return za + (bz - za) * s - g;
+                }
+                // 0.5 m마다 부호를 보고(원지반 세모 몇 m보다 촘촘) 바뀐 칸에서 반씩 좁힌다 — 교선 셈과 같은 부호 규칙(0은 양)
+                int K = Math.Max(2, (int)Math.Ceiling(L / 0.5));
+                double fPrev = Fz(0, out bool gPrev), sRoot = double.NaN; int roots = 0; bool noG = !gPrev;
+                for (int k = 1; k <= K && !noG; k++)
+                {
+                    double s1 = (double)k / K, f1 = Fz(s1, out bool g1);
+                    if (!g1) { noG = true; break; }
+                    if ((fPrev < 0) != (f1 < 0))
+                    {
+                        roots++;
+                        double lo = (double)(k - 1) / K, hi = s1; bool loNeg = fPrev < 0;
+                        for (int it = 0; it < 60 && !noG; it++)
+                        {
+                            double mid = (lo + hi) * 0.5, fm = Fz(mid, out bool gm);
+                            if (!gm) { noG = true; break; }
+                            if ((fm < 0) == loNeg) lo = mid; else hi = mid;
+                        }
+                        sRoot = (lo + hi) * 0.5;
+                    }
+                    fPrev = f1;
+                }
+                if (noG) { nNoGnd++; continue; }
+                if (roots == 0) continue;
+                if (roots > 1) { nMulti++; continue; }
+                nRoot++;
+                if (sRoot * L < 2 * h || (1 - sRoot) * L < 2 * h) { nNear++; continue; }   // 링에 붙은 만남 — 링(곧은 줄 · 한 높이)이 교선을 그대로 잡는다
+                Point3 At(double s) => new(A.X + (bx - A.X) * s, A.Y + (by - A.Y) * s, za + (bz - za) * s);
+                d0[i] = At(sRoot); dm[i] = At(sRoot - h / L); dp[i] = At(sRoot + h / L);
+                if (Blocked(dm[i], dp[i])) { nCut++; continue; }                          // 자 선 위 2 cm 마개도 다른 줄에 닿으면 안 된다(코너 능선 위 자 선)
+                ok[i] = true;
+            }
+            // 이 면의 비틀림 — 같은 변(같은 꼭짓점) 위 이웃 자 선의 사면폭 차 Δ: 칸 하나의 톱니 ≈ Δ/4(¼ × 칸 × tan 비틀림) · 모서리를 걸친 칸은 꼬임이 아니라 꺾임이라 안 센다
+            double twMax = 0, toothMax = 0;
+            for (int i = 0; i < m; i++)
+            {
+                int j = (i + 1) % m;
+                if (double.IsNaN(run[i]) || double.IsNaN(run[j]) || foot[i] != foot[j] || !(band[i] || band[j])) continue;
+                double sp = Math.Sqrt((ra[j].X - ra[i].X) * (ra[j].X - ra[i].X) + (ra[j].Y - ra[i].Y) * (ra[j].Y - ra[i].Y));
+                if (sp < 1e-6 || sp > BreaklinePrep.RingSegMaxM) continue;
+                double dr = Math.Abs(run[j] - run[i]);
+                twMax = Math.Max(twMax, Math.Atan2(dr, sp) * 180 / Math.PI);
+                toothMax = Math.Max(toothMax, dr / 4);
+            }
+            int tier = et / 2 + 1;
+            if (toothMax >= 5e-4) tierText.Append($" {tier}단 {twMax:0.#}°/{toothMax * 100:0.#}cm");
+            if (toothMax > toothAll) { toothAll = toothMax; twAll = twMax; twTier = tier; }
+            // ③ 이어진 만남 점 → 좁은 띠(닫힌 줄: − 쪽 앞으로 · + 쪽 뒤로) · 정확한 선
+            int start = -1;
+            for (int i = 0; i < m; i++) if (!ok[i]) { start = i; break; }
+            if (start < 0) start = 0;                                                        // 고리 전체(드묾) — 열린 띠로
+            var cm = new List<Point3>(); var cp = new List<Point3>(); var c0 = new List<Point3>();
+            void Flush()
+            {
+                if (c0.Count >= 2)
+                {
+                    var strip = new List<Point3>(cm.Count * 2 + 1);
+                    strip.AddRange(cm);
+                    for (int q = cp.Count - 1; q >= 0; q--) strip.Add(cp[q]);
+                    strip.Add(cm[0]);
+                    if (!DebugNoBandStrips) result.BandLines.Add(strip);
+                    result.BandDaylight.Add(new List<Point3>(c0));
+                    nStrip++; nStripPts += strip.Count - 1;
+                }
+                cm.Clear(); cp.Clear(); c0.Clear();
+            }
+            int prev = -1;
+            for (int s = 1; s <= m; s++)
+            {
+                int i = (start + s) % m;
+                if (!ok[i]) { Flush(); prev = -1; continue; }
+                if (prev >= 0)
+                {
+                    double sl = Math.Sqrt((ra[i].X - ra[prev].X) * (ra[i].X - ra[prev].X) + (ra[i].Y - ra[prev].Y) * (ra[i].Y - ra[prev].Y));
+                    if (sl > BreaklinePrep.RingSegMaxM || Blocked(dm[prev], dm[i]) || Blocked(dp[prev], dp[i])) { nCut++; Flush(); }
+                }
+                cm.Add(dm[i]); cp.Add(dp[i]); c0.Add(d0[i]);
+                prev = i;
+            }
+            Flush();
+        }
+        if (nFace == 0) return;
+        dbg.AppendLine($"  ★띠 면 정확 데이라잇 — 땅에 닿는 띠 면 {nFace}개 · 자 선 {nRul} · 땅 만남 {nRoot}(두 번 이상 {nMulti} · 땅 없음 {nNoGnd} · 링에 붙음 {nNear})" +
+                       $" · 좁은 띠 {nStrip}줄(점 {nStripPts}){(nCut > 0 ? $" · 닿아서 끊음 {nCut}" : "")}" +
+                       (twTier > 0 ? $" · 비틀림 최대 {twAll:0.#}°({twTier}단) → 고치기 전 예상 톱니 {toothAll * 100:0.#}cm" : "") +
+                       (DebugNoBandStrips ? " · (하네스: TIN에 안 넣음)" : ""));
+        if (tierText.Length > 0) dbg.AppendLine($"    단마다 비틀림/예상 톱니:{tierText}");
+    }
+
+    /// <summary>두 선분이 닿거나 엇갈리나(끝점 · 겹침 포함 — 좁은 띠가 다른 줄과 닿으면 안 된다).</summary>
+    private static bool SegTouch(Point3 a, Point3 b, Point3 c, Point3 d)
+    {
+        static double Or(Point3 p, Point3 q, Point3 r) => (q.X - p.X) * (r.Y - p.Y) - (q.Y - p.Y) * (r.X - p.X);
+        static bool On(Point3 p, Point3 q, Point3 r) => Math.Min(p.X, q.X) - 1e-12 <= r.X && r.X <= Math.Max(p.X, q.X) + 1e-12
+                                                     && Math.Min(p.Y, q.Y) - 1e-12 <= r.Y && r.Y <= Math.Max(p.Y, q.Y) + 1e-12;
+        double o1 = Or(a, b, c), o2 = Or(a, b, d), o3 = Or(c, d, a), o4 = Or(c, d, b);
+        const double z = 1e-14;
+        if (((o1 > z && o2 < -z) || (o1 < -z && o2 > z)) && ((o3 > z && o4 < -z) || (o3 < -z && o4 > z))) return true;
+        if (Math.Abs(o1) <= z && On(a, b, c)) return true;
+        if (Math.Abs(o2) <= z && On(a, b, d)) return true;
+        if (Math.Abs(o3) <= z && On(c, d, a)) return true;
+        if (Math.Abs(o4) <= z && On(c, d, b)) return true;
+        return false;
+    }
+
+    /// <summary>★[v117.15 · JACK 1112 «톱니»] <b>자가검증</b> — 교선(<paramref name="daylight"/> · Civil 교선 고리나 하네스가 TIN에서 딴 조각)이
+    /// 정확한 띠 데이라잇(<see cref="VirtualSlope.BandDaylight"/>)에서 얼마나 벗어났나 · 톱니 수.
+    /// <para>표본 = 정확한 선의 점(자 선)과 그 사이 가운데 — 칸(≈ 1 m)마다 두 번이라 칸마다 하나인 톱니가 엇갈린 부호로 잡힌다.
+    /// 어긋남 = 표본에서 가장 가까운 교선까지(정확한 선의 왼쪽 +) · 톱니 = 3점 어긋남(가운데 − 양옆 평균)이 <paramref name="teethMin"/>보다 크고 앞 표본과 부호가 엇갈린 곳.
+    /// <paramref name="reach"/> 안에 교선이 없으면 «못 찾음».</para></summary>
+    public static (int Samples, int Missing, double MaxDev, int Teeth) BandTeeth(IEnumerable<IReadOnlyList<Point3>> daylight,
+        IReadOnlyList<List<Point3>> exact, double teethMin = 0.01, double reach = 0.5)
+    {
+        var tree = new NetTopologySuite.Index.Strtree.STRtree<(Point3 A, Point3 B)>();
+        int segs = 0;
+        foreach (var l in daylight)
+            for (int i = 0; i + 1 < l.Count; i++) { tree.Insert(new Envelope(l[i].X, l[i + 1].X, l[i].Y, l[i + 1].Y), (l[i], l[i + 1])); segs++; }
+        if (segs == 0) { int all = 0; foreach (var e in exact) all += Math.Max(0, 2 * e.Count - 1); return (0, all, 0, 0); }
+        tree.Build();
+        int samples = 0, missing = 0, teeth = 0; double maxDev = 0;
+        foreach (var ex in exact)
+        {
+            int n = ex.Count;
+            if (n < 2) continue;
+            var dev = new List<double>();
+            for (int k = 0; k < 2 * n - 1; k++)
+            {
+                Point3 s; double tx, ty;
+                if (k % 2 == 0)
+                {
+                    int i = k / 2; s = ex[i];
+                    var a = ex[Math.Max(i - 1, 0)]; var b = ex[Math.Min(i + 1, n - 1)];
+                    tx = b.X - a.X; ty = b.Y - a.Y;
+                }
+                else
+                {
+                    var a = ex[k / 2]; var b = ex[k / 2 + 1];
+                    s = new Point3((a.X + b.X) * 0.5, (a.Y + b.Y) * 0.5, (a.Z + b.Z) * 0.5);
+                    tx = b.X - a.X; ty = b.Y - a.Y;
+                }
+                double best = double.MaxValue, qx = 0, qy = 0;
+                foreach (var (a, b) in tree.Query(new Envelope(s.X - reach, s.X + reach, s.Y - reach, s.Y + reach)))
+                {
+                    double sx = b.X - a.X, sy = b.Y - a.Y, l2 = sx * sx + sy * sy;
+                    double u = l2 < 1e-18 ? 0 : Math.Clamp(((s.X - a.X) * sx + (s.Y - a.Y) * sy) / l2, 0, 1);
+                    double px = a.X + sx * u, py = a.Y + sy * u, d2 = (px - s.X) * (px - s.X) + (py - s.Y) * (py - s.Y);
+                    if (d2 < best) { best = d2; qx = px; qy = py; }
+                }
+                samples++;
+                if (best > reach * reach) { missing++; dev.Add(double.NaN); continue; }
+                double d = Math.Sqrt(best);
+                if (tx * (qy - s.Y) - ty * (qx - s.X) < 0) d = -d;
+                dev.Add(d);
+                maxDev = Math.Max(maxDev, Math.Abs(d));
+            }
+            double ePrev = double.NaN;
+            for (int k = 1; k + 1 < dev.Count; k++)
+            {
+                double e3 = dev[k] - (dev[k - 1] + dev[k + 1]) * 0.5;
+                if (double.IsNaN(e3)) { ePrev = double.NaN; continue; }
+                if (Math.Abs(e3) > teethMin && !double.IsNaN(ePrev) && Math.Abs(ePrev) > teethMin && (e3 > 0) != (ePrev > 0)) teeth++;
+                ePrev = e3;
+            }
+        }
+        return (samples, missing, maxDev, teeth);
+    }
+
     /// <summary>열린 꺾은선에서 이웃 아닌 두 변이 엇갈리면 그 사이를 잘라 교차점으로 잇는다(제비꼬리) — 자른 수.</summary>
     private static int CutLoops(List<Point3> pts)
     {
@@ -1617,6 +1990,8 @@ public static class GradingGeometry
 
     /// <summary>[하네스 전용 계측] 띠 셈 횟수 · 시간(ms) — 민 토막 · 띠 판정(DistOf).</summary>
     internal static long BandEvalCount, BandRunTicks, DistOfCount, BoundaryFallback, RunCount;
+    /// <summary>★[v117.15 · JACK 1112 «톱니»] 하네스 계측 — 띠 면 정확한 데이라잇 전체 · 그중 띠 자리 판정(MaskAt · DistAt) 시간.</summary>
+    internal static long BandDaylightTicks, BandTestTicks;
 
     /// <summary>[하네스 전용 계측] 이음 고침이 본 이음을 한 줄씩 — 출하 DLL 밖에서 못 건드리게 internal(InternalsVisibleTo blocktest).</summary>
     internal static Action<string>? JoinDebug;

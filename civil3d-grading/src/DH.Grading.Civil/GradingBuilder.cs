@@ -27,9 +27,12 @@ public static class GradingBuilder
     /// 코너 능선과 달리 <c>BreaklinePrep</c>의 교차 처리에 <b>안 넣는다</b>(수백 건이 생겨 둘 다 망가진다).</param>
     /// <param name="midOrd">브레이크라인 허용오차(m). <b>넣는 형상보다 작아야 한다</b> —
     /// 옹벽처럼 0.05m 면이 있는 것은 기본값 1.0m로는 뭉개진다(JACK 0914 실측: 측면이 사라졌다).</param>
+    /// <param name="bandLines">★[v117.15 · JACK 1112 «톱니»] 전이 띠 면의 정확한 데이라잇 양옆 좁은 띠(닫힌 줄 · <see cref="VirtualSlope.BandLines"/>) — <b>TIN에만</b> 넣는다.
+    /// 링 · 보조선에 안 닿게 Core가 이미 끊었다 — 교차 처리(<c>BreaklinePrep</c>)에 안 넣는다.</param>
     public static ObjectId BuildVirtualSlope(Database db, Transaction tr, IReadOnlyList<List<Point3>> rings, string name,
         IReadOnlyList<List<Point3>>? cornerLines = null, ObjectId protect = default,
-        IReadOnlyList<List<Point3>>? seamLines = null, double midOrd = 1.0)
+        IReadOnlyList<List<Point3>>? seamLines = null, double midOrd = 1.0,
+        IReadOnlyList<List<Point3>>? bandLines = null)
     {
         // [재실행 정리] 같은 이름(및 _2, _3… 번호 변형)의 옛 DH 가상면을 먼저 삭제 — 실행마다 쌓여
         // 옛 표면을 보고 "안 생겼다"고 오인하는 혼란 방지(JACK). 항상 최신 하나만 남는다. 원지반(protect)은 제외.
@@ -58,6 +61,13 @@ public static class GradingBuilder
             intended += seamLines.Count;
         }
         LastSeamLines = seamLines;   // ★아래 자가검증이 쓴다 — 끊긴 자리를 정말 덮었나
+        // ★[v117.15 · JACK 1112 «톱니»] 전이 띠 면 정확한 데이라잇 좁은 띠 — TIN에만(교선이 이 띠 안을 지나 꼬인 면 대각선 톱니가 없어진다)
+        int bandN = 0;
+        if (bandLines != null)
+        {
+            foreach (var bl in bandLines) { AddOpenBreakline(tin, bl); bandN++; }
+            intended += bandN;
+        }
         tin.Rebuild();
 
         // [TIN 실측 검증] 의도한 링 점 Z vs 실제 TIN 표고 — 불일치가 어느 방향에 몰렸는지 기록(비대칭 원인 추적).
@@ -72,6 +82,7 @@ public static class GradingBuilder
                             ? $" · ★링이 끊긴 자리 {DiveCount}곳(최장 {DiveMaxLen:F1}m @ {DiveMaxX:F0},{DiveMaxY:F0}){DiveWhere}"
                             : " · 링 안 끊김") +
                           SeamCoverText() +
+                          (bandN > 0 ? $" · 띠 데이라잇 좁은 띠 {bandN}줄" : "") +
                           (sharedPts > 0 ? $" · 보조선-링 공유정점 {sharedPts}개 삽입(교차 경고 제거, maxΔZ {BreaklinePrep.LastMaxZGap:F3}m)" : "") +
                           (BreaklinePrep.LastMaxZGap > 2.0 ? " · ΔZ>2m 교차는 스냅 생략(안전판 — 형상 무해, Civil3D 경고만 남음)" : ""));
             // ★[JACK 0914 로그] <b>링이 하나도 없을 수 있다.</b> 옹벽 판은 링이 아니라

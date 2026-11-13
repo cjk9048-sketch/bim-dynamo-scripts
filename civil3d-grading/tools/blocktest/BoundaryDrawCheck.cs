@@ -131,6 +131,21 @@ static class BoundaryDrawCheck
                       $"찍기 {dw}· 옛 {BoundaryCut.CodeName(old.Code)} {old.Why} · 새 늘임 A {ea} · B {eb} · {BoundaryCut.CodeName(cv.Code)} {cv.Why} · A({cv.A.X:F4},{cv.A.Y:F4}) B({cv.B.X:F4},{cv.B.Y:F4}) · 교차 {cv.Crossings}");
             }
         }
+
+        // ㉑ ★[v117.14.1 · JACK 1112 «부지에 겹치면 겹치는 부분 빨간 해치 — 지금은 빨간 선 + X»] 거절 까닭이 부지 바닥이면 Floor 표지(부르는 쪽이 X 대신 겹침 칠) · 다른 까닭은 아님
+        check("S208 ㉑ 바닥 거절만 Floor 표지 — 첫 점 바닥(③) · 선이 바닥 지남(⑨) = 참 · 홈 지남(⑥) · 엇갈림(⑩) · 경계 밖(⑤) = 거짓",
+              f3.Floor && n6.Floor && !n3.Floor && !n7.Floor && !n2.Floor && !n1.Floor, $"③ {f3.Floor} · ⑨ {n6.Floor} · ⑥ {n3.Floor} · ⑩ {n7.Floor} · ⑤ {n2.Floor} · ④ {n1.Floor}");
+        // ㉒ ★[v117.14.1 · JACK 1112 «미리보기 어디든 생기게»] 반직선이 경계를 처음 지나는 자리(커서 뒤를 경계까지 임시로 잇기) — 네모 · U 홈(가까운 쪽 먼저) · 밖을 향하면 없음
+        {
+            var cxS = BoundaryDraw.Prepare(sq, fl)!; var cxU = BoundaryDraw.Prepare(u, ufl)!;
+            var r1 = BoundaryDraw.RayExit(cxS, 20, 30, 1, 0); var r2 = BoundaryDraw.RayExit(cxS, 20, 30, -3, 0); var r3 = BoundaryDraw.RayExit(cxS, 20, 30, 1, 1);
+            var r4 = BoundaryDraw.RayExit(cxU, 15, 50, 1, 0);   // 홈(x 30) 먼저
+            var r5 = BoundaryDraw.RayExit(cxS, 120, 50, 1, 0);  // 경계 밖에서 바깥으로 — 없음
+            var r6 = BoundaryDraw.RayExit(cxS, 20, 30, 0, 0);   // 방향 없음
+            bool ok22 = r1 is { } a1 && Math.Abs(a1.X - 100) < 1e-9 && Math.Abs(a1.Y - 30) < 1e-9 && r2 is { } a2 && Math.Abs(a2.X) < 1e-9 && Math.Abs(a2.Y - 30) < 1e-9
+                && r3 is { } a3 && Math.Abs(a3.X - 90) < 1e-9 && Math.Abs(a3.Y - 100) < 1e-9 && r4 is { } a4 && Math.Abs(a4.X - 30) < 1e-9 && Math.Abs(a4.Y - 50) < 1e-9 && r5 == null && r6 == null;
+            check("S208 ㉒ 반직선 경계 출구 — 네모 (100,30) · (0,30) · (90,100) · U 홈 (30,50) · 밖으로 = 없음 · 방향 없음 = 없음", ok22, $"{r1} · {r2} · {r3} · {r4} · {r5} · {r6}");
+        }
     }
 }
 
@@ -165,5 +180,16 @@ static class WallEasyCheck
         foreach (var k in new[] { "자리", "섞인 선", "섞임 겹침", "겹침", "구간", "단 수", "도달", "바깥 벽", "바닥", "방향", "원지반", "정지면", "정지면 밖", "옛 사면", "끝 높이", "끝", "마구리", "바닥 높이 끊김", "턱", "계단", "단 표", "옛 소단", "소단 높이", "면 높이", "상자", "재료", "다단 수직", "다단 합성", "고리", "자가검증", "줄", "측선", "가로대", "띠" })
         { var s = WallEasy.Build(k, ""); if (!Terse(s)) { all = false; bad += $"{k}:{s} | "; } }
         check("S208b ⑩ 모든 코드 — 습니다체 없음 · 할 일(→) 있음", all, bad);
+        // ⑪ ★[v117.15 · JACK 1112 «끝이 초록 경계 위인데 "선 끝이 초록 경계가 아님"»] «끝 높이» — 걸린 것 = 경계가 땅과 어긋난 양(cm) · 진입도로 바깥 테두리 = 면 오차 · 옛 거짓 글 없음 · 1 cm 한도는 그대로(글만)
+        const string arcWhy = "잘라낼 자리 바깥 테두리(옛 경계)에서 정지면과 원지반이 0.032 m 다릅니다 (10.0, 20.0) — 옛 경계가 데이라잇이 아닌 자리(앞 옹벽 · 자른 자리) · 선을 옮기세요";
+        var j1 = WallEasy.Build("끝 높이", arcWhy, road: true);
+        var j2 = WallEasy.Build("끝 높이", "A에서 정지면과 원지반이 0.250 m 다릅니다 — 끝이 데이라잇이 아닙니다 · 마구리는 다음 판 (1.0, 2.0)", road: true);
+        var j3 = WallEasy.Build("끝 높이", "띠 끝 X_B에서 정지면이 원지반 반대쪽으로 1.500 m(1 cm 넘음) — 끝 B 곁 옛 경계가 데이라잇이 아닙니다 (1.00, 2.00) · 선 끝을 옮기세요");
+        var j4 = WallEasy.Build("다단 수직", "P0′에 대고 바깥 벽을 못 지었습니다 — 끝 높이: " + arcWhy, road: true);
+        var j5 = WallEasy.Build("끝 높이", arcWhy);   // 부지 — 진입도로 까닭 안 붙음
+        check("S208b ⑪ 끝 높이 — 경계가 땅과 3.2 cm 어긋남(진입도로 면 오차) · 끝 25 cm · 띠 끝 1.50 m · 다단 수직 풀어 씀 · 부지는 까닭 없음 · «경계선 위로» 없음",
+              new[] { j1, j2, j3, j4, j5 }.All(q => Terse(q) && !q.Contains("경계선 위로")) && j1.Contains("땅과 3.2 cm 어긋남") && j1.Contains("진입도로 면 오차")
+              && j2.Contains("25 cm") && !j2.Contains("면 오차") && j3.Contains("1.50 m") && j4 == j1 && j5.Contains("3.2 cm") && !j5.Contains("진입도로"),
+              $"{j1} | {j2} | {j3} | {j4} | {j5}");
     }
 }

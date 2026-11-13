@@ -26,6 +26,9 @@ internal sealed class ExcavPanel : UserControl
 {
     private readonly RadioButton _basePlan, _baseGround;
     private readonly Button _viewBase, _viewAll, _pick, _pickGround, _build;
+    /// <summary>★[v117.15 · JACK 1112 «단추마다 예시 구체적으로»] 단추를 감싼 테두리(꺼진 단추도 마우스를 받아 예시를 돌림).</summary>
+    private readonly Border _pickHit, _pickGroundHit;
+    private readonly System.Collections.Generic.List<Border> _wallHits = new();
     private readonly Button _toWall, _toSlope, _clearWall;
     private readonly TextBlock _pickWhat, _groundWhat, _status, _said, _baseHint;
     private readonly TextBox _slope;
@@ -126,8 +129,10 @@ internal sealed class ExcavPanel : UserControl
         var row = new DockPanel { Margin = new Thickness(0, 0, 0, 8), LastChildFill = true };
         _pick = new Button { Content = "터파기선 선택", MinWidth = 130, Height = 30 };
         _pick.Click += (_, __) => PickSession.Send(Doc, PickCommands.CmdExcav);
-        DockPanel.SetDock(_pick, Dock.Left);
-        row.Children.Add(_pick);
+        // ★[v117.15 · JACK 1112 «터파기선 선택하고 원지반 선택의 애니메이션이 똑같아 · 구체적으로»] 단추마다 제 예시 — 꺼진 단추도 감싼 테두리가 마우스를 받음
+        _pickHit = new Border { Background = Brushes.Transparent, Child = _pick };
+        DockPanel.SetDock(_pickHit, Dock.Left);
+        row.Children.Add(_pickHit);
         _pickWhat = new TextBlock
         {
             Text = "○ 미선택", Margin = new Thickness(10, 0, 0, 0),
@@ -147,8 +152,9 @@ internal sealed class ExcavPanel : UserControl
         _pickGround = new Button { Content = "원지반 선택", MinWidth = 130, Height = 30 };
         _pickGround.ToolTip = "비워 두면 마지막 정지에 쓴 지반을 자동으로 씁니다 — 못 찾으면 여기서 고르세요.";
         _pickGround.Click += (_, __) => PickSession.Send(Doc, PickCommands.CmdGround);
-        DockPanel.SetDock(_pickGround, Dock.Left);
-        gRow.Children.Add(_pickGround);
+        _pickGroundHit = new Border { Background = Brushes.Transparent, Child = _pickGround };
+        DockPanel.SetDock(_pickGroundHit, Dock.Left);
+        gRow.Children.Add(_pickGroundHit);
         _groundWhat = new TextBlock
         {
             Text = "○ 자동", Margin = new Thickness(10, 0, 0, 0),
@@ -208,20 +214,22 @@ internal sealed class ExcavPanel : UserControl
         //       (종단 막대 끝이 다르고 밴드 표기가 다르다) 섞으면 종단면도가 틀리게 그려진다.
         //     ★<b>소단·대소단·라운드·옹벽형태는 없다</b>(JACK 지시 11~13).
         var secWall = GradingDialog.AddCollapsible(root, "4. 사면 수정 (가시설)", out var wallBadge,
-            "둘레의 한 구간만 수직으로 세웁니다 — 자리를 찍고 길이를 주면 됩니다",
+            "시작점 → 둘레 따라 끝점 → 날개 → 그 구간 수직(흙막이)",   // ★[v117.16 · JACK 1112 «직접 노선상에서 선택»]
             open: false, key: "터파기:4.가시설", group: G);
         var wRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 6) };
         Button WBtn(string t, string cmd, string tip)
         {
             var b = new Button { Content = t, MinWidth = 96, Height = 30, Margin = new Thickness(0, 0, 6, 0), ToolTip = tip };
             b.Click += (_, __) => PickSession.Send(Doc, cmd);
-            wRow.Children.Add(b);
+            var hit = new Border { Background = Brushes.Transparent, Child = b };   // ★[v117.15] 꺼진 단추도 예시가 돌게
+            wRow.Children.Add(hit);
+            _wallHits.Add(hit);
             return b;
         }
         _toWall = WBtn("가시설 변환", "DHEXCAVWALL",
-            "터파기 둘레 근처를 찍고 구간 길이를 주면 그 구간이 수직(가시설)이 됩니다.");
+            "시작점 → 둘레 따라 끝점 → 날개 → 그 구간 수직(흙막이) · Esc(날개) = 날개 자동");   // ★[v117.16 · JACK 1112]
         _toSlope = WBtn("사면 변환", "DHEXCAVSLOPE",
-            "찍은 자리에 겹치는 가시설 구간을 지워 다시 사면으로 되돌립니다.");
+            "가시설 구간에 커서 → 빨강 → 클릭 → 그 구간 다시 사면");   // ★[v117.16 · JACK 1112]
         _clearWall = WBtn("전체 해제", "DHEXCAVWALLCLEAR",
             "이 도면의 가시설 구간을 전부 지우고 순수 사면으로 다시 만듭니다.");
         secWall.Children.Add(wRow);
@@ -245,13 +253,26 @@ internal sealed class ExcavPanel : UserControl
         top.Children.Add(_said);
         // ★[v117.13 · JACK 1112 «구조물 터파기에서도 내용을 설명하는 애니메이션 — 위치는 맨 위 · 1~4번(3번은 생성이니 생략) · 마우스를 올려놨을 때»]
         //   예시 칸(FixDemoView) = 맨 위 고정(값 칸과 같이 밀려 내려가지 않음) · 칸 제목 · 칸 안에 마우스 → 그 칸 예시 · 나가면 멈춤
-        var demo = new FixDemoView("칸 제목에 마우스 → 예시", "exBase") { Margin = new Thickness(0, 0, 0, 8), HorizontalAlignment = HorizontalAlignment.Left };
+        var demo = new FixDemoView("칸 제목에 마우스 → 예시", "exBasePlan") { Margin = new Thickness(0, 0, 0, 8), HorizontalAlignment = HorizontalAlignment.Left };
         void Hook(FrameworkElement? fe, string key) { if (fe == null) return; fe.MouseEnter += (_, __) => demo.Play(key); fe.MouseLeave += (_, __) => demo.Idle(); }
         static FrameworkElement? HeadOf(TextBlock badge) => (badge.Parent as FrameworkElement)?.Parent as FrameworkElement;   // 요약칸 → 머리 줄 → 머리(누르는 자리)
-        Hook(HeadOf(_baseBadge), "exBase"); Hook(secBase, "exBase");
+        // ★[v117.15.1 · JACK 1112 «각 선택 단추에 맞춰서»] 칸 = 지금 고른 기준면 장면 · 라디오에 올리면 그 쪽 · 고르면 그 쪽
+        string BaseKey() => _baseGround.IsChecked == true ? "exBaseGround" : "exBasePlan";
+        void HookBase(FrameworkElement? fe) { if (fe == null) return; fe.MouseEnter += (_, __) => demo.Play(BaseKey()); fe.MouseLeave += (_, __) => demo.Idle(); }
+        HookBase(HeadOf(_baseBadge)); HookBase(secBase);
+        _basePlan.MouseEnter += (_, __) => demo.Play("exBasePlan"); _basePlan.MouseLeave += (_, __) => demo.Play(BaseKey());
+        _baseGround.MouseEnter += (_, __) => demo.Play("exBaseGround"); _baseGround.MouseLeave += (_, __) => demo.Play(BaseKey());
+        // 고를 때만(도면 값으로 채울 때 저절로 돌지 않게 — 마우스 · 키보드가 그 단추에 있을 때)
+        _basePlan.Checked += (_, __) => { if (_basePlan.IsMouseOver || _basePlan.IsKeyboardFocusWithin) demo.Play("exBasePlan"); };
+        _baseGround.Checked += (_, __) => { if (_baseGround.IsMouseOver || _baseGround.IsKeyboardFocusWithin) demo.Play("exBaseGround"); };
         Hook(HeadOf(_targetBadge), "exTarget"); Hook(secTarget, "exTarget");
         Hook(HeadOf(wallBadge), "exWall"); Hook(secWall, "exWall");
-        top.Children.Add(demo);
+        // ★[v117.15 · JACK 1112 «사면 수정 부분도 다 똑같아 — 좀 구체적으로»] 단추마다 제 장면 · 단추를 벗어나면(칸 안) 칸 장면으로
+        void HookBtn(FrameworkElement? fe, string key, string back) { if (fe == null) return; fe.MouseEnter += (_, __) => demo.Play(key); fe.MouseLeave += (_, __) => demo.Play(back); }
+        HookBtn(_pickHit, "exPick", "exTarget"); HookBtn(_pickGroundHit, "exGround", "exTarget");
+        string[] wKeys = { "exToWall", "exToSlope", "exClear" };
+        for (int wi = 0; wi < _wallHits.Count && wi < wKeys.Length; wi++) HookBtn(_wallHits[wi], wKeys[wi], "exWall");
+        top.Children.Add(DemoFrame.Wrap(demo));   // ★[v117.14.1 · JACK 1112 «설명 애니메이션은 도킹박스 안에서 크기가 같아야»] 고정 틀
         DockPanel.SetDock(top, Dock.Top);
         deck.Children.Add(top);
         // ★[JACK 0910] 정지 창과 같이 — 값 칸 <b>뒤에</b> 회사 로고를 크게 옅게 깐다.

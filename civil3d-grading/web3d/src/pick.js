@@ -86,6 +86,9 @@ export class Picker {
       const u = h.object.userData;
       if (u.layer === 'drain' && u.kind === 'stream') continue;          // 물길은 화면 거리로 따로(굵기 몇 px라 광선이 잘 못 맞힘)
       if (u.layer === 'terrain') {
+        // ★[v117.16] 측구 구멍 지형 — 맞은 조각 → 원래 세모(구분 · 절성토 · 경사 · 표고 = Civil 지표면 그대로)
+        const fs = h.object.geometry.userData.faceSrc;
+        if (fs) this._origFace(h, fs[h.faceIndex]);
         // 숨긴 구분(옹벽 면 · 원지반 보기의 설계 자리)은 건너뛴다 — 광선은 재료가 숨었는지 모른다
         const ci = this._classIndex(h.faceIndex);
         const mat = Array.isArray(h.object.material) ? h.object.material[ci] : h.object.material;
@@ -95,6 +98,18 @@ export class Picker {
       return h;
     }
     return null;
+  }
+
+  // ★[v117.16] 구멍 지형의 맞음 → 원래 세모 f(번호 · 법선 · 그 자리 원래 높이) — 구멍 가장자리 높이 맞춤은 그릴 때만
+  _origFace(h, f) {
+    const T = this.head.terrain;
+    h.faceIndex = f;
+    if (!T || !T.pos || !T.idx) return;
+    const P = T.pos, v = (i) => new THREE.Vector3(P[i * 3], P[i * 3 + 1], P[i * 3 + 2]);
+    const tri = new THREE.Triangle(v(T.idx[f * 3]), v(T.idx[f * 3 + 1]), v(T.idx[f * 3 + 2]));
+    const n = tri.getNormal(new THREE.Vector3());
+    if (h.face) h.face = { ...h.face, normal: n };
+    if (Math.abs(n.z) > 1e-9) h.point.z = tri.a.z - ((h.point.x - tri.a.x) * n.x + (h.point.y - tri.a.y) * n.y) / n.z;
   }
 
   _classIndex(face) {

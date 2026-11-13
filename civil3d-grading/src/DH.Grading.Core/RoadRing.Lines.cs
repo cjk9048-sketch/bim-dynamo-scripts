@@ -32,13 +32,16 @@ public static partial class RoadRing
     sealed class Crease { public double Level; public double X, Y, Z; public int SideA, SideB; public double SigA, SigB; public int Ring; public bool Used; }
 
     /// <summary>뽑은 끊김선 — 점(높이 = 셈) · 성토/절토 · 단(K) · 윗/아랫선 · 원천 쪽 · 측점.</summary>
-    public sealed class Bl { public List<Point3> Pts = new(); public List<double> S = new(); public bool Cut; public int K; public RoadGrade.LineRole Role; public int Side; public bool Crease; }
+    public sealed class Bl { public List<Point3> Pts = new(); public List<double> S = new(); public bool Cut; public int K; public RoadGrade.LineRole Role; public int Side; public bool Crease; public int Prof; }
+
+    /// <summary>★[v117.16] 꺾임 거리의 한 뜻 — 단면 번호(−1 = 보조 고리) · 절토 · 단 k · 역할 · 면 짓기 전용(옹벽 면 끝 · 0.3 m 안 옹벽 머리 — 선 목록엔 안 넣음).</summary>
+    sealed record LvE(int P, bool Cut, int K, RoadGrade.LineRole Role, bool TinOnly);
 
     public sealed class LineSet
     {
         public readonly List<Bl> Benches = new();
         public readonly List<Bl> Creases = new();
-        public int Snapped, SnapRevert, SnapBig, CreasePts, CreaseChains, Extended, NoExtend, FanLines, CreaseRejected, HelperLines, CreaseFollow, CreaseCut, LineZPts;
+        public int Snapped, SnapRevert, SnapBig, CreasePts, CreaseChains, Extended, NoExtend, FanLines, CreaseRejected, HelperLines, CreaseFollow, CreaseCut, LineZPts, Projected;
     }
 
     /// <summary>둘레 위치 → 측점 · 쪽.</summary>
@@ -84,17 +87,40 @@ public static partial class RoadRing
         var d = ev.D; double per = d.Perimeter;
         var ls = new LineSet();
         // 꺾임 거리 — 성토(Pf) · 절토(Pc) 꺾임 + 보조(1 m) · 쪽마다 꺾임 고리만 끊김선
-        var lv = new SortedDictionary<double, (bool Fill, bool Cut, int KF, int KC, bool SlopeEndF, bool SlopeEndC)>();
-        void AddLv(double x, bool fill, bool cut, int kf, int kc, bool sef, bool sec)
-        {
-            double key = Math.Round(x, 6);
-            if (!lv.TryGetValue(key, out var v)) v = (false, false, -1, -1, false, false);
-            lv[key] = (v.Fill || fill, v.Cut || cut, fill ? kf : v.KF, cut ? kc : v.KC, fill ? sef : v.SlopeEndF, cut ? sec : v.SlopeEndC);
-        }
-        for (int i = 1; i < ev.Pf.E.Count && ev.Pf.E[i].D <= maxDist; i++) AddLv(ev.Pf.E[i].D, true, false, ev.Pf.K[i], 0, ev.Pf.E[i].R > ev.Pf.E[i - 1].R, false);
-        for (int i = 1; i < ev.Pc.E.Count && ev.Pc.E[i].D <= maxDist; i++) AddLv(ev.Pc.E[i].D, false, true, 0, ev.Pc.K[i], false, ev.Pc.E[i].R > ev.Pc.E[i - 1].R);
-        for (double x = HelperStep * 0.5; x <= maxDist; x += HelperStep) { double key = Math.Round(x, 6); if (!lv.Keys.Any(k => Math.Abs(k - x) < 0.05)) AddLv(x, false, false, 0, 0, false, false); }
+        // ★★[v117.16 · JACK 1112 «[옹벽 변환]도 고리 엔진»] 꺾임 거리 = 모든 단면(기본 + 변환 옹벽 변형)의 면 끝 — 거리마다 (단면, 절/성) → (단 k, 역할, 면 짓기 전용)
+        //   역할은 옛 엔진과 같은 뜻: 사면 면 시작 = 성토 윗선 · 절토 아랫선 / 끝 = 성토 아랫선 · 절토 윗선 · 소단 없이 붙은 다음 면 시작은 앞 면 끝과 한 줄(옛 고리 선과 비트 같음)
+        //   옹벽 면 시작 = 옹벽선(앞 옹벽 면과 0.3 m 안이면 면 짓기 전용) · 옹벽 면 끝 = 면 짓기 전용 끊김선(2.5D 벽 면이 칼날처럼)
+        var lv = new SortedDictionary<double, List<LvE>>();
+        void AddLv(double x, LvE e) { double key = Math.Round(x, 6); if (!lv.TryGetValue(key, out var l)) lv[key] = l = new(); if (e.P >= 0) l.Add(e); }
+        for (int p = 0; p < ev.PfA.Length; p++)
+            foreach (bool cut in new[] { false, true })
+            {
+                var pr = cut ? ev.PcA[p] : ev.PfA[p];
+                double lastWallB = double.NegativeInfinity;
+                var fs = pr.Faces;
+                for (int fi = 0; fi < fs.Count; fi++)
+                {
+                    var f = fs[fi];
+                    if (f.A > maxDist) break;
+                    bool prevJoin = fi > 0 && Math.Abs(f.A - fs[fi - 1].B) < 1e-9, prevWall = prevJoin && fs[fi - 1].Wall;
+                    bool nextWall = fi + 1 < fs.Count && fs[fi + 1].Wall && Math.Abs(fs[fi + 1].A - f.B) < 1e-9;
+                    if (f.Wall)
+                    {
+                        // 소단 없이 이어 쌓인 옹벽은 한 면(기울기 같음 — 꺾임 아님)
+                        if (!prevWall && f.A > 1e-6) AddLv(f.A, new LvE(p, cut, f.K, RoadGrade.LineRole.Wall, f.A - lastWallB < 0.3));
+                        if (!nextWall && f.B <= maxDist) AddLv(f.B, new LvE(p, cut, f.K, RoadGrade.LineRole.Wall, true));
+                        if (!nextWall) lastWallB = f.B;
+                    }
+                    else
+                    {
+                        if (!prevJoin && f.A > 1e-6) AddLv(f.A, new LvE(p, cut, f.K, cut ? RoadGrade.LineRole.Toe : RoadGrade.LineRole.Crest, false));
+                        if (f.B <= maxDist) AddLv(f.B, new LvE(p, cut, f.K, cut ? RoadGrade.LineRole.Crest : RoadGrade.LineRole.Toe, false));
+                    }
+                }
+            }
+        for (double x = HelperStep * 0.5; x <= maxDist; x += HelperStep) { if (!lv.Keys.Any(k => Math.Abs(k - x) < 0.05)) AddLv(x, new LvE(-1, false, 0, 0, true)); }
         var levels = lv.ToList();
+        bool corr = Corridor;
         var creases = new List<Crease>();
         int ringNo = 0;
         foreach (var (dist, info) in levels)
@@ -132,7 +158,7 @@ public static partial class RoadRing
                 ls.CreasePts += cutAt.Count;
                 // ★[v116.1 · 계측] 보조 고리(1 m)도 끊김선으로 — 둥근 원뿔 사면(굽이 바깥 · 도로 끝 굽이)에서 꺾임 고리 사이 7.5 m를 세모 하나가 건너 셈과 10 cm 어긋났다.
                 //   높이 = 셈(E2) · 바뀐 자리 점만 · 주름점에서 끊고 그 점을 끝점으로(매달린 끝 없음) · 소단선 목록엔 안 들어감(Crease 줄로 — 세모 짓기만)
-                if (!info.Fill && !info.Cut)
+                if (info.Count == 0)
                 {
                     var cutsH = cutAt.ToDictionary(c => c.I, c => c);
                     Bl? hl = null;
@@ -158,29 +184,41 @@ public static partial class RoadRing
                     FlushH();
                 }
                 // 꺾임 고리 → 소단/사면 꺾임 끊김선(그 쪽 자리만 · 주름점에서 끊음 · 바뀐 자리 밖은 한 점 넘겨 둠 — D로 자름)
+                // ★★[v117.16 · JACK 1112 «코리더처럼 소단 이어짐»] 점마다 그 점을 이긴 원천의 단면에 이 꺾임이 있어야(단면별 역할 · 단 번호) · 코리더식이면 제 무리 값이 이긴 점만
+                //   (다른 무리가 덮은 자리 = 끊음 · 스냅 없음 · 같은 무리 안 측점 뜀으로는 안 끊음 — 섞은 측점이라 이어짐)
                 foreach (int want in new[] { 1, -1 })
                 {
-                    bool isLv = want > 0 ? info.Fill : info.Cut; if (!isLv) continue;
-                    int K = want > 0 ? info.KF : info.KC; bool slopeEnd = want > 0 ? info.SlopeEndF : info.SlopeEndC;
-                    // 역할: 성토 — 사면 끝 = 그 단 아랫선(Toe) · 소단 끝 = 다음 단 윗선(Crest) / 절토 — 사면 끝 = 윗선(Crest) · 소단 끝 = 다음 단 아랫선(Toe)
-                    var role = want > 0 ? (slopeEnd ? RoadGrade.LineRole.Toe : RoadGrade.LineRole.Crest) : (slopeEnd ? RoadGrade.LineRole.Crest : RoadGrade.LineRole.Toe);
-                    int kOut = slopeEnd ? K - 1 : K;   // 옛 엔진과 같은 단 번호 = 사면 번호(0부터) — 사면 끝 = 그 면 · 소단 끝 = 다음 면
+                    var ents = new Dictionary<int, LvE>();
+                    foreach (var e in info.Where(q => q.Cut == (want < 0)).OrderBy(q => q.TinOnly ? 1 : 0).ThenBy(q => q.Role == RoadGrade.LineRole.Wall ? 0 : 1))
+                        ents.TryAdd(e.P, e);
+                    if (ents.Count == 0) continue;
+                    LvE? Ent(in RP a)
+                    {
+                        if (a.Side != want) return null;
+                        var w = want > 0 ? a.P.WLo : a.P.WHi;
+                        if (!ents.TryGetValue(w.Prof, out var e)) return null;
+                        if (corr && !w.Own && Math.Abs(w.Dist - dist) > 1e-3) return null;
+                        return e;
+                    }
                     // 시작 — 이 쪽이 아닌 점 다음부터(고리 전체가 이 쪽이면 0)
                     int start = -1;
-                    for (int i = 0; i < n; i++) if (rp[i].Side != want) { start = i; break; }
+                    for (int i = 0; i < n; i++) if (Ent(rp[i]) == null) { start = i; break; }
                     var cuts = cutAt.ToDictionary(c => c.I, c => c);
                     Bl? cur = null;
-                    void Flush() { if (cur != null && cur.Pts.Count >= 2) ls.Benches.Add(cur); cur = null; }
-                    void Push(double x, double y, double z, double sig)
+                    void Flush() { if (cur != null && cur.Pts.Count >= 2) (cur.Crease ? ls.Creases : ls.Benches).Add(cur); cur = null; }
+                    Bl New(LvE e) => new Bl { Cut = want < 0, K = e.K, Role = e.Role, Prof = e.P, Crease = e.TinOnly };
+                    void Push(double x, double y, double z, double sig, LvE e)
                     {
-                        cur ??= new Bl { Cut = want < 0, K = kOut, Role = role };
+                        cur ??= New(e);
                         var (s, sd) = SigToStation(d, sig);
-                        // 원천 쪽이 바뀌거나 측점이 2 m 넘게 뛰면 끊음([사면→옹벽] 범위가 한 다리만)
-                        if (cur.Pts.Count > 0 && (sd != cur.Side || Math.Abs(s - cur.S[^1]) > 2.0) && cur.Pts.Count >= 2)
+                        // 원천 쪽이 바뀌거나(코리더식이 아니면 측점이 2 m 넘게 뛰어도) · 단면 꺾임 뜻이 바뀌면 끊음([사면→옹벽] 범위가 한 다리 · 한 단면만) — 끊은 자리 점을 새 줄 첫 점으로(틈 없음)
+                        bool ent = cur.Prof != e.P || cur.K != e.K || cur.Role != e.Role || cur.Crease != e.TinOnly;
+                        if (cur.Pts.Count > 0 && (ent || sd != cur.Side || (!corr && Math.Abs(s - cur.S[^1]) > 2.0)) && cur.Pts.Count >= 2)
                         {
                             var last = cur.Pts[^1]; double ls0 = cur.S[^1]; Flush();
-                            cur = new Bl { Cut = want < 0, K = kOut, Role = role }; cur.Pts.Add(last); cur.S.Add(ls0); cur.Side = sd;
+                            cur = New(e); cur.Pts.Add(last); cur.S.Add(ls0); cur.Side = sd;
                         }
+                        else if (ent && cur.Pts.Count < 2) { var keep = cur.Pts.ToList(); var keepS = cur.S.ToList(); cur = New(e); cur.Pts.AddRange(keep); cur.S.AddRange(keepS); }
                         if (cur.Pts.Count == 0) cur.Side = sd;
                         cur.Pts.Add(new Point3(x, y, z)); cur.S.Add(s);
                     }
@@ -189,12 +227,13 @@ public static partial class RoadRing
                     {
                         int i = (baseI + c) % n;
                         var a = rp[i];
-                        if (a.Side == want)
+                        var e = Ent(a);
+                        if (e != null)
                         {
                             if (cur == null)
                             {
                                 int pi = (i - 1 + n) % n; var pr = rp[pi];
-                                cur = new Bl { Cut = want < 0, K = kOut, Role = role };
+                                cur = New(e);
                                 var (s0, sd0) = SigToStation(d, a.Sig); cur.Side = sd0;
                                 if (c > 0 || start < 0)
                                 {
@@ -202,10 +241,27 @@ public static partial class RoadRing
                                     else if (cuts.TryGetValue(pi, out var pc0))   /* ★[검토 M] 같은 쪽 묶음 바뀜도 골점에서 시작 */ { cur.Pts.Add(new Point3(pc0.C.X, pc0.C.Y, pc0.C.Z)); cur.S.Add(s0); }
                                 }
                             }
-                            // 스냅 — 이긴 원천의 진짜 꺾임(거리 = d_k) 자리로
-                            var (sx, sy) = SnapToKink(ev, a, dist, want, ls);
-                            var ps = (sx == a.X && sy == a.Y) ? a.P : ev.Eval(sx, sy);
-                            Push(sx, sy, ps.Z, SigOf(ps, want));
+                            // 스냅 — 이긴 원천의 진짜 꺾임(거리 = d_k) 자리로(★[v117.16] 코리더식은 제 무리 점만 받으니 스냅 없음)
+                            if (corr)
+                            {
+                                // ★[v117.16] 버퍼 고리는 둥근 모서리를 현으로 잇는다(12 / 사분원 — 반경 58 m에서 12 cm 안쪽) — 제 무리 원천(가장 가까운 발 · 꼭짓점) 거리 = d_k 자리로 곧게 옮김
+                                var w = want > 0 ? a.P.WLo : a.P.WHi;
+                                var (gx, gy) = ev.SourceGrad(w.Src, a.X, a.Y); double sd0 = ev.SourceDist(w.Src, a.X, a.Y);
+                                double px = a.X, py = a.Y; var pp = a.P;
+                                if (w.Own && double.IsFinite(gx) && double.IsFinite(sd0) && Math.Abs(sd0 - dist) > 1e-6 && Math.Abs(sd0 - dist) < 0.5)
+                                {
+                                    double qx = a.X + gx * (dist - sd0), qy = a.Y + gy * (dist - sd0);
+                                    var pq = ev.Eval(qx, qy); var wq = want > 0 ? pq.WLo : pq.WHi;
+                                    if (wq.Own && SideOf(pq) == want && Math.Abs(wq.Dist - dist) < 1e-4) { px = qx; py = qy; pp = pq; ls.Projected++; }
+                                }
+                                Push(px, py, pp.Z, SigOf(pp, want), e);
+                            }
+                            else
+                            {
+                                var (sx, sy) = SnapToKink(ev, a, dist, want, ls);
+                                var ps = (sx == a.X && sy == a.Y) ? a.P : ev.Eval(sx, sy);
+                                Push(sx, sy, ps.Z, SigOf(ps, want), e);
+                            }
                         }
                         else if (cur != null)
                         {
@@ -213,7 +269,7 @@ public static partial class RoadRing
                             if (a.Side == 0) { cur.Pts.Add(new Point3(a.X, a.Y, a.P.Z)); cur.S.Add(cur.S[^1]); }
                             Flush();
                         }
-                        if (c < n && cuts.TryGetValue(i, out var cut) && a.Side == want && cur != null)
+                        if (c < n && cuts.TryGetValue(i, out var cut) && e != null && cur != null)
                         {
                             cur.Pts.Add(new Point3(cut.C.X, cut.C.Y, cut.C.Z)); cur.S.Add(cur.S[^1]);
                             Flush();

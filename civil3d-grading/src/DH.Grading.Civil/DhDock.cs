@@ -27,6 +27,8 @@ internal static class DhDock
     const int DockBarRight = 0xE81D;
     /// <summary>새 창을 띄워 둘 자리 — 이웃 칸 왼쪽 끝에서 이만큼 더 왼쪽.</summary>
     const int Gap = 12;
+    /// <summary>★[v117.14.1 · JACK 1112] 다른 창이 떠도 안 닫는 창 — 3D 보기.</summary>
+    const string Keep3D = "3D 보기";
 
     /// <summary>지금까지 연 DH 도킹창(이름 · 팔레트) — 이웃을 셀 때 쓴다.</summary>
     static readonly List<(PaletteSet Ps, string Name)> _all = new();
@@ -37,8 +39,17 @@ internal static class DhDock
     internal static void ShowRight(PaletteSet ps, string name, int width = 0)
     {
         Register(ps, name);
+        // ★[v117.14.1 · JACK 1112 «종횡단도 누르면 팝업 뜨잖아 그럼 기존 도킹팝업은 닫아. 3D 보기 팝업을 제외하고는 도킹팝업은 다른 게 뜨면 닫히게»]
+        //   새 창을 보이기 전에 다른 DH 도킹창을 숨긴다(숨기기만 — 고른 것 · 값 · 세션은 그대로) · 3D 보기는 남김(열 때도 남을 닫지 않음)
+        string closed = "";
+        if (name != Keep3D)
+            foreach (var o in _all)
+            {
+                if (ReferenceEquals(o.Ps, ps) || o.Name == Keep3D) continue;
+                try { if (o.Ps.Visible) { o.Ps.Visible = false; closed += (closed.Length > 0 ? " · " : "") + "«" + o.Name + "»"; } } catch { }
+            }
         ps.Visible = true;
-        string how, plan = "";
+        string how, plan = closed.Length > 0 ? " · 닫음 " + closed : "";
         try
         {
             var frame = FrameRect();
@@ -62,7 +73,7 @@ internal static class DhDock
                 int w = width > 0 ? width : (me?.W ?? ps.Size.Width);
                 int r = left - Gap, l = r - Math.Max(50, w);
                 if (frame != null && l < frame.Value.L + 4) l = Math.Min(frame.Value.L + 4, r - 50);
-                plan = $" · 띄운 자리 {l},{top}~{r},{bottom}(가운데 x {(l + r) / 2} < 띠 왼쪽 {left})"
+                plan += $" · 띄운 자리 {l},{top}~{r},{bottom}(가운데 x {(l + r) / 2} < 띠 왼쪽 {left})"
                      + (bar != null ? $" · 도킹 띠 {bar.Value}" : " · 도킹 띠 못 찾음");
                 ps.FloatControl(new System.Windows.Rect(l, top, r - l, Math.Max(100, bottom - top)));
                 ps.Dock = DockSides.Right;

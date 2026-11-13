@@ -11,6 +11,24 @@
   "Cover": 0.0,
   "DefaultC": 0.9,
   "ArcStep": 0.5,
+  // ★[v117.16] 지표 따라감 — 지표 읽는 간격 m · 단차 = 지표 경사 > StepGradePct % 이고 높이 > DropMax m → 집수정 + 관로 · 낙차 높이 DropMin~DropMax m
+  "SampleStep": 1.0,
+  "SampleTol": 0.02,
+  "StepGradePct": 50.0,
+  "DropMax": 0.5,
+  "DropMin": 0.05,
+  // 집수정(정사각) — 단차 끝에서 띄움 · 안치수 · 벽 · 바닥 두께 · 유입 바닥 아래 깊이 m · 그레이팅 두께 m(집수정 덮개 · 측구 스틸 그레이팅)
+  "StepSetback": 0.5,
+  "BasinInner": 0.6,
+  "BasinWall": 0.15,
+  "BasinFloor": 0.15,
+  "BasinSump": 0.15,
+  "GrateT": 0.05,
+  // 관로(원형) — 지름(호칭) · 관 두께 · 최소 흙덮개(관 윗면 ~ 지표 · Cover와 큰 쪽) m · 추천에 쓰는 지름 표 m
+  "PipeD": 0.3,
+  "PipeWall": 0.05,
+  "PipeCover": 0.3,
+  "PipeSizes": [ 0.3, 0.4, 0.5, 0.6, 0.8, 1.0 ],
   "Sizes": [
     { "Name": "300×300", "B": 0.30, "H": 0.30, "Tw": 0.15, "Tb": 0.15, "Tf": 0.10, "Pf": 0.10 },
     { "Name": "400×400", "B": 0.40, "H": 0.40, "Tw": 0.15, "Tb": 0.15, "Tf": 0.10, "Pf": 0.10 },

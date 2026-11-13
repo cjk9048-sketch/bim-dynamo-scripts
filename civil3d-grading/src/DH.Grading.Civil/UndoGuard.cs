@@ -49,7 +49,7 @@ public sealed class UndoGuard
 
     static readonly ConditionalWeakTable<Document, State> _st = new();
 
-    const string Msg = "\n[되돌리기] 종단이 따르는 지표면이 바뀌어 Ctrl+Z 기록을 비웠습니다(Civil 결함 회피) — 되돌리기는 [옹벽→사면] 등 단추로";
+    const string Msg = "\n[되돌리기] 종단이 따르는 지표면이 바뀌어 Ctrl+Z 기록을 비웠습니다(Civil 결함 회피) — 되돌리기는 [사면 변환] 등 단추로";
 
     /// <summary>도면마다 한 번 — 이벤트를 단다(두 번 불러도 한 번). 면 바뀜 이벤트는 우리 명령이 도는 동안만 붙인다.</summary>
     internal static void Hook(Document? doc)

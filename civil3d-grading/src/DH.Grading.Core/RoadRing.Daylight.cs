@@ -73,7 +73,7 @@ public static partial class RoadRing
     /// 칸 변 위 = 안(도로 면 또는 Φ &gt; 0) 이분(데이라잇) · 안장 = 칸 가운데 · 도로 둘레 5 mm 안 데이라잇 점 = 둘레 위 점.
     /// 둘레 위 이웃 두 점 사이에는 둘레 꼭짓점을 끼워 S가 도로 둘레를 그대로 따름(도로 면 세모와 맞물림 — 둘레 위 점은 도로 면 세모를 나눠 맞춤).
     /// 데이라잇 이웃 점 사이에는 바탕 세모 변 건넘점을 넣음.</summary>
-    public static Geometry? SlopeRegion(Evaluator ev, Field f, out List<List<Point3>> daylight, out Dictionary<(double, double), OnB> onB, out string note)
+    public static Geometry? SlopeRegion(Evaluator ev, Field f, out List<List<Point3>> daylight, out Dictionary<(double, double), OnB> onB, out string note, Dictionary<(long, long), string>? tags = null)
     {
         daylight = new(); onB = new(); note = "";
         int W = f.W, H = f.H;
@@ -83,6 +83,7 @@ public static partial class RoadRing
         bool In(int i, int j) => i >= 0 && j >= 0 && i < W && j < H && f.Keep[j * W + i];
         static bool Inside(in Pt p) { double ph = Evaluator.Phi(p); return p.Kind == 1 || (p.Kind is >= 2 and <= 4 && double.IsFinite(ph) && ph > 0); }
         var edgePt = new Dictionary<long, Coordinate>();
+        void Tag(Coordinate c0, string t) { if (tags != null) tags[((long)Math.Round(c0.X * 1e4), (long)Math.Round(c0.Y * 1e4))] = t; }
         var onBLocal = new Dictionary<(double, double), OnB>();
         Coordinate EdgePoint(int i, int j, bool horiz)
         {
@@ -93,15 +94,16 @@ public static partial class RoadRing
             double ax = f.X(i), ay = f.Y(j), bx = f.X(i2), by = f.Y(j2);
             double ix = aIn ? ax : bx, iy = aIn ? ay : by, ox = aIn ? bx : ax, oy = aIn ? by : ay;
             // 안 마디(도로 면 또는 사면) → 밖 마디: 도로 면 → (가는 띠) → 바뀐 끝 — 한 번만 바뀜 → 이분
-            double lo = 0, hi = 1;
-            for (int it = 0; it < 16; it++)
+            // ★[v117.16 · 계획 5단계 «정확한 데이라잇»] 칸 변 이분을 0.1 µm까지(16회 = 4 µm) — 경계 점 Z = 원지반이라 자리가 곧 정확도
+            double lo = 0, hi = 1, len0 = Math.Sqrt(Sq(ox - ix) + Sq(oy - iy));
+            for (int it = 0; it < 40 && (hi - lo) * len0 > 1e-7; it++)
             {
                 double t = (lo + hi) / 2;
                 if (Inside(ev.Eval(ix + (ox - ix) * t, iy + (oy - iy) * t))) lo = t; else hi = t;
             }
             double tt = (lo + hi) / 2;
             c = new Coordinate(ix + (ox - ix) * tt, iy + (oy - iy) * tt);
-            edgePt[key] = c; return c;
+            edgePt[key] = c; Tag(c, "칸변"); return c;
         }
         var segs = new List<(Coordinate A, Coordinate B)>();
         for (int j = 0; j + 1 < H; j++)
@@ -152,7 +154,7 @@ public static partial class RoadRing
         var Bd = ev.D.B; int m = Bd.Count; int nBreak = 0, nBv = 0;
         var bVerts = new HashSet<(double, double)>(Bd.Select(q => (q.X, q.Y)));
         bool IsOnB(Coordinate c, out OnB ob) => onBLocal.TryGetValue((c.X, c.Y), out ob);
-        int nSnapB = 0;
+        int nSnapB = 0, nSnapKeep = 0, nCurve = 0, nChord = 0;
         List<Coordinate> Rebuild(Coordinate[] ring0)
         {
             // 도로 둘레 5 mm 안 데이라잇 점 = 도로 가장자리가 땅과 거의 같은 높이인 자리(사면 높이 ≤ 약 3 mm) → 둘레 위로 올림(1 mm 안이면 둘레 꼭짓점 그대로)
@@ -163,6 +165,14 @@ public static partial class RoadRing
                 var c = ring[k]; if (IsOnB(c, out _) || bVerts.Contains((c.X, c.Y))) continue;
                 var (dn, foot, sg) = ev.NearestFoot(c.X, c.Y);
                 if (sg < 0 || dn >= 0.005) continue;
+                // ★[v117.16 · 계획 5단계] 둘레로 올림은 그 둘레 점이 땅 위(|도로 면 − 원지반| ≤ 0.1 mm)일 때만 — 아니면 데이라잇 점 그대로(경계 Z = 원지반 지킴)
+                if (ExactDaylight && ev.Ground != null)
+                {
+                    int k0 = (sg + 1) % m; double lv = Sq(Bd[k0].X - Bd[sg].X) + Sq(Bd[k0].Y - Bd[sg].Y);
+                    double uu = lv < 1e-24 ? 0 : Math.Clamp(((c.X - Bd[sg].X) * (Bd[k0].X - Bd[sg].X) + (c.Y - Bd[sg].Y) * (Bd[k0].Y - Bd[sg].Y)) / lv, 0, 1);
+                    double zr = Bd[sg].Z + (Bd[k0].Z - Bd[sg].Z) * uu;
+                    if (!ev.Ground.TryGetElevation(foot.X, foot.Y, out double gr) || Math.Abs(zr - gr) > 1e-4) { nSnapKeep++; continue; }
+                }
                 int kk = (sg + 1) % m; double l2 = Sq(Bd[kk].X - Bd[sg].X) + Sq(Bd[kk].Y - Bd[sg].Y);
                 double u = l2 < 1e-24 ? 0 : Math.Clamp(((c.X - Bd[sg].X) * (Bd[kk].X - Bd[sg].X) + (c.Y - Bd[sg].Y) * (Bd[kk].Y - Bd[sg].Y)) / l2, 0, 1);
                 Coordinate nc; OnB ob;
@@ -189,12 +199,47 @@ public static partial class RoadRing
                 if (gb == null || IsOnB(a, out _) || IsOnB(b, out _)) continue;
                 brk.Clear(); gb.Breaks(a.X, a.Y, b.X, b.Y, brk);
                 double l = Math.Sqrt(Sq(b.X - a.X) + Sq(b.Y - a.Y));
-                foreach (var g in brk) { if (g.T * l < 1e-4 || (1 - g.T) * l < 1e-4) continue; o.Add(new Coordinate(a.X + (b.X - a.X) * g.T, a.Y + (b.Y - a.Y) * g.T)); nBreak++; }
+                foreach (var g in brk)
+                {
+                    if (g.T * l < 1e-4 || (1 - g.T) * l < 1e-4) continue;
+                    var cg = new Coordinate(a.X + (b.X - a.X) * g.T, a.Y + (b.Y - a.Y) * g.T);
+                    // ★★[v117.16 · 계획 5단계] 현이 아니라 원지반 변 위의 Φ = 0 자리 — 그 변 위 점은 원지반 세모 둘이 나눠 가져 경계 변이 원지반 세모 안에서만 곧게 감(|P0 − G| = 0)
+                    if (ExactDaylight && !g.Vertex && CurveOnEdge(g, cg, out var cc)) { o.Add(cc); Tag(cc, "원지반변"); nCurve++; }
+                    else { o.Add(cg); Tag(cg, "원지반변(현)"); nChord++; }
+                    nBreak++;
+                }
             }
             o.Add(ring[^1]);
             var o2 = new List<Coordinate>(); foreach (var c in o) if (o2.Count == 0 || Sq(o2[^1].X - c.X) + Sq(o2[^1].Y - c.Y) > 1e-14) o2.Add(c);
             if (!o2[0].Equals2D(o2[^1])) o2.Add(new Coordinate(o2[0].X, o2[0].Y));
             return o2;
+        }
+        // 원지반 변(g.Ax,Ay → Bx,By) 위에서 현 건넘점 곁의 Φ = 0 자리 — 건넘점에서 양쪽으로 넓혀 부호가 바뀌는 칸(±0.1 m 안)을 잡고 0.1 µm까지 이분 · 못 잡으면 거짓(현 그대로)
+        double PhiAt(double x, double y) { var p = ev.Eval(x, y); return p.Kind == 1 ? 1 : Evaluator.Phi(p); }
+        bool CurveOnEdge(GroundBreak g, Coordinate c0, out Coordinate cc)
+        {
+            cc = c0;
+            double ex = g.Bx - g.Ax, ey = g.By - g.Ay, el = Math.Sqrt(ex * ex + ey * ey); if (el < 1e-9) return false;
+            double u0 = ((c0.X - g.Ax) * ex + (c0.Y - g.Ay) * ey) / (el * el);
+            double f0 = PhiAt(g.Ax + ex * u0, g.Ay + ey * u0); if (!double.IsFinite(f0)) return false;
+            if (Math.Abs(f0) <= 1e-7) { cc = new Coordinate(g.Ax + ex * u0, g.Ay + ey * u0); return true; }
+            double ua = u0, fa = f0, ub = double.NaN;
+            for (double st = 1e-4; st <= 0.1 + 1e-12 && double.IsNaN(ub); st *= 2)
+                foreach (int sgn in new[] { 1, -1 })
+                {
+                    double u = Math.Clamp(u0 + sgn * st / el, 0, 1), fu = PhiAt(g.Ax + ex * u, g.Ay + ey * u);
+                    if (double.IsFinite(fu) && (fu > 0) != (f0 > 0)) { ub = u; break; }
+                }
+            if (double.IsNaN(ub)) return false;
+            double lo2 = ua, hi2 = ub;
+            for (int it = 0; it < 50 && Math.Abs(hi2 - lo2) * el > 1e-7; it++)
+            {
+                double um = (lo2 + hi2) / 2, fm = PhiAt(g.Ax + ex * um, g.Ay + ey * um);
+                if ((fm > 0) == (fa > 0)) lo2 = um; else hi2 = um;
+            }
+            double uf = (lo2 + hi2) / 2;
+            cc = new Coordinate(g.Ax + ex * uf, g.Ay + ey * uf);
+            return true;
         }
         var rPolys = new List<Polygon>();
         for (int gi = 0; gi < Sg.NumGeometries; gi++)
@@ -246,10 +291,19 @@ public static partial class RoadRing
             double u = l2 < 1e-24 ? 0 : Math.Clamp(((c.X - Bd[sg].X) * (Bd[kk].X - Bd[sg].X) + (c.Y - Bd[sg].Y) * (Bd[kk].Y - Bd[sg].Y)) / l2, 0, 1);
             onBLocal[(c.X, c.Y)] = new OnB(sg, u); nCross++;
         }
-        var outPolys = new List<Polygon>(); int nTiny = 0;
+        var outPolys = new List<Polygon>(); int nTiny = 0, nIsle = 0;
         for (int gi = 0; gi < Sd.NumGeometries; gi++)
         {
-            if (Sd.GetGeometryN(gi) is not Polygon np || np.IsEmpty) continue;
+            if (Sd.GetGeometryN(gi) is not Polygon np0 || np0.IsEmpty) continue;
+            // ★[v117.16] 1 ㎡ 아래 속 구멍(사면 속 땅 그대로 섬)은 사면 자리로 메움 — Civil이 세 변 구멍처럼 메우던 것을 우리가 먼저(높이 = 셈 = 그 자리 땅).
+            //   코리더식 섞음이 굽이 가운데에 작은 «땅 그대로» 섬을 낼 수 있다(1112 S236 ③ 헤어핀 0.86 ㎡ — 메움 고리가 그 섬을 못 닫아 넓이 관문에서 멈춤)
+            var np = np0;
+            if (np0.NumInteriorRings > 0)
+            {
+                var keepH = new List<LinearRing>();
+                for (int h = 0; h < np0.NumInteriorRings; h++) { var hr = (LinearRing)np0.GetInteriorRingN(h); if (gf.CreatePolygon(hr).Area >= 1.0) keepH.Add(hr); else nIsle++; }
+                if (keepH.Count != np0.NumInteriorRings) np = gf.CreatePolygon((LinearRing)np0.ExteriorRing, keepH.ToArray());
+            }
             if (np.Area < 1e-4) nTiny++;
             if (!np.IsValid) note = $"사면 자리 다각형 무효({new NetTopologySuite.Operation.Valid.IsValidOp(np).ValidationError?.Message})";
             outPolys.Add(np);
@@ -270,7 +324,7 @@ public static partial class RoadRing
         foreach (var kv in onBLocal) onB[kv.Key] = kv.Value;
         Geometry R = outPolys.Count == 1 ? outPolys[0] : gf.CreateMultiPolygon(outPolys.ToArray());
         note = (note.Length > 0 ? "⚠" + note + " · " : "") + $"사면 자리 {outPolys.Count}개 · 넓이 {R.Area:F0} ㎡ · 둘레 점 {R.NumPoints} · 도로 둘레 위 점 {onBLocal.Count}(5 mm 안 올림 {nSnapB} · 빼기 교점 {nCross}) · 끼운 둘레 꼭짓점 {nBv} · 바탕 건넘점 {nBreak}"
-            + (nTiny > 0 ? $" · ⚠1 cm² 아래 조각 {nTiny}" : "") + (gb == null ? " · ⚠바탕이 꺾임을 못 물음" : "");
+            + $" · 원지반 변 위 Φ=0 {nCurve}(현 {nChord}) · 둘레 올림 안 함 {nSnapKeep}" + (nIsle > 0 ? $" · 1 ㎡ 아래 땅 섬 메움 {nIsle}" : "") + (nTiny > 0 ? $" · ⚠1 cm² 아래 조각 {nTiny}" : "") + (gb == null ? " · ⚠바탕이 꺾임을 못 물음" : "");
         return R;
     }
 

@@ -443,7 +443,7 @@ public static partial class RoadGrade
     }
 
     /// <summary>★[선 따라 TIN] max(|dx|, |dy|) &lt; Gap 인 변의 두 점을 한 점으로(사전 차례 작은 쪽) · 넓이 0이 된 세모는 뺌. 돌려줌 = 합친 쌍 수.</summary>
-    internal static int MergeGapPairs(List<WallDaylight.Tri> tris)
+    internal static int MergeGapPairs(List<WallDaylight.Tri> tris, ISet<(double, double)>? pin = null)
     {
         var map = new Dictionary<(double, double), Point3>();
         foreach (var t in tris)
@@ -451,6 +451,8 @@ public static partial class RoadGrade
                 if (Math.Max(Math.Abs(p.X - q.X), Math.Abs(p.Y - q.Y)) < CivilSafeMesh.Gap && (p.X, p.Y) != (q.X, q.Y))
                 {
                     var (keep, drop) = (p.X, p.Y).CompareTo((q.X, q.Y)) < 0 ? (p, q) : (q, p);
+                    // ★[v117.16 · 진입도로 고리 면 «정확한 데이라잇»] 고정 점(데이라잇 꼭짓점)을 속 점으로 옮기지 않음 — 고정 점이 남는 쪽으로(둘 다 고정이면 둘레끼리라 그대로 합침)
+                    if (pin != null && pin.Contains((drop.X, drop.Y)) && !pin.Contains((keep.X, keep.Y))) (keep, drop) = (drop, keep);
                     while (map.TryGetValue((keep.X, keep.Y), out var k2)) keep = k2;
                     if ((keep.X, keep.Y) != (drop.X, drop.Y)) map[(drop.X, drop.Y)] = keep;
                 }

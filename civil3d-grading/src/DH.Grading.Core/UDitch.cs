@@ -52,6 +52,33 @@ public static partial class UDitch
         /// <summary>호(곡선)를 나누는 간격(m).</summary>
         public double ArcStep { get; set; } = 0.5;
         public List<Size> Sizes { get; set; } = DefaultSizes();
+        // ★[v117.16 · JACK 1112 «애초에 폴리선이 단차 있게 만든 부지거든?»] 지표 따라감 · 낙차 · 단차(집수정 + 관로) · 덮개 — 기준값은 모두 설정(지어낸 고정값 없음)
+        /// <summary>지표를 읽는 간격(m · 선 따라). 급한 곳은 0.1 m까지 더 잘게.</summary>
+        public double SampleStep { get; set; } = 1.0;
+        /// <summary>★[v117.16 검토 HIGH] 간격 가운데 지표가 두 끝 직선에서 이만큼(m) 넘게 벗어나면 반씩 더 읽음(꺾인 곳 — 법면 끝 등).</summary>
+        public double SampleTol { get; set; } = 0.02;
+        /// <summary>이보다 급한 지표 내리막(%) 중 높이가 <see cref="DropMax"/>를 넘는 곳 = 단차(집수정 + 관로).</summary>
+        public double StepGradePct { get; set; } = 50.0;
+        /// <summary>낙차 하나의 최대 높이(m) — 넘는 급경사는 단차로 봄.</summary>
+        public double DropMax { get; set; } = 0.5;
+        /// <summary>낙차 하나의 최소 높이(m).</summary>
+        public double DropMin { get; set; } = 0.05;
+        /// <summary>단차 위 · 아래 끝에서 집수정 · 관 끝을 띄우는 거리(m).</summary>
+        public double StepSetback { get; set; } = 0.5;
+        /// <summary>집수정 안치수(정사각 · m) · 벽 · 바닥 두께 · 유입 바닥고 아래 깊이(침전).</summary>
+        public double BasinInner { get; set; } = 0.6;
+        public double BasinWall { get; set; } = 0.15;
+        public double BasinFloor { get; set; } = 0.15;
+        public double BasinSump { get; set; } = 0.15;
+        /// <summary>그레이팅 두께(m) — 집수정 덮개 · 측구 스틸 그레이팅.</summary>
+        public double GrateT { get; set; } = 0.05;
+        /// <summary>관로 지름(호칭 · m) · 관 두께(m · 모델용).</summary>
+        public double PipeD { get; set; } = 0.3;
+        public double PipeWall { get; set; } = 0.05;
+        /// <summary>★[v117.16 검토 HIGH] 관로 최소 흙덮개(m · 관 윗면 ~ 지표) — 실제 = max(Cover, PipeCover).</summary>
+        public double PipeCover { get; set; } = 0.3;
+        /// <summary>관로 추천에 쓰는 지름 표(m).</summary>
+        public List<double> PipeSizes { get; set; } = new() { 0.3, 0.4, 0.5, 0.6, 0.8, 1.0 };
     }
 
     /// <summary>기본 규격 표(현장타설 U형 · 기초 100 · 양쪽 100 내밈). 300×300은 JACK 도면 «24_U형측구 상세도»(벽 · 바닥 150) — 나머지 두께는 초안 값(설정 파일에서 고침).</summary>
@@ -96,6 +123,24 @@ public static partial class UDitch
         if (!double.IsFinite(s.Cover) || s.Cover < 0 || s.Cover > 5) { bad.Add("Cover"); s.Cover = 0; }
         if (!Pos(s.DefaultC) || s.DefaultC > 1) { bad.Add("DefaultC"); s.DefaultC = 0.9; }
         if (!Pos(s.ArcStep) || s.ArcStep > 10) { bad.Add("ArcStep"); s.ArcStep = 0.5; }
+        // ★[v117.16 · JACK 1112] 단차 · 낙차 · 집수정 · 관로
+        if (!Pos(s.SampleStep) || s.SampleStep < 0.1 || s.SampleStep > 20) { bad.Add("SampleStep"); s.SampleStep = 1.0; }
+        if (!Pos(s.SampleTol) || s.SampleTol > 1) { bad.Add("SampleTol"); s.SampleTol = 0.02; }
+        if (!Pos(s.StepGradePct) || s.StepGradePct <= s.MaxSlopePct) { bad.Add("StepGradePct"); s.StepGradePct = Math.Max(50, s.MaxSlopePct * 2); }
+        if (!Pos(s.DropMax) || s.DropMax > 5) { bad.Add("DropMax"); s.DropMax = 0.5; }
+        if (!Pos(s.DropMin) || s.DropMin > s.DropMax) { bad.Add("DropMin"); s.DropMin = Math.Min(0.05, s.DropMax); }
+        if (!double.IsFinite(s.StepSetback) || s.StepSetback < 0 || s.StepSetback > 10) { bad.Add("StepSetback"); s.StepSetback = 0.5; }
+        if (!Pos(s.BasinInner) || s.BasinInner > 5) { bad.Add("BasinInner"); s.BasinInner = 0.6; }
+        if (!Pos(s.BasinWall) || s.BasinWall > 2) { bad.Add("BasinWall"); s.BasinWall = 0.15; }
+        if (!Pos(s.BasinFloor) || s.BasinFloor > 2) { bad.Add("BasinFloor"); s.BasinFloor = 0.15; }
+        if (!double.IsFinite(s.BasinSump) || s.BasinSump < 0 || s.BasinSump > 3) { bad.Add("BasinSump"); s.BasinSump = 0.15; }
+        if (!Pos(s.GrateT) || s.GrateT > 0.5) { bad.Add("GrateT"); s.GrateT = 0.05; }
+        if (!Pos(s.PipeD) || s.PipeD > 5) { bad.Add("PipeD"); s.PipeD = 0.3; }
+        if (!Pos(s.PipeWall) || s.PipeWall > 1) { bad.Add("PipeWall"); s.PipeWall = 0.05; }
+        if (!double.IsFinite(s.PipeCover) || s.PipeCover < 0 || s.PipeCover > 5) { bad.Add("PipeCover"); s.PipeCover = 0.3; }
+        var ps = (s.PipeSizes ?? new List<double>()).Where(v => Pos(v) && v <= 5).Distinct().OrderBy(v => v).ToList();
+        if (ps.Count == 0) { bad.Add("PipeSizes"); ps = new Settings().PipeSizes; }
+        s.PipeSizes = ps;
         var ok = new List<Size>();
         foreach (var z in s.Sizes ?? new List<Size>())
         {
@@ -160,6 +205,13 @@ public static partial class UDitch
         public bool Reversed { get; set; }
         public double AreaHa { get; set; }
         public double C { get; set; } = 0.9;
+        /// <summary>★[v117.16 · JACK 1112] 참 = 바닥이 지표를 따라감(최대 경사 넘으면 낙차 · 단차는 집수정 + 관로 · <see cref="LayoutOf"/>). 새 측구 = 참 · 옛 기록(칸 없음) = 거짓 = 한 경사 그대로. [지표면 맞춤]이 켬.</summary>
+        public bool Follow { get; set; }
+        /// <summary>★[v117.16] 선 따라 읽은 지표 [측점 m, z(NaN = 못 읽음)] — <see cref="FillSamples"/>. 옛 기록 = 비었음(마디 지표만 씀). 기록에는 한 줄로(검토 LOW — 도면 기록이 부풀지 않게).</summary>
+        [JsonConverter(typeof(CompactPairs))]
+        public List<double[]> Samp { get; set; } = new();
+        /// <summary>★[v117.16 · JACK 1112 «측구에 스틸그라우팅도 선택되게»] 덮개 — 거짓 = 없음(열린 U · 옛 기록) · 참 = 스틸 그레이팅.</summary>
+        public bool Grating { get; set; }
         /// <summary>지은 솔리드 핸들(16진) — 다시 지을 때 지움.</summary>
         public List<string> Solids { get; set; } = new();
     }
@@ -175,6 +227,47 @@ public static partial class UDitch
 
     public static string ToJson(Record r) => JsonSerializer.Serialize(r, Jo);
 
+    /// <summary>★[v117.16 검토 LOW] [[a, b], …]를 줄바꿈 없이 한 값으로(들여쓰기 기록 안에서도) · NaN = "NaN" · 읽기는 숫자 · "NaN" 모두.</summary>
+    internal sealed class CompactPairs : JsonConverter<List<double[]>>
+    {
+        public override List<double[]> Read(ref Utf8JsonReader r, Type t, JsonSerializerOptions o)
+        {
+            var x = new List<double[]>();
+            if (r.TokenType == JsonTokenType.Null) return x;
+            if (r.TokenType != JsonTokenType.StartArray) throw new JsonException("Samp — 배열이 아님");
+            while (r.Read() && r.TokenType != JsonTokenType.EndArray)
+            {
+                if (r.TokenType != JsonTokenType.StartArray) { r.Skip(); continue; }
+                var row = new List<double>();
+                while (r.Read() && r.TokenType != JsonTokenType.EndArray)
+                    row.Add(r.TokenType == JsonTokenType.String ? (double.TryParse(r.GetString(), NumberStyles.Float, Ic, out double v) ? v : double.NaN)
+                          : r.TokenType == JsonTokenType.Number ? r.GetDouble() : double.NaN);
+                x.Add(row.ToArray());
+            }
+            return x;
+        }
+
+        public override void Write(Utf8JsonWriter w, List<double[]> v, JsonSerializerOptions o)
+        {
+            var sb = new StringBuilder("[");
+            for (int i = 0; i < v.Count; i++)
+            {
+                if (i > 0) sb.Append(',');
+                sb.Append('[');
+                var row = v[i] ?? Array.Empty<double>();
+                for (int j = 0; j < row.Length; j++)
+                {
+                    if (j > 0) sb.Append(',');
+                    double d = row[j];
+                    sb.Append(double.IsNaN(d) ? "\"NaN\"" : double.IsPositiveInfinity(d) ? "\"Infinity\"" : double.IsNegativeInfinity(d) ? "\"-Infinity\"" : d.ToString("R", Ic));
+                }
+                sb.Append(']');
+            }
+            sb.Append(']');
+            w.WriteRawValue(sb.ToString());
+        }
+    }
+
     public static bool TryParse(string json, out Record r, out string why)
     {
         r = new Record(); why = "";
@@ -188,6 +281,7 @@ public static partial class UDitch
             {
                 d.Pts ??= new(); d.Solids ??= new(); d.Size ??= DefaultSizes()[0]; d.Id ??= ""; d.LineHandle ??= ""; d.Surface ??= "";
                 d.Pts = d.Pts.Where(p => p != null && p.Length >= 2).Select(p => p.Length >= 3 ? p : new[] { p[0], p[1], double.NaN }).ToList();
+                d.Samp = (d.Samp ?? new()).Where(p => p != null && p.Length >= 2 && double.IsFinite(p[0])).ToList();   // ★[v117.16]
             }
             r = x;
             return true;
@@ -333,6 +427,8 @@ public static partial class UDitch
         public double MaxDeflectDeg;
         public readonly List<string> Warn = new();
         public string Error = "";
+        /// <summary>★[v117.16] 지표 따라감이면 구간 · 낙차 · 집수정 · 관로(<see cref="LayoutOf"/>) — 한 경사면 null.</summary>
+        public Layout? Lay;
     }
 
     /// <summary>평면 점(1 mm 안 겹침 뺌) — [x, y, 지표면 z].</summary>
@@ -363,6 +459,12 @@ public static partial class UDitch
         d.Reversed = !d.Reversed;
         d.Pts.Reverse();
         (d.StartInvert, d.EndInvert) = (d.EndInvert, d.StartInvert);
+        // ★[v117.16] 지표 표본도 뒤집음(측점 = 길이 − 측점)
+        if (d.Samp.Count > 0)
+        {
+            double L = d.Samp[^1][0];
+            d.Samp = d.Samp.AsEnumerable().Reverse().Select(q => new[] { Math.Round(L - q[0], 3), q.Length > 1 ? q[1] : double.NaN }).ToList();
+        }
     }
 
     /// <summary>원 선에서 다시 읽은 점(그린 차례) → 측구 점(상류 → 하류) — <see cref="Ditch.Reversed"/>면 뒤집음.</summary>
@@ -376,6 +478,12 @@ public static partial class UDitch
     public static void ApplyAuto(Ditch d, Settings s)
     {
         if (!d.InvertAuto) return;
+        // ★[v117.16 · JACK 1112] 지표 따라감 — 시점 · 종점 바닥고 = 구간 계산의 처음 · 끝(보이기용)
+        if (d.Follow)
+        {
+            var lay = LayoutOf(d, s);
+            if (lay.Follow && lay.Segs.Count > 0) { d.StartInvert = Math.Round(lay.StartInv, 3); d.EndInvert = Math.Round(lay.EndInv, 3); return; }
+        }
         var (a, b) = DefaultInverts(d, s);
         d.StartInvert = a; d.EndInvert = b;
     }
@@ -399,8 +507,26 @@ public static partial class UDitch
         }
         if (pr.MaxDeflectDeg > MaxDeflect) { pr.Error = string.Format(Ic, "꺾임 {0:0}° — {1:0}° 넘게 꺾인 점은 측구를 못 지음(점을 더 찍어 완만하게)", pr.MaxDeflectDeg, MaxDeflect); return pr; }
         if (pr.MaxDeflectDeg > 90.5) pr.Warn.Add(string.Format(Ic, "급한 꺾임 {0:0}°(맞댄 이음이 길어짐)", pr.MaxDeflectDeg));
-        if (!double.IsFinite(d.StartInvert) || !double.IsFinite(d.EndInvert)) { pr.Error = "시작 · 끝 바닥고를 넣으세요(지표면을 못 읽음)"; return pr; }
         double H = d.Size.H;
+        // ★[v117.16 · JACK 1112 «애초에 폴리선이 단차 있게 만든 부지거든?»] 지표 따라감 — 구간 · 낙차 · 집수정 · 관로
+        if (d.Follow && d.InvertAuto)
+        {
+            var lay = LayoutOf(d, s);
+            if (lay.Follow)
+            {
+                pr.Lay = lay;
+                if (lay.Error.Length > 0) { pr.Error = lay.Error; return pr; }
+                for (int i = 0; i < n; i++) { pr.Inv[i] = lay.InvAt(pr.Sta[i]); pr.Top[i] = pr.Inv[i] + H; pr.Ground[i] = p[i][2]; }
+                pr.SlopePct = (lay.StartInv - lay.EndInv) / pr.Length * 100;
+                pr.MaxAbove = lay.MaxAbove; pr.MaxBelow = lay.MaxBelow;
+                pr.Warn.AddRange(lay.Warn);
+                if (pr.MaxAbove > 0.05) pr.Warn.Add(string.Format(Ic, "측구 윗면이 지표면 위로 최대 {0:0.00} m", pr.MaxAbove));
+                if (pr.MaxBelow > s.DropMax + 0.05) pr.Warn.Add(string.Format(Ic, "측구가 최대 {0:0.00} m 묻힘 — 지표가 솟은 곳 → [방향 바꾸기] 또는 선 확인", pr.MaxBelow));
+                if (lay.GroundMiss > 0) pr.Warn.Add("지표면 밖 점 있음 — 이웃 값으로 메움");
+                return pr;
+            }
+        }
+        if (!double.IsFinite(d.StartInvert) || !double.IsFinite(d.EndInvert)) { pr.Error = "시작 · 끝 바닥고를 넣으세요(지표면을 못 읽음)"; return pr; }
         for (int i = 0; i < n; i++)
         {
             pr.Inv[i] = d.StartInvert + (d.EndInvert - d.StartInvert) * pr.Sta[i] / pr.Length;
@@ -442,6 +568,9 @@ public static partial class UDitch
         public readonly List<string> Notes = new();
         /// <summary>표에서 기준을 다 맞는 가장 작은 규격(추천 — 확정은 설계자 · §M05) · 없으면 «자동 확정 불가» · 셀 수 없으면 빈 글.</summary>
         public string Recommend = "";
+        /// <summary>★[v117.16] 지표 따라감 — 구간마다 · 관로마다(한 경사면 비었음).</summary>
+        public readonly List<SegCheck> Segs = new();
+        public readonly List<PipeCheck> Pipes = new();
     }
 
     /// <summary>직사각 물길(U형 안) Manning 유량 — 폭 B · 수심 y · 경사 S(m/m) · n.</summary>
@@ -471,6 +600,7 @@ public static partial class UDitch
         var h = new Hyd();
         var pr = ProfileOf(d, s);
         if (pr.Error.Length > 0) { h.Verdict = Verdict.NoLine; h.Status = "선 · 바닥고 확인"; h.Notes.Add(pr.Error); return h; }
+        if (pr.Lay is { Follow: true } lay) return CheckFollow(d, r, s, pr, lay);   // ★[v117.16] 구간마다
         h.SlopePct = pr.SlopePct;
         double S = pr.SlopePct / 100, B = d.Size.B, H = d.Size.H, n = s.ManningN;
         if (S > 0)
@@ -543,10 +673,26 @@ public static partial class UDitch
         var rows = new List<(string, string)>();
         var pr = ProfileOf(d, s);
         var h = Check(d, r, s);
-        var q = Qty(d);
+        var q = Qty(d, s);
+        var lay = pr.Lay is { Follow: true } l0 && l0.Error.Length == 0 ? l0 : null;   // ★[v117.16] 지표 따라감
+        var ex = Extras(d, s);
         rows.Add(("규격", "U형 " + d.Size.Label + string.Format(Ic, " (벽 {0:0} · 바닥 {1:0} mm)", d.Size.Tw * 1000, d.Size.Tb * 1000)));
-        rows.Add(("길이", F(q.Length, "0.00") + " m"));
-        rows.Add(("경사", F(pr.SlopePct, "0.###") + " %"));
+        if (lay == null)
+        {
+            rows.Add(("길이", F(q.Length, "0.00") + " m"));
+            rows.Add(("경사", F(pr.SlopePct, "0.###") + " %"));
+        }
+        else
+        {
+            rows.Add(("길이", F(lay.Length, "0.00") + " m" + (lay.Basins.Count > 0 ? " · U형 " + F(q.Length, "0.00") + " m" : "")));
+            var parts = new List<string> { $"{lay.Segs.Count}" };
+            if (lay.Drops.Count > 0) parts.Add(string.Format(Ic, "낙차 {0}(합 {1:0.00} m)", lay.Drops.Count, ex.DropSum));
+            if (lay.Basins.Count > 0) parts.Add($"집수정 {lay.Basins.Count}");
+            if (lay.Pipes.Count > 0) parts.Add(string.Format(Ic, "관 {0:0.0} m", ex.PipeLen));
+            rows.Add(("구간", string.Join(" · ", parts)));
+            double lo = lay.Segs.Min(g => g.SMinPct), hi = lay.Segs.Max(g => g.SMaxPct);
+            rows.Add(("경사", Math.Abs(hi - lo) < 0.0005 ? F(lo, "0.###") + " %" : F(lo, "0.###") + "~" + F(hi, "0.###") + " %"));
+        }
         rows.Add(("바닥고", F(d.StartInvert, "0.000") + " → " + F(d.EndInvert, "0.000") + " m"));
         if (h.Verdict == Verdict.NoRain || h.Verdict == Verdict.NoArea || h.Verdict == Verdict.NoLine)
             rows.Add(("판정", h.Status));
@@ -558,7 +704,8 @@ public static partial class UDitch
             rows.Add(("판정", h.Status + (h.Notes.Count > 0 && h.Verdict != Verdict.Ok ? " — " + string.Join(" · ", h.Notes) : "")));
             if (h.Recommend.Length > 0 && h.Recommend != d.Size.Label) rows.Add(("추천 규격", h.Recommend));
         }
-        rows.Add(("콘크리트", F(q.BodyVol + q.FootVol, "0.00") + " ㎥"));
+        if (d.Grating) rows.Add(("덮개", "스틸 그레이팅 " + F(ex.GrateLen, "0.00") + " m"));   // ★[v117.16 · JACK 1112 «스틸그라우팅»]
+        rows.Add(("콘크리트", F(q.BodyVol + q.FootVol + ex.Concrete, "0.00") + " ㎥"));
         return rows;
     }
 
@@ -586,15 +733,56 @@ public static partial class UDitch
         sb.AppendLine("■ 기준값(설정)");
         sb.AppendLine(string.Format(Ic, "  Manning n {0} · 허용 수심 {1:0}% · 경사 {2:0.###}~{3:0.###} % · 유속 {4:0.0#}~{5:0.0#} m/s · 덮개 {6:0.00} m",
                       s.ManningN, s.DepthRatio * 100, s.MinSlopePct, s.MaxSlopePct, s.MinVelocity, s.MaxVelocity, s.Cover));
-        double tb = 0, tf = 0, tl = 0;
+        if (rec.Ditches.Any(d => d.Follow && d.InvertAuto))   // ★[v117.16 · JACK 1112]
+            sb.AppendLine(string.Format(Ic, "  지표 따라감: 표본 {0:0.0#} m · 단차 = 지표 경사 > {1:0.#} % 이고 높이 > {2:0.00} m · 낙차 {3:0.00}~{2:0.00} m · 단차마다 집수정 둘(위 · 아래 · 안 {4:0.00} m · 벽 {5:0.00} · 바닥 {6:0.00} · 침전 {7:0.00}) · 띄움 {8:0.00} m · 관 D{9:0} · 흙덮개 ≥ {10:0.00} m(땅 속으로)",
+                          s.SampleStep, s.StepGradePct, s.DropMax, s.DropMin, s.BasinInner, s.BasinWall, s.BasinFloor, s.BasinSump, s.StepSetback, s.PipeD * 1000, Math.Max(s.Cover, s.PipeCover)));
+        double tb = 0, tf = 0, tl = 0, tx = 0, tpipe = 0, tgr = 0;
+        int tbas = 0, tdrop = 0;
         foreach (var d in rec.Ditches)
         {
-            var pr = ProfileOf(d, s); var h = Check(d, r, s); var q = Qty(d);
+            var pr = ProfileOf(d, s); var h = Check(d, r, s); var q = Qty(d, s); var ex = Extras(d, s);
+            var lay = pr.Lay is { Follow: true } l0 && l0.Error.Length == 0 ? l0 : null;   // ★[v117.16 · JACK 1112] 지표 따라감
             sb.AppendLine();
             sb.AppendLine($"■ {d.Id} — U형 {d.Size.Label}");
             sb.AppendLine(string.Format(Ic, "  단면: 안폭 {0:0.000} · 안높이 {1:0.000} · 벽 {2:0.000} · 바닥 {3:0.000} · 기초 {4:0.000}(내밈 {5:0.000}) m", d.Size.B, d.Size.H, d.Size.Tw, d.Size.Tb, d.Size.Tf, d.Size.Pf));
             sb.AppendLine($"  선: 점 {CleanPts(d.Pts).Count} · 길이 {F(pr.Length, "0.000")} m · 지표면 «{d.Surface}» · 방향 = 시점(상류) → 종점(하류)");
-            sb.AppendLine($"  종단: 바닥고 {F(d.StartInvert, "0.000")} → {F(d.EndInvert, "0.000")} m · 경사 {F(pr.SlopePct, "0.###")} % ({(d.InvertAuto ? "지표면 따라 자동" : "손 입력")})");
+            if (lay == null)
+                sb.AppendLine($"  종단: 바닥고 {F(d.StartInvert, "0.000")} → {F(d.EndInvert, "0.000")} m · 경사 {F(pr.SlopePct, "0.###")} % ({(d.InvertAuto ? "지표면 따라 자동" : "손 입력")})");
+            else
+            {
+                sb.AppendLine(string.Format(Ic, "  종단: 지표 따라감(바닥 = 지표 − 덮개 − 안높이 · 경사 {0:0.###}~{1:0.###} % · 급하면 낙차 · 단차 = 집수정 + 관로) · 바닥고 {2} → {3} m",
+                              s.MinSlopePct, s.MaxSlopePct, F(d.StartInvert, "0.000"), F(d.EndInvert, "0.000")));
+                sb.AppendLine(string.Format(Ic, "  짜임: 구간 {0} · 낙차 {1}(합 {2:0.000} m) · 집수정 {3} · 관로 {4} · 묻힘 최대 {5:0.00} m", lay.Segs.Count, lay.Drops.Count, ex.DropSum, lay.Basins.Count, lay.Pipes.Count, lay.MaxBelow));
+                for (int i = 0; i < lay.Segs.Count; i++)
+                {
+                    var g = lay.Segs[i];
+                    sb.AppendLine(string.Format(Ic, "    구간 {0}: 측점 {1:0.000} → {2:0.000} m · 길이 {3:0.000} m · 경사 {4} · 바닥고 {5:0.000} → {6:0.000} m",
+                                  i + 1, g.S0, g.S1, g.Length, Math.Abs(g.SMaxPct - g.SMinPct) < 0.0005 ? F(g.SMinPct, "0.###") + " %" : F(g.SMinPct, "0.###") + "~" + F(g.SMaxPct, "0.###") + " %", g.V0, g.V1));
+                }
+                for (int i = 0; i < lay.Drops.Count; i++)
+                {
+                    var x = lay.Drops[i];
+                    sb.AppendLine(string.Format(Ic, "    낙차 {0}: 측점 {1:0.000} m · 높이 {2:0.000} m ({3:0.000} → {4:0.000})", i + 1, x.S, x.H, x.V1, x.V2));
+                }
+                for (int i = 0; i < lay.Basins.Count; i++)
+                {
+                    var b = lay.Basins[i];
+                    sb.AppendLine(string.Format(Ic, "    집수정 {0}({1}): 측점 {2:0.000}~{3:0.000} m · 안 {4:0.00}×{4:0.00} · 바깥 {5:0.00}×{5:0.00} m · 윗면 {6:0.000} · 유입 바닥 {7:0.000}{8} · 안바닥 {9:0.000} · 깊이 {10:0.000} m · 그레이팅 덮개",
+                                  i + 1, b.Lower ? "아래" : "위", b.S0, b.S1, b.Inner, b.Outer, b.ZTop, b.InV, double.IsFinite(b.OutV) ? string.Format(Ic, " · 유출 바닥 {0:0.000}", b.OutV) : "", b.Floor, b.Depth));
+                }
+                for (int i = 0; i < lay.Pipes.Count; i++)
+                {
+                    var p = lay.Pipes[i];
+                    sb.AppendLine(string.Format(Ic, "    관로 {0}: 측점 {1:0.000} → {2:0.000} m · 원형 D{3:0}(바깥 {4:0.00}) · 다리 {5}개 · 길이 {6:0.000} m · 관 바닥 {7:0.000} → {8:0.000} m · 흙덮개 ≥ {9:0.00} m(관 윗면 + 흙덮개 − 지표 최대 {10:0.000} m)",
+                                  i + 1, p.S0, p.S1, p.D * 1000, p.Dout, p.Legs.Count, p.Length, p.InvIn, p.InvOut, p.CoverMin, p.CrownExcess));
+                    for (int j = 0; j < p.Legs.Count; j++)
+                    {
+                        var l = p.Legs[j];
+                        sb.AppendLine(string.Format(Ic, "      다리 {0}-{1}: 측점 {2:0.000} → {3:0.000} m · 길이 {4:0.000} m · 경사 {5} %{6} · 관 바닥 {7:0.000} → {8:0.000}",
+                                      i + 1, j + 1, l.S0, l.S1, l.Length, F(l.SlopePct, "0.##"), l.SlopePct > FallPct ? "(낙하)" : "", l.Z1 - p.D / 2, l.Z2 - p.D / 2));
+                    }
+                }
+            }
             if (pr.Error.Length > 0) sb.AppendLine("  ⚠ " + pr.Error);
             foreach (var w in pr.Warn) sb.AppendLine("  ⚠ " + w);
             sb.AppendLine("  수리(모델과 따로):");
@@ -602,22 +790,51 @@ public static partial class UDitch
             else
             {
                 sb.AppendLine(string.Format(Ic, "    Q = C·I·A/360 = {0:0.00} × {1:0.0} × {2:0.0000} / 360 = {3:0.0000} m³/s", d.C, r.IntensityMmh, d.AreaHa, h.Q));
-                if (double.IsFinite(h.Qcap))
+                if (lay == null)
+                {
+                    if (double.IsFinite(h.Qcap))
+                    {
+                        double y = d.Size.H * s.DepthRatio, A = d.Size.B * y, P = d.Size.B + 2 * y;
+                        sb.AppendLine(string.Format(Ic, "    Qcap = (1/n)·A·R^(2/3)·S^(1/2) — y = {0:0.000} m · A = {1:0.0000} ㎡ · P = {2:0.000} m · R = {3:0.0000} m · S = {4:0.00000} → {5:0.0000} m³/s",
+                                      y, A, P, A / P, h.SlopePct / 100, h.Qcap));
+                    }
+                    if (double.IsFinite(h.Vel)) sb.AppendLine(string.Format(Ic, "    등류 수심 {0:0.000} m ({1:0}%) · 유속 {2:0.00} m/s", h.Yn, h.YRatio * 100, h.Vel));
+                }
+                else
                 {
                     double y = d.Size.H * s.DepthRatio, A = d.Size.B * y, P = d.Size.B + 2 * y;
-                    sb.AppendLine(string.Format(Ic, "    Qcap = (1/n)·A·R^(2/3)·S^(1/2) — y = {0:0.000} m · A = {1:0.0000} ㎡ · P = {2:0.000} m · R = {3:0.0000} m · S = {4:0.00000} → {5:0.0000} m³/s",
-                                  y, A, P, A / P, h.SlopePct / 100, h.Qcap));
+                    sb.AppendLine(string.Format(Ic, "    Qcap = (1/n)·A·R^(2/3)·S^(1/2) — y = {0:0.000} m · A = {1:0.0000} ㎡ · P = {2:0.000} m · R = {3:0.0000} m · S = 구간 최소 경사", y, A, P, A / P));
+                    foreach (var c in h.Segs)
+                        sb.AppendLine(string.Format(Ic, "    구간 {0}: S {1:0.00000}~{2:0.00000} · Qcap {3} m³/s · 수심 {4} % · 유속 {5}~{6} m/s · {7}{8}",
+                                      c.No, c.Seg.SMinPct / 100, c.Seg.SMaxPct / 100, F(c.Qcap, "0.0000"), F(c.YRatio * 100, "0"), F(c.VelMin, "0.00"), F(c.VelMax, "0.00"), c.Status,
+                                      c.Notes.Count > 0 ? " — " + string.Join(" · ", c.Notes) : ""));
+                    foreach (var c in h.Pipes)
+                        sb.AppendLine(string.Format(Ic, "    관로 {0}: 가득 흐름 Qfull = (1/n)·(πD²/4)·(D/4)^(2/3)·S^(1/2) — D {1:0.000} m · 가장 완만한 다리 S {2} → {3} m³/s · 가장 급한 흐름 다리 S {4} 유속 {5} m/s · 낙하 다리 {6} · {7}{8}{9}",
+                                      c.No, c.Pipe.D, F(c.SFlat, "0.00000"), F(c.Qfull, "0.0000"), F(c.SSteep, "0.00000"), F(c.VelMax, "0.00"), c.FallLegs, c.Status,
+                                      c.Recommend.Length > 0 ? " → " + c.Recommend : "", c.Notes.Count > 0 ? " — " + string.Join(" · ", c.Notes) : ""));
                 }
-                if (double.IsFinite(h.Vel)) sb.AppendLine(string.Format(Ic, "    등류 수심 {0:0.000} m ({1:0}%) · 유속 {2:0.00} m/s", h.Yn, h.YRatio * 100, h.Vel));
                 sb.AppendLine("    판정: " + h.Status + (h.Notes.Count > 0 ? " — " + string.Join(" · ", h.Notes) : ""));
                 if (h.Recommend.Length > 0) sb.AppendLine("    표에서 기준을 다 맞는 가장 작은 규격(참고 · 확정은 설계자): " + h.Recommend);
             }
+            // ★[v117.16 · JACK 1112 «측구에 스틸그라우팅도 선택되게»] 덮개
+            if (d.Grating)
+            {
+                string per = lay != null && lay.Segs.Count > 1 ? " (" + string.Join(" · ", lay.Segs.Select((g, i) => string.Format(Ic, "구간 {0} {1:0.00} m", i + 1, g.Length))) + ")" : "";
+                sb.AppendLine(string.Format(Ic, "  덮개: 스틸 그레이팅 · 구간 {0}개 · 길이 {1:0.000} m{2}", lay?.Segs.Count ?? 1, ex.GrateLen, per));
+            }
+            else sb.AppendLine("  덮개: 없음(열린 U)");
             sb.AppendLine(string.Format(Ic, "  수량: 본체 {0:0.0000} ㎡ × {1:0.000} m = {2:0.000} ㎥ · 기초 {3:0.0000} ㎡ × {1:0.000} m = {4:0.000} ㎥ · 합 {5:0.000} ㎥",
                           q.BodyArea, q.Length, q.BodyVol, q.FootArea, q.FootVol, q.BodyVol + q.FootVol));
-            tb += q.BodyVol; tf += q.FootVol; tl += q.Length;
+            if (ex.Drops + ex.Basins + ex.Pipes > 0)
+                sb.AppendLine(string.Format(Ic, "        낙차벽 {0}개 {1:0.000} ㎥ · 집수정 {2}개 {3:0.000} ㎥(바깥 상자 − 안 빈 곳) · 관로 D{4:0} {5}개(다리 {7}) {6:0.000} m",
+                              ex.Drops, ex.DropVol, ex.Basins, ex.BasinVol, s.PipeD * 1000, ex.Pipes, ex.PipeLen, ex.Legs));
+            tb += q.BodyVol; tf += q.FootVol; tl += q.Length; tx += ex.Concrete; tpipe += ex.PipeLen; tgr += ex.GrateLen; tbas += ex.Basins; tdrop += ex.Drops;
         }
         sb.AppendLine();
-        sb.AppendLine(string.Format(Ic, "■ 합계: 측구 {0}개 · 길이 {1:0.00} m · 콘크리트 본체 {2:0.000} ㎥ · 기초 {3:0.000} ㎥ · 합 {4:0.000} ㎥", rec.Ditches.Count, tl, tb, tf, tb + tf));
+        sb.AppendLine(string.Format(Ic, "■ 합계: 측구 {0}개 · 길이 {1:0.00} m · 콘크리트 본체 {2:0.000} ㎥ · 기초 {3:0.000} ㎥", rec.Ditches.Count, tl, tb, tf)
+                      + (tx > 0 ? string.Format(Ic, " · 낙차벽 · 집수정 {0:0.000} ㎥", tx) : "") + string.Format(Ic, " · 합 {0:0.000} ㎥", tb + tf + tx)
+                      + (tbas > 0 || tdrop > 0 ? string.Format(Ic, " · 낙차 {0} · 집수정 {1} · 관로 {2:0.00} m", tdrop, tbas, tpipe) : "")
+                      + (tgr > 0 ? string.Format(Ic, " · 스틸 그레이팅 {0:0.00} m", tgr) : ""));
         return sb.ToString();
     }
 }

@@ -86,7 +86,7 @@ internal sealed class SectionPanel : UserControl
         void Hook(FrameworkElement? fe, string key) { if (fe == null) return; fe.MouseEnter += (_, __) => demo.Play(key); fe.MouseLeave += (_, __) => demo.Idle(); }
 
         // ── 1. 종단도 ──
-        var sec1 = GradingDialog.AddCollapsible(root, "1. 종단도", out var badge1, null, first: true, open: false, key: k + "1.종단도", group: g);
+        var sec1 = GradingDialog.AddCollapsible(root, "1. 종단도", out var badge1, null, first: true, open: true, key: k + "1.종단도:열림", group: null);   // ★[v117.14.1 · JACK 1112 «종횡단도 팝업은 내용이 별로 없어서 모든 내용이 열림 상태면 좋겠어»] 늘 펼침 · 서로 안 닫음
         Hook(HeadOf(badge1), "pfProfile");
         var row1 = new WrapPanel { Margin = new Thickness(0, 0, 0, 6) };
         sec1.Children.Add(row1);
@@ -104,7 +104,7 @@ internal sealed class SectionPanel : UserControl
         }
 
         // ── 2. 횡단도 ──
-        var sec2 = GradingDialog.AddCollapsible(root, "2. 횡단도", out var badge2, null, open: false, key: k + "2.횡단도", group: g);
+        var sec2 = GradingDialog.AddCollapsible(root, "2. 횡단도", out var badge2, null, open: true, key: k + "2.횡단도:열림", group: null);
         Hook(HeadOf(badge2), "xsView");
         var row2 = new WrapPanel { Margin = new Thickness(0, 0, 0, 6) };
         sec2.Children.Add(row2);
@@ -115,7 +115,7 @@ internal sealed class SectionPanel : UserControl
         var deck = new DockPanel { LastChildFill = true };
         var top = new StackPanel { Margin = new Thickness(10, 10, 10, 0) };
         top.Children.Add(head);
-        top.Children.Add(demo);
+        top.Children.Add(DemoFrame.Wrap(demo));   // ★[v117.14.1 · JACK 1112 «종횡단도 애니메이션 창 제각각 → 계획부지 생성처럼 고정 · 같은 크기»]
         DockPanel.SetDock(top, Dock.Top);
         deck.Children.Add(top);
         deck.Children.Add(DhBrand.Watermark(new ScrollViewer

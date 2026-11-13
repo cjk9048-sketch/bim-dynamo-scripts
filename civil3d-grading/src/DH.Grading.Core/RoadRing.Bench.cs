@@ -30,15 +30,17 @@ public static partial class RoadRing
             for (int i = 1; i < p.E.Count; i++) if (Math.Abs(p.E[i].R - p.E[i - 1].R) < 1e-9 && p.E[i].D > p.E[i - 1].D + 1e-9) o.Add((p.E[i - 1].D, p.E[i].D));
             return o;
         }
-        var fc = Flats(ev.Pc); var ff = Flats(ev.Pf);
-        if (fc.Count == 0 && ff.Count == 0) return R;
+        // ★[v117.16] 단면마다 평평한 토막(변환 옹벽 변형 단면은 옹벽 사이 소단)
+        var fcA = ev.PcA.Select(Flats).ToArray(); var ffA = ev.PfA.Select(Flats).ToArray();
+        if (fcA.All(l => l.Count == 0) && ffA.All(l => l.Count == 0)) return R;
+        List<(double A, double B)> FL(bool cut, int p) => (cut ? fcA : ffA)[Math.Clamp(p, 0, fcA.Length - 1)];
         static bool In(List<(double A, double B)> fl, double d, double pad) { foreach (var (a, c) in fl) if (d > a - pad && d < c + pad) return true; return false; }
         // 한 점이 소단인가(0 아님 · 1 소단 · 2 이어 받는 원뿔 소단)
         int Is(double x, double y)
         {
             var q = ev.Eval(x, y);
             if (q.Kind is not (2 or 3 or 4)) return 0;
-            bool cut = q.Kind != 3; var w = cut ? q.WHi : q.WLo; var fl = cut ? fc : ff;
+            bool cut = q.Kind != 3; var w = cut ? q.WHi : q.WLo; var fl = FL(cut, w.Prof);
             if (w.Src < 0) return 0;
             if (w.Src < 2 * m) return In(fl, w.Dist, 0) ? 1 : 0;
             var gd = ev.SourceGrad(w.Src, x, y); if (!double.IsFinite(gd.X)) return 0;
@@ -55,7 +57,7 @@ public static partial class RoadRing
             var q = g.P[k]; if (q.Kind is not (2 or 3 or 4)) continue;
             bool cut = q.Kind != 3; var w = cut ? q.WHi : q.WLo;
             if (w.Src < 0) continue;
-            if (w.Src >= 2 * m || In(cut ? fc : ff, w.Dist, pad)) cand.Add(k);
+            if (w.Src >= 2 * m || In(FL(cut, w.Prof), w.Dist, pad)) cand.Add(k);
         }
         // 2) 후보 마디의 칸(마디 둘레 ± 반 칸)을 cell마다 — 칸 열쇠(전역 cell 격자)로 겹침 없이
         double c = Math.Max(0.05, cell);
