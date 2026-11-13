@@ -1955,8 +1955,8 @@ public sealed class CreateGradingCommand
                 catch { }
 
                 string verifyCut = "", verifyFill = "";
-                if (cut.HasSlope) { cutId = GradingBuilder.BuildVirtualSlope(db, tr, cut.Rings, "가상절토_DH", cut.CornerLines, groundId, cut.SeamLines); verifyCut = GradingBuilder.LastVerify; }
-                if (fill.HasSlope) { fillId = GradingBuilder.BuildVirtualSlope(db, tr, fill.Rings, "가상성토_DH", fill.CornerLines, groundId, fill.SeamLines); verifyFill = GradingBuilder.LastVerify; }
+                if (cut.HasSlope) { cutId = GradingBuilder.BuildVirtualSlope(db, tr, cut.Rings, "가상절토_DH", cut.CornerLines, groundId, cut.SeamLines, bandLines: cut.BandLines); verifyCut = GradingBuilder.LastVerify; }
+                if (fill.HasSlope) { fillId = GradingBuilder.BuildVirtualSlope(db, tr, fill.Rings, "가상성토_DH", fill.CornerLines, groundId, fill.SeamLines, bandLines: fill.BandLines); verifyFill = GradingBuilder.LastVerify; }
                 // 검증 로그에 TIN 실측 대조 결과 덧붙임(비대칭/누락 방향 추적)
                 try
                 {
@@ -2082,6 +2082,20 @@ public sealed class CreateGradingCommand
                 //   그러면 rings[^1]이 패드가 되어 <b>사면 삼각형을 전부 버린다</b>.
                 ComputePure(fillId, "성토", fill.HasSlope && fill.Rings.Count > 1 ? fill.Rings[fill.Rings.Count - 1] : null);
                 ComputePure(cutId, "절토", cut.HasSlope && cut.Rings.Count > 1 ? cut.Rings[cut.Rings.Count - 1] : null);
+
+                // ★[v117.15 · JACK 1112 «톱니»] 자가검증 — 전이 띠 면의 교선이 정확한 데이라잇(자 선 따라 곧은 면 ∩ 원지반)을 따르나.
+                //   톱니 = 엇갈린 3점 어긋남 > 1 cm(칸마다 하나씩 꺾이면 여기서 잡힌다) · 고친 뒤 0 · 최대 어긋남 mm대여야 한다.
+                foreach (var (labB, vsB) in new[] { ("성토", fill), ("절토", cut) })
+                {
+                    if (vsB.BandDaylight.Count == 0 || !pureLoops.TryGetValue(labB, out var lpB)) continue;
+                    try
+                    {
+                        var (bnS, bnM, bnD, bnT) = GradingGeometry.BandTeeth(lpB, vsB.BandDaylight);
+                        diagX += $"\n■ 띠 데이라잇({labB}) — 정확한 선 {vsB.BandDaylight.Count}줄 · 표본 {bnS} · 최대 어긋남 {bnD * 100:0.00}cm · 톱니(엇갈린 3점 >1cm) {bnT}곳"
+                               + (bnM > 0 ? $" · 교선 못 찾음 {bnM}" : "") + (bnT > 0 ? " ⚠" : "") + "\n";
+                    }
+                    catch (System.Exception exB) { diagX += $"\n■ 띠 데이라잇({labB}) 재기 실패 — {exB.Message}\n"; }
+                }
 
                 // [0728 — JACK] 사면(데이라잇)이 원지반(측량) 경계에 닿을 정도면 경고 후 수행 중단.
                 //   경계 밖 지반 정보가 없어 결과(정지면·토량)를 신뢰할 수 없음 — 계획고/구배/측량범위 조정 필요.

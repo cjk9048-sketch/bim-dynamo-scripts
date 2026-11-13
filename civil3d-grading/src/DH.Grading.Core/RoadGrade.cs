@@ -1729,7 +1729,7 @@ public static partial class RoadGrade
 
     /// <summary>★★[v113.1] 세모 무더기의 Civil 바늘(가장 긴 변에 대한 높이 &lt; <see cref="CivilSafeMesh.ThinH"/>) 짧은 변 접기 — 짧은 변이 5 mm 안이면 한 끝을 다른 끝으로(좌표 그대로 같은 점) 옮기고
     /// 넓이 0 세모를 뺀다. 옮긴 점을 쓰는 다른 세모가 하나라도 바늘 · 뒤집힘이 되면 안 접음. 칸 면(벽 끝 마구리 곁 2.1 mm 두 점 — 벽 폴리선 계측) · 선 면이 같은 법. 돌려줌 = 접은 수.</summary>
-    internal static int FoldNeedles(List<WallDaylight.Tri> tris, double Tol = 0.005)
+    internal static int FoldNeedles(List<WallDaylight.Tri> tris, double Tol = 0.005, ISet<(double, double)>? pin = null)
     {
         static double Cr(Point3 o, Point3 a, Point3 b) => (a.X - o.X) * (b.Y - o.Y) - (a.Y - o.Y) * (b.X - o.X);
         static double L(Point3 a, Point3 b) => Math.Sqrt(Sq(a.X - b.X) + Sq(a.Y - b.Y));
@@ -1756,6 +1756,7 @@ public static partial class RoadGrade
                 // u → v 로 옮겨 이웃이 하나라도 바늘 · 뒤집힘이 되면 반대(v → u)로 — 한쪽만 보면 벽 끝 마구리 곁 바늘(2.1 mm · 71 µm)을 못 접었다(이웃 1.9 mm 세모가 42 µm 바늘이 됨 · 반대 방향은 이웃 모두 멀쩡 — 계측)
                 bool Can(Point3 uu, Point3 vv)
                 {
+                    if (pin != null && pin.Contains((uu.X, uu.Y)) && !pin.Contains((vv.X, vv.Y))) return false;   // ★[v117.16] 고정 점(데이라잇 꼭짓점)을 속 점으로는 안 옮김(둘레끼리는 접음)
                     if (!at.TryGetValue((uu.X, uu.Y), out var lst)) return false;
                     foreach (int s in lst)
                     {

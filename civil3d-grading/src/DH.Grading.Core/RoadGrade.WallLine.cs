@@ -266,8 +266,8 @@ public static partial class RoadGrade
             {
                 string bad = q.EdgeWall ? "가장자리 옹벽"
                            : q.Prof != 0 && (q.Prof < r.ProfMain.Length && r.ProfMain[q.Prof] != q.Prof) ? "끝면 띠"
-                           : q.Prof != 0 ? "[사면→옹벽] 벽 면" : "";
-                if (bad.Length > 0) { st.Code = "주인 광선"; st.Why = $"선이 {bad} 구간을 지납니다 — 그 구간은 [옹벽→사면]으로 되돌린 뒤 그리세요"; Mark(cut, st, (x, y)); return; }
+                           : q.Prof != 0 ? "[옹벽 변환] 벽 면" : "";
+                if (bad.Length > 0) { st.Code = "주인 광선"; st.Why = $"선이 {bad} 구간을 지납니다 — 그 구간은 [사면 변환]으로 되돌린 뒤 그리세요"; Mark(cut, st, (x, y)); return; }
             }
         }
         }

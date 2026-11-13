@@ -30,12 +30,30 @@ internal static class WallSectionDiagram
         return new Viewbox { Child = canvas, Stretch = Stretch.Uniform, StretchDirection = StretchDirection.Both, Height = height, HorizontalAlignment = HorizontalAlignment.Center };
     }
 
+    /// <summary>★[v117.15 · JACK 1112 «보강토 블록 패턴»] 보강토 블록 줄쌓기(엇갈린 이음) — 화면 14 × 7 px 블록 · 조각 안을 채운다(단면표 · 정지 창 형식 단면 · 뒷채움 그림 · 사면 그림 공통).</summary>
+    internal static readonly Brush BlockBrush = MakeBlockBrush();
+    static Brush MakeBlockBrush()
+    {
+        var joint = new Pen(new SolidColorBrush(Color.FromArgb(0xD0, 0x7E, 0x70, 0x56)), 0.7);
+        var g = new GeometryGroup();
+        g.Children.Add(new LineGeometry(new Point(0, 0), new Point(14, 0)));
+        g.Children.Add(new LineGeometry(new Point(0, 7), new Point(14, 7)));
+        g.Children.Add(new LineGeometry(new Point(0, 0), new Point(0, 7)));    // 윗줄 이음
+        g.Children.Add(new LineGeometry(new Point(7, 7), new Point(7, 14)));   // 아랫줄 이음(반 블록 엇갈림)
+        var dg = new DrawingGroup();
+        dg.Children.Add(new GeometryDrawing(new SolidColorBrush(Color.FromArgb(0xD8, 0xD6, 0xCB, 0xB2)), null, new RectangleGeometry(new Rect(0, 0, 14, 14))));
+        dg.Children.Add(new GeometryDrawing(null, joint, g));
+        var b = new DrawingBrush(dg) { TileMode = TileMode.Tile, Viewport = new Rect(0, 0, 14, 14), ViewportUnits = BrushMappingMode.Absolute, Viewbox = new Rect(0, 0, 14, 14), ViewboxUnits = BrushMappingMode.Absolute, Stretch = Stretch.None };
+        b.Freeze();
+        return b;
+    }
+
     internal static Brush FillOf(string mat) => mat switch
     {
         "콘크리트" or "뒤채움 콘크리트" => new SolidColorBrush(Color.FromArgb(0xC0, 0xD8, 0xD8, 0xD8)),
         "부벽(평균)" => new SolidColorBrush(Color.FromArgb(0x60, 0xD8, 0xD8, 0xD8)),
         "버림" => new SolidColorBrush(Color.FromArgb(0xC0, 0xB8, 0xB8, 0xB8)),
-        "블록" => new SolidColorBrush(Color.FromArgb(0xC0, 0xC9, 0xBF, 0xA8)),
+        "블록" => BlockBrush,   // ★[v117.15 · JACK 1112 «보강토 옹벽 단면 — 단면표 · 설명 칸 둘 다 벽면 단면 안에 보강토 블록 패턴»]
         "기초패드" or "기초" => new SolidColorBrush(Color.FromArgb(0xC0, 0xBD, 0xBD, 0xBD)),
         "패널" => new SolidColorBrush(Color.FromArgb(0xC0, 0xD0, 0xD4, 0xDC)),
         "찰쌓기" or "메쌓기" => new SolidColorBrush(Color.FromArgb(0xC0, 0xBF, 0xB3, 0x9C)),

@@ -59,7 +59,7 @@ public static partial class RoadRing
             for (int i = 0; i < cut.NumGeometries; i++)
             {
                 if (cut.GetGeometryN(i) is not LineString l || l.Length < 1e-4) continue;
-                var tl = new RoadGrade.TierLine { Cut = bl.Cut, Side = bl.Side, K = bl.K, Role = bl.Role };
+                var tl = new RoadGrade.TierLine { Cut = bl.Cut, Side = bl.Side, K = bl.K, Role = bl.Role, Prof = bl.Prof };
                 foreach (var c in l.Coordinates)
                 {
                     int bi = 0; double bd = double.PositiveInfinity;
@@ -96,6 +96,10 @@ public static partial class RoadRing
             if (double.IsNaN(s)) (s, sd) = SigToStation(b.Deck, p.SigNear);
             r.FS[k] = (float)s; r.FSide[k] = (sbyte)sd;
         }
+        // ★[v117.16 · JACK 1112 «[옹벽 변환]도 고리 엔진»] 기록 · 단면 번호(옛 엔진과 같은 번호 — [사면 변환] 기록 고르기 WallLineMatch · OwnerRange) · 끝면 띠 없음(ProfMain = 자기)
+        r.Recs = b.Deck.Recs.ToList(); r.RecProf = b.Deck.RecProf.ToArray();
+        r.ProfMain = Enumerable.Range(0, b.Deck.ProfKeys.Count).ToArray();
+        r.ProfTier = b.Deck.ProfKeys.Select(k => k.Tier).ToArray(); r.ProfBenchL = b.Deck.ProfKeys.Select(k => k.BenchL).ToArray();
         r.CutVol = b.CutVol; r.FillVol = b.FillVol; r.MaxCut = b.MaxCut; r.MaxFill = b.MaxFill;
         r.Length = b.Deck.Length; r.Conflicts = b.Conflicts; r.ReachHit = b.ReachHit; r.ReachUsed = inp.Reach;
         foreach (var dl in b.Daylight) { r.Daylight.Add(dl.Select(p => (p.X, p.Y)).ToList()); r.DaylightZ.Add(dl.Select(p => (p.X, p.Y, p.Z)).ToList()); }
@@ -113,6 +117,7 @@ public static partial class RoadRing
             double nx = d.NX[pv] + d.NX[i], ny = d.NY[pv] + d.NY[i], nl = Math.Sqrt(nx * nx + ny * ny); if (nl < 1e-9) continue;
             nx /= nl; ny /= nl;
             var sa = new RoadGrade.SlopeAt { S = d.BS[i], Side = d.BSide[i], X = d.B[i].X, Y = d.B[i].Y, EdgeZ = d.B[i].Z };
+            for (int ri = d.Recs.Count - 1; ri >= 0; ri--) if (d.Recs[ri].Side == sa.Side && sa.S >= d.Recs[ri].S0 - 1e-9 && sa.S <= d.Recs[ri].S1 + 1e-9) { sa.Rec = ri; break; }   // ★[v117.16] 가장자리 표본의 기록(1단 시작선 단면)
             double t = step, lastZ = d.B[i].Z, lastX = d.B[i].X, lastY = d.B[i].Y; bool any = false;
             while (t <= ev.Reach)
             {

@@ -30,9 +30,12 @@ internal static class GradeStart
         bool Blocked);
 
     /// <summary>이 도면에 이미 정지 결과가 있는가 — 창이 <c>이어서/새로시작</c> 칸을 보일지 정하는 데 쓴다.</summary>
-    internal static bool HasPrevious(Database db, out int nRegion)
+    internal static bool HasPrevious(Database db, out int nRegion) => HasPrevious(db, out nRegion, out _);
+
+    /// <summary>★[v117.14.1] 위와 같고 + 마지막 구역의 계획선 핸들(<paramref name="lastPlan"/> — [옹벽 삭제] 켜짐에 씀 · 없으면 "").</summary>
+    internal static bool HasPrevious(Database db, out int nRegion, out string lastPlan)
     {
-        nRegion = 0;
+        nRegion = 0; lastPlan = "";
         try
         {
             using var tr = db.TransactionManager.StartTransaction();
@@ -43,6 +46,7 @@ internal static class GradeStart
                     && (GradingBuilder.SurfaceExistsByBaseName(tr, "정지면_DH")
                         || GradingBuilder.SurfaceExistsByBaseName(tr, Commands.WallCompositeCommand.BaseName));
             nRegion = has ? regions!.Count : 0;
+            if (has) lastPlan = regions![^1].PlanHandle ?? "";
             tr.Commit();
             return has;
         }
@@ -73,7 +77,7 @@ internal static class GradeStart
                 tr.Commit();
                 return new Plan(Commands.GradeMode.Fresh, ObjectId.Null,
                     $"정지면_DH가 없고 옹벽 합성 전 정지면('{Commands.WallCompositeCommand.BaseName}')만 남아 있습니다.\n\n"
-                  + "[사면→옹벽]이나 [옹벽→사면]을 한 번 돌리면 합성 전 면이 정지면_DH로 돌아옵니다 — 그 뒤에 이어서 하세요.\n"
+                  + "[옹벽 변환]이나 [사면 변환]을 한 번 돌리면 합성 전 면이 정지면_DH로 돌아옵니다 — 그 뒤에 이어서 하세요.\n"
                   + "(처음부터 다시 만들려면 [새로시작])", true);
             }
             if (!hasPrev || !append) { tr.Commit(); return fresh; }

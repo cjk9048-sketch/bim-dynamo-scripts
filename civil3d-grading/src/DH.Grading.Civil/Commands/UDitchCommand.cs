@@ -132,6 +132,23 @@ public sealed class UDitchCommand
                 case UDitchDialog.Act.Build:
                     if (Build(c, out string bmsg)) note = bmsg; else error = bmsg;
                     continue;
+                case UDitchDialog.Act.Fit:   // ★[v117.16 검토 LOW] [지표면 맞춤] — 원 선 · 지표를 다시 읽음(창 미리보기 = 모델)
+                    if (memo.Sel >= 0 && memo.Sel < c.Rec.Ditches.Count)
+                    {
+                        var fd0 = c.Rec.Ditches[memo.Sel];
+                        using (var tr = c.Db.TransactionManager.StartTransaction())
+                        {
+                            UDitchStore.Refresh(c.Db, tr, fd0, c.S);
+                            UDitchStore.Save(c.Db, tr, c.Rec);
+                            tr.Commit();
+                        }
+                        var ly = UDitch.LayoutOf(fd0, c.S);
+                        note = string.Format(Ic, "{0} — 지표 다시 읽음 · 구간 {1}{2}{3}", fd0.Id, ly.Segs.Count, ly.Drops.Count > 0 ? $" · 낙차 {ly.Drops.Count}" : "",
+                                             ly.Basins.Count > 0 ? string.Format(Ic, " · 집수정 {0} · 관 {1:0.0} m", ly.Basins.Count, ly.Pipes.Sum(p => p.Length)) : "");
+                        c.Log.AppendLine("  [지표면 맞춤] " + note);
+                        foreach (var ln in ly.Log) c.Log.AppendLine("    " + ln);
+                    }
+                    continue;
             }
         }
     }
@@ -335,8 +352,9 @@ public sealed class UDitchCommand
         if (!UDitchStore.ReadLine(tr, id, c.S.ArcStep, out var pts, out bool z3, out string why)) { tr.Commit(); msg = why; c.Ed.WriteMessage("\n[U형 측구] ⚠" + why); return false; }
         string h = id.Handle.ToString();
         int k = c.Rec.Ditches.FindIndex(d => d.LineHandle == h);
-        var d = k >= 0 ? c.Rec.Ditches[k] : new UDitch.Ditch { Id = UDitch.NextId(c.Rec.Ditches), LineHandle = h, Size = c.S.Sizes[0].Copy(), C = c.S.DefaultC };
-        UDitchStore.FillGround(c.Db, tr, d, pts, z3);
+        // ★[v117.16 · JACK 1112] 새 측구 = 지표 따라감(단차 → 집수정 + 관로 · 급하면 낙차) · 옛 측구는 그대로(한 경사 — [지표면 맞춤]으로 바꿈)
+        var d = k >= 0 ? c.Rec.Ditches[k] : new UDitch.Ditch { Id = UDitch.NextId(c.Rec.Ditches), LineHandle = h, Size = c.S.Sizes[0].Copy(), C = c.S.DefaultC, Follow = true };
+        UDitchStore.FillGround(c.Db, tr, d, pts, z3, c.S);
         UDitch.ApplyAuto(d, c.S);
         if (k < 0) { c.Rec.Ditches.Add(d); k = c.Rec.Ditches.Count - 1; }
         if (c.Rec.Site.Source.Contains("없음")) c.Rec.Site = UDitchStore.SiteOf(c.Db, GradingSettings.ExportEpsg, c.Rec.Ditches);
@@ -344,8 +362,11 @@ public sealed class UDitchCommand
         tr.Commit();
         index = k;
         var q = UDitch.Qty(d);
-        msg = string.Format(Ic, "{0} — 길이 {1:0.00} m · 지표면 {2}{3}", d.Id, q.Length, d.Surface, why.Length > 0 ? " · ⚠" + why : "");
+        var lay = UDitch.LayoutOf(d, c.S);
+        msg = string.Format(Ic, "{0} — 길이 {1:0.00} m · 지표면 {2}{3}{4}", d.Id, q.Length, d.Surface,
+                            lay.Basins.Count > 0 ? $" · 단차 {lay.Basins.Count} → 집수정 + 관로" : "", why.Length > 0 ? " · ⚠" + why : "");
         c.Log.AppendLine("  " + msg);
+        foreach (var ln in lay.Log) c.Log.AppendLine("    " + ln);
         return true;
     }
 
@@ -359,7 +380,9 @@ public sealed class UDitchCommand
         catch (System.Exception ex) { msg = "모델을 못 지음 — " + ex.Message; Done(c, "⚠" + msg + "\n" + ex); return false; }
         string rep = UDitchStore.WriteReport(c.Db, c.Doc.Name ?? "", c.Rec, c.S, out string rwhy);
         int shortN = c.Rec.Ditches.Count(d => UDitch.Check(d, c.Rec.Rain, c.S).Verdict == UDitch.Verdict.Short);
-        msg = string.Format(Ic, "모델 {0}개(솔리드 {1}{2}) · 길이 {3:0.00} m · 콘크리트 {4:0.00} ㎥", c.Rec.Ditches.Count - st.Skipped, st.Solids, st.Meshes > 0 ? $" · 메시 {st.Meshes}" : "", st.Length, st.BodyVol + st.FootVol)
+        msg = string.Format(Ic, "모델 {0}개(솔리드 {1}{2}) · 길이 {3:0.00} m · 콘크리트 {4:0.00} ㎥", c.Rec.Ditches.Count - st.Skipped, st.Solids, st.Meshes > 0 ? $" · 메시 {st.Meshes}" : "", st.Length, st.BodyVol + st.FootVol + st.ExtraVol)
+              + (st.Drops > 0 ? $" · 낙차 {st.Drops}" : "") + (st.Basins > 0 ? string.Format(Ic, " · 집수정 {0} · 관 {1:0.0} m", st.Basins, st.PipeLen) : "")   // ★[v117.16]
+              + (st.GrateLen > 0 ? string.Format(Ic, " · 그레이팅 {0:0.0} m", st.GrateLen) : "")
               + (!c.Rec.Rain.Has ? " · 강우자료 없음" : shortN > 0 ? $" · ⚠수리 부족 {shortN}" : "")
               + (st.Skipped > 0 ? $" · ⚠못 지음 {st.Skipped}({st.FirstFail})" : st.FirstFail.Length > 0 ? " · ⚠" + st.FirstFail : "")
               + (rep.Length > 0 ? " · 보고서 " + Path.GetFileName(rep) : " · ⚠" + rwhy);

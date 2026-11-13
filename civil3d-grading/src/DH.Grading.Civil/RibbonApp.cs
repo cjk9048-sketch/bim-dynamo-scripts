@@ -98,6 +98,8 @@ public sealed class RibbonApp : IExtensionApplication
         //   명령을 하나도 안 돌린 도면에서 손으로 «재작성»을 눌러도 틀린 모양이 되지 않게, 첫 명령이 아니라 여기서 한다(파일 이름만 바꾼다 — 도면은 안 건드린다).
         //   (잰 것은 화면 없는 Civil의 API Rebuild — 파일이 없으면 «파일 없음»으로 끝나고 삼각형은 남는다. 화면의 «재작성» 버튼이 같은 길인지는 못 쟀다)
         AcadApp.Idle += OnIdleRetireXml;
+        // ★[v117.14.1 · JACK 1112 «아래 명령창에 메뉴 있잖아. 그거 마우스 옆에 띄우는 걸 디폴트로»] 동적 입력(커서 옆 묻는 글 · 고르기 메뉴) 켬 — 처음 한 번만
+        AcadApp.Idle += OnIdleDynPrompt;
 
         // ★★★[v103.1.7 · JACK 1014 «최대한 현장확인말고 로그로 확인할수있게 해줘»] 자가점검 세션 — 지난 세션이 정상 종료됐나 · 끝나지 않은 작업(그 도중에 Civil이 죽었다)이 있나를
         //   DH_자가점검.log 첫 줄로 · 어느 빌드가 도는지(DLL 지문)도. 시작 도중이 아니라 첫 Idle에(위 다른 일들과 같은 까닭)
@@ -150,6 +152,28 @@ public sealed class RibbonApp : IExtensionApplication
             });
         }
         catch { }
+    }
+
+    /// <summary>★[v117.14.1 · JACK 1112 «명령창 메뉴를 마우스 옆에 띄우는 걸 디폴트로»] 동적 입력 켬 — DYNMODE(0이면 3 · F12로 끈 음수면 양수로) · DYNPROMPT 1(커서 옆 묻는 글 · ↓ 고르기 메뉴).
+    /// <para>이 PC에서 <b>처음 한 번만</b>(HKCU\Software\DHGrading «DynPromptSet») — 그 뒤 사용자가 F12로 끄면 그대로 둔다(취향을 매번 덮지 않음).
+    /// 화면 없는 Civil(시험)은 건드리지 않는다(사용자 설정 · 레지스트리 무변화 규칙).</para></summary>
+    private void OnIdleDynPrompt(object? sender, System.EventArgs e)
+    {
+        AcadApp.Idle -= OnIdleDynPrompt;
+        if (SelfCheckLog.Headless) return;
+        try
+        {
+            using (var k = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Software\DHGrading"))
+                if (k?.GetValue("DynPromptSet") is int done && done == 1) return;
+            int mode = System.Convert.ToInt32(AcadApp.GetSystemVariable("DYNMODE"));
+            int prompt = System.Convert.ToInt32(AcadApp.GetSystemVariable("DYNPROMPT"));
+            int want = mode < 0 ? -mode : mode == 0 ? 3 : mode;
+            if (want != mode) AcadApp.SetSystemVariable("DYNMODE", want);
+            if (prompt != 1) AcadApp.SetSystemVariable("DYNPROMPT", 1);
+            GradingSettings.SaveUserPrefInt("DynPromptSet", 1);
+            DiagLog.Append($"\n■ {System.DateTime.Now:HH:mm:ss} 동적 입력 켬(처음 한 번) — DYNMODE {mode} → {want} · DYNPROMPT {prompt} → 1 · 끄기 = F12\n");
+        }
+        catch (System.Exception ex) { try { DiagLog.Append("\n■ 동적 입력 켜기 실패 — " + ex.Message + "\n"); } catch { } }
     }
 
     /// <summary>시작 직후 한 번 — 옛 판의 고정 이름 XML 원본을 «.옛판.xml»로.</summary>
@@ -321,7 +345,7 @@ public sealed class RibbonApp : IExtensionApplication
                 "· [계획 경계 선택] → [원지반 선택] → 값을 정하고 → [계획부지생성하기]\n" +
                 "· 절토/성토 제원과 예시 그림 · 산지 대소단\n" +
                 "· 옹벽 — 절토·성토 옹벽 형태 · 뒷채움 터파기(종단·횡단·수량)\n" +
-                "· 계획부지 수정(사면→옹벽 / 옹벽→사면 / 옹벽 추가)\n\n" +
+                "· 계획부지 수정(옹벽 변환 / 사면 변환 / 옹벽 추가)\n\n" +
                 "※ 칸 제목(■ 계획부지생성 · ■ 계획부지 수정)을 누르면 접었다 펼칠 수 있습니다.\n" +
                 "※ 값은 [계획부지생성하기]를 누를 때 함께 반영됩니다(따로 저장할 것 없습니다).", null);
             var btnExcPanel = MakeButton(

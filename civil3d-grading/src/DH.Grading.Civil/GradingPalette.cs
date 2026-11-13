@@ -84,7 +84,8 @@ public static class GradingPalette
                             //   (<c>tools/apidump</c>로 실제 어셈블리에서 확인 — 자동숨김 전용 값은 없다).
                             //   자동숨김으로 말아 두면 <c>Hide</c>가 온다.
                             if (e.NewState == StateEventIndex.Hide) PickSession.DropMarks(doc);
-                            else if (e.NewState == StateEventIndex.Show) _panel?.SyncTo(doc);
+                            // ★[v117.14.1 · 설치 전 검토 MED] 다른 창이 뜨면 이 창이 숨고(DhDock) 그 창의 숨김이 찍기 표시를 지운다 — 다시 보일 때 다시 칠함(터파기 창과 같은 법)
+                            else if (e.NewState == StateEventIndex.Show) { PickSession.Repaint(doc); _panel?.SyncTo(doc); }
                         }
                         catch { }
                     };
@@ -189,7 +190,10 @@ public static class GradingPalette
         {
             if (_ps != null && _ps.Visible)
             {
-                _panel?.RefreshReset();
+                // ★[v117.14.1 · JACK 1112 «계획부지 수정은 계획부지 생성 전까지 모두 비활성화 · 계획지표면이 초기화돼도 비활성화»]
+                //   명령 끝(DH… · U · UNDO · REDO)마다 «정지면이 있나 · 지울 옹벽이 있나»를 다시 읽는다 — 종전엔 [초기화] 단추만 맞춰
+                //   [계획부지 생성] · [계획지표면 초기화] 뒤에도 수정 단추가 앞 상태로 남았다. RefreshPicks가 RefreshReset도 부른다.
+                _panel?.RefreshPicks();
                 // ★[v113.0 · JACK 1104] 명령이 끝나면 «만들 때 쓴 값»을 다시 읽어 [계획부지생성하기] 깜박을 맞춘다(U · UNDO로 생성을 되돌려도) — 칸 값은 안 건드림
                 _panel?.ReloadGenerated();
             }

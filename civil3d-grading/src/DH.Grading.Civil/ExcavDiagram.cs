@@ -71,7 +71,16 @@ internal static class ExcavDiagram
         const double gUp = 1.0 / 3.0;
         double gRise = 0.5 * H;
         double xTopBack = xs[^1] + face;
-        double Lz(double x)                                            // 최종면(땅) — 계획면 · 단마다 앞면(1:0.01) · 소단 · 맨 위 뒤 원지반(1:3으로 단높이 반 · 그 뒤 평평)
+        // ★[v117.14.1 · JACK 1112 «원지반처럼 보이게 · 원상복구 시도 원지형이 울퉁불퉁하지 않으니깐 정지한 것 같아»] 맨 위 단 뒤 원지반 = 자연 땅 —
+        //   오르막은 꺾임 없이(tanh — 처음 1:3 · 단높이 반에 다가감) + 굴곡(정해진 사인 셋의 합 · 단높이 비례 · 난수 없음 → 다시 그려도 같은 모양).
+        //   벽 꼭대기에서 0.8H 동안 굴곡을 0에서 키워 옹벽 머리에 딱 붙는다. 터파기선 · 데이라잇 · 되메우기 · 배면사면이 모두 이 땅(Lz)을 쓴다
+        double Nat(double d)
+        {
+            double t = System.Math.Clamp(d / (0.8 * H), 0, 1), e = t * t * (3 - 2 * t);
+            double bump = 0.045 * System.Math.Sin(d / (0.41 * H) + 0.7) + 0.025 * System.Math.Sin(d / (0.17 * H) + 2.3) + 0.012 * System.Math.Sin(d / (0.072 * H) + 4.1);
+            return gRise * System.Math.Tanh(d * gUp / gRise) + H * bump * e;
+        }
+        double Lz(double x)                                            // 최종면(땅) — 계획면 · 단마다 앞면(1:0.01) · 소단 · 맨 위 뒤 원지반(1:3으로 단높이 반까지 · 굴곡 — Nat)
         {
             double z = 0;
             for (int k = 0; k < Steps; k++)
@@ -79,7 +88,7 @@ internal static class ExcavDiagram
                 if (x <= xs[k]) break;
                 z = x >= xs[k] + face ? (k + 1) * H : k * H + (x - xs[k]) / System.Math.Max(1e-9, face) * H;
             }
-            if (x > xTopBack) z = yTopG + System.Math.Min(gRise, (x - xTopBack) * gUp);
+            if (x > xTopBack) z = yTopG + Nat(x - xTopBack);
             return z;
         }
         // 법면 — 바닥 끝에서 1:n · 소단(켜면 BH마다 BW) · 엔진과 같은 규칙(도랑도 앞쪽은 같은 법면 · 뒤는 앞면 선에서 끝)
@@ -205,10 +214,15 @@ internal static class ExcavDiagram
         }
         if (cur != null) runs.Add(cur);
 
+        // ★[v117.14.1 · JACK 1112 «배면사면 선택할 때 원지반보다 위로 뭔가 덮는 주황색 도형»] 맨 위 단 뒤 원지반은 Lz를 촘촘히 잰 점으로 그린다 —
+        //   종전엔 벽 꼭대기 → 오른끝 한 줄(현)로 그려, Lz의 1:3 오르막(벽 뒤 1.5H)보다 최대 17px 낮았다(그림 시험으로 잼).
+        //   되메우기 · 절토 면은 Lz를 따르므로 그만큼 땅선 «위로» 삐져나와 땅 위를 덮는 도형으로 보였다
+        var nat = new List<(double X, double Y)>();
+        for (int i = 1; i <= 300; i++) { double x = xTopBack + (xR - xTopBack) * i / 300; nat.Add((x, Lz(x))); }
         // 흙(땅 아래 · 계단)
         var soil = new List<(double X, double Y)> { (xL, 0) };
         for (int k = 0; k < Steps; k++) { soil.Add((xs[k], k * H)); soil.Add((xs[k] + face, (k + 1) * H)); }
-        soil.Add((xR, Lz(xR))); soil.Add((xR, yB)); soil.Add((xL, yB));
+        soil.AddRange(nat); soil.Add((xR, yB)); soil.Add((xL, yB));
         Poly(new SolidColorBrush(Color.FromArgb(0x55, 0xC8, 0xA9, 0x6E)), null, soil);
         // 판 자리(되메우기) — 터파기선과 땅 사이
         var fillBrush = new SolidColorBrush(Color.FromArgb(0xE0, 0xFB, 0xF7, 0xEE));
@@ -218,6 +232,36 @@ internal static class ExcavDiagram
             foreach (var q in r) pg.Add((q.X, q.E));
             for (int i = r.Count - 1; i >= 0; i--) pg.Add((r[i].X, r[i].G));
             Poly(fillBrush, null, pg);
+        }
+        // ★[v104 B · JACK 1021] 배면사면 — 맨 위 단 뒤 데이라잇에서 1:nB로 내려오다 옹벽 꼭대기 높이에서 평탄
+        // ★[v117.14.1 · JACK 1112 «이게 뭐지?»] 그 위 ~ 원지반 = 판 자리 중 다시 안 메우는 흙 → 빗금 + «깎는 흙». 땅선 · 터파기선이 위에 오게 먼저 그린다
+        bool backOn = on && spec.BackOn && !trench;   // 도랑(패널식)은 벽 뒤 터파기가 없어 배면사면도 없다
+        double nB = Ok(spec.BackSlope, 1.5, 0.05, 5), zDl = Lz(xD);
+        double B(double x) => System.Math.Max(MinW(x), System.Math.Min(Lz(x), System.Math.Max(yTopG, zDl - (xD - x) / nB)));   // 터파기선 아래로는 안 내려간다
+        var bl = new List<(double X, double Y)>();
+        var cutBrush = new SolidColorBrush(Color.FromRgb(0xA8, 0x55, 0x18));   // «깎는 흙» 글 · 빗금
+        if (backOn)
+        {
+            for (double x = xTopBack; x <= xD + 1e-9; x += 0.02) bl.Add((x, B(x)));
+            bl.Add((xD, zDl));
+            var cutPg = new List<(double X, double Y)>(bl);
+            for (int i = bl.Count - 1; i >= 0; i--) cutPg.Add((bl[i].X, Lz(bl[i].X)));
+            var hatch = new DrawingBrush
+            {
+                TileMode = TileMode.Tile, Stretch = Stretch.None,
+                Viewport = new Rect(0, 0, 6, 6), ViewportUnits = BrushMappingMode.Absolute,
+                Viewbox = new Rect(0, 0, 6, 6), ViewboxUnits = BrushMappingMode.Absolute,
+                Drawing = new DrawingGroup
+                {
+                    ClipGeometry = new RectangleGeometry(new Rect(0, 0, 6, 6)),
+                    Children =
+                    {
+                        new GeometryDrawing(new SolidColorBrush(Color.FromArgb(0x70, 0xF2, 0xC0, 0x8A)), null, new RectangleGeometry(new Rect(0, 0, 6, 6))),
+                        new GeometryDrawing(null, new Pen(new SolidColorBrush(Color.FromArgb(0x90, 0xA8, 0x55, 0x18)), 0.8), new LineGeometry(new Point(-1, 7), new Point(7, -1))),
+                    },
+                },
+            };
+            Poly(hatch, null, cutPg);
         }
         // 옹벽 — 단마다 같은 단면(비구조물 먼저 · 구조물이 위에)
         for (int k = 0; k < Steps; k++)
@@ -229,22 +273,32 @@ internal static class ExcavDiagram
         // 최종면(초록) — 계획면 · 단마다 앞면 · 소단 · 원지반
         var gl = new List<(double X, double Y)> { (xL, 0) };
         for (int k = 0; k < Steps; k++) { gl.Add((xs[k], k * H)); gl.Add((xs[k] + face, (k + 1) * H)); }
-        gl.Add((xR, Lz(xR)));
+        gl.AddRange(nat);   // ★[v117.14.1] 원지반 = 굴곡진 Lz 그대로(현 아님)
         PolyLine(profile, 2.4, false, gl);
         // 터파기선(마젠타 파선)
         if (on) foreach (var r in runs) PolyLine(mag, 1.8, true, r.Select(q => (q.X, q.E)).ToList());
-        // ★[v104 B · JACK 1021] 배면사면 — 맨 위 단 뒤 데이라잇에서 1:nB로 내려오다 옹벽 꼭대기 높이에서 평탄 · 그 위 원지반 = 절토(옅은 주황)
-        if (on && spec.BackOn && !trench)   // 도랑(패널식)은 벽 뒤 터파기가 없어 배면사면도 없다
+        // 배면사면 선 · 글자(깎는 흙 면은 위에서 먼저 그렸다)
+        if (backOn)
         {
-            double nB = Ok(spec.BackSlope, 1.5, 0.05, 5), zDl = Lz(xD);
-            double B(double x) => System.Math.Max(MinW(x), System.Math.Min(Lz(x), System.Math.Max(yTopG, zDl - (xD - x) / nB)));   // 터파기선 아래로는 안 내려간다
-            var bl = new List<(double X, double Y)>();
-            var cutPg = new List<(double X, double Y)>();
-            for (double x = xTopBack; x <= xD + 1e-9; x += 0.02) bl.Add((x, B(x)));
-            bl.Add((xD, zDl));
-            foreach (var q in bl) cutPg.Add(q);
-            for (int i = bl.Count - 1; i >= 0; i--) cutPg.Add((bl[i].X, Lz(bl[i].X)));
-            Poly(new SolidColorBrush(Color.FromArgb(0x70, 0xF2, 0xC0, 0x8A)), null, cutPg);
+            // ★[v117.14.1] «깎는 흙» — 글자 폭 안에서 가장 얇은 자리가 가장 두꺼운 곳의 가운데(글자 높이가 안 들어가면 안 단다 — 빗금만)
+            {
+                string cl = "깎는 흙";
+                double half = (TW(cl) / 2 + 3) / s, bestX = double.NaN, bestTop = 0, bestBot = 0, bestTh = 0;
+                for (int i = 0; i < bl.Count; i += 5)
+                {
+                    double x = bl[i].X;
+                    if (x - half < xTopBack || x + half > xD) continue;
+                    double top = double.PositiveInfinity, bot = double.NegativeInfinity;
+                    for (int j = -4; j <= 4; j++) { double xx = x + half * j / 4; top = System.Math.Min(top, Lz(xx)); bot = System.Math.Max(bot, B(xx)); }
+                    if (top - bot > bestTh) { bestTh = top - bot; bestX = x; bestTop = top; bestBot = bot; }
+                }
+                if (!double.IsNaN(bestX) && bestTh * s >= 15)
+                {
+                    var tb = new TextBlock { Text = cl, FontSize = 10, Foreground = cutBrush, Background = new SolidColorBrush(Color.FromArgb(0xC0, 0xFF, 0xFF, 0xFF)) };
+                    Canvas.SetLeft(tb, PX(bestX) - TW(cl) / 2); Canvas.SetTop(tb, (PY(bestTop) + PY(bestBot)) / 2 - 7);
+                    c.Children.Add(tb);
+                }
+            }
             var bkBrush = new SolidColorBrush(Color.FromRgb(0x2E, 0x8B, 0x57));
             PolyLine(bkBrush, 1.8, true, bl);
             // 평탄 끝 = 배면이 꼭대기 높이를 처음 넘는 자리(재서 — 터파기선이 먼저 오르면 거기서 끝난다)
@@ -317,7 +371,7 @@ internal static class ExcavDiagram
         // 이름
         var info = WallSection.Of(spec.Table.Kind);
         T(PX(xL) + 2, PY(0) - 16, "계획면", 10);
-        T(PX(xR) - 40, PY(Lz(xR)) - 16, "원지반", 10);
+        T(PX(xR) - 40, PY(nat.Where(q => PX(q.X) >= PX(xR) - 42).Max(q => q.Y)) - 16, "원지반", 10);   // ★[v117.14.1] 굴곡 — 글자 폭 안 가장 높은 땅 위
         string condS = WallSection.CondShort(spec.Table.Kind, spec.Table.Cond);
         T(4, 2, info.Name + (condS.Length > 0 ? " · " + condS : "") + (info.PublicTable ? "" : " ⚠공공 표 없음") + (sh.Over ? " ⚠표 밖" : ""), 11,
           info.PublicTable && !sh.Over ? txt : new SolidColorBrush(Color.FromRgb(0xB0, 0x30, 0x28)));

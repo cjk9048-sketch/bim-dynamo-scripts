@@ -128,7 +128,7 @@ public sealed class WallMigrateCommand
         else if (done.Count > 0 && restoreNote.Length == 0)
             msg.AppendLine($"합성을 못 해 옹벽 {string.Join(",", done.Select(d => d.No))}을 옛 모양으로 되돌렸습니다(정지면_DH 그대로) — {compNote}");
         else if (done.Count > 0)
-            msg.AppendLine($"⚠합성을 못 했고 옹벽 {string.Join(",", done.Select(d => d.No))}을 옛 모양으로 되돌리지도 못했습니다({restoreNote}) — [옹벽 합성]을 다시 하거나 [옹벽→사면]으로 되돌리세요 · {compNote}");
+            msg.AppendLine($"⚠합성을 못 했고 옹벽 {string.Join(",", done.Select(d => d.No))}을 옛 모양으로 되돌리지도 못했습니다({restoreNote}) — [옹벽 합성]을 다시 하거나 [사면 변환]으로 되돌리세요 · {compNote}");
         foreach (var (no, why) in failed) msg.AppendLine($"옹벽 {no} 옮기지 못함(옛 모양 그대로) — {why}");
         string text = msg.ToString().TrimEnd();
         foreach (var line in text.Split('\n')) ed.WriteMessage($"\n[{Tag}] {line.TrimEnd()}");

@@ -89,7 +89,7 @@ public static partial class RoadRing
             // 그 점 면 값(이긴 원천 후보 값 V)에서 남은 단면 높이만큼 — 절토 = V − F(d) + R_k · 성토 = V + F(d) − R_k.
             //   소단 띠 안이면 F(d) = R_k라 V 그대로(규칙 검사 정확) · 굽음 벌점(꼭짓점 μτ · 이어 받는 원뿔 굽음)은 그 점 자리 값이라 단 높이 기울기 ≤ μ
             //   (벌점을 소단 자리 반지름에서 세면 꼭짓점 곁 벽에서 반지름 비만큼 커져 벽 소단이 33 % 기울었다 — 키트 rwall 1110)
-            double F = (_up ? _ev.Pc : _ev.Pf).F(w.Dist), sg = _up ? 1 : -1;
+            double F = (_up ? _ev.PcA : _ev.PfA)[Math.Clamp(w.Prof, 0, _ev.PcA.Length - 1)].F(w.Dist), sg = _up ? 1 : -1;   // ★[v117.16] 이긴 원천의 단면
             return w.V + sg * (_rise[k - 1] - F);
         }
 

@@ -15,7 +15,7 @@ import asphaltSUrl from '../tex/asphalt_s.jpg';
 import concreteSUrl from '../tex/concrete_s.jpg';
 import { SURFACE, surfaceFromPixels, patchGround } from './groundtex.js';
 import { faceStyle, pieceAttrs, faceUniforms, FACE, patchWallFace } from './wallface.js';
-import { buildUDitch } from './uditch.js';
+import { buildUDitch, applyUDitchHole } from './uditch.js';
 
 const srgb = (hex) => new THREE.Color(hex);
 const rgb = (a) => new THREE.Color().setRGB(a[0] / 255, a[1] / 255, a[2] / 255, THREE.SRGBColorSpace);
@@ -440,6 +440,7 @@ export function applyTerrainMode(L) {
   if (T.joints) T.joints.visible = !groundMode;                        // ★[v116.8] 줄눈도
   if (L.ditch) L.ditch.obj.visible = L.ditch.on && !groundMode;         // ★[도로 마무리 ②] 측구도 설계 것
   if (L.uditch) L.uditch.obj.visible = L.uditch.on && !groundMode;      // ★[배수지 U형 측구] 부지 측구도
+  applyUDitchHole(L, groundMode);                                       // ★[v117.16 · JACK 1112 «측구가 지표면이랑 겹쳐서 안 보이네»] 측구 자리 구멍 지형 — 측구가 보일 때만
   // 원지반 보기에서는 옹벽 · 무늬도 없다(그때는 없던 것)
   if (L.wall) L.wall.obj.visible = wallOn;
   if (L.pattern) L.pattern.obj.visible = L.pattern.on && !groundMode;

@@ -20,17 +20,18 @@ public static partial class RoadRing
         if (b?.Ev == null) { o.AddRange(lines); return o; }
         var ev = b.Ev; int m = ev.D.B.Count;
         double[] Br(Prof p) { var l = new List<double>(); for (int i = 1; i < p.E.Count; i++) l.Add(p.E[i].D); return l.ToArray(); }
-        var bc = Br(ev.Pc); var bf = Br(ev.Pf);
+        // ★[v117.16] 단면마다(변환 옹벽 변형 단면 — 그 점을 이긴 원천의 단면 꺾임으로 잼)
+        var bcA = ev.PcA.Select(Br).ToArray(); var bfA = ev.PfA.Select(Br).ToArray();
         // ① 거짓 조각 빼기 — 단 번호와 상관없이(1단 사면 끝 선 K = 0도) · 도로 가장자리 점은 도로 면 위(Kind 1) · 원천 거리 ≈ 0이라 남음
         foreach (var tl in lines)
         {
             if (tl.Role == RoadGrade.LineRole.Wall || tl.Cross || tl.WallNo != 0 || tl.DisplayOnly || tl.Pts.Count < 2) { o.Add(tl); continue; }
-            var br = tl.Cut ? bc : bf;
             RoadGrade.TierLine? cur = null;
             foreach (var p in tl.Pts)
             {
                 st.Pts++;
                 var q = ev.Eval(p.X, p.Y); var w = tl.Cut ? q.WHi : q.WLo;
+                var br = (tl.Cut ? bcA : bfA)[Math.Clamp(w.Prof, 0, bcA.Length - 1)];
                 bool ok = true;
                 if (q.Kind != 1 && w.Src >= 0 && w.Src < 2 * m && double.IsFinite(w.Dist))
                 {

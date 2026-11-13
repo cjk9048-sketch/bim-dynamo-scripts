@@ -3731,5 +3731,15 @@ public sealed class ProfileCommand
                          + $" · 그중 {nBent}개는 꺾어서 띄움");
         }
         catch (System.Exception ex) { log.AppendLine("  검토선 꾸미기 실패 — " + ex.Message); }
+        // ★[v117.15 · JACK 1112 «종단도 그리기 수행했는데 평면에 측점선이 안 보여»] 원인: 측점 레이어가 이미 꺼져 있었음([측점 보기/숨기기] 숨김 · 또는 «전부»가 아닌 보기) —
+        //   레이어를 그대로 두는 EnsureLayer라 새로 그린 측점도 꺼진 레이어에 들어감. 종단도를 그리면(부지 · 측점 다시 · 진입도로) 측점 레이어를 켜고 «측점 숨김» 표시를 지움.
+        try
+        {
+            using var trV = db.TransactionManager.StartTransaction();
+            int nOn = ViewSurfaceCommand.ShowStationsAfterDraw(db, trV, out bool wasHidden);
+            trV.Commit();
+            log.AppendLine($"  측점 레이어 켬 {nOn}개{(wasHidden ? " · «측점 숨김» 풀림" : "")}");
+        }
+        catch (System.Exception ex) { log.AppendLine("  측점 레이어 켜기 실패 — " + ex.Message); }
     }
 }

@@ -312,7 +312,7 @@ internal static class ZoneEditCommon
 
     public static void Run(Document doc, bool wallMode)
     {
-        string cmdLabel = wallMode ? "사면→옹벽" : "옹벽→사면";   // ★[v113.0 · JACK 1104] 단추 이름과 같게(옛 «옹벽 변환» · «사면 변환»)
+        string cmdLabel = wallMode ? "옹벽 변환" : "사면 변환";   // ★[v113.0 · JACK 1104] 단추 이름과 같게(옛 «옹벽 변환» · «사면 변환»)
         Editor ed = doc.Editor;
         Database db = doc.Database;
         string app = GradingSettings.WallPickAppName;
@@ -1054,7 +1054,7 @@ internal static class ZoneEditCommon
                 SelfCheckLog.Line(cmdLabel + " — 고른 조각", '–', pickTxt, doc.Name);   // ★[v103.1.7] 자가점검 기록에도
                 if (sameKind)
                 {
-                    ed.WriteMessage($"\n   이미 옹벽입니다{(wallPiece ? $"(옹벽 {wSel})" : "")} — [사면→옹벽]을 할 수 없습니다. 값을 바꾸려면 [옹벽→사면]으로 되돌린 뒤 다시 [사면→옹벽]하세요.");
+                    ed.WriteMessage($"\n   이미 옹벽입니다{(wallPiece ? $"(옹벽 {wSel})" : "")} — [옹벽 변환]을 할 수 없습니다. 값을 바꾸려면 [사면 변환]으로 되돌린 뒤 다시 [옹벽 변환]하세요.");
                     tr.Commit();
                     Deselect(key);
                     continue;
@@ -1556,7 +1556,7 @@ internal static class ZoneEditCommon
             {
                 // ★[v103.1 · 코드 검토 중간 1] 옹벽 변환 «전체구간»으로 구간 옹벽 자리를 고르면 옹벽 위에 전체구간 옹벽이 겹친다 — 바꾸지 않고 길을 알린다
                 string cvw = string.Join(", ", covered.Select(w => $"옹벽 {w.No}"));
-                ed.WriteMessage($"\n[{cmdLabel}] 이 자리는 이미 구간 옹벽({cvw})입니다 — 값을 바꾸려면 [옹벽→사면]으로 되돌린 뒤 다시 [사면→옹벽]하세요. 아무것도 안 바꿨습니다.");
+                ed.WriteMessage($"\n[{cmdLabel}] 이 자리는 이미 구간 옹벽({cvw})입니다 — 값을 바꾸려면 [사면 변환]으로 되돌린 뒤 다시 [옹벽 변환]하세요. 아무것도 안 바꿨습니다.");
                 Log($"■ {cmdLabel} — 전체구간 옹벽 변환이 구간 옹벽({cvw})을 덮어 멈춤(안 바꿈)");
                 Abandon();
                 return;
@@ -1951,6 +1951,22 @@ internal static class ZoneEditCommon
         catch { }
     }
 
+    /// <summary>★[v117.14.1 · JACK 1112 «옹벽 삭제 단추는 지울 게 있을 때만 활성화»] [옹벽 삭제]가 고를 옹벽 수 — <see cref="RunWallRevert"/>와 같은 거름
+    /// (옹벽 목록의 계획선이 비었거나 <paramref name="plan"/>과 같음 · 지은 것(State 1) · 선 옹벽(종류 ≠ 0)). 못 읽으면 0.</summary>
+    internal static int AddedWallCount(Database db, string plan)
+    {
+        try
+        {
+            using var tr = db.TransactionManager.StartTransaction();
+            int n = 0;
+            if (WallListStore.TryLoad(db, tr, out var head, out var list, out _) && (head.PlanHandle.Length == 0 || head.PlanHandle == plan))
+                n = list.Count(w => w.State == 1 && w.Kind != 0);
+            tr.Commit();
+            return n;
+        }
+        catch { return 0; }
+    }
+
     /// <summary>★[v117.9.2 · JACK 1112 «옹벽 추가로 만든 옹벽을 되돌릴 방법도 마련해줘»] [옹벽 되돌리기](DHWALLREVERT) — [옹벽→사면]의 숨은 W 길과 같은 일을
     /// 단추 하나로: 옹벽 자리 클릭(또는 번호) → 확인 → 그 옹벽만 지우고 옛 사면 · 옛 경계로(<see cref="RevertBound"/>).</summary>
     public static void RunWallRevert(Document doc)
@@ -1981,7 +1997,7 @@ internal static class ZoneEditCommon
     /// <summary>★★[v113.0 · JACK 1104 «옹벽 폴리선» · 계획 4-5] 사면 변환 W — 폴리선 옹벽 하나를 통째로 지우고 옛 사면 · 옛 경계로.
     /// 옹벽 자리를 클릭(목록 Poly 안 · 곁)하거나 번호(N)를 친다 → 빨간 테두리 + 확인 → 구간 · 제원은 그대로(덮인 옹벽만) → 정지면을 다시 만든다
     /// (★v117.9.2 — «되돌리기만» 길은 평면 선을 안 되살려 안 씀 · 남은 옹벽은 다시 짓고 합성).</summary>
-    private static void RevertBound(Document doc, GradingBundle region, System.Collections.Generic.List<WallRec> listWalls, string activePlan, string lbl = "옹벽→사면")
+    private static void RevertBound(Document doc, GradingBundle region, System.Collections.Generic.List<WallRec> listWalls, string activePlan, string lbl = "사면 변환")
     {
         var ed = doc.Editor; var db = doc.Database;
         var bound = listWalls.Where(w => w.Kind != 0).ToList();   // ★[v114.0] 선 옹벽(종류 2)

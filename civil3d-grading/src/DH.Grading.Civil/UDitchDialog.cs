@@ -11,7 +11,7 @@ namespace DH.Grading.Civil;
 /// 글은 짧게(JACK 1014) — 뜻은 풍선 글.</para></summary>
 internal sealed class UDitchDialog : Window
 {
-    internal enum Act { None, Pick, Draw, Delete, Build }
+    internal enum Act { None, Pick, Draw, Delete, Build, Fit }
 
     internal sealed class View
     {
@@ -37,10 +37,12 @@ internal sealed class UDitchDialog : Window
 
     readonly View _v;
     readonly TextBox _years, _mins, _int, _src, _ver, _start, _end, _area, _c;
-    readonly ComboBox _csv, _ditch, _size;
+    readonly ComboBox _csv, _ditch, _size, _cover;
     readonly TextBlock _result, _status, _rainState;
     readonly Button _ok, _del, _rev, _auto;
-    readonly UIElement _csvLabel;
+    readonly UIElement _csvLabel, _segLabel;
+    readonly StackPanel _segs;
+    readonly ScrollViewer _segScroll;
     bool _loading;
 
     UDitch.Ditch? Cur => _v.Sel >= 0 && _v.Sel < _v.Rec.Ditches.Count ? _v.Rec.Ditches[_v.Sel] : null;
@@ -114,10 +116,13 @@ internal sealed class UDitchDialog : Window
         _size = new ComboBox { Height = 28, MinWidth = 140, ToolTip = "표준 규격(설정 파일 UDitch.settings.json)" };
         foreach (var z in v.S.Sizes) _size.Items.Add("U형 " + z.Label);
         _rev = Btn("방향 바꾸기", "시점 ↔ 종점(흐름 방향)");
-        Row("규격", Line(_size, new Border { Width = 8 }, _rev), "안폭 × 안높이(mm)");
+        // ★[v117.16 · JACK 1112 «측구에 스틸그라우팅도 선택되게»] 덮개 — 측구마다
+        _cover = new ComboBox { Height = 28, MinWidth = 110, ToolTip = "측구 덮개 — 스틸 그레이팅 = U 위에 판(벽 윗면에 맞춤)" };
+        _cover.Items.Add("없음"); _cover.Items.Add("스틸 그레이팅");
+        Row("규격", Line(_size, Unit("덮개"), _cover, new Border { Width = 8 }, _rev), "안폭 × 안높이(mm)");
         _start = Box(84, "시점(상류) 바닥고 m"); _end = Box(84, "종점(하류) 바닥고 m");
-        _auto = Btn("지표면 맞춤", $"바닥고 = 지표면 − 덮개 {v.S.Cover:0.00} m − 안높이");
-        Row("바닥고", Line(Unit("시점"), _start, Unit("종점"), _end, Unit("m"), _auto), "시작 · 끝 바닥고 → 한 경사");
+        _auto = Btn("지표면 맞춤", $"바닥 = 지표면 − 덮개 {v.S.Cover:0.00} m − 안높이 · 최대 경사 {v.S.MaxSlopePct:0.#} % 넘으면 낙차 · 단차 = 집수정 + 관로");
+        Row("바닥고", Line(Unit("시점"), _start, Unit("종점"), _end, Unit("m"), _auto), "칸에 치면 한 경사(손 입력) · [지표면 맞춤] = 지표 따라감");
         _area = Box(72, "집수면적(ha)"); _c = Box(52, "유출계수 C(0~1)");
         Row("집수", Line(_area, Unit("ha"), Unit("C"), _c), "합리식 Q = C · I · A / 360");
         Rule();
@@ -125,6 +130,11 @@ internal sealed class UDitchDialog : Window
         // 결과
         _result = new TextBlock { TextWrapping = TextWrapping.Wrap, FontFamily = DhBrand.Ui, LineHeight = 20, MinHeight = 60 };
         Row("결과", _result, "수리검토는 모델과 따로 — 모델을 지어도 수리 OK가 아닙니다");
+        // ★[v117.16 · JACK 1112] 구간 표(낙차 · 집수정 사이 연속 U) + 낙차 · 집수정 · 관로 한 줄씩 — 지표 따라감일 때만
+        _segs = new StackPanel();
+        _segScroll = new ScrollViewer { Content = _segs, MaxHeight = 190, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled };
+        Row("구간", _segScroll, "낙차 · 집수정 사이 연속 U — 수리는 구간마다(통수능 = 최소 경사 · 유속 = 최소~최대 경사)");
+        _segLabel = (UIElement)g.Children[^2];
 
         g.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         var foot = new TextBlock { Text = v.Foot, FontSize = 11, Foreground = DhBrand.Sub, Margin = new Thickness(0, -2, 0, 4), TextTrimming = TextTrimming.CharacterEllipsis };
@@ -166,6 +176,13 @@ internal sealed class UDitchDialog : Window
             Dirty = true;
             LoadDitch();
         };
+        _cover.SelectionChanged += (_, __) =>
+        {
+            if (_loading || Cur is not UDitch.Ditch d || _cover.SelectedIndex < 0) return;
+            d.Grating = _cover.SelectedIndex == 1;
+            Dirty = true;
+            Refresh();
+        };
         _ditch.SelectionChanged += (_, __) => { if (_loading) return; _v.Sel = _ditch.SelectedIndex; LoadDitch(); };
         _csv.SelectionChanged += (_, __) =>
         {
@@ -191,9 +208,10 @@ internal sealed class UDitchDialog : Window
         {
             if (Cur is not UDitch.Ditch d) return;
             d.InvertAuto = true;
+            d.Follow = true;   // ★[v117.16 · JACK 1112] 지표 따라감(옛 한 경사 측구도 여기서 바뀜)
             UDitch.ApplyAuto(d, _v.S);
             Dirty = true;
-            LoadDitch();
+            Done(Act.Fit);   // ★[v117.16 검토 LOW] 명령이 원 선 · 지표를 다시 읽고 창을 다시 띄움 — 미리보기 = 모델
         };
         pick.Click += (_, __) => Done(Act.Pick);
         draw.Click += (_, __) => Done(Act.Draw);
@@ -237,7 +255,8 @@ internal sealed class UDitchDialog : Window
         _loading = true;
         var d = Cur;
         bool on = d != null;
-        foreach (UIElement x in new UIElement[] { _size, _start, _end, _area, _c, _rev, _auto, _del }) x.IsEnabled = on;
+        foreach (UIElement x in new UIElement[] { _size, _cover, _start, _end, _area, _c, _rev, _auto, _del }) x.IsEnabled = on;
+        _cover.SelectedIndex = d == null ? -1 : d.Grating ? 1 : 0;
         if (d != null)
         {
             int si = _v.S.Sizes.FindIndex(z => z.Label == d.Size.Label && Math.Abs(z.B - d.Size.B) < 1e-9 && Math.Abs(z.H - d.Size.H) < 1e-9);
@@ -252,7 +271,7 @@ internal sealed class UDitchDialog : Window
             _end.Text = double.IsFinite(d.EndInvert) ? d.EndInvert.ToString("0.000", Ic) : "";
             _area.Text = d.AreaHa > 0 ? d.AreaHa.ToString("0.####", Ic) : "";
             _c.Text = d.C.ToString("0.##", Ic);
-            _auto.FontWeight = d.InvertAuto ? FontWeights.SemiBold : FontWeights.Normal;
+            _auto.FontWeight = d.InvertAuto && d.Follow ? FontWeights.SemiBold : FontWeights.Normal;
         }
         else { _start.Text = _end.Text = _area.Text = _c.Text = ""; _size.SelectedIndex = -1; }
         _loading = false;
@@ -335,11 +354,12 @@ internal sealed class UDitchDialog : Window
         _rainState.Text = rain.Has ? "" : "자료 미확보";
         _rainState.Foreground = Amber;
         _result.Inlines.Clear();
-        if (Cur is not UDitch.Ditch d) _result.Inlines.Add(new System.Windows.Documents.Run(_v.Rec.Ditches.Count == 0 ? "측구 선을 고르거나 그리세요" : "측구를 고르세요") { Foreground = DhBrand.Sub });
+        if (Cur is not UDitch.Ditch d) { _result.Inlines.Add(new System.Windows.Documents.Run(_v.Rec.Ditches.Count == 0 ? "측구 선을 고르거나 그리세요" : "측구를 고르세요") { Foreground = DhBrand.Sub }); FillSegs(null, null); }
         else
         {
             var h = UDitch.Check(d, rain, _v.S);
             var pr = UDitch.ProfileOf(d, _v.S);
+            FillSegs(pr, h);
             bool first = true;
             foreach (var (k, val) in UDitch.InfoRows(d, rain, _v.S))
             {
@@ -359,6 +379,11 @@ internal sealed class UDitchDialog : Window
                 _result.Inlines.Add(new System.Windows.Documents.LineBreak());
                 _result.Inlines.Add(new System.Windows.Documents.Run("⚠ " + w) { Foreground = Amber });
             }
+            if (pr.Error.Length == 0 && pr.Lay is not { Follow: true })   // ★[v117.16] 옛 한 경사 측구 · 손 바닥고
+            {
+                _result.Inlines.Add(new System.Windows.Documents.LineBreak());
+                _result.Inlines.Add(new System.Windows.Documents.Run("한 경사 — 단차 · 낙차 자동은 [지표면 맞춤]") { Foreground = DhBrand.Sub });
+            }
         }
         // [모델 생성] — 측구가 있고 지을 수 있는 것이 하나라도(수리 결과와 무관 · §9)
         bool any = _v.Rec.Ditches.Any(x => UDitch.ProfileOf(x, _v.S).Error.Length == 0);
@@ -367,6 +392,52 @@ internal sealed class UDitchDialog : Window
         else if (_bad.Length > 0) { _status.Text = _bad; _status.Foreground = DhBrand.Warn; }
         else if (_v.Note.Length > 0) { _status.Text = _v.Note; _status.Foreground = DhBrand.Ok; }
         else _status.Text = "";
+    }
+
+    /// <summary>★[v117.16 · JACK 1112] 구간 표 · 낙차 · 집수정 · 관로 한 줄씩(지표 따라감일 때만 보임).</summary>
+    void FillSegs(UDitch.Profile? pr, UDitch.Hyd? h)
+    {
+        _segs.Children.Clear();
+        var lay = pr?.Lay is { Follow: true } l && l.Error.Length == 0 ? l : null;
+        _segScroll.Visibility = _segLabel.Visibility = lay != null && h != null ? Visibility.Visible : Visibility.Collapsed;
+        if (lay == null || h == null) return;
+        static string N(double v, string f) => double.IsFinite(v) ? v.ToString(f, Ic) : "—";
+        var grid = new Grid();
+        foreach (double w in new[] { 34.0, 96, 52, 82, 84 }) grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(w) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        void Cell(int r, int c, string t, Brush fg, bool bold = false)
+        {
+            var tb = new TextBlock { Text = t, Foreground = fg, FontWeight = bold ? FontWeights.SemiBold : FontWeights.Normal, Margin = new Thickness(0, 0, 6, 2), TextTrimming = TextTrimming.CharacterEllipsis };
+            Grid.SetRow(tb, r); Grid.SetColumn(tb, c); grid.Children.Add(tb);
+        }
+        grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        string[] head = { "구간", "측점 m", "길이 m", "경사 %", "유속 m/s", "판정" };
+        for (int c = 0; c < head.Length; c++) Cell(0, c, head[c], DhBrand.Sub);
+        int row = 1;
+        foreach (var c in h.Segs)
+        {
+            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            var g = c.Seg;
+            Cell(row, 0, c.No.ToString(Ic), DhBrand.Ink);
+            Cell(row, 1, N(g.S0, "0.0") + "~" + N(g.S1, "0.0"), DhBrand.Ink);
+            Cell(row, 2, N(g.Length, "0.0"), DhBrand.Ink);
+            Cell(row, 3, Math.Abs(g.SMaxPct - g.SMinPct) < 0.0005 ? N(g.SMinPct, "0.##") : N(g.SMinPct, "0.##") + "~" + N(g.SMaxPct, "0.##"), DhBrand.Ink);
+            Cell(row, 4, double.IsFinite(c.VelMin) ? N(c.VelMin, "0.00") + "~" + N(c.VelMax, "0.00") : "—", DhBrand.Ink);
+            Cell(row, 5, c.Status, c.Verdict switch { UDitch.Verdict.Ok => DhBrand.Ok, UDitch.Verdict.Short or UDitch.Verdict.NoSlope => DhBrand.Warn, UDitch.Verdict.Caution => Amber, _ => DhBrand.Sub }, c.Verdict != UDitch.Verdict.NoRain);
+            row++;
+        }
+        _segs.Children.Add(grid);
+        void Line(string t) => _segs.Children.Add(new TextBlock { Text = t, Foreground = DhBrand.Ink, Margin = new Thickness(0, 1, 0, 1), TextTrimming = TextTrimming.CharacterEllipsis });
+        for (int i = 0; i < lay.Drops.Count; i++)
+            Line(string.Format(Ic, "낙차 {0}  측점 {1:0.0} m · {2:0.00} m", i + 1, lay.Drops[i].S, lay.Drops[i].H));
+        for (int i = 0; i < lay.Basins.Count; i++)
+        {
+            var b = lay.Basins[i];
+            Line(string.Format(Ic, "집수정 {0}({1})  측점 {2:0.0} m · {3:0.0#}×{3:0.0#} · 깊이 {4:0.00} m", i + 1, b.Lower ? "아래" : "위", b.S, b.Inner, b.Depth));
+        }
+        foreach (var c in h.Pipes)
+            Line(string.Format(Ic, "관로 {0}  D{1:0} · {2:0.0} m · 다리 {3}{4}", c.No, c.Pipe.D * 1000, c.Pipe.Length, c.Pipe.Legs.Count,
+                               c.Verdict == UDitch.Verdict.Short ? " · 부족 → " + c.Recommend : c.Verdict == UDitch.Verdict.Caution ? " · 주의 — 유속 " + N(c.VelMax, "0.0") + " m/s" : c.Verdict == UDitch.Verdict.Ok ? " · OK" : ""));
     }
 
     void Done(Act a)

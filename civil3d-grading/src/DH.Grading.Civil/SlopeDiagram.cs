@@ -49,7 +49,9 @@ internal static class SlopeDiagram
         /// <summary>수직으로 볼 구배 문턱(<c>GradingSettings.WallGateSlope</c>).</summary>
         double WallGate,
         /// <summary>★[v105 · JACK 1022 «3D 모양 콤보는 없애고»] 옹벽 이름(단면 형식 이름) — 없으면 모양 이름.</summary>
-        string? WallName = null);
+        string? WallName = null,
+        /// <summary>★[v117.14.1 · JACK 1112 «대소단 치수»] 마우스를 올린 칸 — <c>"terrInt"</c> = 간격 치수 · <c>"terrW"</c> = 대소단 폭 치수를 주황으로. 없으면 강조 없음.</summary>
+        string? Hi = null);
 
     /// <summary>★<b>화면 크기에 맞춰 늘어나는 그림틀</b>을 만든다.
     /// <para>안쪽 <see cref="Canvas"/>는 언제나 420×300이다 — 그리는 계산이 그 자리를 쓰기 때문이다.
@@ -85,11 +87,28 @@ internal static class SlopeDiagram
             if (dash) ln.StrokeDashArray = new DoubleCollection { 3, 3 };
             c.Children.Add(ln);
         }
-        void T(double x, double y, string str, double size = 10)
+        void T(double x, double y, string str, double size = 10, Brush? b = null)
         {
-            var tb = new TextBlock { Text = str, FontSize = size, Foreground = txt };
+            var tb = new TextBlock { Text = str, FontSize = size, Foreground = b ?? txt };
             Canvas.SetLeft(tb, x); Canvas.SetTop(tb, y);
             c.Children.Add(tb);
+        }
+        static double TextW(string str, double size)
+        {
+            var tb = new TextBlock { Text = str, FontSize = size };
+            tb.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+            return tb.DesiredSize.Width;
+        }
+        // ★[v117.14.1 · JACK 1112 «원지반의 변하지 않는 부분은 좀 울퉁불퉁하게 둬서 원지반처럼 보이게»] 자연 땅 굴곡(px) —
+        //   정해진 사인 셋의 합(난수 없음 → 다시 그려도 같은 모양) · 최대 약 ±3.5px · 설계선과 만나는 자리에선 30px 동안 0에서 키워 딱 붙인다
+        static double Bump(double x) => 1.9 * System.Math.Sin(x / 23.0 + 0.7) + 1.1 * System.Math.Sin(x / 9.3 + 2.3) + 0.5 * System.Math.Sin(x / 4.1 + 4.1);
+        static double Ease(double d) { double t = System.Math.Clamp(d / 30.0, 0, 1); return t * t * (3 - 2 * t); }
+        void NatLine(List<Point> p, Brush b, double th, bool dash)
+        {
+            var pl = new System.Windows.Shapes.Polyline { Stroke = b, StrokeThickness = th, StrokeLineJoin = PenLineJoin.Round };
+            if (dash) pl.StrokeDashArray = new DoubleCollection { 3, 3 };
+            pl.Points = new PointCollection(p);
+            c.Children.Add(pl);
         }
 
         // ★★★[4단계 시험이 잡았다] <b>부품이 스스로 막는다.</b>
@@ -161,29 +180,43 @@ internal static class SlopeDiagram
         }
         // [JACK 0728] 가로폭 항상 동일 — 기하가 좁으면 상단(초록)을 오른쪽 끝까지 연장하고 토사도 채움.
         double xe = cw - 6;
-        pts.Add(new Point(xe, Y(nR)));
+        // ★[v117.14.1 · JACK 1112 «원지반처럼»] 설계 끝(절토 = 사면 머리 · 성토 = 비탈 끝) 너머는 손대지 않은 원지반 — 굴곡진 자연 땅(흙 채움도 이 선을 따른다)
+        double xTop = xcur, yTop = Y(nR);
+        var nat = new List<Point> { new(xTop, yTop) };
+        for (double x = xTop + 3; x < xe; x += 3) nat.Add(new Point(x, yTop + Bump(x) * Ease(x - xTop)));
+        nat.Add(new Point(xe, yTop + Bump(xe) * Ease(xe - xTop)));
 
         // 토사(흙) 채움 — 프로파일 아래(절토=원지반 흙 / 성토=쌓은 흙+지반).
         var soil = new System.Windows.Shapes.Polygon { Fill = new SolidColorBrush(Color.FromArgb(0x55, 0xC8, 0xA9, 0x6E)) };
         var pc = new PointCollection();
         foreach (var q in pts) pc.Add(q);
+        foreach (var q in nat) pc.Add(q);
         pc.Add(new Point(xe, ch - 16)); pc.Add(new Point(20, ch - 16));
         soil.Points = pc;
         c.Children.Add(soil);
 
-        // 정지면 프로파일(초록)
+        // 정지면 프로파일(초록) — 설계선은 곧게 · 그 너머 원지반은 굴곡
         for (int i = 0; i + 1 < pts.Count; i++)
             L(pts[i].X, pts[i].Y, pts[i + 1].X, pts[i + 1].Y, profile, 2.6);
+        NatLine(nat, profile, 2.6, dash: false);
 
-        // 원지반(점선)
+        // 원지반(점선) — ★[v117.14.1] 굴곡 · 설계선과 만나는 끝에서 0으로 줄여 붙인다
+        var og = new List<Point>();
         if (cut)
         {
-            L(x0, yPlan, xe, Y(nR) - 12, dim, 1.2, dash: true);
+            double ya = yPlan, yb = Y(nR) - 12;
+            for (double x = x0; x < xe; x += 3) og.Add(new Point(x, ya + (yb - ya) * (x - x0) / (xe - x0) + Bump(x + 57) * Ease(x - x0)));
+            og.Add(new Point(xe, yb + Bump(xe + 57) * Ease(xe - x0)));
+            NatLine(og, dim, 1.2, dash: true);
             T(System.Math.Max(xe - 66, 70), System.Math.Max(Y(nR) - 34, 4), "원지반", 11);
         }
         else
         {
-            L(xe, Y(nR), 20, System.Math.Min(Y(nR) + 18, ch - 20), dim, 1.2, dash: true);
+            // ★[v117.14.1] 쌓은 흙 밑 원지반 = 비탈 끝 너머 원지반이 그대로 이어진 것 — 비탈 끝에서 왼쪽으로(종전엔 오른끝부터 그어 땅선과 겹쳤다)
+            double yl = System.Math.Min(Y(nR) + 18, ch - 20);
+            for (double x = xTop; x > 20; x -= 3) og.Add(new Point(x, yTop + (yl - yTop) * (xTop - x) / System.Math.Max(xTop - 20, 1) + Bump(x) * Ease(xTop - x)));
+            og.Add(new Point(20, yl + Bump(20) * Ease(xTop - 20)));
+            NatLine(og, dim, 1.2, dash: true);
             T(System.Math.Max(xe - 66, 70), System.Math.Min(Y(nR) + 6, ch - 22), "원지반", 11);
         }
 
@@ -205,13 +238,39 @@ internal static class SlopeDiagram
             T((bx1 + bx2) / 2 - 22, by - 48, "소단폭", 12);
             T((bx1 + bx2) / 2 - 14, by - 33, $"{W:0.##}m", 11);
         }
-        else T(System.Math.Min(x0 + rp, cw - 130), Y(1) - 32, $"소단폭 {W:0.##}m", 11);
+        // ★[v117.14.1] 절토는 소단 아래(흙 쪽)에 — 위에 두면 «구배 1:n» 글자와 겹쳤다(대소단 켜면 소단이 좁아 이 갈래)
+        else T(System.Math.Min(x0 + rp, cw - 130), cut ? Y(1) + 6 : Y(1) - 32, $"소단폭 {W:0.##}m", 11);
 
-        // 대소단(계단식 산지) — 간격 도달 단 뒤 넓은 평탄에 표기
-        if (terrace && terrFlat >= 0 && twp >= 14)
+        // 대소단(계단식 산지) — 간격 도달 단 뒤 넓은 평탄
+        // ★[v117.14.1 · JACK 1112 «대소단 치수»] 간격(계획면 → 대소단 높이) 세로 치수 + 대소단 폭 가로 치수 · 그 칸에 마우스를 올리면(Hi) 그 치수가 주황
+        if (terrace && terrFlat >= 0)
         {
+            var hiB = WallSectionDiagram.HiBrush;
+            bool hInt = spec.Hi == "terrInt", hW = spec.Hi == "terrW";
             double tx1 = flatX[terrFlat], tx2 = tx1 + twp, ty = Y(terrFlat + 1);
-            T((tx1 + tx2) / 2 - 36, ty + (cut ? 6 : -20), $"대소단 {TW:0.#}m", 11);
+            // 간격 — 단높이 치수 왼쪽(x0 − 30) · 대소단 끝에서 점선 보조선
+            Brush gb = hInt ? hiB : dim; double gth = hInt ? 2.2 : 1.2, gX = x0 - 30;
+            L(gX, Y(0), gX, ty, gb, gth);
+            L(gX - 4, Y(0), gX + 4, Y(0), gb, gth); L(gX - 4, ty, gX + 4, ty, gb, gth);
+            L(gX + 4, ty, tx1, ty, gb, hInt ? 1.2 : 0.8, dash: true);
+            // 글자 — 단높이 글자와 안 겹치게(절토는 그 위 · 성토는 그 아래)
+            double m01 = (Y(0) + Y(1)) / 2;
+            double gy = terrFlat >= 1 ? (Y(1) + ty) / 2 - 14 : (cut ? ty - 34 : ty + 4);
+            gy = cut ? System.Math.Min(gy, m01 - 16 - 30) : System.Math.Max(gy, m01 + 13 + 2);
+            gy = System.Math.Clamp(gy, 2, ch - 30);
+            T(8, gy, "간격", 12, hInt ? hiB : null);
+            T(8, gy + 15, $"{TI:0.##}m", 11, hInt ? hiB : null);
+            // 대소단 폭 — 대소단 위(빈 쪽) · 글자가 대소단보다 길면 절토는 오른끝(오른쪽은 다음 사면이 오른다) · 성토는 왼끝 맞춤
+            Brush wb = hW ? hiB : dim; double wth = hW ? 2.2 : 1.2;
+            string tl = $"대소단 폭 {TW:0.##}m";
+            double tlw = TextW(tl, 11);
+            if (twp >= 4)
+            {
+                L(tx1, ty - 14, tx2, ty - 14, wb, wth);
+                L(tx1, ty - 18, tx1, ty - 10, wb, wth); L(tx2, ty - 18, tx2, ty - 10, wb, wth);
+            }
+            double tlx = cut ? System.Math.Min((tx1 + tx2 - tlw) / 2, tx2 - tlw) : System.Math.Max((tx1 + tx2 - tlw) / 2, tx1);
+            T(System.Math.Clamp(tlx, 2, cw - tlw - 2), ty - 31, tl, 11, hW ? hiB : null);
         }
 
         // 구배 값
@@ -262,8 +321,7 @@ internal static class SlopeDiagram
                     Canvas.SetLeft(r, rectX); Canvas.SetTop(r, ytop); c.Children.Add(r);
                     if (style == WallStyle.보강토)
                     {
-                        for (double yy = ytop + 6; yy < ybot - 2; yy += 7)
-                            L(rectX, yy, rectX + wt, yy, wallLine, 0.9);
+                        r.Fill = WallSectionDiagram.BlockBrush;   // ★[v117.15 · JACK 1112 «보강토 블록 패턴»] 줄쌓기 블록(옛: 가로줄만)
                     }
                     else // 앵커판넬 — 앵커는 흙 쪽(전면 반대)으로
                     {

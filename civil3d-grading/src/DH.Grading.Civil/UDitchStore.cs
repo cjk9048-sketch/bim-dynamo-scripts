@@ -177,8 +177,9 @@ internal static class UDitchStore
         return true;
     }
 
-    /// <summary>측구 점의 지표면 z를 다시 읽음(지표면 → 3D 선 Z → NaN) · 지표면 이름.</summary>
-    internal static void FillGround(Database db, Transaction tr, UDitch.Ditch d, List<double[]> pts, bool z3)
+    /// <summary>측구 점의 지표면 z를 다시 읽음(지표면 → 3D 선 Z → NaN) · 지표면 이름 ·
+    /// ★[v117.16 · JACK 1112 «애초에 폴리선이 단차 있게 만든 부지거든?»] 선 따라 지표 표본(<see cref="UDitch.FillSamples"/> — 마디 사이 단차를 찾으려고).</summary>
+    internal static void FillGround(Database db, Transaction tr, UDitch.Ditch d, List<double[]> pts, bool z3, UDitch.Settings s)
     {
         var (sid, name) = FindSurface(db, tr);
         int miss = 0;
@@ -189,6 +190,17 @@ internal static class UDitchStore
             p[2] = g;
         }
         UDitch.SetLinePts(d, pts);   // ★[설치 전 검토 1] [방향 바꾸기]면 그린 차례를 뒤집어 씀
+        CivilDb.TinSurface? ts = null;
+        try { if (!sid.IsNull && !sid.IsErased) ts = tr.GetObject(sid, OpenMode.ForRead) as CivilDb.TinSurface; } catch { }
+        // ★[v117.16 검토 LOW] 면 네모 밖은 묻지 않음(표본마다 예외 나지 않게) — 네모 안 빈 곳은 그대로 예외 → NaN
+        double bx0 = double.NegativeInfinity, by0 = double.NegativeInfinity, bx1 = double.PositiveInfinity, by1 = double.PositiveInfinity;
+        if (ts != null)
+            try { var gp = ts.GetGeneralProperties(); bx0 = gp.MinimumCoordinateX; bx1 = gp.MaximumCoordinateX; by0 = gp.MinimumCoordinateY; by1 = gp.MaximumCoordinateY; } catch { }
+        UDitch.FillSamples(d, (x, y) =>
+        {
+            if (ts == null || x < bx0 || x > bx1 || y < by0 || y > by1) return double.NaN;
+            try { return ts.FindElevationAtXY(x, y); } catch { return double.NaN; }   // 면 밖
+        }, s);
         d.Surface = sid.IsNull ? (z3 ? "(3D 선 Z)" : "(없음)") : name + (miss > 0 ? $" · 면 밖 {miss}점" : "");
     }
 
@@ -199,7 +211,7 @@ internal static class UDitchStore
         {
             if (d.LineHandle.Length == 0 || !db.TryGetObjectId(new Handle(System.Convert.ToInt64(d.LineHandle, 16)), out var id) || id.IsErased) return;
             if (!ReadLine(tr, id, s.ArcStep, out var pts, out bool z3, out _)) return;
-            FillGround(db, tr, d, pts, z3);
+            FillGround(db, tr, d, pts, z3, s);
             UDitch.ApplyAuto(d, s);
         }
         catch { }
@@ -246,6 +258,9 @@ internal static class UDitchStore
         public int Solids, Meshes, Erased, Skipped;
         public string FirstFail = "";
         public double BodyVol, FootVol, Length;
+        /// <summary>★[v117.16] 낙차 · 집수정 · 관로(개수 · 관 길이) · 낙차벽 + 집수정 콘크리트 · 스틸 그레이팅 길이.</summary>
+        public int Drops, Basins, Pipes;
+        public double PipeLen, ExtraVol, GrateLen;
     }
 
     /// <summary>모든 측구를 다시 짓는다(옛것 지움 → 원 선 다시 읽기 → 본체 · 기초 솔리드) · 색 = 수리 판정(부족 빨강 · 주의 노랑 · 그 밖 레이어 색).
@@ -307,17 +322,25 @@ internal static class UDitchStore
                     finally { solid?.Dispose(); }
                     if (made is SubDMesh) nMesh++;
                     made.TransformBy(move);
-                    made.ColorIndex = color;
+                    made.ColorIndex = sol.Part is "그레이팅" or "집수정 덮개" ? (short)8 : color;   // ★[v117.16] 스틸 그레이팅 = 회색
                     using (var xd = new ResultBuffer(new TypedValue((int)DxfCode.ExtendedDataRegAppName, App), new TypedValue((int)DxfCode.ExtendedDataAsciiString, d.Id),
                                                      new TypedValue((int)DxfCode.ExtendedDataAsciiString, sol.Part), new TypedValue((int)DxfCode.ExtendedDataAsciiString, h.Status)))
                         made.XData = xd;
                     d.Solids.Add(made.Handle.ToString());
                 }
-                var q = UDitch.Qty(d);
+                var q = UDitch.Qty(d, s);
+                var xq = UDitch.Extras(d, s);   // ★[v117.16 · JACK 1112] 낙차 · 집수정 · 관로 · 그레이팅
                 st.Solids += nSol; st.Meshes += nMesh;
                 st.BodyVol += q.BodyVol; st.FootVol += q.FootVol; st.Length += q.Length;
-                log.AppendLine(string.Format(System.Globalization.CultureInfo.InvariantCulture, "  {0}: U형 {1} · 길이 {2:F2} m · 경사 {3:0.###} % · 수리 {4} · 콘크리트 {5:F3} ㎥ · {6}",
-                               d.Id, d.Size.Label, q.Length, h.SlopePct, h.Status, q.BodyVol + q.FootVol, string.Join("/", sols.Select(x => $"{x.Part} 부피 {x.Volume:F3}"))));
+                st.Drops += xq.Drops; st.Basins += xq.Basins; st.Pipes += xq.Pipes; st.PipeLen += xq.PipeLen; st.ExtraVol += xq.Concrete; st.GrateLen += xq.GrateLen;
+                var ly = UDitch.LayoutOf(d, s);
+                foreach (var ln in ly.Log) log.AppendLine($"    {d.Id} {ln}");
+                foreach (var w in ly.Warn) log.AppendLine($"    {d.Id} ⚠{w}");
+                log.AppendLine(string.Format(System.Globalization.CultureInfo.InvariantCulture, "  {0}: U형 {1} · 길이 {2:F2} m · 경사 {3:0.###} % · 수리 {4} · 콘크리트 {5:F3} ㎥{6}{7} · {8}",
+                               d.Id, d.Size.Label, q.Length, h.SlopePct, h.Status, q.BodyVol + q.FootVol + xq.Concrete,
+                               ly.Follow ? $" · 지표 따라감 구간 {ly.Segs.Count} · 낙차 {xq.Drops} · 집수정 {xq.Basins} · 관 {xq.PipeLen:F2} m" : " · 한 경사",
+                               d.Grating ? $" · 그레이팅 {xq.GrateLen:F2} m" : "",
+                               string.Join("/", sols.GroupBy(x => x.Part).Select(gp => $"{gp.Key} {gp.Count()}개 부피 {gp.Sum(x => x.Volume):F3}"))));
             }
             catch (System.Exception ex)
             {
@@ -370,21 +393,40 @@ internal static class UDitchStore
         if (rec.Ditches.Count == 0) return null;
         var s = LoadSettings(out _, out _);
         var o = new List<object>();
-        int tris = 0;
+        int tris = 0, nb = 0, np = 0;
         foreach (var d in rec.Ditches)
         {
-            var (pos, idx) = UDitch.SceneMesh(d, s, ox, oy);
+            var (pos, idx) = UDitch.SceneMesh(d, s, ox, oy, out var parts);
             if (idx.Length == 0) { log.AppendLine($"  U형 측구: {d.Id} — 못 지음(건너뜀)"); continue; }
             var h = UDitch.Check(d, rec.Rain, s);
             tris += idx.Length / 3;
+            // ★[v117.16 · JACK 1112] 집수정(위 · 아래 · inner = 안치수) · 관로(다리마다 한 칸)(뷰어가 그림 — 장면 좌표 = 도면 − ox, oy · z 그대로 · 관 d = 바깥 지름) · 스틸 그레이팅 여부(뷰어가 윗면에 그림 — 메시에는 판 없음) ·
+            //   parts = 메시 덩어리(부분 · 구간 · 첫 꼭짓점 · 꼭짓점 수 — 구간이 여럿이면 덩어리가 여럿)
+            var (bs, ps) = UDitch.SceneParts(d, s, ox, oy, rec.Rain);
+            nb += bs.Count; np += ps.Count;
+            static List<object> Rows(List<(string K, string V)> rs) => rs.Select(r => (object)new[] { r.K, r.V }).ToList();
             o.Add(new Dictionary<string, object>
             {
                 ["name"] = d.Id, ["title"] = $"{d.Id} U형 측구", ["status"] = h.Status,
                 ["rows"] = UDitch.InfoRows(d, rec.Rain, s).Select(r => (object)new[] { r.K, r.V }).ToList(),
                 ["pos"] = sc.F32(pos), ["idx"] = sc.U32(idx),
+                ["parts"] = parts.Select(q => (object)new Dictionary<string, object> { ["part"] = q.Part, ["seg"] = q.Seg, ["v0"] = q.V0, ["n"] = q.N }).ToList(),
+                ["basins"] = bs.Select(b => (object)new Dictionary<string, object>
+                {
+                    ["x"] = Web3DScene.Num(b.V[0], 3), ["y"] = Web3DScene.Num(b.V[1], 3), ["zTop"] = Web3DScene.Num(b.V[2], 3), ["zBottom"] = Web3DScene.Num(b.V[3], 3),
+                    ["w"] = Web3DScene.Num(b.V[4], 3), ["l"] = Web3DScene.Num(b.V[5], 3), ["rot"] = Web3DScene.Num(b.V[6], 5), ["inner"] = Web3DScene.Num(b.V[7], 3),
+                    ["name"] = b.Name, ["title"] = b.Name, ["rows"] = Rows(b.Rows),
+                }).ToList(),
+                ["pipes"] = ps.Select(p => (object)new Dictionary<string, object>
+                {
+                    ["x1"] = Web3DScene.Num(p.V[0], 3), ["y1"] = Web3DScene.Num(p.V[1], 3), ["z1"] = Web3DScene.Num(p.V[2], 3),
+                    ["x2"] = Web3DScene.Num(p.V[3], 3), ["y2"] = Web3DScene.Num(p.V[4], 3), ["z2"] = Web3DScene.Num(p.V[5], 3), ["d"] = Web3DScene.Num(p.V[6], 3),
+                    ["name"] = p.Name, ["title"] = p.Name, ["rows"] = Rows(p.Rows),
+                }).ToList(),
+                ["grating"] = d.Grating,
             });
         }
-        log.AppendLine($"  U형 측구: {o.Count}개 · tris {tris:N0}");
+        log.AppendLine($"  U형 측구: {o.Count}개 · tris {tris:N0} · 집수정 {nb} · 관로 {np}");
         return o.Count > 0 ? o : null;
     }
 }

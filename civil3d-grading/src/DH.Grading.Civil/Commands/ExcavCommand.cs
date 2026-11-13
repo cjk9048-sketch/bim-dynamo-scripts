@@ -224,6 +224,7 @@ public sealed class ExcavCommand
         Database db = doc.Database;
         var log = new System.Text.StringBuilder();
         LastLog = "";
+        WingWarn = "";
         log.AppendLine($"[터파기 지표면] {System.DateTime.Now:yyyy-MM-dd HH:mm:ss}  [DH.Grading {GradingSettings.Version}]");
 
         string boxHandle = boxPolyId.Handle.ToString();
@@ -591,7 +592,9 @@ public sealed class ExcavCommand
                     //   종전엔 <c>null</c>이라 구간을 지정해도 <b>형상이 한 톨도 안 바뀌었다</b> —
                     //   바로 위 절토부 복원(<c>b.CutWallZones</c>)은 이미 넘기고 있었는데 여기만 빠져 있었다.
                     //   ★기록에 구간이 없으면(v1~v3, 또는 아직 안 지정) <c>null</c>과 같아 옛 형상 그대로다.
-                    var vs = GradingGeometry.Build(e.Bottom, target, p, up: true, e.WallZones);
+                    // ★[v117.16 · JACK 1112 «찍고 노선상에서 마지막 선 찍고 날개 찍었던 그 방식»] 날개 단 가시설 구간은 엔진에 안 넘긴다(그 자리는 사면으로 만든 뒤 아래에서 깎음) ·
+                    //   날개 없는 구간(옛 기록 · Esc) · 날개를 못 쓰는 구간은 종전 길(엔진 구간 — 구간만 수직 · 끝은 저절로)
+                    var wplan = PlanWings(e, target, p, log, tag, out var vs);
                     if (!vs.HasSlope)
                     {
                         log.AppendLine($"■ {tag} 굴착 법면 없음 — 건너뜀");
@@ -600,6 +603,18 @@ public sealed class ExcavCommand
                     }
 
                     var vid = GradingBuilder.BuildVirtualSlope(db, tr, vs.Rings, $"{VirtName}{k + 1}", vs.CornerLines, groundId);
+                    if (wplan != null)
+                    {
+                        var vid2 = CutWings(db, tr, vid, vs, e, wplan, $"{VirtName}{k + 1}", groundId, log, tag);
+                        if (!vid2.IsNull) vid = vid2;
+                        else
+                        {
+                            // 못 깎았다 — 날개를 버리고 종전 길(구간 수직 · 끝은 저절로)로 다시 굽는다(말한다)
+                            vs = GradingGeometry.Build(e.Bottom, target, p, up: true, e.WallZones);
+                            vid = GradingBuilder.BuildVirtualSlope(db, tr, vs.Rings, $"{VirtName}{k + 1}", vs.CornerLines, groundId);
+                            WingWarn = $"구조물 {k + 1} 날개 못 씀 → 날개 자동(로그)";
+                        }
+                    }
                     var vTin = (TinSurface)tr.GetObject(vid, OpenMode.ForWrite);
                     var bTin = (TinSurface)tr.GetObject(baseId, OpenMode.ForRead);
                     // ★★★[검토 0903 — 치명] <b>굴착에는 바깥선을 안 넘긴다.</b>
@@ -918,11 +933,153 @@ public sealed class ExcavCommand
         try { ExcavPalette.Refresh(); } catch { }
         ed.WriteMessage($"\n[터파기 지표면] 완료 — {SurfName} (구조물 {made}개)" +
                         $"\n  굴착 구배 1:{useSlope:0.##}{(useSlope <= GradingSettings.WallGateSlope + 1e-9 ? " (수직)" : "")}" +
+                        (WingWarn.Length > 0 ? $"\n  ⚠ {WingWarn}" : "") +
                         $"\n  자세한 내용: {DiagLog.FilePath}");
         // ★★[2차 검토 0909 · 높은1] 여기까지 왔으면 <b>실제로 구웠다</b> — 그때만 참이다.
         return made > 0;
     }
 
+
+    // ══ ★[v117.16 · JACK 1112 «가시설 변환 — 시작점 → 둘레 따라 끝점 → 날개»] 날개 단 가시설 구간 ══════════
+    //   구간 + 날개 둘이 두른 땅(R)은 안 판다 — 엔진은 그 자리를 사면으로 만들고(날개 구간은 안 넘김) ·
+    //   ① 첫 TIN(사면)에서 날개 선의 높이를 뜨고 ② 사면 링에서 R(높이마다 1:최소구배로 줄인 것)을 빼고 ③ 날개 선을 더해 다시 굽는다(ExcavWing).
+    //   못 하면 종전 길(구간만 수직 · 끝은 저절로)로 물러나고 말한다(WingWarn).
+
+    /// <summary>★[v117.16] 날개를 못 써 물러난 구조물 — 명령 끝 알림 한 줄(없으면 빈 글).</summary>
+    private static string WingWarn = "";
+
+    /// <summary>★[v117.16] 바깥 링 밖 여유(m) — R이 엔진의 가장 바깥 링을 넉넉히 넘게(그 밖은 TIN이 없다).</summary>
+    private const double WingMargin = 2.0;
+
+    /// <summary>★[v117.16] 날개 깎기 재료 — 구간마다 R 하나 · 날개 선 둘(T0 끝 · T1 끝).</summary>
+    private sealed class WingPlan
+    {
+        public readonly System.Collections.Generic.List<System.Collections.Generic.List<Point3>> Regions = new();
+        public readonly System.Collections.Generic.List<System.Collections.Generic.List<Point3>> Paths = new();
+        public double TopRise;
+    }
+
+    /// <summary>★[v117.16] 엔진을 돌리고(날개 구간 빼고) 날개 깎기 재료를 만든다 — 날개 구간이 없으면 null(종전과 같은 한 번).
+    /// 못 쓰는 날개 구간은 엔진 구간으로 돌려 다시 돌린다(최대 두 번) · 그래도 못 하면 전부 엔진 구간(종전 길)으로.</summary>
+    private static WingPlan? PlanWings(ExcavBundle e, IGroundSurface target, GradingParams p,
+                                       System.Text.StringBuilder log, string tag, out VirtualSlope vs)
+    {
+        var legacy = new System.Collections.Generic.List<SlopeZone>();
+        var wz = new System.Collections.Generic.List<SlopeZone>();
+        if (e.WallZones != null)
+            foreach (var z in e.WallZones) { if (z == null) continue; if (z.HasWings) wz.Add(z); else legacy.Add(z); }
+        if (wz.Count == 0)
+        {
+            vs = GradingGeometry.Build(e.Bottom, target, p, up: true, e.WallZones);
+            return null;
+        }
+        for (int pass = 0; pass < 2 && wz.Count > 0; pass++)
+        {
+            vs = GradingGeometry.Build(e.Bottom, target, p, up: true, legacy.Count > 0 ? legacy : null);
+            if (!vs.HasSlope) break;
+            int top = -1; double topRise = double.NegativeInfinity;
+            for (int i = 0; i < vs.Rings.Count && i < vs.RingRise.Count; i++)
+                if (!double.IsNaN(vs.RingRise[i]) && vs.RingRise[i] > topRise && vs.Rings[i].Count >= 3) { topRise = vs.RingRise[i]; top = i; }
+            if (top < 0) { log.AppendLine($"■ {tag} 가시설 날개 — 사면 링 없음(날개 자동)"); break; }
+            var outer = vs.Rings[top];
+            var plan = new WingPlan { TopRise = topRise };
+            var failed = new System.Collections.Generic.List<SlopeZone>();
+            foreach (var z in wz)
+            {
+                var ruler = z.Ref ?? e.Bottom;
+                // ★[v117.16 · 설치 전 검토 MED] 터파기선을 옮기거나 돌려(길이는 같아) 구간이 옛 자(z.Ref)를 들고 남으면 날개 R이 옛 자리를 깎는다 →
+                //   옛 자와 지금 바닥의 꼭짓점이 1 cm 넘게 어긋나면 날개를 쓰지 않음(날개 자동 · 종전 길)
+                if (z.Ref != null && !SameRing(z.Ref, e.Bottom, 0.01))
+                {
+                    failed.Add(z);
+                    log.AppendLine($"■ {tag} 가시설 날개 [{z.T0:F1}~{z.T1:F1}m] 못 씀 — 터파기선이 옮겨짐(옛 자 ≠ 지금 바닥) → 날개 자동(엔진 구간) · 다시 지정하면 날개");
+                    continue;
+                }
+                var R = ExcavWing.Region(ruler, z.T0, z.T1, z.WingT0!.Value, z.WingT1!.Value, outer, WingMargin, out string why);
+                var a = R == null ? null : ExcavWing.WingPath(ruler, z.T0, z.WingT0.Value, outer, vs.CornerLines, 1.0);
+                var b = R == null ? null : ExcavWing.WingPath(ruler, z.T1, z.WingT1.Value, outer, vs.CornerLines, 1.0);
+                if (R == null || a == null || b == null)
+                {
+                    failed.Add(z);
+                    log.AppendLine($"■ {tag} 가시설 날개 [{z.T0:F1}~{z.T1:F1}m] 못 씀 — {(R == null ? why : "날개 선이 바깥 링에 안 닿음")} → 날개 자동(엔진 구간)");
+                    continue;
+                }
+                log.AppendLine($"■ {tag} 가시설 날개 [{z.T0:F1}~{z.T1:F1}m] — R {R.Count}점 · {GradingGeometry.RingAreaNts(R):F0}㎡ · 날개 선 {a.Count} · {b.Count}점"
+                             + (why.Length > 0 ? $" · ⚠{why}" : ""));
+                plan.Regions.Add(R); plan.Paths.Add(a); plan.Paths.Add(b);
+            }
+            if (failed.Count == 0) return plan;
+            WingWarn = $"날개 {failed.Count}곳 못 씀 → 날개 자동(로그)";
+            foreach (var f in failed) { wz.Remove(f); legacy.Add(f); }
+        }
+        // 물러남 — 전부 엔진 구간(종전 길)
+        vs = GradingGeometry.Build(e.Bottom, target, p, up: true, e.WallZones);
+        if (wz.Count > 0) { log.AppendLine($"■ {tag} 가시설 날개 — 전부 날개 자동(엔진 구간)"); WingWarn = "날개 못 씀 → 날개 자동(로그)"; }
+        return null;
+    }
+
+    /// <summary>★[v117.16 · 설치 전 검토 MED] 두 닫힌 링이 같은가 — 점 수가 같고 같은 차례의 꼭짓점(XY)이 <paramref name="tol"/> 안(시작점이 달라도 한 바퀴 돌려 봄).</summary>
+    private static bool SameRing(System.Collections.Generic.IReadOnlyList<Point3> a, System.Collections.Generic.IReadOnlyList<Point3> b, double tol)
+    {
+        if (a == null || b == null || a.Count != b.Count || a.Count == 0) return false;
+        int n = a.Count;
+        for (int s = 0; s < n; s++)
+        {
+            bool ok = true;
+            for (int i = 0; i < n && ok; i++)
+            {
+                var p = a[i]; var q = b[(i + s) % n];
+                ok = System.Math.Abs(p.X - q.X) <= tol && System.Math.Abs(p.Y - q.Y) <= tol;
+            }
+            if (ok) return true;
+        }
+        return false;
+    }
+
+    /// <summary>★[v117.16] 첫 TIN(<paramref name="vid"/> — 사면)에서 날개 선 높이를 뜨고, 사면 링에서 R을 빼고, 날개 선을 더해 다시 굽는다.
+    /// 못 하면 <see cref="ObjectId.Null"/>(부르는 쪽이 종전 길로 다시 굽는다).</summary>
+    private static ObjectId CutWings(Database db, Transaction tr, ObjectId vid, VirtualSlope vs, ExcavBundle e, WingPlan plan,
+                                     string name, ObjectId groundId, System.Text.StringBuilder log, string tag)
+    {
+        try
+        {
+            var tin = (TinSurface)tr.GetObject(vid, OpenMode.ForRead);
+            var lines = new System.Collections.Generic.List<System.Collections.Generic.List<Point3>>();
+            int miss = 0;
+            foreach (var path in plan.Paths)
+            {
+                var l = new System.Collections.Generic.List<Point3>(path.Count);
+                for (int i = 0; i < path.Count; i++)
+                {
+                    var q = path[i];
+                    // 끝 둘은 셈으로(첫 점 = 바닥 둘레 위 · 끝 점 = 가장 바깥 링 위 — 엔진과 같은 높이 셈) · 사이는 사면 면에서 뜬다
+                    if (i == 0) { l.Add(new Point3(q.X, q.Y, ExcavWing.BottomZAt(e.Bottom, q.X, q.Y))); continue; }
+                    if (i == path.Count - 1) { l.Add(new Point3(q.X, q.Y, ExcavWing.BottomZAt(e.Bottom, q.X, q.Y) + plan.TopRise)); continue; }
+                    try { l.Add(new Point3(q.X, q.Y, tin.FindElevationAtXY(q.X, q.Y))); }
+                    catch { miss++; }
+                }
+                // ★[설치 전 검토 LOW] 사이 점 하나라도 못 뜨면 경사 줄이 사면 위가 아니게 됨 → 종전 길
+                if (l.Count < 2 || miss > 0) { log.AppendLine($"■ {tag} 가시설 날개 — 날개 선 높이를 못 뜸(빠진 점 {miss}) → 날개 자동"); return ObjectId.Null; }
+                lines.Add(l);
+            }
+            if (!ExcavWing.Carve(vs.Rings, vs.RingRise, vs.CornerLines, e.Bottom, plan.Regions, e.MinSlope,
+                                 out var rings2, out var corners2, out string clog))
+            {
+                log.AppendLine($"■ {tag} 가시설 날개 — 링 못 깎음({clog}) → 날개 자동");
+                return ObjectId.Null;
+            }
+            corners2.AddRange(lines);
+            var vid2 = GradingBuilder.BuildVirtualSlope(db, tr, rings2, name, corners2, groundId);
+            log.AppendLine($"■ {tag} 가시설 날개 {plan.Regions.Count}곳 깎음 — {clog} · 날개 선 {lines.Count}줄"
+                         + (miss > 0 ? $"(높이 못 뜬 점 {miss}개 뺌)" : ""));
+            return vid2;
+        }
+        catch (System.Exception ex)
+        {
+            log.AppendLine($"■ {tag} 가시설 날개 예외 — {ex.GetType().Name}: {ex.Message} → 날개 자동");
+            return ObjectId.Null;
+        }
+    }
 
     /// <summary>★★[2차 검토 0909 · 빠진 것] <b>구간의 자가 아직 맞는가.</b>
     ///

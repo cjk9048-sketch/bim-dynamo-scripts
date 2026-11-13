@@ -48,6 +48,15 @@ public sealed class SlopeZone
     /// <b>기본값 <c>false</c>(전체)</b>라 옛 번들에서 올라온 구간은 <b>종전대로</b> 돈다.</para></summary>
     public bool Partial { get; set; }
 
+    /// <summary>★[v117.16 · JACK 1112 «찍고 노선상에서 마지막 선 찍고 날개 찍었던 그 방식»] 터파기 가시설 날개 — <see cref="T0"/> 끝 · <see cref="T1"/> 끝에서 찍은 방향(평면).
+    /// <para>둘 다 있으면 구간 + 날개 둘이 두른 땅은 안 판다(<see cref="ExcavWing"/>) · 없으면 종전 길(구간만 수직 · 끝은 저절로).
+    /// 터파기 기록(v5)만 적고 읽는다 — 정지 번들은 안 적는다.</para></summary>
+    public (double X, double Y)? WingT0 { get; set; }
+    /// <summary>★[v117.16] <see cref="T1"/> 끝 날개 방향 — <see cref="WingT0"/> 참고.</summary>
+    public (double X, double Y)? WingT1 { get; set; }
+    /// <summary>★[v117.16] 날개 둘이 다 있나.</summary>
+    public bool HasWings => WingT0 != null && WingT1 != null;
+
     /// <summary>(시작단, 구배 n, 소단폭 m) 목록 — <see cref="Normalize"/>로 시작단 오름차순 정렬해 둔다.
     /// 소단폭이 음수면 '전역값 따름'(옛 번들에서 올라온 옹벽 구간이 그렇다).
     /// ※ 단높이는 구간별로 둘 수 없다 — 링은 '같은 표고의 등고선'이라 링 하나에 표고가 하나뿐인데,

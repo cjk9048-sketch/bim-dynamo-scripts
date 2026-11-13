@@ -318,7 +318,7 @@ public sealed class NoriCommand
             {
                 string why = detail.Contains("기본 옹벽(")
                     ? "절토·성토가 모두 옹벽이고, 사면으로 바꾼 구간이 없습니다."
-                      + "\n[옹벽→사면]으로 일부를 사면으로 돌리면 그 구간에 노리선이 나옵니다."
+                      + "\n[사면 변환]으로 일부를 사면으로 돌리면 그 구간에 노리선이 나옵니다."
                     : "그릴 사면을 찾지 못했습니다 — [계획부지 생성]을 먼저 돌렸는지 확인해 주세요.";
                 AcadApp.ShowAlertDialog("노리선 — 그린 것이 없습니다\n\n" + why
                                       + "\n\n자세한 사유:" + detail.Replace("\n\n", "\n"));

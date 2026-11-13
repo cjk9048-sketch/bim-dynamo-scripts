@@ -690,6 +690,55 @@ public sealed class PickCommands
     }
 
     /// <summary>하나 찍는 일의 뼈대 — <b>어떤 길로 빠져나가도 자물쇠를 푼다</b>.</summary>
+    /// <summary>★[v117.15.1 · JACK 1112 «닫힌 폴리곤 아니면 알아서 닫기»] 열린 폴리선(2D · 3D)을 닫는다 — 끝점이 첫 점과 1 mm 안이면 그 끝점을 빼고 닫음.
+    /// 돌려줌 = 사용자에게 보일 단답형 한 줄(닫을 것이 없으면 "") · 기술 내용은 로그.</summary>
+    private static string CloseIfOpen(Transaction tr, DBObject o)
+    {
+        const double same = 1e-3;
+        if (o is Polyline pl && !pl.Closed && pl.NumberOfVertices >= 2)
+        {
+            pl.UpgradeOpen();
+            var a = pl.GetPoint2dAt(0); var b = pl.GetPoint2dAt(pl.NumberOfVertices - 1);
+            double gap = a.GetDistanceTo(b);
+            if (gap <= same && pl.NumberOfVertices >= 4) pl.RemoveVertexAt(pl.NumberOfVertices - 1);
+            pl.Closed = true;
+            try { DiagLog.Append($"\n[찍기] 열린 폴리선 닫음 — 점 {pl.NumberOfVertices}개 · 끝 사이 {gap:0.###} m{(gap <= same ? "(겹친 끝점 뺌)" : "(닫는 변 더함)")}"); } catch { }
+            return gap <= same ? "열린 폴리선 → 닫음" : $"열린 폴리선 → 닫음(끝점 사이 {gap:0.##} m 이음)";
+        }
+        if (o is Polyline3d p3 && !p3.Closed)
+        {
+            var vs = new System.Collections.Generic.List<ObjectId>();
+            foreach (ObjectId vid in p3) vs.Add(vid);
+            if (vs.Count < 2) return "";
+            p3.UpgradeOpen();
+            var v0 = (PolylineVertex3d)tr.GetObject(vs[0], OpenMode.ForRead);
+            var vn = (PolylineVertex3d)tr.GetObject(vs[^1], OpenMode.ForRead);
+            double gap = new Autodesk.AutoCAD.Geometry.Point2d(v0.Position.X, v0.Position.Y).GetDistanceTo(new Autodesk.AutoCAD.Geometry.Point2d(vn.Position.X, vn.Position.Y));
+            // ★[설치 전 검토 MED] 평면에서 겹쳐도 높이가 다르면(단차 자리) 지우지 않고 닫기만 — 읽는 쪽(BoundaryReader) 0.01 m 규칙과 같게
+            bool sameZ = System.Math.Abs(vn.Position.Z - v0.Position.Z) < 0.01;
+            if (gap <= same && sameZ && vs.Count >= 4) { vn.UpgradeOpen(); vn.Erase(); }
+            p3.Closed = true;
+            try { DiagLog.Append($"\n[찍기] 열린 3D 폴리선 닫음 — 점 {vs.Count}개 · 끝 사이 {gap:0.###} m{(gap <= same ? "(겹친 끝점 뺌)" : "(닫는 변 더함)")}"); } catch { }
+            return gap <= same ? "열린 3D 폴리선 → 닫음" : $"열린 3D 폴리선 → 닫음(끝점 사이 {gap:0.##} m 이음)";   // (겹쳐도 높이가 다르면 끝점 그대로 · 수직 변으로 닫힘)
+        }
+        return "";
+    }
+
+    /// <summary>★[v117.16] 이 면이 마지막 정지 구역이 쓴 원지반인가(구역 기록의 GroundHandle) — 못 읽으면 거짓.</summary>
+    private static bool IsLastGround(AcDoc doc, ObjectId id)
+    {
+        try
+        {
+            using var tr = doc.Database.TransactionManager.StartTransaction();
+            var regs = GradingBundleStore.TryLoadAll(doc.Database, tr, out _);
+            string h = id.Handle.ToString();
+            bool same = regs is { Count: > 0 } && regs.Any(g => g.GroundHandle.Length > 0 && g.GroundHandle == h);   // ★[설치 전 검토 LOW] 모든 구역의 원지반
+            tr.Commit();
+            return same;
+        }
+        catch { return false; }
+    }
+
     private static void PickOne(string key, string what, string prompt, bool wantSurface)
     {
         var doc = AcadApp.DocumentManager.MdiActiveDocument;
@@ -723,14 +772,29 @@ public sealed class PickCommands
             }
 
             string name = what;
+            string closedNote = "";
             try
             {
                 using var tr = doc.Database.TransactionManager.StartTransaction();
                 var o = tr.GetObject(r.ObjectId, OpenMode.ForRead);
+                // ★[v117.15.1 · JACK 1112 «터파기선이나 계획부지 경계 선택할 때 닫힌 폴리곤 아니면 알아서 닫기»] 열린 폴리선 · 3D 폴리선 → 닫음
+                //   (끝점이 첫 점과 겹치면 겹친 끝점을 빼고 닫음 — 같은 점 두 번이 안 남게) · 피처라인은 닫기 속성이 없어 그대로(읽는 쪽 규칙)
+                if (!wantSurface) closedNote = CloseIfOpen(tr, o);
                 name = o is Autodesk.Civil.DatabaseServices.TinSurface ts ? ts.Name : Describe(tr, r.ObjectId, o);
                 tr.Commit();
             }
-            catch { }
+            catch (System.Exception cx) { try { DiagLog.Append($"\n[찍기] {what} 닫기 · 이름 읽기 실패 — {cx.Message}"); } catch { } }
+            if (closedNote.Length > 0) ed.WriteMessage($"\n[찍기] {what} — {closedNote}");
+
+            // ★[v117.16 · JACK 1112 «원지반 선택에서 정지면_DH가 골라져 터파기 오류» — 검토로 찾은 오류] 원지반 자리에 우리가 만든 면(«…_DH» — 정지면_DH ·
+            //   최종지표면_DH · 진입도로_DH 등)을 고르면 그 자리에서 거절(고르기 전 값 그대로). 종전엔 아무 말 없이 받아 [터파기 지표면 생성]에서야
+            //   «원지반과 계획지표면이 같은 면» 오류. 예외: 마지막 정지가 실제로 쓴 원지반(LandXML 원지반 이름이 정지면_DH인 도면 — GradingBuilder 주석)은 받음.
+            if (wantSurface && key == PickSession.KeyGround && SelfCheck.IsOurSurfaceName(name) && !IsLastGround(doc, r.ObjectId))
+            {
+                ed.WriteMessage($"\n[찍기] 원지반 아님 — «{name}»은 이 프로그램이 만든 면 → 부지 밖 원지반 지표면 클릭 · 비우면 자동(고른 것 그대로)");
+                try { DiagLog.Append($"\n[찍기] 원지반 거절 — {name}(우리 면 이름 · 마지막 정지의 원지반 아님)"); } catch { }
+                return;
+            }
 
             // ★★[검토 0909 · 높음] <b>지표면은 칠할 수 없다 — 칠했다고 말하지도 않는다.</b>
             //   <see cref="BoundaryReader"/>는 폴리선 셋만 읽고 그 외는 던진다. 그래서 지표면을 고를 때마다

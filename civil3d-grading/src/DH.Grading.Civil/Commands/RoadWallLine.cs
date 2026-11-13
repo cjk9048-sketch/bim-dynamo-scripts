@@ -21,6 +21,8 @@ internal static class RoadWallLine
         public RoadGrade.WallState? St; public RoadGrade.WallSurface? Ws;
         public List<Point3>? Bd, Band; public List<(string Name, IReadOnlyList<Point3> Ring)> Bl = new();
         public string Why = "";
+        /// <summary>★[v117.15 · JACK 1112 «잠시 멈춤»] 판정 준비 단계 시간 — 앞 선 옹벽 얹기 · 바깥 고리(ms · 준비 한 줄).</summary>
+        public long MsPrev, MsRing;
     }
 
     static List<(string Name, IReadOnlyList<Point3> Ring)> SiteBlockers(Autodesk.AutoCAD.DatabaseServices.Database db)
@@ -48,13 +50,16 @@ internal static class RoadWallLine
         t.Bl = SiteBlockers(doc.Database);
         var prev = inp.LineWalls.Where(w => w.No != exceptNo).ToList();
         var cur = p0;
+        var sw = System.Diagnostics.Stopwatch.StartNew();
         if (prev.Count > 0)
         {
             var ws0 = RoadGrade.ApplyWalls(inp, r, p0, lines, path, prev, t.Bl, ring: ring);
             cur = ws0.Tris;
             foreach (var w in ws0.Built) foreach (var z in w.Built!.ZoneF.Concat(w.Built.ZoneC)) t.Bl.Add(($"앞 선 옹벽 {w.No}의 바꿀 자리", z));
         }
+        t.MsPrev = sw.ElapsedMilliseconds;
         var (bd, band, holes, why2) = RoadGrade.OutlineOf(r, cur);
+        t.MsRing = sw.ElapsedMilliseconds - t.MsPrev;
         if (bd == null || band == null) { t.Why = why2; return t; }
         t.Bd = bd; t.Band = band; t.Bl.AddRange(holes);
         return t;
@@ -118,7 +123,7 @@ internal static class RoadWallLine
             SelfCheckLog.Line(Tag, b0.Ok, b0.SelfCheck, doc.Name);
             if (b0.Ok && b0.Profile != null) SelfCheckLog.Line(Tag, '✔', b0.Profile.Probe, doc.Name);
         }
-        if (t.St != null && !t.St.Ok) { try { DiagLog.AppendCarry($"\n  [{Tag}] 거절(기술) — {t.St.Code}: {t.St.Why}"); } catch { } return Stop(doc, WallEasy.Build(t.St.Code, t.St.Why)); }
+        if (t.St != null && !t.St.Ok) { try { DiagLog.AppendCarry($"\n  [{Tag}] 거절(기술) — {t.St.Code}: {t.St.Why}"); } catch { } return Stop(doc, WallEasy.Build(t.St.Code, t.St.Why, road: true)); }
         if (t.St == null) return Stop(doc, t.Why.Length > 0 ? t.Why : "못 지음");
         var st = t.St;
         var b = st.Built!;
@@ -182,7 +187,10 @@ internal static class RoadWallLine
     internal static bool Run(Document doc, RoadSession s)
     {
         var ed = doc.Editor;
+        // ★[v117.15 · JACK 1112 «진입도로 옹벽 추가 버튼 누르면 잠시 동안 프로그램이 멈춰»] 준비 단계 시간 한 줄(진단 로그) — 면 캐시 맞음/새로 · 바탕 · 토막 · 지문 · 면 · 앞 옹벽 · 고리
+        var swRun = System.Diagnostics.Stopwatch.StartNew(); s.P0Note = "면 안 셈";
         var ol = OutlineOf(doc, s);
+        try { DiagLog.Append($"\n[{Tag}] 준비 {swRun.ElapsedMilliseconds} ms — {s.P0Note} · 앞 옹벽 {s.Design.BoundWalls?.Count ?? 0}개 얹기 {ol.MsPrev} ms · 바깥 고리 {ol.MsRing} ms"); } catch { }
         if (ol.Bd == null || ol.Band == null) { ed.WriteMessage($"\n[{Tag}] {ol.Why} — 안 바뀜"); return false; }
         var bd = ol.Bd; var band = ol.Band; var bl = ol.Bl;
         var got = WallLineDraw.Run(doc, Tag, bd, band, pts => BoundaryCut.Classify(pts, bd, band, bl));
@@ -211,11 +219,11 @@ internal static class RoadWallLine
                 var more = new List<IReadOnlyList<Point3>>();
                 foreach (var z in b!.ZoneF.Concat(b.ZoneC)) more.Add(z.Append(z[0]).ToList());
                 more.AddRange(b.TierRows);
-                live = WallLineDraw.Show(b.Points.Select(q => (q.X, q.Y)).Concat(b.BreakAt), st!.Cut!.Line, mk, 2, more, 3);
+                live = WallLineDraw.Show(b.Points.Select(q => (q.X, q.Y)).Concat(b.BreakAt), st!.Cut!.Line, mk, WallLineDraw.GuideAci, more, 3);   // ★[v117.14.1 · JACK 1112] 그은 선 초록(옛 노랑 — 노리선과 헷갈림)
                 live.AddRange(WallLineDraw.Show(System.Array.Empty<(double, double)>(), null, mk, 2, b.Foot.Cast<IReadOnlyList<Point3>>(), 1));
             }
             else live = WallLineDraw.Show((st?.Cut?.Marks ?? new List<(double, double)>()).Concat(b?.Marks ?? new List<(double, double)>()), got.Cut.Line.Count >= 2 ? got.Cut.Line : got.Pts, mk);   // ★[v117.9.2] 거절 때도 경계 위 A..B 선(판정용 1 m 늘임은 안 보임)
-            string easyWhy = st != null && !st.Ok ? WallEasy.Build(st.Code, st.Why) : t.Why;
+            string easyWhy = st != null && !st.Ok ? WallEasy.Build(st.Code, st.Why, road: true) : t.Why;   // ★[v117.15] 진입도로 «끝 높이» = 도로 면 오차
             if (!ok && st != null && !st.Ok) { try { DiagLog.AppendCarry($"\n  [{Tag}] 거절(기술) — {st.Code}: {st.Why}"); } catch { } }
             // ★[v117.9.3 · JACK 1112 «침범했을 경우만 소단선 미리보기»] 다단 «자리» 거절 — 소단선(초록) · 바닥 침범 몫(빨강)
             var bb = !ok && st != null && !st.Ok ? st.Built : null;   // 다단 짓기 결과(실패도 실림 · 없으면 null)

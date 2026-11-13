@@ -389,16 +389,28 @@ internal static class WallLineFlow
         double slopeW = System.Math.Max(GradingSettings.MinSlope, 0), faceRun = p.MinFaceRun, grid = System.Math.Max(1.0, p.VertexSpacing), margin = System.Math.Max(0, GradingSettings.WallPolygonMargin);
         var rp = regF.Params;
         double hc = rp.BenchHeightOf(true), tc = rp.BenchWidthOf(true), hf = rp.BenchHeightOf(false), tf = rp.BenchWidthOf(false);
+        // ★[v117.15 · JACK 1112 «옹벽 추가 시 기본 단높이는 위 사면 설정의 절토 · 성토 값을 따라가게 — 별도로 바꾸기 전까지 · 절토부 성토부를 인식해서»]
+        //   다단 단높이 첫 값 = 정지 창 «사면 설정» 칸의 지금 값(절토 단높이 · 성토 단높이) — 종전 = 이 구역을 만들 때 쓴 값(만든 뒤 칸을 고치면 안 따라감).
+        //   절토 · 성토 가름은 Core(WallByLine.Tiered — 선이 오르면 절토 Hc · 내리면 성토 Hf) 그대로 · [단높이(H)]로 손 값을 주면 그 값(tH)이 이김.
+        //   다단에서 Hc · Hf는 단높이 첫 값으로만 쓴다(수직만은 안 씀 · 옛 소단 링은 다단 · 수직에서 건너뜀).
+        double uiHc = GradingSettings.CutBenchHeight, uiHf = GradingSettings.FillBenchHeight;
+        string hNote = "";
+        if (uiHc >= 0.5 && uiHc <= 30 && System.Math.Abs(uiHc - hc) > 1e-6) { hNote += $" 절토 {hc:0.##}→{uiHc:0.##}"; hc = uiHc; }
+        if (uiHf >= 0.5 && uiHf <= 30 && System.Math.Abs(uiHf - hf) > 1e-6) { hNote += $" 성토 {hf:0.##}→{uiHf:0.##}"; hf = uiHf; }
+        try { DiagLog.Append($"\n  [{Tag}] 단높이 첫 값 = 사면 설정 칸(절토 {hc:0.##} · 성토 {hf:0.##} m){(hNote.Length > 0 ? " · 구역 값과 다름:" + hNote : "")}"); } catch { }
         bool tierMode = true; double tH = double.NaN, tB = double.NaN, tZ = double.NaN;
         List<WallByLine.TierSec>? tSecs = null; bool tEnd = false;   // ★[v117.x A · B] 구간(승인 · 수동 — Z1 NaN = 그 구간 자동) · 끝 비탈
         WallByLine.WallShape shape = WallByLine.WallShape.Tiered;
         System.Func<double, double, double?> deltaAt = (x, y) => gC.TryGetElevation(x, y, out double gz) && pC.TryGetElevation(x, y, out double pz) ? gz - pz : null;
-        WallBenchPreview.Result? BenchPrev(BoundaryCut.Result c, int n = 0, double h = double.NaN, double bw = double.NaN) => !tierMode ? null : WallBenchPreview.Compute(new WallBenchPreview.Input
+        // ★[v117.14.1 · JACK 1112 «어디든 생기게»] 선 · 자를 자리 · 안쪽 부호 · 보일 길이(g)는 그리는 쪽(WallLineDraw)이 채움 — 여기는 면 · 단높이 · 소단폭만
+        WallBenchPreview.Result? BenchPrev(WallBenchPreview.Input g, int n = 0, double h = double.NaN, double bw = double.NaN)
         {
-            Line = c.Line, NewRing = c.NewRing, CutRing = c.CutRing, Plan = regF.Boundary, Delta = deltaAt, Hc = hc, Bc = tc, Hf = hf, Bf = tf, SlopeW = slopeW,
-            HOverride = double.IsNaN(h) ? tH : h, BOverride = double.IsNaN(bw) ? tB : bw, N = n,
-        });
-        var got = WallLineDraw.Run(doc, Tag, bdF, regF.Boundary, pts => BoundaryCut.Classify(pts, bdF, regF.Boundary, blF), c => BenchPrev(c));
+            if (!tierMode) return null;
+            g.Plan = regF.Boundary; g.Delta = deltaAt; g.Hc = hc; g.Bc = tc; g.Hf = hf; g.Bf = tf; g.SlopeW = slopeW;
+            g.HOverride = double.IsNaN(h) ? tH : h; g.BOverride = double.IsNaN(bw) ? tB : bw; g.N = n;
+            return WallBenchPreview.Compute(g);
+        }
+        var got = WallLineDraw.Run(doc, Tag, bdF, regF.Boundary, pts => BoundaryCut.Classify(pts, bdF, regF.Boundary, blF), tierMode ? g => BenchPrev(g) : null);   // ★[설치 전 검토 LOW] 수직만이면 미리보기 셈 안 함
         if (got == null) return;
         // ★★[v117.0 · JACK 1111 «선 그은 부분은 그냥 수직 1:0.01로 끝까지» · 계획 3절] 새로 그리는 부지 옹벽 = 수직 옹벽 — 묻는 것 없음([다시그리기(S)] · Enter = 적용).
         //   옛 «제원 절토(C) · 성토(F) · 천단(P)» 묻기는 없앰(소단 · 단높이 · 천단 계단이 없다) — 옛 기록(Shape 0)은 다시 짓기(Rebuild)에서 옛 모양 그대로
@@ -413,12 +425,13 @@ internal static class WallLineFlow
             // 미리보기 — 벽 띠 · 소단 자리(초록 3) · 안쪽 단 머리 줄(초록 3) · L(빨강 1) · 가름점 C · 바깥 단 끊김(빨간 X)
             bool tierUi = tierMode && b.Shape == 3;
             List<Autodesk.AutoCAD.DatabaseServices.Entity> live;
+            bool filled = false, filledHit = false;   // ★[v117.14.1] «자리» 거절 — 소단 해치 · 빨간 칠(ShowBench)을 그렸나 · 그중 침범 칠이 있나
             if (b.Ok)
             {
                 var more = new List<IReadOnlyList<Point3>>();
                 foreach (var z in b.ZoneF.Concat(b.ZoneC)) more.Add(z.Append(z[0]).ToList());
                 more.AddRange(b.TierRows);
-                live = WallLineDraw.Show(b.Points.Select(q => (q.X, q.Y)).Concat(b.BreakAt), got.Cut.Line, mk, 2, more, 3);
+                live = WallLineDraw.Show(b.Points.Select(q => (q.X, q.Y)).Concat(b.BreakAt), got.Cut.Line, mk, WallLineDraw.GuideAci, more, 8);   // ★[설치 전 검토 LOW] 띠 · 단 줄 회색 8(그은 선 초록과 가름)   // ★[v117.14.1 · JACK 1112] 그은 선 초록(옛 노랑 — 노리선과 헷갈림)
                 live.AddRange(WallLineDraw.Show(System.Array.Empty<(double, double)>(), null, mk, 2, b.Foot.Cast<IReadOnlyList<Point3>>(), 1));
                 // ★[v117.x A] 구간 경계(지은 구간 · 구간안) — 큰 X
                 if (b.TierSecMarks.Count > 0) live.AddRange(WallLineDraw.Show(b.TierSecMarks, null, mk * 2));   // ★[v117.14 · 검토 LOW] 구간안 X는 안 그림(구간나눔(P) 없앰 — 설명 없는 X가 남지 않게)
@@ -426,20 +439,23 @@ internal static class WallLineFlow
             else
             {
                 // ★[v117.14 · JACK 1112 «소단 예시도 해치와 텍스트로 · X자 말고 부지경계 침범 글»] «자리» 거절은 아래 소단 해치 · 글이 자리를 알려 주므로 X를 안 그린다(해치가 안 그려질 때만 X)
-                var bp = b.Code == "자리" ? BenchPrev(got.Cut, b.TierN, b.TierH, b.TierB) : null;
+                var bp = b.Code == "자리" ? BenchPrev(new WallBenchPreview.Input { Line = got.Cut.Line, NewRing = got.Cut.NewRing, CutRing = got.Cut.CutRing }, b.TierN, b.TierH, b.TierB) : null;
                 var bl2 = bp != null && (bp.Ok.Count + bp.Hit.Count) > 0 ? WallLineDraw.ShowBench(bp) : new List<Autodesk.AutoCAD.DatabaseServices.Entity>();
-                live = WallLineDraw.Show(bl2.Count > 0 ? System.Array.Empty<(double, double)>() : b.Marks, got.Cut.Line.Count >= 2 ? got.Cut.Line : got.Pts, mk);
+                filled = bl2.Count > 0; filledHit = filled && bp!.Hit.Count > 0;
+                try { live = WallLineDraw.Show(bl2.Count > 0 ? System.Array.Empty<(double, double)>() : b.Marks, got.Cut.Line.Count >= 2 ? got.Cut.Line : got.Pts, mk); }
+                catch { WallLineDraw.Drop(bl2); throw; }   // ★[설치 전 검토 LOW] 그리다 죽으면 빨간 칠이 화면에 남지 않게
                 live.AddRange(bl2);
             }   // ★[v117.9.2 · JACK 1112 «경계 밖으로 노란 선 길어짐»] 거절 때도 경계 위 A..B 선(판정용 1 m 늘임은 안 보임)
             if (!b.Ok) { try { DiagLog.AppendCarry($"\n  [{Tag}] 거절(기술) — {b.Code}: {b.Why}"); } catch { } }
             // ★[v117.9.3 · JACK 1112 «침범했을 경우만 소단선 미리보기 — 소단선이 그 선 위에 보이면서 침범하는 걸»] 다단 «자리» 거절 — 소단선(초록) · 부지 바닥 침범 몫(빨강)
-            bool benchHit = !b.Ok && b.TierBenchHit.Count > 0;
+            // ★[v117.14.1 · JACK 1112 «지금은 그냥 빨간선만 나오고 X»] 칠 · 해치를 그렸으면 빨간 · 초록 소단선은 안 그림(같은 자리를 칠이 보여 줌) — 못 그렸을 때만 종전 소단선
+            bool benchHit = !b.Ok && b.TierBenchHit.Count > 0 && !filled;
             if (benchHit)
             {
                 live.AddRange(WallLineDraw.Show(System.Array.Empty<(double, double)>(), null, mk, 2, b.TierBenchOk, 3));
                 live.AddRange(WallLineDraw.Show(System.Array.Empty<(double, double)>(), null, mk, 2, b.TierBenchHit, 1));
             }
-            string spec = !b.Ok ? $"〈⚠{WallEasy.Build(b.Code, b.Why)}{(benchHit ? " · 빨간 소단선 = 부지 침범 자리" : "")}〉"
+            string spec = !b.Ok ? $"〈⚠{WallEasy.Build(b.Code, b.Why)}{(filledHit ? " · 빨간 해치 = 부지 침범" : benchHit ? " · 빨간 소단선 = 부지 침범 자리" : "")}〉"
                 : b.Shape == 3 ? string.Format(ic, "〈다단 {0}단 · 단높이 {1:0.##} · 소단 {2:0.##} · 바깥 최고 {3:F2} m{4}〉", b.TierN, b.TierH, b.TierB,
                     b.OuterHMax, (b.BreakN > 0 ? string.Format(ic, " · 끊김 {0}곳 → 선을 둘로 나눠 그리기 권함", b.BreakN) : "")
                     + (b.TierSecsUsed.Count >= 2 ? string.Format(ic, " · 구간 {0}(저장된 구간)", b.TierSecsUsed.Count) : "") + (b.TierEnd ? " · 끝 비탈" : ""))   // ★[v117.14 · JACK 1112 «수동구간 · 구간나눔 · 한구간 · 첫소단 — 안 쓰면 없애 · 복잡하면 어려워져»] 구간 · 첫 소단 글 뺌
@@ -468,7 +484,7 @@ internal static class WallLineFlow
             string kw = r.Status == PromptStatus.None ? "" : (r.StringResult ?? "").Trim().ToUpperInvariant();
             if (kw == "S")
             {
-                var g2 = WallLineDraw.Run(doc, Tag, bdF, regF.Boundary, pts => BoundaryCut.Classify(pts, bdF, regF.Boundary, blF), c => BenchPrev(c));
+                var g2 = WallLineDraw.Run(doc, Tag, bdF, regF.Boundary, pts => BoundaryCut.Classify(pts, bdF, regF.Boundary, blF), g => BenchPrev(g));
                 if (g2 == null) return;
                 got = g2;
                 b = Geo();
@@ -585,7 +601,7 @@ internal static class WallLineFlow
             if (lo.Length > 0 && lo != ln) drift += (drift.Length > 0 ? " · " : "") + $"⚠옹벽 {w.No} 모양 바뀜(소단 {lo} → {ln})";
         }
         string moved = WallByLine.SamePlace(w, cut);
-        if (moved.Length > 0) return "폴리선 옹벽 자리가 움직였다 — " + moved + " → [옹벽→사면]으로 되돌리기 · 또는 다시 그리기";
+        if (moved.Length > 0) return "폴리선 옹벽 자리가 움직였다 — " + moved + " → [사면 변환]으로 되돌리기 · 또는 다시 그리기";
         var er = WallTags.Erase(db, tr, (n, r) => n == w.No && (r.Length == 0 || r == region), false, groundId);
         var (wh, blk, note) = BuildSurface(db, tr, b, w.No, region, groundId);
         if (wh.Length == 0) return note;

@@ -443,9 +443,9 @@ static class ZoneBlendCheck
                 return best;
             }
             GradingGeometry.Build(sq, ng, pr, false, zs);
-            GradingGeometry.BandEvalCount = 0; GradingGeometry.BandRunTicks = 0; GradingGeometry.DistOfCount = 0; GradingGeometry.BoundaryFallback = 0; GradingGeometry.RunCount = 0;
+            GradingGeometry.BandEvalCount = 0; GradingGeometry.BandRunTicks = 0; GradingGeometry.DistOfCount = 0; GradingGeometry.BoundaryFallback = 0; GradingGeometry.RunCount = 0; GradingGeometry.BandDaylightTicks = 0; GradingGeometry.BandTestTicks = 0;
             var swX = System.Diagnostics.Stopwatch.StartNew(); GradingGeometry.Build(sq, ng, pr, false, zs); swX.Stop();
-            Console.WriteLine($"      S161 계측 — Build {swX.ElapsedMilliseconds}ms · DistOf {GradingGeometry.DistOfCount}회 · 민 토막 셈 {GradingGeometry.BandEvalCount}회 · 민 토막 시간 {GradingGeometry.BandRunTicks * 1000.0 / System.Diagnostics.Stopwatch.Frequency:F0}ms · 토막 {GradingGeometry.RunCount} · 띠 끝 반씩 좁히기 {GradingGeometry.BoundaryFallback}회");
+            Console.WriteLine($"      S161 계측 — Build {swX.ElapsedMilliseconds}ms · DistOf {GradingGeometry.DistOfCount}회 · 민 토막 셈 {GradingGeometry.BandEvalCount}회 · 민 토막 시간 {GradingGeometry.BandRunTicks * 1000.0 / System.Diagnostics.Stopwatch.Frequency:F0}ms · 토막 {GradingGeometry.RunCount} · 띠 끝 반씩 좁히기 {GradingGeometry.BoundaryFallback}회 · 띠 면 데이라잇 {GradingGeometry.BandDaylightTicks * 1000.0 / System.Diagnostics.Stopwatch.Frequency:F0}ms(띠 자리 판정 {GradingGeometry.BandTestTicks * 1000.0 / System.Diagnostics.Stopwatch.Frequency:F0}ms)");
             GradingGeometry.DistOfCount = 0;
             var swY = System.Diagnostics.Stopwatch.StartNew(); GradingGeometry.Build(sq, ng, P(0, maxB: 30, maxRise: 47), false, zs); swY.Stop();
             Console.WriteLine($"      S161 계측 — 띠 없이 Build {swY.ElapsedMilliseconds}ms · DistOf {GradingGeometry.DistOfCount}회");
@@ -461,6 +461,7 @@ static class ZoneBlendCheck
             check("S161 ⑨사면 구간 16개 · 띠 10m — 같은 판 띠 없음(L=0)의 1.3배 안", t16 <= t16o * 1.3, $"{t16}ms vs 띠 없이 {t16o}ms");
             check("S161 ⑨' 그 판의 «그 밖» 이음 0", vT.JumpsOther == 0, $"{vT.JumpsOther}{(vT.JumpOtherAt is { } jt ? $" @({jt.X:F2},{jt.Y:F2})" : "")}");
         }
+        BandTeethCheck.Run(check0);   // ★[v117.15 · JACK 1112 «톱니»] ⑩ 띠 면 정확한 데이라잇
     }
 
     static double W(double v, double tot) { v %= tot; return v < 0 ? v + tot : v; }
