@@ -80,6 +80,7 @@ internal sealed class RoadPanel : UserControl
         top.Children.Add(head);
         // ★[v117.17 · JACK 1112 «모든 도킹팝업창 맨 위 = 설명 애니메이션 칸»] 진입도로 창도 정지 · 종횡단도 · 터파기 창처럼 로고 아래 고정 틀(옛: ■ 옹벽 칸 오른쪽 작은 칸)
         _demo = new FixDemoView("칸 · 단추에 마우스 → 설명", "add");
+        _demo.RoadSrc = RoadParams;   // ★[v117.18.2 · JACK 1116] 횡단 · 포장 · 사면 · 노선 장면은 지금 창 값으로
         top.Children.Add(DemoFrame.Wrap("Road", _demo));
         top.Children.Add(_title);
         top.Children.Add(_note);
@@ -154,7 +155,7 @@ internal sealed class RoadPanel : UserControl
         paveRow.Children.Add(new TextBlock { Text = "종류", FontSize = 11, Foreground = DhBrand.Sub, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0) });
         _paveKind = new ComboBox { Width = 96, Height = 26, ToolTip = "횡단도 포장 층 · 3D 질감 — 도로 면 · 토공은 그대로 · 두께 첫 값은 예시" };
         foreach (var k in new[] { "아스팔트", "콘크리트" }) _paveKind.Items.Add(k);
-        _paveKind.SelectionChanged += (_, __) => PaveKindChanged();
+        _paveKind.SelectionChanged += (_, __) => { PaveKindChanged(); _demo?.RedrawHeld(); };
         paveRow.Children.Add(_paveKind);
         _host.Children.Add(paveRow);
         var hostP = _host;
@@ -586,7 +587,23 @@ internal sealed class RoadPanel : UserControl
 
     static bool Busy(Autodesk.AutoCAD.ApplicationServices.Document doc) { try { return !string.IsNullOrEmpty(doc.CommandInProgress); } catch { return false; } }
 
-    void Commit()
+    void Commit() { CommitCore(); _demo?.RedrawHeld(); }   // 값이 바뀌면 멈춘 끝 그림만 새 값으로(되감기 없음)
+
+    /// <summary>예시 장면이 읽는 지금 값 — 열린 도로 설계 · 없으면 새 도로 값.</summary>
+    RoadDemoParams? RoadParams()
+    {
+        var doc = AcadApp.DocumentManager.MdiActiveDocument;
+        var d = _s?.Design ?? (doc != null ? DraftOf(doc) : null);
+        if (d == null) return null;
+        return new RoadDemoParams
+        {
+            CurveR = d.CurveR, HalfL = d.HalfL, HalfR = d.HalfR, CrossSlope = d.CrossSlope, ShoulderL = d.ShoulderL, ShoulderR = d.ShoulderR, ShoulderSlope = d.ShoulderSlope,
+            PaveKind = d.PaveKind, PaveA = d.PaveA, PaveC = d.PaveC, JointGap = d.JointGap,
+            CutSlope = d.CutSlope, CutBenchH = d.CutBenchH, CutBenchW = d.CutBenchW, FillSlope = d.FillSlope, FillBenchH = d.FillBenchH, FillBenchW = d.FillBenchW,
+        };
+    }
+
+    void CommitCore()
     {
         if (_loading) return;
         if (_s == null)
@@ -683,7 +700,9 @@ internal sealed class RoadPanel : UserControl
         return t;
     }
 
-    internal void Show(RoadSession? s)
+    internal void Show(RoadSession? s) { ShowCore(s); _demo?.RedrawHeld(); }
+
+    void ShowCore(RoadSession? s)
     {
         bool same = ReferenceEquals(s, _s);
         _s = s;

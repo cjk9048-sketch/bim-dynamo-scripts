@@ -29,11 +29,16 @@ internal sealed class ExcavPanel : UserControl
     /// <summary>★[v117.15 · JACK 1112 «단추마다 예시 구체적으로»] 단추를 감싼 테두리(꺼진 단추도 마우스를 받아 예시를 돌림).</summary>
     private readonly Border _pickHit, _pickGroundHit;
     private readonly System.Collections.Generic.List<Border> _wallHits = new();
-    private readonly Button _toWall, _toPart, _toSlope, _clearWall, _update, _reset;
+    private readonly Button _toPart, _toSlope, _clearWall, _update, _reset;
     /// <summary>★[v117.18] 구배 칸을 사람이 고쳤나 — 고쳤으면 도면 기록이 칸을 되덮지 않는다(고친 값 ≠ 만든 값 → [업데이트]가 깜박). 만들기 · 업데이트를 누르면 풀림.</summary>
     private bool _slopeEdited;
     private readonly TextBlock _pickWhat, _groundWhat, _status, _said, _baseHint;
     private readonly TextBox _slope;
+    // ★[v117.18.2 · JACK 1116 «굴착 구배 옆 체크박스로 가시설»] 켜면 구배 = 하한(0.01 = 엔진의 «수직») · 칸 꺼짐 · ④ 가시설 구간 도구 꺼짐 · 끄면 옛 값 복원
+    private CheckBox _wallChk = null!;
+    private TextBlock _wallNote = null!;
+    private string _prevSlopeText = "0.5";
+    private bool _chkSync;
 
     /// <summary>★[JACK 0910] 이 창의 <b>아코디언 묶음 이름</b> — 네 칸이 한 묶음이라 한 번에 하나만 열린다.
     /// 정지 창과 <b>다른 이름</b>이어야 서로를 닫지 않는다.</summary>
@@ -128,8 +133,8 @@ internal sealed class ExcavPanel : UserControl
         // ★[v117.18 · JACK 1116 «기준면을 선택했는데 대상에서 또 원지반을 선택해줘야 해?»] 원지반은 기준면 칸 안에 한 줄 — 자동(면 이름) · [바꾸기]
         //   (자동 = 기록 · 마지막 정지에 쓴 지반 — 못 찾을 때만 [바꾸기]로 고른다. 세션 핸들 하나에 기대지 않음 — 검토 0909)
         var gRow = new DockPanel { Margin = new Thickness(0, 0, 0, 8), LastChildFill = true };
-        _pickGround = new Button { Content = "바꾸기", MinWidth = 70, Height = 26 };
-        _pickGround.ToolTip = "비워 두면 마지막 정지에 쓴 지반을 자동으로 씁니다 — 못 찾으면 여기서 고르세요.";
+        _pickGround = new Button { Content = "원지반 선택", MinWidth = 90, Height = 26 };
+        _pickGround.ToolTip = "원지반을 자동으로 못 찾았습니다 — 부지 밖 원지반 지표면을 고르세요.";
         _pickGround.Click += (_, __) => PickSession.Send(Doc, PickCommands.CmdGround);
         _pickGroundHit = new Border { Background = Brushes.Transparent, Child = _pickGround };
         DockPanel.SetDock(_pickGroundHit, Dock.Right);
@@ -169,6 +174,10 @@ internal sealed class ExcavPanel : UserControl
             open: false, key: "터파기:3.굴착", group: G);
         _slope = GradingDialog.AddRow(secDig, "굴착 구배  1 :", Commands.ExcavCommand.Slope, "");
         _slope.ToolTip = "0을 넣으면 수직(가시설)입니다. 너무 작은 값은 자동으로 하한으로 올립니다.";
+        _wallChk = new CheckBox { Content = "가시설", Margin = new Thickness(12, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center, ToolTip = "둘레 전체 수직(1 : 0.01) — 구배 안 씀" };
+        if (_slope.Parent is DockPanel slopeRow) { DockPanel.SetDock(_wallChk, Dock.Left); slopeRow.Children.Add(_wallChk); }
+        _wallChk.Checked += (_, __) => OnWallChk(true);
+        _wallChk.Unchecked += (_, __) => OnWallChk(false);
         // ★★★[검토 0910 · 높음1] <b>구배가 틀렸다는 말은 구배 칸 옆에 있어야 한다.</b>
         //   <para>종전엔 그 문구를 <c>_baseHint</c>에 썼는데, 칸 접기가 생기면서 그것이
         //   <c>1. 터파기 기준면</c> <b>안</b>으로 들어갔다. 구배를 치려면 <c>3. 굴착</c>을 펼쳐야 하고,
@@ -218,7 +227,7 @@ internal sealed class ExcavPanel : UserControl
         //       (종단 막대 끝이 다르고 밴드 표기가 다르다) 섞으면 종단면도가 틀리게 그려진다.
         //     ★<b>소단·대소단·라운드·옹벽형태는 없다</b>(JACK 지시 11~13).
         var secWall = GradingDialog.AddCollapsible(root, "4. 가시설", out var wallBadge,
-            "터파기선 클릭 → 둘레 전체 수직(흙막이) · 일부만은 [부분 변환]",   // ★[v117.16 · JACK 1112 «직접 노선상에서 선택»]
+            "일부 구간만 수직(흙막이) — 전체는 ③ 가시설",   // ★[v117.16 · JACK 1112 «직접 노선상에서 선택»]
             open: false, key: "터파기:4.가시설", group: G);
         var wRow = new WrapPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 6) };
         Button WBtn(string t, string cmd, string tip)
@@ -230,14 +239,14 @@ internal sealed class ExcavPanel : UserControl
             _wallHits.Add(hit);
             return b;
         }
-        _toWall = WBtn("가시설 변환", "DHEXCAVWALLALL",
-            "터파기 경계선 클릭 → 그 구조물 둘레 전체가 수직(흙막이)");
         _toPart = WBtn("부분 변환", "DHEXCAVWALL",
             "시작점 → 둘레 따라 끝점 → 날개 → 그 구간 수직(흙막이) · Esc(날개) = 날개 자동");   // ★[v117.16 · JACK 1112]
         _toSlope = WBtn("사면 변환", "DHEXCAVSLOPE",
             "가시설 구간에 커서 → 빨강 → 클릭 → 그 구간 다시 사면");   // ★[v117.16 · JACK 1112]
         _clearWall = WBtn("전체 해제", "DHEXCAVWALLCLEAR",
             "이 도면의 가시설 구간을 전부 지우고 순수 사면으로 다시 만듭니다.");
+        _wallNote = new TextBlock { Text = "③ 가시설 체크 중 — 전부 수직", FontSize = 11, Foreground = DhBrand.Warn, Margin = new Thickness(0, 0, 0, 6), Visibility = Visibility.Collapsed };
+        secWall.Children.Add(_wallNote);
         secWall.Children.Add(wRow);
         secWall.Children.Add(new TextBlock
         {
@@ -270,11 +279,18 @@ internal sealed class ExcavPanel : UserControl
         void Hook(FrameworkElement? fe, string key) { if (fe == null) return; fe.MouseEnter += (_, __) => demo.Play(key); fe.MouseLeave += (_, __) => demo.Idle(); }
         static FrameworkElement? HeadOf(TextBlock badge) => (badge.Parent as FrameworkElement)?.Parent as FrameworkElement;   // 요약칸 → 머리 줄 → 머리(누르는 자리)
         // ★[v117.15.1 · JACK 1112 «각 선택 단추에 맞춰서»] 칸 = 지금 고른 기준면 장면 · 라디오에 올리면 그 쪽 · 고르면 그 쪽
-        void HookBase(FrameworkElement? fe) { if (fe == null) return; fe.MouseEnter += (_, __) => demo.Play("exBaseWhy"); fe.MouseLeave += (_, __) => demo.Idle(); }
-        // ★[v117.18 · JACK 1116 «왜 기준면 선택이 필요한지 — 종단 · 횡단 · 토공»] 칸 제목 · 칸 = 비교 장면(exBaseWhy) · 라디오 = 그 기준 · 라디오를 벗어나면 비교 장면
+        string BaseKey() => _baseGround.IsChecked == true ? "exBaseGround" : "exBasePlan";   // 지금 고른 기준면의 제 장면
+        // ★[v117.18.2 · JACK 1116 «눌러서 선택해야만 나와 — 위에 올렸을 때 나오게»] 원인: 라디오가 꺼져 있으면(정지 전 · 작업 중) 그 위 MouseEnter가 안 와서 고른 뒤에야 바뀜 → 칸 전체에서 마우스 위치로 라디오를 직접 판정
+        void PlayIfChanged(string k) { if (demo.PlayKey != k || !demo.Playing) demo.Play(k); }
+        bool OverBase(RadioButton r, System.Windows.Input.MouseEventArgs e) { try { var p = e.GetPosition(r); return p.X >= 0 && p.Y >= 0 && p.X <= r.ActualWidth && p.Y <= r.ActualHeight; } catch { return false; } }
+        void HookBase(FrameworkElement? fe) { if (fe == null) return; fe.MouseEnter += (_, __) => PlayIfChanged(BaseKey()); fe.MouseLeave += (_, __) => demo.Idle(); }
         HookBase(HeadOf(_baseBadge)); HookBase(secBase);
-        _basePlan.MouseEnter += (_, __) => demo.Play("exBasePlan"); _basePlan.MouseLeave += (_, __) => demo.Play("exBaseWhy");
-        _baseGround.MouseEnter += (_, __) => demo.Play("exBaseGround"); _baseGround.MouseLeave += (_, __) => demo.Play("exBaseWhy");
+        secBase.PreviewMouseMove += (_, e) =>
+        {
+            if (OverBase(_basePlan, e)) PlayIfChanged("exBasePlan");
+            else if (OverBase(_baseGround, e)) PlayIfChanged("exBaseGround");
+            else if ((demo.PlayKey == "exBasePlan" || demo.PlayKey == "exBaseGround") && demo.PlayKey != BaseKey()) demo.Play(BaseKey());   // 라디오를 벗어남 → 고른 기준 장면(원지반 선택 단추 등 다른 장면은 건드리지 않음)
+        };
         // 고를 때만(도면 값으로 채울 때 저절로 돌지 않게 — 마우스 · 키보드가 그 단추에 있을 때)
         _basePlan.Checked += (_, __) => { if (_basePlan.IsMouseOver || _basePlan.IsKeyboardFocusWithin) demo.Play("exBasePlan"); };
         _baseGround.Checked += (_, __) => { if (_baseGround.IsMouseOver || _baseGround.IsKeyboardFocusWithin) demo.Play("exBaseGround"); };
@@ -282,10 +298,11 @@ internal sealed class ExcavPanel : UserControl
         Hook(HeadOf(wallBadge), "exWall"); Hook(secWall, "exWall");
         // ★[v117.15 · JACK 1112 «사면 수정 부분도 다 똑같아 — 좀 구체적으로»] 단추마다 제 장면 · 단추를 벗어나면(칸 안) 칸 장면으로
         void HookBtn(FrameworkElement? fe, string key, string back) { if (fe == null) return; fe.MouseEnter += (_, __) => demo.Play(key); fe.MouseLeave += (_, __) => demo.Play(back); }
-        HookBtn(_pickHit, "exPick", "exTarget"); HookBtn(_pickGroundHit, "exGround", "exBaseWhy");
+        HookBtn(_pickHit, "exPick", "exTarget"); HookBtn(_pickGroundHit, "exGround", "exBasePlan");
         Hook(HeadOf(_digBadge), "exSlope"); Hook(secDig, "exSlope");
+        HookBtn(_wallChk, "exWallChk", "exSlope");
         HookBtn(resetHit, "exReset", "exReset");
-        string[] wKeys = { "exToWallAll", "exToWall", "exToSlope", "exClear" };
+        string[] wKeys = { "exToWall", "exToSlope", "exClear" };
         for (int wi = 0; wi < _wallHits.Count && wi < wKeys.Length; wi++) HookBtn(_wallHits[wi], wKeys[wi], "exWall");
         top.Children.Add(DemoFrame.Wrap("Excav", demo));   // ★[v117.14.1 · JACK 1112 «설명 애니메이션은 도킹박스 안에서 크기가 같아야»] 고정 틀
         DockPanel.SetDock(top, Dock.Top);
@@ -321,6 +338,7 @@ internal sealed class ExcavPanel : UserControl
         try
         {
             _slope.Text = Commands.ExcavCommand.Slope.ToString(CultureInfo.InvariantCulture);
+            SetWallChk(Commands.ExcavCommand.Slope <= GradingSettings.MinSlope + 1e-9);
 
             // ★★★[검토 0909 · 치명] <b>덮는 경우를 좁힌다.</b>
             //   ① 도면이 <b>정말 바뀌었으면</b> 그 도면 값으로 맞춘다(맞는 동작).
@@ -431,6 +449,7 @@ internal sealed class ExcavPanel : UserControl
         double sl = ReadSlopeFromDrawing(doc);
         if (sl < 0) return;
         string t = sl.ToString("0.###");
+        SetWallChk(sl <= GradingSettings.MinSlope + 1e-9);   // 도면 기록이 수직이면 체크
         if (_slope.Text == t) return;
         _loading = true;
         try { _slope.Text = t; Commands.ExcavCommand.Slope = sl; }
@@ -455,6 +474,31 @@ internal sealed class ExcavPanel : UserControl
     /// <para>종전엔 못 읽으면 <b>조용히 버렸다</b> — 화면엔 친 글자가 있는데 실제로는 옛 값으로 팠다.
     /// 리본 쪽은 <i>"0~30 범위여야 합니다"</i>라고 말해 준다.</para></summary>
     private bool _slopeOk = true;
+
+    /// <summary>도면 기록 · 불러오기로 체크를 맞춘다(옛 값 복원 · 구배 덮어쓰기 없음).</summary>
+    private void SetWallChk(bool on)
+    {
+        if (_wallChk.IsChecked == on) { _slope.IsEnabled = !on; return; }
+        _chkSync = true;
+        try { _wallChk.IsChecked = on; _slope.IsEnabled = !on; }
+        finally { _chkSync = false; }
+    }
+
+    /// <summary>사람이 체크 · 해제 — 켜면 구배 0.01(엔진 하한)로 잠그고 옛 값을 기억 · 끄면 되돌림.</summary>
+    private void OnWallChk(bool on)
+    {
+        if (_chkSync) return;
+        if (on)
+        {
+            string cur = (_slope.Text ?? "").Trim();
+            if (cur.Length > 0 && cur != GradingSettings.MinSlope.ToString(CultureInfo.InvariantCulture)) _prevSlopeText = cur;
+            _slope.Text = GradingSettings.MinSlope.ToString(CultureInfo.InvariantCulture);
+        }
+        else _slope.Text = _prevSlopeText;
+        _slope.IsEnabled = !on;
+        _slopeEdited = true;
+        PushSlope();   // 글이 안 바뀐 경우도 값 · 화면을 맞춘다
+    }
 
     private void PushSlope()
     {
@@ -515,8 +559,14 @@ internal sealed class ExcavPanel : UserControl
             var g = doc == null ? null : PickSession.Peek(doc, PickSession.KeyGround);
             // ★[v117.18] «원지반: 자동(면 이름)» · 직접 골랐으면 «원지반: ● 이름» — 이름은 기록 → 마지막 정지 지반 차례로(읽기만 · busy가 아닐 때)
             string autoName = busy ? "" : AutoGroundName(doc);
-            _groundWhat.Text = g != null ? "원지반: ● " + g.What : "원지반: 자동" + (autoName.Length > 0 ? "(" + autoName + ")" : "(마지막 정지 지반)");
-            _groundWhat.Foreground = g != null ? DhBrand.Brand : DhBrand.Sub;
+            // ★[v117.18.2 · JACK 1116 «바꾸기가 더 헷갈려 — 평소엔 숨김»] 이름만 «(자동)» · 못 찾을 때만 [원지반 선택]
+            bool found = g != null || autoName.Length > 0;
+            if (!busy)
+            {
+                _groundWhat.Text = g != null ? "원지반: ● " + g.What : found ? "원지반: " + autoName + " (자동)" : "⚠ 원지반 못 찾음 →";
+                _groundWhat.Foreground = g != null ? DhBrand.Brand : found ? DhBrand.Sub : Brushes.OrangeRed;
+                _pickGroundHit.Visibility = found ? Visibility.Collapsed : Visibility.Visible;
+            }
 
             _pick.IsEnabled = !busy;
             _pickGround.IsEnabled = !busy;
@@ -526,10 +576,11 @@ internal sealed class ExcavPanel : UserControl
             _build.IsEnabled = !busy && has && _slopeOk;
             // 가시설 구간은 <b>이미 만든 터파기</b>가 있어야 고칠 수 있다.
             bool madeAny = doc != null && HasExcav(doc);
-            _toWall.IsEnabled = !busy && madeAny;
-            _toPart.IsEnabled = !busy && madeAny;
-            _toSlope.IsEnabled = !busy && madeAny;
-            _clearWall.IsEnabled = !busy && madeAny;
+            bool vertAll = _wallChk.IsChecked == true;   // ③ 가시설 체크 중 — 전부 수직이라 구간 도구는 쉼
+            _wallNote.Visibility = vertAll ? Visibility.Visible : Visibility.Collapsed;
+            _toPart.IsEnabled = !busy && madeAny && !vertAll;
+            _toSlope.IsEnabled = !busy && madeAny && !vertAll;
+            _clearWall.IsEnabled = !busy && madeAny && !vertAll;
             // ★★★[3차 검토 0909 · 치명2] <b>명령이 도는 중에는 안 비춘다.</b>
             //   <c>Refresh</c>는 <c>PickSession.Changed</c> 구독자인데, <c>Begin()</c>이 그것을 쏜다 —
             //   즉 <b>[생성]을 누르는 그 순간</b> 방금 친 구배가 옛 기록값으로 되돌아가

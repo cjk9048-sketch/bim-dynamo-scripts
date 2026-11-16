@@ -1188,13 +1188,19 @@ public class RoadCommand
             Hilite(db, planId, true);
             int done = 0;
             bool was = s.Suppress; s.Suppress = true;   // 우리가 쓰는 동안 바뀜 표시 막음 — 끝에서 한 번 다시 계산
+            // ★[v117.18.1 · JACK 1116 스샷] 찍는 동안 PVI 자리를 그립 꼴로 그림(명령 중엔 AutoCAD가 그립을 안 그림) — 넣고 · 지울 때마다 다시 읽음
+            System.Collections.Generic.List<(Point3d P, bool End)> marks = new();
+            void ReadMarks() { try { using var trm = db.TransactionManager.StartTransaction(); marks = PviMarks(trm, s); trm.Commit(); } catch { } }
+            ReadMarks();
             try
             {
                 while (true)
                 {
-                    var pr = ed.GetPoint(new PromptPointOptions(add
-                        ? "\n[PVI 넣기] 넣을 자리 — 종단도 안을 찍으세요(지금 계획선 위에 넣음 · Enter 끝): "
-                        : "\n[PVI 지우기] 지울 PVI 근처를 찍으세요(종단도 안 · Enter 끝): ") { AllowNone = true });
+                    var ppo = new PromptPointOptions(add
+                        ? "\n[PVI 넣기] 넣을 자리 — 종단도 안 클릭(지금 계획선 위 · Enter 끝): "
+                        : "\n[PVI 지우기] 지울 PVI 클릭(종단도 안 · Enter 끝): ") { AllowNone = true };
+                    var pr = CursorLabel.GetPoint(ed, ppo, add ? "PVI 넣을 자리 클릭" : "지울 PVI 클릭",
+                        extra: (wd, cur, has) => DrawPviMarks(wd, marks, cur, has, !add));
                     if (pr.Status != PromptStatus.OK) break;
                     var p = pr.Value.TransformBy(ed.CurrentUserCoordinateSystem);
                     string msg;
@@ -1207,7 +1213,7 @@ public class RoadCommand
                     }
                     catch (System.Exception exP) { msg = "⚠못 함 — " + exP.Message; }
                     ed.WriteMessage($"\n{tag} {msg}");
-                    if (!msg.StartsWith("⚠")) done++;
+                    if (!msg.StartsWith("⚠")) { done++; ReadMarks(); }
                 }
             }
             finally
@@ -1309,6 +1315,82 @@ public class RoadCommand
         return null;
     }
 
+    /// <summary>★[v117.18.1 · JACK 1116 스샷 «PVI 넣기나 지우기를 눌렀을 때 기즈모가 보이게 선택되어야 하는데 그냥 종단선만 선택돼 — 기존 기즈모를 못 보는 상태에서 추가하다 보니 어려워»]
+    /// 원인: 찍는 동안엔 강조(Hilite)만 · 골라 두기(SetImpliedSelection)는 명령 끝에서만 — 명령이 도는 동안 AutoCAD는 그립을 안 그린다.
+    /// → 이 도로 종단뷰마다 계획 종단 PVI 자리(도면 XY) · 처음 · 끝 표시.</summary>
+    static System.Collections.Generic.List<(Point3d P, bool End)> PviMarks(Transaction tr, RoadSession s)
+    {
+        var o = new System.Collections.Generic.List<(Point3d, bool)>();
+        if (s.PlanId.IsNull || s.PlanId.IsErased) return o;
+        var prof = (CivilDb.Profile)tr.GetObject(s.PlanId, OpenMode.ForRead);
+        var al = (CivilDb.Alignment)tr.GetObject(s.AlignId, OpenMode.ForRead);
+        int n = prof.PVIs.Count;
+        foreach (ObjectId vid in al.GetProfileViewIds())
+        {
+            try
+            {
+                if (tr.GetObject(vid, OpenMode.ForRead) is not CivilDb.ProfileView pv) continue;
+                for (int i = 0; i < n; i++)
+                {
+                    var q = prof.PVIs[i];
+                    if (q.RawStation < pv.StationStart - 1e-6 || q.RawStation > pv.StationEnd + 1e-6) continue;
+                    double x = 0, y = 0;
+                    try { if (!pv.FindXYAtStationAndElevation(q.RawStation, q.Elevation, ref x, ref y)) continue; } catch { continue; }
+                    o.Add((new Point3d(x, y, 0), i == 0 || i == n - 1));
+                }
+            }
+            catch { }
+        }
+        return o;
+    }
+
+    /// <summary>★[v117.18.1] PVI 자리를 Civil 그립 꼴(청록 네모 · 화면 10 px)로 — 지우기면 커서 곁(화면 15 px — <see cref="PviDelAt"/>과 같은 허용) PVI를 빨강으로 키움 · 처음 · 끝은 회색(못 지움).
+    /// 지그 면 채우기는 반투명이라 가로선으로 채움(<see cref="CursorLabel"/>과 같은 방법).</summary>
+    static void DrawPviMarks(Autodesk.AutoCAD.GraphicsInterface.WorldDraw wd, System.Collections.Generic.List<(Point3d P, bool End)> marks, Point3d cur, bool has, bool del)
+    {
+        if (marks.Count == 0) return;
+        double u = CursorLabel.PixelUnit(), h = 5 * u;
+        int hot = -1;
+        if (del && has)
+        {
+            double bd = double.MaxValue;
+            for (int i = 0; i < marks.Count; i++) { double d = new Point2d(marks[i].P.X, marks[i].P.Y).GetDistanceTo(new Point2d(cur.X, cur.Y)); if (d < bd) { bd = d; hot = i; } }
+            if (bd > PviPickTol()) hot = -1;   // 지우기와 같은 허용 — 빨강 = 실제로 지워질 PVI
+        }
+        var t = wd.SubEntityTraits;
+        t.FillType = Autodesk.AutoCAD.GraphicsInterface.FillType.FillNever;
+        var cyan = new Autodesk.AutoCAD.Colors.EntityColor(0, 220, 230);
+        var red = new Autodesk.AutoCAD.Colors.EntityColor(235, 60, 50);
+        var grey = new Autodesk.AutoCAD.Colors.EntityColor(150, 150, 150);
+        var edge = new Autodesk.AutoCAD.Colors.EntityColor(20, 40, 60);
+        double step = System.Math.Max(u * 0.45, 1e-9);
+        for (int i = 0; i < marks.Count; i++)
+        {
+            var (p, end) = marks[i];
+            bool isHot = i == hot;
+            double r = isHot ? h * 1.5 : h;
+            t.TrueColor = del && end ? grey : isHot ? red : cyan;
+            for (double y = -r; y <= r + 1e-12; y += step)
+                wd.Geometry.WorldLine(new Point3d(p.X - r, p.Y + y, 0), new Point3d(p.X + r, p.Y + y, 0));
+            t.TrueColor = edge;
+            var c = new Point3dCollection { new(p.X - r, p.Y - r, 0), new(p.X + r, p.Y - r, 0), new(p.X + r, p.Y + r, 0), new(p.X - r, p.Y + r, 0), new(p.X - r, p.Y - r, 0) };
+            wd.Geometry.Polyline(c, Vector3d.ZAxis, System.IntPtr.Zero);
+        }
+    }
+
+    /// <summary>PVI 지우기 찍기 허용 = 화면 15 px(지금 확대 기준) — 지우기(<see cref="PviDelAt"/>)와 그림(<see cref="DrawPviMarks"/>)이 같은 값을 씀.</summary>
+    static double PviPickTol()
+    {
+        try
+        {
+            double vs = System.Convert.ToDouble(AcadApp.GetSystemVariable("VIEWSIZE"));
+            var sc = (Point2d)AcadApp.GetSystemVariable("SCREENSIZE");
+            if (sc.Y > 0) return vs / sc.Y * 15;
+        }
+        catch { }
+        return 1.0;
+    }
+
     const double PviGap = 0.5;   // 이웃 PVI와 이보다 가까우면 안 넣음(m)
 
     static string PviAddAt(Transaction tr, RoadSession s, Point3d p)
@@ -1346,15 +1428,7 @@ public class RoadCommand
             double d = Math.Sqrt((x - p.X) * (x - p.X) + (y - p.Y) * (y - p.Y));
             if (d < bd) { bd = d; best = i; }
         }
-        // 찍기 허용 = 화면 15 px(지금 확대 기준)
-        double tol = 1.0;
-        try
-        {
-            double vs = System.Convert.ToDouble(AcadApp.GetSystemVariable("VIEWSIZE"));
-            var sc = (Point2d)AcadApp.GetSystemVariable("SCREENSIZE");
-            if (sc.Y > 0) tol = vs / sc.Y * 15;
-        }
-        catch { }
+        double tol = PviPickTol();
         if (best < 0 || bd > tol) return "⚠찍은 자리 가까이에 PVI가 없습니다 — PVI(꺾인 점) 바로 위를 찍으세요";
         if (best == 0 || best == prof.PVIs.Count - 1) return "⚠처음 · 끝 PVI는 지울 수 없습니다(노선 시점 · 종점 높이)";
         double st = prof.PVIs[best].RawStation, z = prof.PVIs[best].Elevation;
