@@ -86,6 +86,8 @@ internal sealed class RoadSession
         {
             var o = RoadRing.DisplayLines(b, lines, out var st, addBench: !preview);
             if (!preview) try { DiagLog.Append(string.Format(System.Globalization.CultureInfo.InvariantCulture, "{0}[진입도로] {1} — 표시 소단선 · 사면선: 점 {2:N0} · 거짓 조각 점 뺌 {3:N0} · 소단 턱 더함 {4}줄 {5:F1} m · {6} ms", System.Environment.NewLine, Name, st.Pts, st.Dropped, st.AddedLines, st.AddedLen, st.Ms)); } catch { }
+            // ★[v117.18.4 · JACK 1116] 급한 꺾임 검토 목록(단차 · 사면 · 소단 폭 · 배수) — 로그 한 줄씩
+            if (!preview) foreach (var rv in st.Review) try { DiagLog.Append(System.Environment.NewLine + $"[진입도로] {Name} — {rv}"); } catch { }
             return o;
         }
         catch (System.Exception ex) { try { DiagLog.Append(System.Environment.NewLine + $"[진입도로] {Name} — ⚠표시 소단선 못 셈({ex.Message}) — 짓는 선 그대로"); } catch { } return lines; }

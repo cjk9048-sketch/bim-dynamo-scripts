@@ -10,7 +10,9 @@ namespace DH.Grading.Core;
 /// 짓는 선을 이긴 원천 등치선으로 모두 다시 긋기(1109)는 면이 깨져 되돌림 — 그래서 표시만.</summary>
 public static partial class RoadRing
 {
-    public sealed class DisplayStats { public int Pts, Dropped, Kept, AddedLines, AddedPts, OutlinePts, Snapped, Bridged; public double AddedLen, BridgedLen; public long Ms; public readonly List<string> BridgeNotes = new(); }
+    public sealed class DisplayStats { public int Pts, Dropped, Kept, AddedLines, AddedPts, OutlinePts, Snapped, Bridged; public double AddedLen, BridgedLen; public long Ms; public readonly List<string> BridgeNotes = new();
+        /// <summary>★[v117.18.4 · JACK 1116 «꺾임 구간 검토 목록»] 급한 꺾임(<see cref="Deck.Sharp"/> — 안쪽 반경 &lt; 첫 단 거리 + 여유)마다 한 줄 — «꺾임 n · 성 K1 — 단차 H m · 사면 1:n · 소단 폭 x m · 배수 ⚠고임» · 이을 짝이 없으면 «이음 못 함» 한 줄.</summary>
+        public readonly List<string> Review = new(); }
 
     public static List<RoadGrade.TierLine> DisplayLines(Built b, IReadOnlyList<RoadGrade.TierLine> lines, out DisplayStats st, double tol = 0.15, bool addBench = true)
     {
@@ -141,7 +143,31 @@ public static partial class RoadRing
         return o;
     }
 
-    const double BridgeMax = 16.0, BridgeOpen = 0.3, BridgeStep = 0.5;   // 걸음(0.25 m)마다 높이 차 상한 — 면 기울기 1:n(≤ 0.14) · 벽 면 아닌 절벽 거름
+    const double BridgeMax = 16.0, BridgeOpen = 0.3, BridgeStep = 0.5, BridgeGround = 4.5;   // 걸음(0.25 m)마다 높이 차 상한 — 면 기울기 1:n(≤ 0.14) · 벽 면 아닌 절벽 거름
+
+    static string Fm(double v, string f = "F1") => double.IsFinite(v) ? v.ToString(f, System.Globalization.CultureInfo.InvariantCulture) : "-";
+
+    /// <summary>점의 급한 굽이 번호(0부터 · 단 k 소단선이 닿는 범위 <see cref="Deck.SharpZone"/> · 없으면 −1) — 측점이 없으면 가장 가까운 중심선 마디의 측점.</summary>
+    static int BendNo(Evaluator ev, (double X, double Y, double Z, double S) p, int k)
+    {
+        var d = ev.D; if (d.Sharp.Count == 0) return -1;
+        double s = p.S;
+        if (!double.IsFinite(s)) { double best = double.MaxValue; for (int i = 0; i < d.X.Length; i++) { double dd = Sq(d.X[i] - p.X) + Sq(d.Y[i] - p.Y); if (dd < best) { best = dd; s = d.S[i]; } } }
+        return d.SharpZone(s, k);
+    }
+
+    static string ReviewLine(Evaluator ev, int no, RoadGrade.TierLine ta, RoadGrade.TierLine? tb, (double X, double Y, double Z, double S) a, (double X, double Y, double Z, double S) b, double zaFar, double zbFar, double gap, int nOpen = 0)
+    {
+        var arr = ta.Cut ? ev.PcA : ev.PfA; var pr = arr[Math.Clamp(ta.Prof, 0, arr.Length - 1)];
+        double g = pr.E.Count > 1 && pr.E[1].D > pr.E[0].D + 1e-9 ? Math.Abs(pr.E[1].R - pr.E[0].R) / (pr.E[1].D - pr.E[0].D) : double.NaN, w = double.NaN;
+        for (int i = 1; i < pr.E.Count; i++) if (Math.Abs(pr.E[i].R - pr.E[i - 1].R) < 1e-9 && pr.E[i].D > pr.E[i - 1].D + 1e-9) { w = pr.E[i].D - pr.E[i - 1].D; break; }
+        string head = $"꺾임 {no + 1} · {(ta.Cut ? "절" : "성")} {(ta.Side > 0 ? "좌" : "우")} {ta.K}단";
+        string tail = $" · 사면 1:{Fm(double.IsFinite(g) && g > 1e-9 ? 1 / g : double.NaN)} · 소단 폭 {Fm(w)} m";
+        if (tb == null) return head + $" — 이음 못 함(열린 끝 {nOpen}곳 · 첫 ({a.X % 1000:F1}, {a.Y % 1000:F1}) · 같은 단 · 같은 역할 짝이 {BridgeMax:F0} m 안에 없거나 중간이 면이 아님)" + tail;
+        // 배수 — 이음 앞 · 뒤 다리까지 이은 줄이 이음 끝에서 움푹(국소 최저)이면 고임
+        bool sag = (a.Z < zaFar - 0.02 && a.Z < b.Z - 0.02) || (b.Z < zbFar - 0.02 && b.Z < a.Z - 0.02);
+        return head + $" — 단차 {Fm(Math.Abs(a.Z - b.Z))} m(이음 {gap:F0} m)" + tail + (sag ? " · 배수 ⚠고임" : "");
+    }
 
     /// <summary>★★[v117.18.1 · JACK 1116 «안쪽 소단선이 끊겨 변환을 못 함» · 옵션 1 «짧은 경사로 다른 다리 소단과 만남»] 안쪽 모퉁이 — 같은 단 · 같은 역할(고를 선 = 성토 Crest · 절토 Toe) 조각의 빈 끝끼리 <see cref="BridgeMax"/> m 안이고 이음 길이 위 셈이 도로 면 안을 안 지나며 걸음마다 높이 차가 <see cref="BridgeStep"/> 아래(절벽 아님)이면 «셈 면을 따라 걷는 선»(0.25 m마다 높이 = 셈)을 더함 · 이은 끝의 그림 전용 조각은 고를 수 있게(DisplayOnly 해제) → 단마다 한 줄 · 모퉁이 꺾임.</summary>
     static void BridgeCorners(Evaluator ev, List<RoadGrade.TierLine> o, DisplayStats st)
@@ -150,7 +176,7 @@ public static partial class RoadRing
         var add = new List<RoadGrade.TierLine>();
         foreach (var g in cand.GroupBy(l => (l.Cut, l.Side, l.K, l.Role, l.Prof)))
         {
-            var L = g.ToList(); int n = L.Count; if (n < 2) continue;
+            var L = g.ToList(); int n = L.Count;
             (double X, double Y, double Z, double S) End(int e) => (e & 1) == 0 ? L[e >> 1].Pts[0] : L[e >> 1].Pts[^1];
             (double X, double Y) OutDir(int e)
             {
@@ -168,6 +194,12 @@ public static partial class RoadRing
                 }
                 return true;
             }
+            double FarZ(int e)   // 그 다리 끝에서 안쪽으로 2 m 걸은 점 높이(배수 · 고임 판정)
+            {
+                var pp = L[e >> 1].Pts; var a0 = End(e); double acc = 0; var prev = a0;
+                for (int k = 1; k < pp.Count; k++) { var q = (e & 1) == 0 ? pp[k] : pp[pp.Count - 1 - k]; acc += Math.Sqrt(Sq(q.X - prev.X) + Sq(q.Y - prev.Y)); prev = q; if (acc >= 2.0) break; }
+                return prev.Z;
+            }
             var open = new bool[2 * n]; for (int e = 0; e < 2 * n; e++) open[e] = Open(e);
             var pairs = new List<(double Gap, int A, int B)>();
             for (int ea = 0; ea < 2 * n; ea++)
@@ -178,11 +210,14 @@ public static partial class RoadRing
                     if (gap <= BridgeOpen || gap > BridgeMax) continue;
                     double gx = (b.X - a.X) / gap, gy = (b.Y - a.Y) / gap; var ua = OutDir(ea); var ub = OutDir(eb);
                     if (!double.IsFinite(ua.X) || !double.IsFinite(ub.X) || ua.X * gx + ua.Y * gy < -0.8 || -(ub.X * gx + ub.Y * gy) < -0.8) continue;   // 되돌아가는 이음은 안 함
-                    bool ok = true; int ns = Math.Max(2, (int)Math.Ceiling(gap / 0.25)); double zPrev = a.Z;
+                    // ★[v117.18.5 · JACK 1116 «바깥 소단선이 4 m 끊김»] 걷기 점이 땅과 같은 높이(Kind 0 = 설계 = 원지반 · 땅이 소단을 잠깐 덮은 자리)여도 이음 — 단 [검토 H3] 급한 굽이 안(두 끝 다)에서 이음이
+                    //   BridgeGround m 이하이고 땅이 이은 소단 높이 이상(소단을 덮음)일 때만 — 그 밖에서는 옛 규칙(땅 위 이음 안 함 · 소단이 땅에 닿았다 다시 나오는 자리를 자연 땅 너머로 잇지 않음)
+                    bool ok = true; bool? bo = null; bool BendOk() => bo ??= gap <= BridgeGround && BendNo(ev, a, L[ea >> 1].K) is int na && na >= 0 && na == BendNo(ev, b, L[eb >> 1].K); int ns = Math.Max(2, (int)Math.Ceiling(gap / 0.25)); double zPrev = a.Z;
                     for (int i = 1; i < ns && ok; i++)
                     {
                         double t = (double)i / ns, x = a.X + (b.X - a.X) * t, y = a.Y + (b.Y - a.Y) * t; var q = ev.Eval(x, y);
-                        ok = q.Kind is 2 or 3 or 4 && double.IsFinite(q.Z) && Math.Abs(q.Z - zPrev) <= BridgeStep; zPrev = q.Z;
+                        ok = q.Kind is 2 or 3 or 4 || (q.Kind == 0 && BendOk() && double.IsFinite(q.Z) && q.Z >= a.Z + (b.Z - a.Z) * t);
+                        ok = ok && double.IsFinite(q.Z) && Math.Abs(q.Z - zPrev) <= BridgeStep; zPrev = q.Z;
                     }
                     if (ok) pairs.Add((gap, ea, eb));
                 }
@@ -198,8 +233,15 @@ public static partial class RoadRing
                     double t = (double)i / ns; double x = a.X + (b.X - a.X) * t, y = a.Y + (b.Y - a.Y) * t;
                     nt.Pts.Add(i == 0 ? a : i == ns ? b : (x, y, ev.Eval(x, y).Z, double.IsFinite(a.S) && double.IsFinite(b.S) ? a.S + (b.S - a.S) * t : double.NaN));
                 }
+                int bn = BendNo(ev, a, L[ea >> 1].K); if (bn < 0) bn = BendNo(ev, b, L[eb >> 1].K);
+                if (bn >= 0 && (gap >= 3.0 || Math.Abs(a.Z - b.Z) >= 0.5)) st.Review.Add(ReviewLine(ev, bn, L[ea >> 1], L[eb >> 1], a, b, FarZ(ea), FarZ(eb), gap));   // 굽이 안이어도 0.1 m짜리 맞댐은 목록에서 뺌(소음)
                 add.Add(nt); L[ea >> 1].DisplayOnly = false; L[eb >> 1].DisplayOnly = false; st.Bridged++; st.BridgedLen += gap; st.BridgeNotes.Add($"{(L[ea >> 1].Cut ? "절" : "성")} 쪽{L[ea >> 1].Side} K{L[ea >> 1].K} {L[ea >> 1].Role} ({a.X % 1000:F1},{a.Y % 1000:F1})→({b.X % 1000:F1},{b.Y % 1000:F1}) {gap:F1} m 높이 {a.Z:F2}→{b.Z:F2}");
             }
+            // 이을 짝이 없는 열린 끝도 급한 굽이 안이면 검토 목록에 한 줄(이음 못 함)
+            var left = new SortedDictionary<int, (int N, int E)>();
+            for (int e = 0; e < 2 * n; e++)
+                if (open[e] && !used[e]) { int bn = BendNo(ev, End(e), L[e >> 1].K); if (bn >= 0) left[bn] = left.TryGetValue(bn, out var c0) ? (c0.N + 1, c0.E) : (1, e); }
+            foreach (var (bn, c0) in left) st.Review.Add(ReviewLine(ev, bn, L[c0.E >> 1], null, End(c0.E), End(c0.E), double.NaN, double.NaN, double.NaN, c0.N));
         }
         o.AddRange(add);
     }

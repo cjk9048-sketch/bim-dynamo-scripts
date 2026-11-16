@@ -87,13 +87,21 @@ public static partial class RoadRing
         int merged = RoadGrade.MergeGapPairs(tris, pin); Dbg("쌍");
         int folded = RoadGrade.FoldNeedles(tris, 0.005, pin); Dbg("접음");
         int flipped = RoadGrade.FlipNeedles(tris); Dbg("뒤집음");
+        string zoneFail = "";   // 첫 구역 맞춤이 못 한 까닭(급한 굽이 도로만 이어 감 — 끝 Note에 남김)
         var (thin, gapE, nm) = RoadGrade.Health(tris);
         if (thin > 0 || gapE > 0)
         {
             var outer = OuterPoints(tris);
             var made = CivilSafeMesh.MakeZone(tris, outer, out var zr, flatH: CivilSafeMesh.ThinFlat);
-            if (made == null) { b.Note = $"고리 면 Civil 맞춤 못 함 — 바늘 {thin} · 0.1 mm 변 {gapE}({(zr.Fail.Length > 0 ? zr.Fail : zr.Summary)})"; return b; }
-            tris = made; (thin, gapE, nm) = RoadGrade.Health(tris); Dbg("구역");
+            // ★[v117.18.4 · JACK 1116 «옹벽 변환이 이상하게»] 첫 구역 맞춤이 못 해도 바로 실패하지 않고 아래 마무리(3회 고침) · 끝 검사로(둘째 맞춤이 이미 그렇게 함) — 굽이 안쪽 옹벽 변환(S 35 ~ 114)이 바늘 11로 면을 못 지었다
+            //   [검토 M] 급한 굽이(Deck.Sharp)가 있는 도로만 — 그 밖의 도로는 옛 길 그대로(바로 실패 · 옛 엔진으로 물러섬 · 엔진이 바뀌지 않게) · 못 한 까닭(zr.Fail)은 끝 Note에 남김
+            if (made != null) { tris = made; (thin, gapE, nm) = RoadGrade.Health(tris); Dbg("구역"); }
+            else
+            {
+                zoneFail = zr.Fail.Length > 0 ? zr.Fail : zr.Summary;
+                if (deck.Sharp.Count == 0) { b.Note = $"고리 면 Civil 맞춤 못 함 — 바늘 {thin} · 0.1 mm 변 {gapE}({zoneFail})"; return b; }
+                Dbg("구역 못 함 — 마무리로");
+            }
         }
         tj += SplitTJunctions(tris); Dbg("T자2");
         holes += FillTriHoles(tris) + RoadGrade.FillSmallHoles(tris, 1.0, gf); Dbg("구멍2");
@@ -117,6 +125,16 @@ public static partial class RoadRing
             (thin, gapE, nm) = RoadGrade.Health(tris);
             lastFix += a1; Dbg($"마무리 {round + 1}");
             if (a1 == 0) break;
+        }
+        // ★[v117.18.5 · 검토 M] 마지막 수단 — 급한 굽이 도로(Deck.Sharp)에서 그래도 속 바늘이 남으면(옹벽 면 줄 위 점이 다른 소단선 점과 mm 안에서 겹친 일직선 세 점 · 높이 차로 접기 못 함)
+        //   ① 접기를 5 cm까지(둘레 고정 점은 그대로 — 위 pin) ② 그래도 남으면 속 꼭짓점을 0.4 mm 옮김(높이 그대로 · 둘레 변 끝은 안 옮김 · 세모 방향 반시계 유지 · 바늘 아님) — 쓴 수는 끝 Note에 밝힘 · 통과하던 면은 바늘이 없어 이 길을 안 탐
+        int lastFold = 0, lastNudge = 0;
+        if (thin > 0 && deck.Sharp.Count > 0)
+        {
+            lastFold = RoadGrade.FoldNeedles(tris, 0.05, pin);
+            (thin, gapE, nm) = RoadGrade.Health(tris);
+            if (thin > 0) { lastNudge = NudgeNeedles(tris); if (lastNudge > 0) (thin, gapE, nm) = RoadGrade.Health(tris); }
+            Dbg("바늘 마지막 고침");
         }
         // ★[v117.16 · 계획 5단계] 지은 뒤 — 바깥 둘레 꼭짓점 중 데이라잇(도로 둘레 밖 · 셈 Φ ≤ 1 mm)인데 높이가 땅과 다른 점(둘레 바늘 떼기가 0.125 mm 안쪽 속 점을 둘레로 낸 것 등)은 그 자리 원지반으로
         if (ExactDaylight) b.Count.ZSnapped = SnapRimToGround(tris, ev);
@@ -158,7 +176,7 @@ public static partial class RoadRing
                 b.Note = $"고리 면 검사 못 넘음 — 세모 넓이 {got:F3} ㎡ ≠ 사면 자리 + 도로 면 {want:F3} ㎡(겹침 · 빈틈)"; return b;
             }
         }
-        if (thin + gapE + nm + leftHoles > 0) { b.Note = $"고리 면 검사 못 넘음 — 바늘 {thin} · 0.1 mm 변 {gapE} · 세 세모 변 {nm} · 작은 구멍 {leftHoles}"; return b; }
+        if (thin + gapE + nm + leftHoles > 0) { b.Note = $"고리 면 검사 못 넘음 — 바늘 {thin} · 0.1 mm 변 {gapE} · 세 세모 변 {nm} · 작은 구멍 {leftHoles}" + (zoneFail.Length > 0 ? $" · 첫 구역 맞춤 못 함({zoneFail})" : ""); return b; }
         b.Area = tris.Sum(t => Math.Abs((t.B.X - t.A.X) * (t.C.Y - t.A.Y) - (t.B.Y - t.A.Y) * (t.C.X - t.A.X)) / 2);
         // 성토 1단 윗선(K = 0) — 도로 가장자리 중 바깥이 성토인 줄
         b.Lines.AddRange(EdgeCrest(ev));
@@ -176,6 +194,9 @@ public static partial class RoadRing
         b.Ok = true;
         b.Note = $"고리 면 — 세모 {tris.Count:N0} · 넓이 {b.Area:N0} ㎡ · 소단/사면 꺾임선 {b.Lines.Count} · 주름선 {ls?.CreaseChains ?? 0}(점 {ls?.CreasePts ?? 0} · 이어진 바뀜이라 뺀 후보 {ls?.CreaseRejected ?? 0} · 골 따라 끼운 점 {ls?.CreaseFollow ?? 0} · 골 벗어나 끊음 {ls?.CreaseCut ?? 0}) · 선 높이 맞춤 점 {ls?.LineZPts ?? 0} · 부채 경계선 {ls?.FanLines ?? 0} · 보조 고리 선 {ls?.HelperLines ?? 0} · 벽 면 띠 {ls?.WallFaces ?? 0}(점 {ls?.WallFacePts ?? 0} · 띠 곁 주름선 끊음 {ls?.WallFacePruned ?? 0}) · 스냅 {ls?.Snapped ?? 0}(되돌림 {ls?.SnapRevert ?? 0} · 0.5 m 넘음 {ls?.SnapBig ?? 0}) · 꺾임 거리로 옮긴 고리 점 {ls?.Projected ?? 0} · {tnote} · {rnote}"
                  + $" · 다듬기: T자 나눔 {tj} · 구멍 {holes} · 0.1 mm 쌍 {merged} · 바늘 접음 {folded} · 뒤집음 {flipped}"
+                 + (lastFold + lastNudge > 0 ? $" · ⚠급한 굽이 바늘 마지막 고침: 5 cm 접음 {lastFold} · 꼭짓점 0.4 mm 옮김 {lastNudge}" : "")
+                 + (zoneFail.Length > 0 ? $" · ⚠첫 구역 맞춤 못 함({zoneFail}) — 마무리로 넘김" : "")
+                 + (deck.RecSnaps.Count > 0 ? $" · ⚠급한 굽이 옹벽 기록 끝 {deck.RecSnaps.Count}곳을 가까운 마디로 붙임(최대 {deck.RecSnaps.Max(r => Math.Abs(r.To - r.From)):F2} m)" : "")
                  + (b.Conflicts > 0 ? $" · ⚠부딪힘 {b.Conflicts}칸(낮은 쪽 사면을 넣음 · 옹벽 검토)" : "")
                  + (b.ReachHit ? " · ⚠찾는 거리 끝에 닿음" : "")
                  + $" · 평가 {tEval} ms · 전체 {sw.ElapsedMilliseconds} ms";
@@ -342,6 +363,61 @@ public static partial class RoadRing
             var (p, q) = l1 >= l2 && l1 >= l3 ? (t.A, t.B) : l2 >= l3 ? (t.B, t.C) : (t.C, t.A);
             if (use.GetValueOrDefault(Ek(p, q)) != 1) continue;
             tris.RemoveAt(i); n++;
+        }
+        return n;
+    }
+
+    /// <summary>★[v117.18.5 · JACK 1116 «옹벽 변환 바늘 1»] 끝 보정 — 접기 · 뒤집기 · 떼기가 못 푼 속 바늘(옹벽 면 끝 ~ 평면 폭 0 · 높이 차 5 cm)을 그 꼭짓점을 긴 변의 수직으로 0.4 mm 옮겨 푼다(높이는 그대로 · 한 세모만 쓰는 둘레 변 끝 점은 안 옮김 ·
+    /// 그 점을 쓰는 모든 세모가 같은 방향 · 바늘 아님이어야 · 안 되면 그대로). 돌려줌 = 푼 수.</summary>
+    static int NudgeNeedles(List<WallDaylight.Tri> tris, double d = 0.0004)
+    {
+        static double Cr(Point3 o, Point3 a, Point3 b) => (a.X - o.X) * (b.Y - o.Y) - (a.Y - o.Y) * (b.X - o.X);
+        static double L(Point3 a, Point3 b) => Math.Sqrt(Sq(a.X - b.X) + Sq(a.Y - b.Y));
+        static double H(Point3 a, Point3 b, Point3 c) => Math.Abs(Cr(a, b, c)) / Math.Max(1e-300, Math.Max(L(a, b), Math.Max(L(b, c), L(c, a))));
+        static ((double, double), (double, double)) Ek(Point3 p, Point3 q) { var a0 = (p.X, p.Y); var b0 = (q.X, q.Y); return a0.CompareTo(b0) < 0 ? (a0, b0) : (b0, a0); }
+        var use = new Dictionary<((double, double), (double, double)), int>();
+        var at = new Dictionary<(double, double), List<int>>();
+        for (int q = 0; q < tris.Count; q++)
+        {
+            var t = tris[q];
+            foreach (var (p, r) in new[] { (t.A, t.B), (t.B, t.C), (t.C, t.A) }) { var k = Ek(p, r); use[k] = use.GetValueOrDefault(k) + 1; }
+            foreach (var p in new[] { t.A, t.B, t.C }) { if (!at.TryGetValue((p.X, p.Y), out var l)) at[(p.X, p.Y)] = l = new(); l.Add(q); }
+        }
+        var rim = new HashSet<(double, double)>();
+        foreach (var (k, c) in use) if (c == 1) { rim.Add(k.Item1); rim.Add(k.Item2); }
+        int n = 0;
+        for (int i = 0; i < tris.Count; i++)
+        {
+            var t = tris[i];
+            if (H(t.A, t.B, t.C) >= CivilSafeMesh.ThinH) continue;
+            double l1 = L(t.A, t.B), l2 = L(t.B, t.C), l3 = L(t.C, t.A);
+            // 긴 변 반대 꼭짓점 먼저 · 다음 나머지 둘
+            var order = l1 >= l2 && l1 >= l3 ? new[] { (t.C, t.A, t.B), (t.A, t.B, t.C), (t.B, t.C, t.A) } : l2 >= l3 ? new[] { (t.A, t.B, t.C), (t.B, t.C, t.A), (t.C, t.A, t.B) } : new[] { (t.B, t.C, t.A), (t.C, t.A, t.B), (t.A, t.B, t.C) };
+            double lm = Math.Max(l1, Math.Max(l2, l3)); if (lm < 1e-12) continue;
+            var (e0, e1) = l1 >= l2 && l1 >= l3 ? (t.A, t.B) : l2 >= l3 ? (t.B, t.C) : (t.C, t.A);
+            double nx = -(e1.Y - e0.Y) / lm, ny = (e1.X - e0.X) / lm;
+            bool done = false;
+            foreach (var (v, _, _) in order)
+            {
+                if (done) break;
+                if (rim.Contains((v.X, v.Y)) || !at.TryGetValue((v.X, v.Y), out var lst)) continue;
+                foreach (double sg in new[] { 1.0, -1.0 })
+                {
+                    var v2 = new Point3(v.X + nx * d * sg, v.Y + ny * d * sg, v.Z);
+                    bool ok = true;
+                    foreach (int s in lst)
+                    {
+                        var w = tris[s]; Point3 S2(Point3 p) => p.X == v.X && p.Y == v.Y ? v2 : p;
+                        var a = S2(w.A); var b = S2(w.B); var c = S2(w.C);
+                        double c1 = Cr(a, b, c);
+                        double h1 = H(a, b, c), h0 = H(w.A, w.B, w.C);
+                        if ((s == i ? h1 < CivilSafeMesh.ThinH * 1.2 : h1 < CivilSafeMesh.ThinH && h1 < h0) || !(c1 > 0)) { ok = false; break; }   // 모든 세모는 반시계 — 옮긴 뒤도 반시계(뒤집히면 안 옮김)
+                    }
+                    if (!ok) continue;
+                    foreach (int s in lst) { var w = tris[s]; Point3 S2(Point3 p) => p.X == v.X && p.Y == v.Y ? v2 : p; tris[s] = new WallDaylight.Tri(S2(w.A), S2(w.B), S2(w.C)); }
+                    at.Remove((v.X, v.Y)); at[(v2.X, v2.Y)] = lst; n++; done = true; break;
+                }
+            }
         }
         return n;
     }

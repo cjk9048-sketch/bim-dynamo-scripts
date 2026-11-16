@@ -109,8 +109,22 @@ static class RoadRingJack
         var b = RoadRing.Build(inp);
         Console.WriteLine($"[RJ] 짓기 {sw.ElapsedMilliseconds} ms · ok {b.Ok} · 세모 {b.Tris.Count} · 선 {b.Lines.Count}");
         Console.WriteLine("  " + b.Note.Substring(0, Math.Min(b.Note.Length, 900)));
-        if (!b.Ok) return;
+        if (!b.Ok)
+        {
+            foreach (var t in b.Tris)
+            {
+                double l1 = Math.Sqrt(Math.Pow(t.A.X - t.B.X, 2) + Math.Pow(t.A.Y - t.B.Y, 2)), l2 = Math.Sqrt(Math.Pow(t.B.X - t.C.X, 2) + Math.Pow(t.B.Y - t.C.Y, 2)), l3 = Math.Sqrt(Math.Pow(t.C.X - t.A.X, 2) + Math.Pow(t.C.Y - t.A.Y, 2));
+                double cr = Math.Abs((t.B.X - t.A.X) * (t.C.Y - t.A.Y) - (t.B.Y - t.A.Y) * (t.C.X - t.A.X));
+                if (cr / Math.Max(l1, Math.Max(l2, l3)) < 1.25e-4) Console.WriteLine($"  [RJ] 바늘 ({t.A.X % 1000:F4},{t.A.Y % 1000:F4},{t.A.Z:F3}) ({t.B.X % 1000:F4},{t.B.Y % 1000:F4},{t.B.Z:F3}) ({t.C.X % 1000:F4},{t.C.Y % 1000:F4},{t.C.Z:F3})");
+            }
+            var nb = Environment.GetEnvironmentVariable("BLOCKTEST_RRNEAR");   // "x,y" 1000 나머지 — 그 곁 0.4 m 세모 목록
+            if (!string.IsNullOrEmpty(nb)) { var q = nb.Split(',').Select(v => double.Parse(v, ci)).ToArray(); foreach (var t in b.Tris) { double cx = (t.A.X + t.B.X + t.C.X) / 3 % 1000, cy = (t.A.Y + t.B.Y + t.C.Y) / 3 % 1000; if (Math.Abs(cx - q[0]) < 0.4 && Math.Abs(cy - q[1]) < 0.4) Console.WriteLine($"    곁 ({t.A.X % 1000:F4},{t.A.Y % 1000:F4},{t.A.Z:F3}) ({t.B.X % 1000:F4},{t.B.Y % 1000:F4},{t.B.Z:F3}) ({t.C.X % 1000:F4},{t.C.Y % 1000:F4},{t.C.Z:F3})"); } }
+            return;
+        }
         Analyze(inp, b);
+        RoadRingBend.Run(inp, b);
+        RoadRingBend.Conv(inp, b);
+        RoadRingBend.Tiers(inp, b);
         var (pok, ptxt, pg) = PickCheck(b);
         bool one = pg.TryGetValue((false, 1, 1), out int n1) && n1 == 1 && pg.TryGetValue((false, 1, 2), out int n2) && n2 == 1;
         Console.WriteLine($"[RJ] {(pok && one ? "통과" : "실패")} 고를 선 검사: 성 쪽1 K1 · K2 한 줄씩 {one} · {ptxt}");
@@ -123,6 +137,7 @@ static class RoadRingJack
         var ci = CultureInfo.InvariantCulture;
         Console.WriteLine("[RJ] 세모 품질: " + TriStats(b, 236, 112, 275, 135));
         var lines = RoadRing.DisplayLines(b, b.Lines, out var st);
+        foreach (var rv in st.Review) Console.WriteLine("[RJ] 검토 " + rv);
         Console.WriteLine($"[RJ] 표시 선 {lines.Count} (거짓 조각 뺌 {st.Dropped} · 턱 더함 {st.AddedLines}줄 {st.AddedLen:F1} m)");
         {
             foreach (var l in lines.Where(l => l.K == 1 && l.Side == 1 && !l.Cut && l.Pts.Count >= 2))

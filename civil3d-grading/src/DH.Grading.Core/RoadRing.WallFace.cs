@@ -9,7 +9,31 @@ namespace DH.Grading.Core;
 /// 위 줄 · 아래 줄을 닫힌 띠 하나로(매달린 끝 없음 · 높이 = 셈). 벽 단면이 없는 도로는 아무것도 안 함(시간 0).</para></summary>
 public static partial class RoadRing
 {
-    const double WfStep = 0.1, WfEps = 0.002, WfSeed = 0.4, WfMinH = 0.01, WfMinW = 0.002, WfClear = 0.01;
+    const double ThinChord = 1.0, WfStep = 0.1, WfEps = 0.002, WfSeed = 0.4, WfMinH = 0.01, WfMinW = 0.002, WfClear = 0.01;
+
+    /// <summary>줄에서 일직선 속 점 빼기(Douglas–Peucker · 평면 0.5 mm · 높이 2 mm · 남긴 점 사이 ≤ <see cref="ThinChord"/> m — 긴 현이 벽 위 뜀 한쪽만 읽지 않게) — 끝점은 남김 · 돌려줌 = 남길 점 표시.</summary>
+    static bool[] ThinKeep(Evaluator ev, List<(double X, double Y)> l)
+    {
+        var keep = new bool[l.Count]; if (l.Count == 0) return keep; keep[0] = keep[^1] = true;
+        if (l.Count < 3) return keep;
+        var z = l.Select(q => ev.Eval(q.X, q.Y).Z).ToArray();
+        var st = new Stack<(int, int)>(); st.Push((0, l.Count - 1));
+        while (st.Count > 0)
+        {
+            var (a, b) = st.Pop(); if (b <= a + 1) continue;
+            double dx = l[b].X - l[a].X, dy = l[b].Y - l[a].Y, L = Math.Sqrt(dx * dx + dy * dy), worst = 0; int wi = -1;
+            if (L > ThinChord) { int mi = (a + b) >> 1; keep[mi] = true; st.Push((a, mi)); st.Push((mi, b)); continue; }
+            for (int i = a + 1; i < b; i++)
+            {
+                double t = L < 1e-12 ? 0 : Math.Clamp(((l[i].X - l[a].X) * dx + (l[i].Y - l[a].Y) * dy) / (L * L), 0, 1);
+                double ex = l[a].X + dx * t - l[i].X, ey = l[a].Y + dy * t - l[i].Y, ez = z[a] + (z[b] - z[a]) * t - z[i];
+                double dev = Math.Max(Math.Sqrt(ex * ex + ey * ey) / 0.0005, Math.Abs(double.IsFinite(ez) ? ez : 1) / 0.002);
+                if (dev > worst) { worst = dev; wi = i; }
+            }
+            if (worst > 1) { keep[wi] = true; st.Push((a, wi)); st.Push((wi, b)); }
+        }
+        return keep;
+    }
 
     /// <summary>벽 면 위 · 아래 끊김선 띠를 <paramref name="ls"/>.Creases에 더함 — 돌려줌 = 띠 수.</summary>
     static int WallFaceLines(Evaluator ev, Field f, LineSet ls)
@@ -131,9 +155,16 @@ public static partial class RoadRing
                 if (seq.Count < 2) continue;
                 var bl = new Bl { Crease = true, Cut = want < 0, Prof = p, Role = RoadGrade.LineRole.Wall };
                 void Add(double x, double y) { var e = ev.Eval(x, y); bl.Pts.Add(new Point3(x, y, e.Z)); bl.S.Add(double.NaN); }
-                foreach (var (u, _) in seq) Add(u.X, u.Y);
-                for (int i = seq.Count - 1; i >= 0; i--) { var l = seq[i].L; if (Sq(l.X - bl.Pts[^1].X) + Sq(l.Y - bl.Pts[^1].Y) > 1e-10) Add(l.X, l.Y); }
-                Add(seq[0].U.X, seq[0].U.Y);
+                // ★[v117.18.4 · JACK 1116 «옹벽 변환 바늘 1»] 원인: 0.1 m 걸음 점이 거의 일직선(평면 0.5 mm · 높이 2 mm 안)인 채 줄에 그대로 들어가, 아래 줄 곁에 세 점이 일직선인 넓이 0 세모(바늘)가 남았다 — 일직선 속 걸음 쌍을 뺌(위 · 아래 줄 둘 다 일직선일 때만 · 끝 · 꺾임 쌍은 남김)
+                // ★[검토 H1] 급한 굽이 구간(Deck.Sharp) 안 걸음 쌍만 — 그 밖의 옹벽 변환 도로는 점 그대로(비트 같음)
+                var inBend = new bool[seq.Count];
+                if (ev.D.Sharp.Count > 0)
+                    for (int i = 0; i < seq.Count; i++) { var ew = ev.Eval(seq[i].U.X, seq[i].U.Y); var ww = WinOf(ew, want); inBend[i] = ww.Src >= 0 && ev.D.SharpAt(SigToStation(ev.D, ww.Sigma).S); }
+                var kU = ThinKeep(ev, seq.Select(q => q.U).ToList()); var kL = ThinKeep(ev, seq.Select(q => q.L).ToList()); var kp = seq.Select((q, i) => !inBend[i] || kU[i] || kL[i]).ToList();   // 위 · 아래 짝을 같이(어느 줄이든 꺾이면 둘 다 남김)
+                var upL = seq.Where((q, i) => kp[i]).Select(q => q.U).ToList(); var loL = Enumerable.Reverse(seq.Where((q, i) => kp[i])).Select(q => q.L).ToList();
+                foreach (var u in upL) Add(u.X, u.Y);
+                foreach (var l in loL) if (Sq(l.X - bl.Pts[^1].X) + Sq(l.Y - bl.Pts[^1].Y) > 1e-10) Add(l.X, l.Y);
+                Add(upL[0].X, upL[0].Y);
                 RefineLineZ(ev, bl);
                 ls.Creases.Add(bl); strips.Add(bl); chains++; pts += bl.Pts.Count;
             }

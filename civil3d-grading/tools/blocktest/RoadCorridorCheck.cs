@@ -180,7 +180,9 @@ static class RoadCorridorCheck
                 double R = 15; string tag = $" 헤어핀 R{R:0} 옹벽 K=1";
                 double s0 = 45, s1 = 60 + Math.PI * R + 15;
                 var inp = Road(R, new List<RoadGrade.TierWall> { new(s0, s1, -1, 1, 1.0) });
-                var b = Build(inp);
+                if (Environment.GetEnvironmentVariable("BLOCKTEST_RRCDBG") != null) RoadRing.DebugRing = s => { if (s.Contains("바늘")) Console.WriteLine("   [단계] " + (s.Length > 200 ? s[..200] : s)); };
+                var b = Build(inp); RoadRing.DebugRing = null;
+                if (!b.Ok) foreach (var t in b.Tris) { double l1 = Math.Sqrt(Math.Pow(t.A.X - t.B.X, 2) + Math.Pow(t.A.Y - t.B.Y, 2)), l2 = Math.Sqrt(Math.Pow(t.B.X - t.C.X, 2) + Math.Pow(t.B.Y - t.C.Y, 2)), l3 = Math.Sqrt(Math.Pow(t.C.X - t.A.X, 2) + Math.Pow(t.C.Y - t.A.Y, 2)); double cr = Math.Abs((t.B.X - t.A.X) * (t.C.Y - t.A.Y) - (t.B.Y - t.A.Y) * (t.C.X - t.A.X)); if (cr / Math.Max(l1, Math.Max(l2, l3)) < 1.25e-4) Console.WriteLine($"   바늘 ({t.A.X:F4},{t.A.Y:F4},{t.A.Z:F4}) ({t.B.X:F4},{t.B.Y:F4},{t.B.Z:F4}) ({t.C.X:F4},{t.C.Y:F4},{t.C.Z:F4}) h={cr / Math.Max(l1, Math.Max(l2, l3)) * 1000:F4}mm"); }
                 Check($"{tag} 지어짐(고리 면 · 옛 엔진으로 안 감)", b.Ok, b.Note.Length > 300 ? b.Note[..300] : b.Note);
                 if (b.Ok)
                 {

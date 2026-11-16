@@ -70,6 +70,24 @@ public static partial class RoadRing
         public readonly List<WallDaylight.Tri> Tris = new();
         public readonly List<List<Point3>> Lines = new();
         public double MaxGrade, Length;
+        /// <summary>★[v117.18.8 · JACK 1116] 급한 굽이 측점 구간(안쪽 반경 &lt; 첫 단 거리 + <see cref="BendMargin"/>) — 굽이 전용 처리(옹벽 기록 끝 붙임 · 소단선 이음)의 단 하나 기준 · 구간 · 그 안 가장 작은 안쪽 반경.</summary>
+        public readonly List<(double S0, double S1, double Rin)> Sharp = new();
+        /// <summary>굽이 마디에 붙인 옹벽 기록 끝(측점 · 밀린 거리) — 한계 ≤ 0.13 m.</summary>
+        public readonly List<(double From, double To)> RecSnaps = new();
+        public bool SharpAt(double s) { foreach (var w in Sharp) if (s >= w.S0 - 1e-9 && s <= w.S1 + 1e-9) return true; return false; }
+        /// <summary>단 하나(첫 단 소단까지) 거리 — 급한 굽이가 k단 소단선에 미치는 측점 범위 = 구간 ± k × 이 값(소단선은 가장자리에서 k단 몫 떨어져 굽이 둘레를 쓸고 감).</summary>
+        public double BendReach;
+        /// <summary>측점 s · 단 k의 소단선이 닿는 급한 굽이 번호(구간 ± k × <see cref="BendReach"/> 안 · 여럿이면 가장 가까운 것 · 없으면 −1).</summary>
+        public int SharpZone(double s, int k)
+        {
+            int best = -1; double bd = double.MaxValue, z = Math.Max(1, k) * BendReach;
+            for (int i = 0; i < Sharp.Count; i++)
+            {
+                double dd = s < Sharp[i].S0 ? Sharp[i].S0 - s : s > Sharp[i].S1 ? s - Sharp[i].S1 : 0;
+                if (dd <= z + 1e-9 && dd < bd) { bd = dd; best = i; }
+            }
+            return best;
+        }
         public Polygon Poly = null!;
         public double Perimeter => Cum.Length == 0 ? 0 : Cum[^1];
         /// <summary>둘레 점 i의 볼록 여부(반시계 · 바깥으로 꺾임).</summary>
@@ -113,6 +131,36 @@ public static partial class RoadRing
             x.Insert(k, x[k - 1] + (x[k] - x[k - 1]) * t); y.Insert(k, y[k - 1] + (y[k] - y[k - 1]) * t); s.Insert(k, v); z.Insert(k, z[k - 1] + (z[k] - z[k - 1]) * t);
         }
         return (x.ToArray(), y.ToArray(), s.ToArray(), z.ToArray());
+    }
+
+    const double BendMargin = 1.0, BendWin = 1.0, BendSnapSeg = 0.26;
+
+    /// <summary>★[v117.18.8 · JACK 1116 «급한 굽이만»] 급한 굽이 구간 — 측점마다 ±<see cref="BendWin"/> m 앞뒤 꺾은선 방향 차 ÷ 호길이 = 곡률 → 곡률 반경 R · 안쪽 가장자리 반경 = R − 안쪽 바깥 폭(측구 포함)이
+    /// 첫 단 거리(절 · 성 중 큰 단높이 × 구배) + <see cref="BendMargin"/> 아래이면 급함 · 이어진 측점은 한 구간. 굽이 전용 처리 · 검토 목록 · 소단선 이음이 모두 이 하나만 본다.</summary>
+    static List<(double S0, double S1, double Rin)> SharpBendWindows(RoadGrade.Input inp, double[] X, double[] Y, double[] S)
+    {
+        var o = new List<(double, double, double)>(); int n = X.Length; if (n < 3) return o;
+        double d1 = Math.Max(inp.Cut.BenchH * inp.Cut.Slope, inp.Fill.BenchH * inp.Fill.Slope);
+        var h = new double[n - 1]; var mid = new double[n - 1];
+        for (int j = 0; j + 1 < n; j++) { h[j] = Math.Atan2(Y[j + 1] - Y[j], X[j + 1] - X[j]); mid[j] = (S[j] + S[j + 1]) / 2; }
+        int Seg(double s) { int lo = 0, hi = n - 1; while (lo + 1 < hi) { int m = (lo + hi) >> 1; if (S[m] <= s) lo = m; else hi = m; } return lo; }
+        int run = -1; double rmin = double.MaxValue;
+        for (int i = 0; i <= n; i++)
+        {
+            bool sharp = false; double rin = double.NaN;
+            if (i >= 1 && i + 1 < n && S[i] - BendWin >= S[0] && S[i] + BendWin <= S[^1])
+            {
+                int ja = Seg(S[i] - BendWin), jb = Seg(S[i] + BendWin); double arc = mid[jb] - mid[ja];
+                if (jb > ja && arc > 1e-9)
+                {
+                    double k = Ang(h[jb] - h[ja]) / arc;
+                    if (Math.Abs(k) > 1e-9) { rin = 1 / Math.Abs(k) - inp.Outer(k > 0 ? -1 : 1, S[i]); sharp = rin < d1 + BendMargin; }
+                }
+            }
+            if (sharp) { if (run < 0) { run = i; rmin = double.MaxValue; } rmin = Math.Min(rmin, rin); }
+            else if (run >= 0) { o.Add((S[run], S[i - 1], rmin)); run = -1; }
+        }
+        return o;
     }
 
     /// <summary>중심선 촘촘히 — 이웃 각이 <see cref="CurveDeg"/>° 넘는 곳 양옆 마디를 가운데 꼭짓점 Catmull–Rom으로 0.25 m마다(원호 재현) · 곧은 곳 그대로.
@@ -173,6 +221,7 @@ public static partial class RoadRing
         why = "";
         if (inp.X.Length < 2 || inp.Y.Length != inp.X.Length || inp.Z.Length != inp.X.Length) { why = "중심선 점이 모자람"; return null; }
         var (X, Y, S, Z) = Densify(inp.X, inp.Y, inp.Z);
+        var sharp = SharpBendWindows(inp, X, Y, S);
         // 측구 시작 · 끝 — 그 측점과 5 cm 바깥 측점을 넣어 폭이 바뀌는 자리가 5 cm 안에서 꺾이게(옛 엔진 직각 쌍 자름과 같은 뜻 · 둘레 = 사다리 바깥 줄)
         if (inp.Ditches.Count > 0)
         {
@@ -192,9 +241,32 @@ public static partial class RoadRing
             int pi = profKeys.IndexOf(key); if (pi < 0) { pi = profKeys.Count; profKeys.Add(key); }
             recProf.Add(pi);
         }
+        // ★[v117.18.8 · JACK 1116 «변환이 이상하게» · 검토 H2] 급한 굽이 안의 0.25 m 호 마디(R 7)에 끼운 점은 바깥 둘레를 스스로 겹치게 함(안쪽 가장자리가 반경 ≈ 반폭) — 그 안(급한 굽이 구간 · 마디 ≤ 0.26 m)에서는
+        //   옹벽 기록 끝을 가까운 마디로 붙임(한계 ≤ 0.13 m · 끝마다 독립 — 차례 무관) · 기록 S0 · S1 자체를 고쳐 쓰므로 둘레 · 결과 · 수량이 같은 값을 봄 · 두 끝이 한 마디로 모이면 기록이 사라지므로 못 지음(말없이 안 버림)
+        var snaps = new List<(double, double)>();
+        if (recs.Count > 0 && sharp.Count > 0)
+        {
+            double Snap(double v)
+            {
+                if (v <= S[0] + 1e-3 || v >= S[^1] - 1e-3) return v;
+                int k = Array.BinarySearch(S, v); if (k >= 0) return v; k = ~k;
+                if (v - S[k - 1] < 1e-3 || S[k] - v < 1e-3 || S[k] - S[k - 1] > BendSnapSeg) return v;
+                bool inW = false; foreach (var w in sharp) if (v >= w.S0 - 1e-9 && v <= w.S1 + 1e-9) { inW = true; break; }
+                if (!inW) return v;
+                double to = v - S[k - 1] < S[k] - v ? S[k - 1] : S[k]; snaps.Add((v, to)); return to;
+            }
+            for (int i = 0; i < recs.Count; i++)
+            {
+                double a = Snap(recs[i].S0), c = Snap(recs[i].S1);
+                if (a == recs[i].S0 && c == recs[i].S1) continue;
+                if (!(Math.Abs(c - a) > 1e-6)) { why = $"옹벽 기록 측점 {recs[i].S0:F2} ~ {recs[i].S1:F2}이 굽이 마디(0.25 m) 한 곳으로 모임 — 더 길게 고르세요"; return null; }
+                recs[i] = recs[i] with { S0 = a, S1 = c };
+            }
+        }
         if (recs.Count > 0) (X, Y, S, Z) = InsertStations(X, Y, S, Z, recs.SelectMany(r => new[] { r.S0, r.S1 }).ToList());
         int n = X.Length;
         var d = new Deck { X = X, Y = Y, S = S, Z = Z, Length = S[^1], MinSlope = inp.MinSlope };
+        d.Sharp.AddRange(sharp); d.RecSnaps.AddRange(snaps); d.BendReach = Math.Max(inp.Cut.BenchH * inp.Cut.Slope + inp.Cut.BenchW, inp.Fill.BenchH * inp.Fill.Slope + inp.Fill.BenchW);
         d.Recs.AddRange(recs); d.RecProf = recProf.ToArray(); d.ProfKeys.Clear(); d.ProfKeys.AddRange(profKeys);
         var sec = inp.Sec;
         // 측점마다 가로 점(왼쪽 바깥 → 오른쪽 바깥) — 옵셋(좌 −) · 높이 차
