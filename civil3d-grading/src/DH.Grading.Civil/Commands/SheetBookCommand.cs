@@ -79,18 +79,18 @@ public class SheetBookCommand
         catch (System.Exception exN) { nori = "⚠노리선 못 그림 — " + exN.Message; }
         try
         {
-            BusyPopup.Show("도면화 — 배치탭 만드는 중");
+            BusyPopup.Show("도면생성 — 배치탭 만드는 중");
             r = SheetBookBuilder.Make(doc, inp, only);
         }
         catch (System.Exception ex)
         {
-            r = new SheetBookBuilder.Result { Line = "⚠도면화 실패 — " + ex.Message };
+            r = new SheetBookBuilder.Result { Line = "⚠도면생성 실패 — " + ex.Message };
             r.Log.AppendLine("  " + ex);
         }
         finally { try { BusyPopup.Close(); } catch { } }
         if (nori.Length > 0) { r.Log.Insert(0, "  " + nori + "\n"); if (nori.StartsWith("⚠")) r.Warns.Add(nori.TrimStart('⚠')); }
         string warn = r.Warns.Count > 0 ? "\n  ⚠" + string.Join("\n  ⚠", r.Warns.Distinct()) : "";
-        ed.WriteMessage("\n[도면화] " + r.Line + warn);
+        ed.WriteMessage("\n[도면생성] " + r.Line + warn);
         try { DiagLog.Append("\n" + r.Log + (r.Warns.Count > 0 ? "  ⚠" + string.Join("\n  ⚠", r.Warns.Distinct()) + "\n" : "")); } catch { }
         job.Done(r.Ok, r.Line + (r.Warns.Count > 0 ? $" · ⚠{r.Warns.Count}" : ""));
         Last[doc] = r;

@@ -24,7 +24,7 @@ internal static class RoadPalette
                 DockEnabled = DockSides.Left | DockSides.Right,
                 MinimumSize = new System.Drawing.Size(360, 520),
             };
-            _ps.AddVisual("진입도로", _panel);
+            _ps.AddVisual("진입도로", DockClose.Wrap(_panel, () => _ps));
             RoadSession.Changed += s => { try { _panel.Dispatcher.Invoke(() => _panel.Show(s ?? RoadSession.Of(AcadApp.DocumentManager.MdiActiveDocument))); } catch { } };
             AcadApp.DocumentManager.DocumentActivated += (_, e) => { try { _panel.Show(RoadSession.Of(e.Document)); } catch { } };
         }
@@ -529,6 +529,7 @@ internal sealed class RoadPanel : UserControl
                 VerticalContentAlignment = VerticalAlignment.Center, HorizontalContentAlignment = HorizontalAlignment.Center,
                 ToolTip = $"{lo:0.###} ~ {hi:0.###}",
             };
+            tb.TextChanged += (_, __) => _demo?.Redraw();   // ★[JACK 1116 «수치 칸은 미리보기 뷰»] 치는 대로 그림이 따라감(확정 전 값 · RoadParams가 칸 글자를 읽음)
             tb.KeyDown += (_, e) => { if (e.Key == System.Windows.Input.Key.Enter) Commit(); };
             tb.LostFocus += (_, __) => Commit();
             tb.LostKeyboardFocus += (_, __) => Commit();      // ★[재검토 낮음 7] 칸에서 바로 도면을 누르면 LostFocus가 안 온다 — 친 값이 다음 계산에 덮이지 않게
@@ -584,6 +585,15 @@ internal sealed class RoadPanel : UserControl
         var doc = AcadApp.DocumentManager.MdiActiveDocument;
         var d = _s?.Design ?? (doc != null ? DraftOf(doc) : null);
         if (d == null) return null;
+        // 칸에 친 값(범위 안)을 확정 전에도 그림에 반영 — 설계 사본에만 씀(곡선 다시 넣기 · 저장 부작용 없음)
+        var live = new RoadDesign(); live.CopyShapeFrom(d);
+        foreach (var (box, _, set, scale, lo, hi) in _fields)
+        {
+            if (_ditchUBoxes.Contains(box) || _ditchLBoxes.Contains(box)) continue;
+            if (!double.TryParse(box.Text.Trim(), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double v) || !double.IsFinite(v) || v < lo - 1e-9 || v > hi + 1e-9) continue;
+            if (ReferenceEquals(box, _curve)) live.CurveR = v / scale; else set(live, v / scale);
+        }
+        d = live;
         return new RoadDemoParams
         {
             CurveR = d.CurveR, HalfL = d.HalfL, HalfR = d.HalfR, CrossSlope = d.CrossSlope, ShoulderL = d.ShoulderL, ShoulderR = d.ShoulderR, ShoulderSlope = d.ShoulderSlope,

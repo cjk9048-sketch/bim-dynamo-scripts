@@ -123,7 +123,7 @@ public static class Web3DPalette
             DockEnabled = DockSides.Left | DockSides.Right,
             MinimumSize = new System.Drawing.Size(420, 360),
         };
-        _ps.AddVisual("3D", _panel);
+        _ps.AddVisual("3D", DockClose.Wrap(_panel, () => _ps));
     }
 
     static void Open()

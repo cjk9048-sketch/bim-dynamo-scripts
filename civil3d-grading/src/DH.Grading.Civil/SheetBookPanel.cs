@@ -74,14 +74,27 @@ internal sealed class SheetBookPanel : UserControl
     {
         DhBrand.Apply(this);
         Background = DhBrand.Wall;
-        var head = DhBrand.Header("도면화", "", drag: null, onClose: null, logoHeight: 17, titleSize: 13, pad: new Thickness(0, 0, 0, 6));
+        var head = DhBrand.Header("도면생성", "", drag: null, onClose: null, logoHeight: 17, titleSize: 13, pad: new Thickness(0, 0, 0, 6));
         head.Background = Brushes.Transparent;
         var top = new StackPanel { Margin = new Thickness(10, 10, 10, 0) };
         top.Children.Add(head);
         // ★[v117.19 · JACK 1116 «도면화도 애니메이션 · 접이식 카테고리»] 맨 위 설명 칸 — 칸 제목 · 항목에 마우스 → 그 장면(한 번 돌고 끝 그림에서 멈춤)
         var demo = new FixDemoView("칸 제목에 마우스 → 예시", "sbTabs") { Margin = new Thickness(0, 0, 0, 8), HorizontalAlignment = HorizontalAlignment.Left };
-        void Hook(FrameworkElement? fe, string key) { if (fe == null) return; fe.MouseEnter += (_, __) => demo.Play(key); fe.MouseLeave += (_, __) => demo.Idle(); }
-        void HookBtn(FrameworkElement? fe, string key, string back) { if (fe == null) return; fe.MouseEnter += (_, __) => demo.Play(key); fe.MouseLeave += (_, __) => demo.Play(back); }
+        // ★[v117.18.5 · JACK 1116 «배치 탭 안에 있으면 영상이 끊이지 않게 · 끝나도 되감기 없이 · 아예 넘어갔다 다시 올 때만 다시 시작» = 탭 애니메이션]
+        //   칸(머리 + 몸)을 한 덩어리로 — 안에서 옮기면 같은 장면(Play 방패가 되감기 막음) · 덩어리를 다 벗어난 채 0.25초면 쉼(Idle) → 다시 들어오면 처음부터
+        var regions = new List<FrameworkElement[]>();
+        var idleTm = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
+        idleTm.Tick += (_, __) => { idleTm.Stop(); foreach (var g in regions) foreach (var e in g) if (e.IsMouseOver) return; demo.Idle(); };
+        void Region(string? key, params FrameworkElement?[] els)
+        {
+            var g = els.Where(e => e != null).Cast<FrameworkElement>().ToArray();
+            regions.Add(g);
+            foreach (var e in g)
+            {
+                e.MouseEnter += (_, __) => { idleTm.Stop(); if (key != null) demo.Play(key); };
+                e.MouseLeave += (_, __) => { idleTm.Stop(); idleTm.Start(); };
+            }
+        }
         static FrameworkElement? HeadOf(TextBlock b) => (b.Parent as FrameworkElement)?.Parent as FrameworkElement;   // 요약칸 → 머리 줄 → 머리(누르는 자리)
         top.Children.Add(DemoFrame.Wrap("SheetBook", demo));
         var deck = new DockPanel { LastChildFill = true };
@@ -99,24 +112,28 @@ internal sealed class SheetBookPanel : UserControl
         Content = deck;
 
         // ■ 표제란
-        var s1 = Cat("■ 표제란", "도곽 표제란에 들어갈 값 — 이 도면에 저장됩니다", true, false, out _titleBadge, "sbTitle", Hook, HeadOf);
-        Field(s1, "공사명", _project, "비우면 빈 칸");
-        Field(s1, "도면명 앞말", _prefix, "도면명 앞에 붙는 말 — 예: «배수지» → «배수지 토공 횡단면도 (1/5)»");
+        // ★[v117.18.5 · JACK 1116 «공사명에 올리면 공사명 글씨 나오는 애니메이션 — 공사명 · 도면명 · 도면번호 · 날짜 순»] 표제란 = 줄마다 제 장면(머리는 넷 다)
+        var s1 = Cat("■ 표제란", "도곽 표제란에 들어갈 값 — 이 도면에 저장됩니다", true, false, out _titleBadge);
+        Region("sbTitle", HeadOf(_titleBadge));
+        Region(null, s1);
+        Region("sbTProject", Field(s1, "공사명", _project, "비우면 빈 칸"));
+        Region("sbTPrefix", Field(s1, "도면명 앞말", _prefix, "도면명 앞에 붙는 말 — 예: «배수지» → «배수지 토공 횡단면도 (1/5)»"));
         var no = new StackPanel { Orientation = Orientation.Horizontal };
         no.Children.Add(_noPrefix);
         no.Children.Add(new TextBlock { Text = "시작", FontSize = 11, Foreground = DhBrand.Sub, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 4, 0) });
         no.Children.Add(_noStart);
         _noPrefix.ToolTip = "도면번호 접두 — 번호는 세 자리(001)로 탭 · 장 차례대로 이어 매김";
         _noStart.ToolTip = "첫 장 번호";
-        Field(s1, "도면번호", no, null);
+        Region("sbTNo", Field(s1, "도면번호", no, null));
         var dt = new StackPanel { Orientation = Orientation.Horizontal };
         dt.Children.Add(_date); dt.Children.Add(_today);
         _date.ToolTip = "기본 = 작성하는 날(yyyy.MM.dd) · 고쳐 쓰면 그 글";
         _today.Click += (_, __) => { _date.Text = Today(); };
-        Field(s1, "날짜", dt, null);
+        Region("sbTDate", Field(s1, "날짜", dt, null));
 
         // ■ 배치 탭
-        var s2 = Cat("■ 배치 탭", "모형탭에 그려 둔 종단도 · 횡단도 장 그대로 — 종류마다 탭 하나 · 장은 왼쪽 → 오른쪽", false, true, out _tabsBadge, "sbTabs", Hook, HeadOf);
+        var s2 = Cat("■ 배치 탭", "모형탭에 그려 둔 종단도 · 횡단도 장 그대로 — 종류마다 탭 하나 · 장은 왼쪽 → 오른쪽", false, true, out _tabsBadge);
+        Region("sbTabsAll", HeadOf(_tabsBadge), s2);   // 탭 애니메이션 — 배치 탭(7초) → 벌개제근(14초) 한 편 · 줄마다 바꾸지 않음
         var grid = new Grid { Margin = new Thickness(0, 0, 0, 2) };
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(128) });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
@@ -137,7 +154,6 @@ internal sealed class SheetBookPanel : UserControl
             cb.Checked += (_, __) => Changed(); cb.Unchecked += (_, __) => Changed();
             tb.TextChanged += (_, __) => Changed();
             r++;
-            if (k == Kind.Plan) { HookBtn(cb, "sbClearing", "sbTabs"); HookBtn(tb, "sbClearing", "sbTabs"); HookBtn(st, "sbClearing", "sbTabs"); }
             if (k == Kind.Plan)
             {
                 // 평면 축척 — 평면 줄 바로 아래(들여서)
@@ -149,14 +165,14 @@ internal sealed class SheetBookPanel : UserControl
                 _planScale.ToolTip = "자동 = 평면이 뷰포트에 들어가는 가장 큰 축척(1:200 ~ 1:5000)";
                 _planScale.SelectionChanged += (_, __) => Changed();
                 ps.Children.Add(_planScale); ps.Children.Add(_planAuto);
-                HookBtn(ps, "sbPlanDeco", "sbTabs");
                 Grid.SetRow(ps, r); Grid.SetColumn(ps, 0); Grid.SetColumnSpan(ps, 3);
                 grid.Children.Add(ps);
                 r++;
             }
         }
         s2.Children.Add(grid);
-        var s3 = Cat("■ 도곽", "배치 탭에 씌울 도곽(기본 = 수공 도곽)", false, false, out _frameBadge, "sbFrame", Hook, HeadOf);
+        var s3 = Cat("■ 도곽", "배치 탭에 씌울 도곽(기본 = 수공 도곽)", false, false, out _frameBadge);
+        Region("sbFrame", HeadOf(_frameBadge), s3);
         var fr = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 2) };
         fr.Children.Add(_frame); fr.Children.Add(_frameWarn);
         _frame.SelectionChanged += (_, __) =>
@@ -176,7 +192,7 @@ internal sealed class SheetBookPanel : UserControl
         var res = new StackPanel { Orientation = Orientation.Horizontal };
         res.Children.Add(_result); res.Children.Add(_resultWarn);
         bottom.Children.Add(res);
-        Hook(_make, "sbMake");
+        Region("sbMake", _make);
 
         // ■ 평면 꾸미기 — ★[v112.5 · JACK 1104 «기울기 · 방위표 · 등고값 · 등고선 간격 · 측점 껐다 켰다 — 작성하기로 수행해야만 활성화»] 평면 탭이 있을 때만 켬 · 바꾸면 평면 탭만 다시
         // ★[v112.6 · JACK 1104 «평면 꾸미기는 도면화 창 말고 전체 계획평면도 배치탭을 누르면 뜨는 별도 창»] 여기는 안 보임(PlanOptsWindow) — 칸은 남겨 둠(값 그릇)
@@ -229,14 +245,10 @@ internal sealed class SheetBookPanel : UserControl
     readonly TextBlock _titleBadge = new(), _tabsBadge = new(), _frameBadge = new();
 
     /// <summary>접이식 칸(다른 도킹창과 같은 아코디언) — 접히면 제목 옆에 요약 · 제목과 안쪽에 마우스 → 설명 장면 <paramref name="scene"/>.</summary>
-    StackPanel Cat(string title, string tip, bool first, bool open, out TextBlock badge, string scene, Action<FrameworkElement?, string> hook, Func<TextBlock, FrameworkElement?> headOf)
-    {
-        var body = GradingDialog.AddCollapsible(_root, title, out badge, tip, first, open);
-        hook(headOf(badge), scene); hook(body, scene);
-        return body;
-    }
+    StackPanel Cat(string title, string tip, bool first, bool open, out TextBlock badge)
+        => GradingDialog.AddCollapsible(_root, title, out badge, tip, first, open);
 
-    static void Field(Panel parent, string label, FrameworkElement input, string? tip)
+    static DockPanel Field(Panel parent, string label, FrameworkElement input, string? tip)
     {
         var row = new DockPanel { Margin = new Thickness(0, 0, 0, 6), LastChildFill = false };
         var l = new TextBlock { Text = label, Width = 80, FontSize = 11.5, Foreground = DhBrand.Ink, VerticalAlignment = VerticalAlignment.Center };
@@ -244,6 +256,7 @@ internal sealed class SheetBookPanel : UserControl
         row.Children.Add(l); row.Children.Add(input);
         if (tip != null) input.ToolTip = tip;
         parent.Children.Add(row);
+        return row;
     }
 
     internal void Load(Values v)

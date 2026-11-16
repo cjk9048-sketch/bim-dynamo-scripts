@@ -241,9 +241,9 @@ public sealed class ResetCommand
     ///  · keepGround=true([전체 초기화] — JACK 1023): 가져온 것 중 '원지반'과 그 재료(등고선 · 표고점 · 범위 밖 자료)는 남긴다.
     ///  · ★[v111.10] keepGround=false여도 남의 면이 원지반을 쓰면 원지반은 물러남(«원지반(옛)» · 숨김) + 그 재료 선은 안 지움(지우면 정의에 느낌표).
     /// 반환=(지운 지표면 수, 지운 객체 수, 번들 제거 여부).</summary>
-    internal static (int surfs, int ents, bool bundleCleared) ResetCore(Document doc, bool includeImported, bool keepGround = false)
+    internal static (int surfs, int ents, bool bundleCleared) ResetCore(Document doc, bool includeImported, bool keepGround = false, System.Collections.Generic.ICollection<ObjectId>? onlyGround = null)
     {
-        var rep = Wipe(doc, Scope.All, includeImported, keepGround);
+        var rep = Wipe(doc, Scope.All, includeImported, keepGround, onlyGround);
         string ret = rep.Ret.Retired.Count + rep.Ret.Failed.Count > 0 ? rep.RetireLine : "";
         if (ret.Length > 0) try { doc.Editor.WriteMessage("\n[초기화] " + ret); } catch { }
         try { DiagLog.Append($"\n■ 초기화(ResetCore · 가져온 것 {includeImported} · 원지반 남김 {keepGround})\n  {rep.Log.ToString().Replace("\n", "\n  ")}\n"); } catch { }
@@ -269,7 +269,7 @@ public sealed class ResetCommand
     /// <summary>★★★[v111.10 · 계획_초기화.md 3.1 ~ 3.3] 초기화 몸통 — 부품을 갈래대로 부른다.
     /// 차례: 진입도로 미리보기 끔 → (부지) 종단도 잔재 → 트랜잭션 하나[XML 정리 → (부지) «DH선형» 노선 · 뷰 → 진입도로 → 지울 면 목록 V → 물러날 면 P(읽기만) →
     /// (부지) «DH-» 선(남김 목록 · P에 원지반이 들면 그 재료도 남김) → 면(V − P 지움 · P 물러남) → (부지) 번호 옹벽 선 · 기록 · 보이기 / (도로) 정지면_DH 숨어 있으면 켬] → (도로) 노리선 → (부지) 세션 메모리.</summary>
-    internal static Report Wipe(Document doc, Scope scope, bool includeImported, bool keepGround)
+    internal static Report Wipe(Document doc, Scope scope, bool includeImported, bool keepGround, System.Collections.Generic.ICollection<ObjectId>? onlyGround = null)
     {
         Database db = doc.Database;
         var R = new Report();
@@ -333,7 +333,7 @@ public sealed class ResetCommand
                             || (site && SelfCheck.IsOurSurfaceName(nm))
                             // ★[v111.10] 이미 물러난 면 — 아무도 안 쓰면 이번에 지움(쌓이지 않게) · 쓰면 그대로(도로 갈래는 도로 · 최종면에서 물러난 면만 — 계획지표면은 그대로)
                             || RetiredInScope(tr, s, site);
-                    if (site && includeImported && !keepGround && SectionCommand.IsBase(nm, ImportGisCommand.GroundSurfaceName)) { hit = true; groundIds.Add(sid); }
+                    if (site && includeImported && !keepGround && SectionCommand.IsBase(nm, ImportGisCommand.GroundSurfaceName) && (onlyGround == null || onlyGround.Contains(sid))) { hit = true; groundIds.Add(sid); }   // ★[JACK 1116] onlyGround = 고른 원지반만(나머지 원지반 · 재료 · 지적은 남김)
                     if (hit) V.Add(sid);
                 }
                 catch { }
@@ -348,8 +348,8 @@ public sealed class ResetCommand
             if (site)
             {
                 var keep = new System.Collections.Generic.HashSet<string>(System.StringComparer.OrdinalIgnoreCase);
-                if (!includeImported) keep.UnionWith(ImportGisCommand.ImportLayers);
-                if (keepGround || R.GroundRetired) keep.UnionWith(GroundKeepLayers);   // ★[v111.10] 물러난 원지반의 재료 선도 남김
+                if (!includeImported || onlyGround != null) keep.UnionWith(ImportGisCommand.ImportLayers);
+                if (keepGround || R.GroundRetired || onlyGround != null) keep.UnionWith(GroundKeepLayers);   // ★[v111.10] 물러난 원지반의 재료 선도 남김
                 if (scope == Scope.Site) keep.UnionWith(SiteKeepLayers);
                 R.Ents += EraseEntitiesOnDhLayers(db, tr, keep);
             }
@@ -363,7 +363,7 @@ public sealed class ResetCommand
             {
                 // ★[v103.0] 번호 붙은 옹벽 선(표면은 위 이름 규칙에서 — 물러나 이름이 바뀐 면은 여기서 안 걸림)
                 try { var erW = WallTags.Erase(db, tr, (n, r) => true, true, ObjectId.Null); R.Surfs += erW.Surfaces + erW.LegacySurfaces; R.Ents += erW.Lines + erW.LegacyLines; } catch { }
-                if (includeImported && !keepGround)
+                if (includeImported && !keepGround && onlyGround == null)
                     // ★[v111.9 · 계획_원지형자르기.md 6장] 원지반까지 지우면(좌표계 변경) 원지형 자르기 기록도 — 원지반을 남기는 초기화는 남긴다(잘린 원지반의 띠를 다음 자르기가 알아보게)
                     GroundCropBuilder.ClearRecord(db, tr);
 

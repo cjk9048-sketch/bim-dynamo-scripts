@@ -46,6 +46,8 @@ internal sealed partial class FixDemoView : Border
         ["exGround"] = (5.4, "원지반 선택 — 부지 밖 원지반 클릭"),
         ["exToWall"] = (5.4, "부분 변환 — 시작 · 끝점 클릭 → 그 구간 수직"),
         ["exSlope"] = (9.0, "3. 굴착 구배 1 : n — n 클수록 넓게 팜 · 0 = 수직"),
+        ["exSlopeVal"] = (1.0, "굴착 구배 1 : n — 칸 값대로 비탈 모양 · 가시설이면 수직"),   // ★미리보기(StaticKeys) — V1 = n · VFlag = 가시설
+        ["profVal"] = (1.0, "종단 — 최대 경사 % · PVI 간격 m 대로 종단 모양"),   // ★미리보기(StaticKeys) — V1 = 최대 경사(비) · V2 = PVI 간격 m
         ["exWallChk"] = (4.4, "가시설 — 둘레 전체 수직(1:0.01) · 구배 안 씀"),
         ["exReset"] = (4.4, "터파기 초기화 — 터파기 지움 · 터파기선 남음"),
         ["exToSlope"] = (4.8, "사면 변환 — 가시설 구간 클릭 → 다시 사면"),
@@ -81,6 +83,29 @@ internal sealed partial class FixDemoView : Border
         ["sbPlanDeco"] = (9.0, "평면 꾸미기 — 도면 기울기 · 등고값(계곡선) · 측점 · 등고선 간격"),
         ["sbMake"] = (6.0, "작성하기 — 고른 종류마다 배치 탭 새로 만듦 · U 한 번에 되돌림"),
         ["sbClearing"] = (14.0, "벌개제근 — 공사 범위 ∩ 임상도 숲만 → 종류별 ㎡ → 토공량표 한 줄"),
+        // ★[v117.18.5 · JACK 1116 «공사명에 올리면 공사명 글씨 나오는 애니메이션 — 공사명 · 도면명 · 도면번호 · 날짜 순»] 표제란 줄마다 제 장면
+        ["sbTProject"] = (4.6, "공사명 — 입력 → 표제란 공사명 칸"),
+        ["sbTPrefix"] = (5.6, "도면명 앞말 — 앞말 + 탭 이름 → 표제란 도면명"),
+        ["sbTNo"] = (5.6, "도면번호 — 접두 + 시작 번호 → 장마다 001 · 002 · 003"),
+        ["sbTDate"] = (4.8, "날짜 — [오늘] 또는 직접 입력 · 비우면 작성하는 날"),
+        // ★[v117.18.5 · JACK 1116 «배치 탭 안에선 영상이 끊이지 않게» = 탭 애니메이션] 배치 탭 한 편 = 배치 탭(7초) → 벌개제근(14초) · 자막은 장면 따라
+        ["sbTabsAll"] = (21.0, "배치 탭 — 모형탭의 종단 · 횡단 장 → 종류마다 탭 하나 + 도곽 · 장은 왼쪽 → 오른쪽"),
+        // ★[수량산출서 · JACK 1116 «도킹창 애니메이션 — 수목»] 수량산출서 도킹창
+        ["qtyFacility"] = (4.2, "시설명 — 입력 → 둘째 시트 이름 «1)시설명»"),
+        ["qtyDeep"] = (4.4, "터파기 구분 H — 깊이 4.5 m 기준 → 위 · 아래 따로 집계"),
+        ["qtyForestArea"] = (7.0, "임목폐기물 — 공사 범위 ∩ 임상도 숲 → 임상별 ㎡ → 벌개제근 ㎡"),
+        ["qtyDensity"] = (6.8, "밀도 — 100 ㎡ 안 나무 수 → × 면적 → 본수"),
+        ["qtyDbh"] = (4.6, "흉고직경 — 지상 1.2 m 줄기 지름 → 지상부 식의 d"),
+        ["qtyRoot"] = (7.2, "근원직경 — 땅 위 줄기 지름 ×4 → 뿌리분 부피 V"),
+        ["qtyHeight"] = (6.0, "수고 — 비우면 임상도 임분고 면적가중평균 → 없으면 7.2 m"),
+        ["qtyConst"] = (5.6, "상수 — 중량 식 쌓기 → 발생량 · 적사량"),
+        ["qtyConst0"] = (4.6, "뿌리부 K — 뿌리부 중량 W₂ = K · f · V"),
+        ["qtyConst1"] = (4.6, "뿌리 비율 f — 뿌리부 중량 W₂ = K · f · V"),
+        ["qtyConst2"] = (4.6, "수간 단위중량 W₀ — 지상부 중량 W₁의 한 항"),
+        ["qtyConst3"] = (4.6, "형상계수 K — 지상부 중량 W₁의 한 항"),
+        ["qtyConst4"] = (4.6, "할증률 P — 지상부 중량 W₁ · (1+P)"),
+        ["qtyConst5"] = (4.6, "지상부 할증 — 지상부 발생량(㎥)에 곱함"),
+        ["qtyMake"] = (5.2, "만들기 — 토공 수량 엑셀 → 시트 5장"),
     };
 
     /// <summary>현재 장면 키.</summary>
@@ -89,6 +114,14 @@ internal sealed partial class FixDemoView : Border
     public string PlayKey => _key;   // 지금 그리는(마지막으로 튼) 장면 이름
     public bool Playing => _tm.IsEnabled || _held;   // ★[v117.18.1] 끝 그림에서 멈춘 터파기 장면도 «도는 중»(마우스가 칸 안에서 움직일 때 처음부터 다시 돌지 않게)
     bool _held;
+    /// <summary>★[JACK 1116 «수치를 직접 기입하는 곳은 애니메이션이 아니라 미리보기 뷰»] 미리보기 장면 키 — Play(key)가 타이머 없이 완성 그림을 바로 그려 멈춤 · 값이 바뀌면 패널이 Redraw() 호출(장면은 지금 값을 읽어 그림). 새 수치 칸 장면은 여기에 키만 추가.</summary>
+    public static readonly HashSet<string> StaticKeys = new() { "roadAlign", "roadXsec", "roadPave", "roadSlope", "exSlopeVal", "profVal", "qtyDeep", "qtyDensity", "qtyDbh", "qtyRoot", "qtyHeight", "qtyConst", "qtyConst0", "qtyConst1", "qtyConst2", "qtyConst3", "qtyConst4", "qtyConst5" };
+    /// <summary>미리보기 장면이 떠 있으면 새 값으로 다시 그림(없으면 아무 일 없음).</summary>
+    public void Redraw()
+    {
+        if (!_played || !StaticKeys.Contains(_key)) return;
+        try { Draw(_key, Spec[_key].Period - 0.01); } catch { }
+    }
     /// <summary>★[v117.18.1 · JACK 1116] 한 번만 돌고 끝 그림에서 멈추는 장면 — 전부.</summary>
     static bool HoldsEnd(string key) => true;   // ★[v117.18.2 · JACK 1116 «모든 애니메이션 되감기 없이»] 전부 한 번 돌고 끝 그림에서 멈춤
     /// <summary>«terrace» 장면용 — 산지 대소단 체크 상태(꺼짐이면 옅게 + «꺼짐»).</summary>
@@ -151,6 +184,13 @@ internal sealed partial class FixDemoView : Border
         }
         else { _chip.Visibility = Visibility.Collapsed; _cap.Text = cap; }
         _played = true; _held = false;
+        // ★[v117.18.5 · JACK 1116 «도로설정은 절토 · 성토처럼 처음부터 다 보이고 수치에 따라 모양이 바뀌게»] 도로 설정 넷은 타이머 없이 완성 그림 바로 + 값 바뀔 때 RedrawHeld
+        if (StaticKeys.Contains(key))
+        {
+            _tm.Stop(); _held = true;
+            try { Draw(key, Spec[key].Period - 0.01); } catch { }
+            return;
+        }
         if (IsLoaded && !IsVisible) return;   // ★[v117.18] 도움말 체크를 꺼 접힌 칸 — 타이머 안 돌림(CPU 0)
         _sw.Restart(); _tm.Start();
     }
@@ -185,7 +225,7 @@ internal sealed partial class FixDemoView : Border
     static readonly Color ChipBgC = Color.FromRgb(0xDC, 0xEF, 0xE9), ChipLineC = Color.FromRgb(0x9C, 0xC8, 0xBE), ChipInkC = Color.FromRgb(0x00, 0x48, 0x4E);
     static readonly Brush ChipBg = Fz(0xDC, 0xEF, 0xE9), ChipLine = Fz(0x9C, 0xC8, 0xBE);
     /// <summary>설명 글 앞에 단추 모양을 붙이는 장면(진짜 단추에서 부르는 것) — 칸 제목 · 라디오 · 체크 장면은 글만.</summary>
-    static readonly HashSet<string> ButtonKeys = new() { "toWall", "toSlope", "add", "delete", "pickPlan", "pickGround", "exPick", "exGround", "exToWall", "exReset", "exToSlope", "exClear", "pfProfile", "pfAdd", "pfFb", "pfDel", "pfRev", "xsView", "roadDraw", "roadPick", "sbMake" };
+    static readonly HashSet<string> ButtonKeys = new() { "toWall", "toSlope", "add", "delete", "pickPlan", "pickGround", "exPick", "exGround", "exToWall", "exReset", "exToSlope", "exClear", "pfProfile", "pfAdd", "pfFb", "pfDel", "pfRev", "xsView", "roadDraw", "roadPick", "sbMake", "qtyMake" };
 
     /// <summary>마우스가 나감 — 타이머를 멈추고 마지막 그림(결과)에서 멈춘다.</summary>
     public void Idle()
@@ -272,6 +312,8 @@ internal sealed partial class FixDemoView : Border
             case "exGround": ExGround(t); break;
             case "exToWall": ExToWall(t); break;
             case "exSlope": ExSlope(t); break;
+            case "exSlopeVal": ExSlopeVal(); break;
+            case "profVal": ProfVal(); break;
             case "exWallChk": ExWallChk(t); break;
             case "exReset": ExReset(t); break;
             case "exToSlope": ExToSlope(t); break;
@@ -303,6 +345,26 @@ internal sealed partial class FixDemoView : Border
             case "sbPlanDeco": SbPlanDeco(t); break;
             case "sbMake": SbMake(t); break;
             case "sbClearing": SbClearing(t); break;
+            case "sbTProject": SbTField(0, t); break;
+            case "sbTPrefix": SbTField(1, t); break;
+            case "sbTNo": SbTField(2, t); break;
+            case "sbTDate": SbTField(3, t); break;
+            case "sbTabsAll": SbTabsAll(t); break;
+            case "qtyFacility": QtyFacility(t); break;
+            case "qtyDeep": QtyDeep(t); break;
+            case "qtyForestArea": QtyForestArea(t); break;
+            case "qtyDensity": QtyDensity(t); break;
+            case "qtyDbh": QtyDbh(t); break;
+            case "qtyRoot": QtyRoot(t); break;
+            case "qtyHeight": QtyHeight(t); break;
+            case "qtyConst": QtyConst(-1, t); break;
+            case "qtyConst0": QtyConst(0, t); break;
+            case "qtyConst1": QtyConst(1, t); break;
+            case "qtyConst2": QtyConst(2, t); break;
+            case "qtyConst3": QtyConst(3, t); break;
+            case "qtyConst4": QtyConst(4, t); break;
+            case "qtyConst5": QtyConst(5, t); break;
+            case "qtyMake": QtyMake(t); break;
         }
     }
 
@@ -1521,10 +1583,23 @@ internal sealed partial class FixDemoView : Border
     // ★[v117.18 · JACK 1116 «굴착 구배 애니메이션이 없어 — 측면으로»] 단면 — 구덩이 바닥 · 비탈 1:n(세로 1 · 가로 n) · n이 커지면 완만 · 0이면 수직(가시설)
     void ExSlope(double t)
     {
-        const double gy = 100, by = 214, cx = 210, hb = 56;
         // n 시간표: 0.3 → 0.5 → 1.0 → 0(수직)
         double n = t < 2.4 ? 0.3 : t < 3.4 ? 0.3 + 0.2 * Seg(t, 2.4, 3.4) : t < 5.0 ? 0.5 : t < 6.0 ? 0.5 + 0.5 * Seg(t, 5.0, 6.0) : t < 7.2 ? 1.0 : 1.0 * (1 - Seg(t, 7.2, 8.2));
-        double h = by - gy, w = n * h;
+        ExSlopeAt(n, n < 0.02 ? "1 : 0  수직" : $"1 : {n:0.0#}");
+    }
+
+    // ★미리보기 — 칸의 굴착 구배 1 : n 그대로(가시설이면 수직 · «가시설»)
+    void ExSlopeVal()
+    {
+        double n = VFlag ? 0 : Cl(V1, 0, 20, 1);
+        ExSlopeAt(n, VFlag ? "가시설" : n < 0.02 ? "1 : 0  수직" : $"1 : {Num(V1, "0.0#")}");
+    }
+
+    void ExSlopeAt(double n, string lab)
+    {
+        const double gy = 100, cx = 210, hb = 56;
+        double h = 114; if (n * h > 120) h = 120 / n;   // 아주 완만하면 깊이를 줄여 비율은 그대로
+        double by = gy + h, w = n * h;
         Tx(10, 8, "단면", 13, Dim, true);
         Pl(new[] { new Point(0, gy), new Point(W, gy), new Point(W, 292), new Point(0, 292) }, A(SoilC, 0.45), null, 0);
         var hole = new[] { new Point(cx - hb - w, gy), new Point(cx - hb, by), new Point(cx + hb, by), new Point(cx + hb + w, gy) };
@@ -1543,7 +1618,6 @@ internal sealed partial class FixDemoView : Border
             Ln(new Point(cx + hb, by + 14), new Point(lx, by + 14), ink, 1.5);
             TxB((cx + hb + lx) / 2 - 6, by + 16, "n", 15, ExOrgT, true);
         }
-        string lab = wall ? "1 : 0  수직" : $"1 : {n:0.0#}";
         Key(150, 38, lab, 1, 18);
     }
 
@@ -2005,6 +2079,35 @@ internal sealed partial class FixDemoView : Border
 
     // ★[v117.18.2 · JACK 1116 «진입도로 횡단 · 포장 · 사면은 실제 값에 따라»] 도로 장면은 지금 도킹창 값(RoadSrc)으로 그린다 — 값이 바뀌면 멈춘 끝 그림만 다시 그림(되감기 없음)
     internal Func<RoadDemoParams?>? RoadSrc;
+    /// <summary>미리보기 장면이 읽는 값(패널이 Play · Redraw 전에 넣음) — 뜻은 Spec 주석.</summary>
+    public double V1 = 1, V2 = 1; public bool VFlag;
+
+    // ★미리보기 — 종단: 최대 경사(V1 = 비율) · PVI 간격(V2 = m) 대로. 가장 가파른 구간 = 최대 경사 · PVI 점 사이 = 간격
+    void ProfVal()
+    {
+        double g = Cl(V1, 0.005, 0.3, 0.08), sp = Cl(V2, 1, 500, 40);
+        double pm = Math.Min(1.7, 340 / (sp * 2.2));                       // 화면 px / m — 구간 둘은 늘 보이게
+        double vs = Math.Min(pm * 4, 56 / (g * sp));                       // 세로 과장(구간 비율은 그대로)
+        double[] gr = { 1.0, -0.6, 0.45, -0.7, 0.9, -0.5, 0.35, -0.8 };   // 첫 구간이 가장 가파름 = 최대 경사
+        var xs = new List<double>(); var ys = new List<double>();
+        double x = 40, y = 0;
+        for (int i = 0; x <= 390 && i < 40; i++)
+        {
+            xs.Add(x); ys.Add(y);
+            double gi = g * gr[i % gr.Length];
+            y -= gi * sp * vs; x += sp * pm;
+        }
+        if (xs.Count < 2) { xs.Add(x); ys.Add(y); }
+        double mn = ys.Min(), mx = ys.Max(), off = 150 - (mn + mx) / 2;
+        var pts = new List<Point>(); for (int i = 0; i < xs.Count; i++) pts.Add(new Point(xs[i], ys[i] + off));
+        var gnd = new List<Point>(); for (double gx = 14; gx <= 406; gx += 6) { double yy = pts[0].Y; for (int i = 1; i < pts.Count; i++) if (gx >= pts[i - 1].X) yy = pts[i - 1].Y + (pts[i].Y - pts[i - 1].Y) * Math.Clamp((gx - pts[i - 1].X) / (pts[i].X - pts[i - 1].X), 0, 1); gnd.Add(new Point(gx, yy + 14 + Rough(gx * 1.3) * 2.5)); }
+        Pl(new List<Point>(gnd) { new(406, 290), new(14, 290) }, A(SoilC, 0.4), null, 0);
+        Pl(gnd, null, Ground, 1.6, closed: false);
+        Pl(pts, null, Profile, 2.4, closed: false);
+        foreach (var p in pts) Dot(p, 3.5, Red);
+        { Ln(pts[0], pts[1], A(RedC, 1), 3.6); TxB(Math.Min((pts[0].X + pts[1].X) / 2 - 20, 330), Math.Min(pts[0].Y, pts[1].Y) - 26, $"최대 {Num(g * 100)} %", 12, Red, true, 1); }
+        if (pts.Count >= 2) DimH(pts[0].X, pts[1].X, 248, $"간격 {Num(sp)} m", 1, 18);
+    }
     RoadDemoParams RP { get { try { return RoadSrc?.Invoke() ?? new RoadDemoParams(); } catch { return new RoadDemoParams(); } } }
     /// <summary>멈춘(끝 그림) 도로 장면만 새 값으로 다시 그림 · 도는 중이면 다음 프레임이 새 값을 읽음.</summary>
     public void RedrawHeld()
@@ -2019,11 +2122,12 @@ internal sealed partial class FixDemoView : Border
     void RoadAlign(double t)
     {
         double draw = Seg(t, 0.3, 1.5), u = Seg(t, 2.0, 3.2);
+        double fd = Math.Clamp(46 * Cl(RP.CurveR, 3, 1000, 30) / 30, 12, 90);   // 곡선 반경 R에 따라 둥근 크기가 변함(그림 비례)
         if (u <= 0) Pl(PartOf(RdV, draw), null, RouteBr, 2.6, closed: false);
-        else { DashPl(RdV, A(RdBlueC, 0.35), 1.4); Pl(Fillet(RdV, 46 * u), null, RouteBr, 2.6, closed: false); }
+        else { DashPl(RdV, A(RdBlueC, 0.35), 1.4); Pl(Fillet(RdV, fd * u), null, RouteBr, 2.6, closed: false); }
         double dots = Seg(t, 1.5, 1.8) * (1 - u);
         for (int i = 1; i < 3; i++) if (dots > 0.05) Dot(RdV[i], 4, A(RedC, dots));
-        for (int i = 1; i < 3; i++) RadiusMark(RdV, i, 46, Seg(t, 3.2, 3.6));
+        for (int i = 1; i < 3; i++) RadiusMark(RdV, i, fd, Seg(t, 3.2, 3.6));
         TxB(14, 12, $"곡선 반경 R = {Num(RP.CurveR)} m", 12, Txt, true, Seg(t, 3.3, 3.7));
     }
 
@@ -2138,7 +2242,7 @@ internal sealed partial class FixDemoView : Border
         Pl(soil, A(SoilC, 0.45), null, 0);
         var rp = RP;
         double cn = Cl(rp.CutSlope, 0.3, 4, 1.5), fn = Cl(rp.FillSlope, 0.3, 4, 1.8);
-        double bhC = Cl(rp.CutBenchH * 3, 10, 40, 15), bhF = Cl(rp.FillBenchH * 3, 10, 40, 15), bwC = Cl(rp.CutBenchW * 8, 0, 30, 8), bwF = Cl(rp.FillBenchW * 8, 0, 30, 8);
+        double bhC = Cl(rp.CutBenchH * 6, 14, 44, 30), bhF = Cl(rp.FillBenchH * 6, 14, 44, 30), bwC = Cl(rp.CutBenchW * 8, 0, 30, 8), bwF = Cl(rp.FillBenchW * 8, 0, 30, 8);
         var cut = SlopeLine(new Point(130, 190), -1, true, cn, bhC, bwC, G);
         var fil = SlopeLine(new Point(290, 190), 1, false, fn, bhF, bwF, G);
         double uc = Seg(t, 0.9, 2.7), uf = Seg(t, 2.6, 4.4);
@@ -2159,13 +2263,20 @@ internal sealed partial class FixDemoView : Border
         Pl(PartOf(fil, uf), null, Profile, 2.4, closed: false);
         TxB(16, 20, $"절토 1:{Num(rp.CutSlope)}", 12, Red, true, Seg(t, 2.0, 2.4));
         TxB(330, 20, $"성토 1:{Num(rp.FillSlope)}", 12, Green, true, Seg(t, 3.9, 4.3));
-        // 소단(첫 소단) 표시
+        // 첫 단 — 단높이(세로 치수) · 소단 폭(가로 치수) = 지금 칸 값
+        // ★[v117.18.5] 소단 = SlopeLine 의 [1] → [2](평평한 곳) · 예전엔 [2] → [3](사면)에 표시해 경사면을 «소단»으로 가리켰음
         double ba = Seg(t, 4.7, 5.2);
-        if (ba > 0.01 && cut.Count > 3 && bwC > 0.5)
+        if (ba > 0.01 && cut.Count > 2)
         {
-            var b0 = cut[2]; var b1 = cut[3];
-            Ln(new Point(b0.X, b0.Y - 3), new Point(b1.X, b1.Y - 3), A(RedC, ba), 3);
-            TxB(b1.X - 6, b1.Y - 26, "소단", 11, Red, true, ba);
+            var s0 = cut[0]; var s1 = cut[1]; var br = A(RedC, ba);
+            Ln(new Point(s0.X + 6, s1.Y), new Point(s0.X + 6, s0.Y), br, 1.4);
+            Ln(new Point(s0.X + 2, s1.Y), new Point(s0.X + 10, s1.Y), br, 1.4); Ln(new Point(s0.X + 2, s0.Y), new Point(s0.X + 10, s0.Y), br, 1.4);
+            TxB(s0.X + 12, (s0.Y + s1.Y) / 2 - 9, $"단높이 {Num(rp.CutBenchH)} m", 11, Red, true, ba);
+            if (bwC > 0.5 && Math.Abs(cut[2].Y - s1.Y) < 0.5)
+            {
+                Ln(new Point(s1.X, s1.Y - 2), new Point(cut[2].X, s1.Y - 2), br, 3);
+                DimH(Math.Min(s1.X, cut[2].X), Math.Max(s1.X, cut[2].X), s1.Y - 14, $"소단 {Num(rp.CutBenchW)} m", ba);
+            }
         }
     }
 

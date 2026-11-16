@@ -20,6 +20,7 @@ using AcadApp = Autodesk.AutoCAD.ApplicationServices.Application;
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.InfraworksCommand))]          // DHINFRA(INFRAWORKS SHP 내보내기)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.Web3DCommand))]               // DH3D(3D 보기 — Civil 안 3D 창 · v107)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.ViewSurfaceCommand))]         // DHVIEW(지표면 보기 전환)
+[assembly: CommandClass(typeof(DH.Grading.Civil.Commands.GroundOffCommand))]          // ★[v117.18.5 · JACK 1116 «원지반 삭제 안 돼»] DHGROUNDOFF — v105.1.3부터 등록이 빠져 «알 수 없는 명령»이었음
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.ExcavCommand))]              // DHEXCAV(터파기 지표면 — 지하구조물)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.ResetCommand))]               // DHRESET(전체 초기화) · DHGRADERESET(계획지표면 초기화) · DHROADRESET(진입도로 초기화)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.BasemapCommand))]             // DHMAP/DHMAPOFF(위성 배경지도 켜기·끄기)
@@ -984,8 +985,8 @@ public sealed class RibbonApp : IExtensionApplication
 
             tab.Panels.Add(new RibbonPanel { Source = pExport });
             // ★★★[v112.0 · 계획_도면화.md 4.10 · JACK 1103 «도면화 단추 새로»] «내보내기» 맨 앞 — 도킹창 «도면화»(표제란 값 → [작성하기])
-            var btnBook = MakeButton("도면화", "DHSHEETBOOK ", "모형의 종단도 · 횡단도로 배치탭(도곽 · 표제란)을 만듭니다", "도면화");
-            btnBook.ToolTip = MakeTip("도면화 (DHSHEETBOOK)",
+            var btnBook = MakeButton("도면생성", "DHSHEETBOOK ", "모형의 종단도 · 횡단도로 배치탭(도곽 · 표제란)을 만듭니다", "도면화");
+            btnBook.ToolTip = MakeTip("도면생성 (DHSHEETBOOK)",
                 "모형의 종단도 · 횡단도로 **배치탭(도곽 · 표제란)**을 만듭니다.\n\n" +
                 "· 탭 = 전체 계획평면도 · 부지 종단면도 · 부지 횡단면도 · 진입도로 종단면도 · 진입도로 횡단면도\n" +
                 "· 장마다 페이지 설정(A1 · A3 맞춤)\n" +

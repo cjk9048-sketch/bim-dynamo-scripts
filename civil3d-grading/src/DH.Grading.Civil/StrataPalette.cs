@@ -80,7 +80,7 @@ public static class StrataPalette
                     //   여기 숫자를 박아 두면 칸을 넓힐 때 창이 안 따라와 또 잘린다(§50).
                     MinimumSize = new System.Drawing.Size(StrataPanel.WidestWidth, 420),
                 };
-                _ps.AddVisual("지층 구성", _panel);
+                _ps.AddVisual("지층 구성", DockClose.Wrap(_panel, () => _ps));
                 // ★뜰 때의 크기도 같은 값으로 — <c>MinimumSize</c>만 주면 도킹 폭이 안 따라오는 판이 있다.
                 try { _ps.Size = new System.Drawing.Size(StrataPanel.WidestWidth, 700); } catch { }
             }

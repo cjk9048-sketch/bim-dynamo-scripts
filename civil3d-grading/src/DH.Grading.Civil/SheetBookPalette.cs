@@ -19,13 +19,13 @@ internal static class SheetBookPalette
         if (_ps == null)
         {
             _panel = new SheetBookPanel();
-            _ps = new PaletteSet("도면화")
+            _ps = new PaletteSet("도면생성")
             {
                 Style = PaletteSetStyles.ShowPropertiesMenu | PaletteSetStyles.ShowAutoHideButton | PaletteSetStyles.ShowCloseButton,
                 DockEnabled = DockSides.Left | DockSides.Right,
                 MinimumSize = new System.Drawing.Size(360, 480),
             };
-            _ps.AddVisual("도면화", _panel);
+            _ps.AddVisual("도면생성", DockClose.Wrap(_panel, () => _ps));
             _panel.MakeClicked += Make;
             _panel.PlanOptsChanged += () =>
             {

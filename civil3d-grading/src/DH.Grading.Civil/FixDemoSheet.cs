@@ -317,4 +317,113 @@ internal sealed partial class FixDemoView
             TxB(294, 230, "→ 엑셀 수량산출서", 9, Txt, true, xl);
         }
     }
+
+    // ── ★[v117.18.5 · JACK 1116 «공사명에 올리면 공사명 글씨 나오는 애니메이션 — 공사명 · 도면명 · 도면번호 · 날짜 순»] 표제란 줄마다 그 칸만 ──
+    static readonly string[] SbTLabels = { "공사명", "도면명", "도면번호", "날짜" };
+
+    /// <summary>오른쪽 도곽 + 표제란 넉 줄 — <paramref name="focus"/> 줄만 칠하고 값을 씀(나머지는 빈 칸).</summary>
+    void SbTSheet(int focus, double fill, Action<double, double>? value)
+    {
+        Pl(SbR(206, 28, 202, 244), Brushes.White, Fz(0x77, 0x77, 0x77), 1.4);
+        Pl(SbR(212, 34, 190, 232), null, Fz(0xAA, 0xAA, 0xAA), 0.8);
+        for (int i = 0; i < 5; i++) Ln(new Point(222, 52 + i * 22), new Point(392 - (i % 2) * 40, 52 + i * 22), Fz(0xE2, 0xE2, 0xE2), 1);
+        for (int i = 0; i < 4; i++)
+        {
+            double ry = 176 + i * 22; bool on = i == focus;
+            Pl(SbR(214, ry, 186, 22), on && fill > 0.01 ? A(ChipBgC, fill) : Brushes.White, on && fill > 0.01 ? A(Color.FromRgb(0xD9, 0x34, 0x2B), fill) : Fz(0x88, 0x88, 0x88), on && fill > 0.01 ? 1.6 : 1);
+            Tx(218, ry + 4, SbTLabels[i], 9, on ? Txt : Dim, on);
+            if (on) value?.Invoke(262, ry + 4);
+        }
+        Ln(new Point(258, 176), new Point(258, 264), Fz(0x88, 0x88, 0x88), 1);
+    }
+
+    /// <summary>a → b 선(진행 <paramref name="u"/>) + 끝 화살촉.</summary>
+    void SbArrowTo(Point a, Point b, double u)
+    {
+        if (u <= 0.01) return;
+        var c = Color.FromRgb(0xD9, 0x34, 0x2B);
+        var e = new Point(a.X + (b.X - a.X) * u, a.Y + (b.Y - a.Y) * u);
+        Ln(a, e, A(c, 0.9), 1.6, dash: true);
+        if (u > 0.95) { double dx = b.X - a.X, dy = b.Y - a.Y, l = Math.Sqrt(dx * dx + dy * dy); var d = new Point(dx / l, dy / l); var n = new Point(-d.Y, d.X); Ln(b, new Point(b.X - d.X * 7 + n.X * 4, b.Y - d.Y * 7 + n.Y * 4), A(c, 1), 1.8); Ln(b, new Point(b.X - d.X * 7 - n.X * 4, b.Y - d.Y * 7 - n.Y * 4), A(c, 1), 1.8); }
+    }
+
+    /// <summary>입력 칸 하나(이름 + 흰 상자 + 글) — 글은 <paramref name="typed"/>(0~1)만큼 한 자씩.</summary>
+    void SbTBox(double x, double y, double w, string label, string text, double typed, bool focus = true)
+    {
+        if (label.Length > 0) Tx(x, y - 20, label, 12, Txt, true);
+        Pl(SbR(x, y, w, 28), Brushes.White, focus ? A(Color.FromRgb(0x00, 0x48, 0x4E), 1) : Fz(0xBB, 0xBB, 0xBB), focus ? 1.6 : 1);
+        int n = (int)Math.Round(text.Length * Math.Clamp(typed, 0, 1));
+        if (n > 0) Tx(x + 6, y + 6, text.Substring(0, n), 12, Txt);
+    }
+
+    void SbTField(int i, double t)
+    {
+        switch (i)
+        {
+            case 0:   // 공사명 — 한 자씩 → 표제란 공사명
+            {
+                SbTBox(20, 96, 172, "공사명", "○○배수지 건설공사", Seg(t, 0.3, 2.0));
+                SbArrowTo(new Point(194, 110), new Point(212, 187), Seg(t, 2.2, 2.8));
+                double f = Seg(t, 2.8, 3.4);
+                SbTSheet(0, f, (x, y) => TxB(x, y, "○○배수지 건설공사", 9, Txt, true, f));
+                break;
+            }
+            case 1:   // 도면명 앞말 — 앞말 + 탭 이름 = 도면명
+            {
+                SbTBox(20, 70, 172, "도면명 앞말", "배수지", Seg(t, 0.3, 1.1));
+                double c1 = Seg(t, 1.4, 1.9), c2 = Seg(t, 2.0, 2.6);
+                if (c1 > 0.01) { Pl(SbR(20, 128, 54, 24), A(ChipBgC, c1), A(Color.FromRgb(0xD9, 0x34, 0x2B), c1), 1.4); TxB(26, 132, "배수지", 11, Red, true, c1); TxB(24, 156, "앞말", 9, Dim, false, c1); }
+                if (c2 > 0.01) { TxB(80, 131, "+", 13, Txt, true, c2); Pl(SbR(98, 128, 94, 24), A(Colors.White, c2), A(Color.FromRgb(0x99, 0x99, 0x99), c2), 1.2); TxB(104, 132, "토공 횡단면도", 11, Txt, false, c2); TxB(102, 156, "탭 이름", 9, Dim, false, c2); }
+                SbArrowTo(new Point(194, 140), new Point(212, 209), Seg(t, 2.9, 3.5));
+                double f = Seg(t, 3.5, 4.1), g = Seg(t, 4.0, 4.6);
+                SbTSheet(1, f, (x, y) => { TxB(x, y, "배수지", 9, Red, true, f); TxB(x + 32, y, "토공 횡단면도", 9, Txt, true, g); });
+                break;
+            }
+            case 2:   // 도면번호 — 접두 + 시작 → 장마다 이어 매김
+            {
+                Tx(20, 56, "도면번호", 12, Txt, true);
+                SbTBox(20, 76, 56, "", "C-", Seg(t, 0.3, 0.8));
+                Tx(84, 82, "시작", 11, Dim);
+                SbTBox(114, 76, 40, "", "1", Seg(t, 0.9, 1.2));
+                for (int k = 0; k < 3; k++)
+                {
+                    double a = Seg(t, 1.6 + k * 0.5, 2.0 + k * 0.5);
+                    if (a <= 0.01) continue;
+                    double x = 20 + k * 58, y = 134 + k * 8;
+                    Pl(SbR(x, y, 50, 64), A(Colors.White, a), A(Color.FromRgb(0x77, 0x77, 0x77), a), 1.2);
+                    Pl(SbR(x + 4, y + 46, 42, 14), A(ChipBgC, a), A(Color.FromRgb(0x88, 0x88, 0x88), a), 0.8);
+                    TxB(x + 7, y + 46, $"C-00{k + 1}", 8, Txt, true, a);
+                    TxB(x + 12, y + 70, $"{k + 1}장", 9, Dim, false, a);
+                }
+                SbArrowTo(new Point(76, 182), new Point(212, 231), Seg(t, 3.4, 4.0));
+                double f = Seg(t, 4.0, 4.6);
+                SbTSheet(2, f, (x, y) => TxB(x, y, "C-001", 9, Txt, true, f));
+                break;
+            }
+            default:   // 날짜 — [오늘] → 오늘 날짜 · 비우면 작성하는 날
+            {
+                double d = Seg(t, 1.3, 1.5);
+                SbTBox(20, 96, 108, "날짜", "2026.11.16", d > 0.5 ? 1 : 0);
+                Key(136, 98, "오늘", 1, 12);
+                double mv = Seg(t, 0.3, 1.0);
+                var p = new Point(120 + 40 * mv, 150 - 36 * mv);
+                Ptr(p, Seg(t, 1.0, 1.4));
+                double note = Seg(t, 3.4, 4.0);
+                TxB(20, 140, "비우면 = 작성하는 날", 10, Dim, false, note);
+                SbArrowTo(new Point(130, 110), new Point(212, 253), Seg(t, 1.8, 2.4));
+                double f = Seg(t, 2.4, 3.0);
+                SbTSheet(3, f, (x, y) => TxB(x, y, "2026.11.16", 9, Txt, true, f));
+                break;
+            }
+        }
+    }
+
+    // ── ★[v117.18.5 · JACK 1116 «배치 탭 안에선 영상이 끊이지 않게 · 끝나도 되감기 없이» = 탭 애니메이션] 배치 탭(7초) → 벌개제근(14초) 한 편 ──
+    void SbTabsAll(double t)
+    {
+        double p1 = Spec["sbTabs"].Period;
+        string sub = t < p1 ? "sbTabs" : "sbClearing";
+        if (t < p1) SbTabs(t); else SbClearing(t - p1);
+        if (_tm.IsEnabled || _held) { string c = Spec[sub].Caption; if (_cap.Text != c) _cap.Text = c; }   // 쉼(Idle)은 자막을 건드리지 않음
+    }
 }

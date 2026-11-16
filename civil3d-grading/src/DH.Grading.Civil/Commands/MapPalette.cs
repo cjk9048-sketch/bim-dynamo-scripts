@@ -55,7 +55,7 @@ public static class MapPalette
                     DockEnabled = DockSides.Left | DockSides.Right,
                     MinimumSize = new System.Drawing.Size(520, 420),
                 };
-                _ps.AddVisual("지도", _panel);
+                _ps.AddVisual("지도", DockClose.Wrap(_panel, () => _ps));
             }
 
             // ★★[JACK 0901 "지도가 넉넉히 보이도록 좀 도킹바가 크게 열려야 해"]

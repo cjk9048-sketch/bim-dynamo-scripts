@@ -301,6 +301,17 @@ internal sealed class ExcavPanel : UserControl
         HookBtn(_pickHit, "exPick", "exTarget"); HookBtn(_pickGroundHit, "exGround", "exBasePlan");
         Hook(HeadOf(_digBadge), "exSlope"); Hook(secDig, "exSlope");
         HookBtn(_wallChk, "exWallChk", "exSlope");
+        // ★[JACK 1116 «수치 칸은 미리보기 뷰»] 구배 칸에 마우스 · 포커스 → 칸 값 그대로의 비탈 그림 바로(타이머 없음) · 치는 대로 · 가시설 체크 따라 다시 그림
+        void SlopeVal()
+        {
+            demo.VFlag = _wallChk.IsChecked == true;
+            if (double.TryParse((_slope.Text ?? "").Trim().Replace(',', '.'), NumberStyles.Float, CultureInfo.InvariantCulture, out double v) && double.IsFinite(v) && v >= 0) demo.V1 = v;
+        }
+        void PlaySlopeVal() { SlopeVal(); demo.Play("exSlopeVal"); demo.Redraw(); }
+        _slope.MouseEnter += (_, __) => PlaySlopeVal(); _slope.MouseLeave += (_, __) => demo.Play("exSlope");
+        _slope.GotKeyboardFocus += (_, __) => PlaySlopeVal();
+        _slope.TextChanged += (_, __) => { SlopeVal(); demo.Redraw(); };
+        _wallChk.Checked += (_, __) => { SlopeVal(); demo.Redraw(); }; _wallChk.Unchecked += (_, __) => { SlopeVal(); demo.Redraw(); };
         HookBtn(resetHit, "exReset", "exReset");
         string[] wKeys = { "exToWall", "exToSlope", "exClear" };
         for (int wi = 0; wi < _wallHits.Count && wi < wKeys.Length; wi++) HookBtn(_wallHits[wi], wKeys[wi], "exWall");

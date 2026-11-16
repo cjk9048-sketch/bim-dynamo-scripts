@@ -61,7 +61,7 @@ public static class GradingPalette
                     //   예시 그림 글자가 안 읽힌다 — 근거는 <see cref="PanelW"/>에 셈까지 적어 뒀다.
                     MinimumSize = new System.Drawing.Size(PanelW, 420),
                 };
-                _ps.AddVisual("정지", _panel);
+                _ps.AddVisual("정지", DockClose.Wrap(_panel, () => _ps));
 
                 // ★★★[계획 §4 · 걷는 자리 5] <b>창을 닫거나 말아 두면 빨간 표시를 걷는다.</b>
                 //

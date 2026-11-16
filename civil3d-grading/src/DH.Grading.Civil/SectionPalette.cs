@@ -40,7 +40,7 @@ public static class SectionPalette
                     DockEnabled = DockSides.Left | DockSides.Right,
                     MinimumSize = new System.Drawing.Size(PanelW, 380),
                 };
-                h.Ps.AddVisual("종횡단도", h.Panel);
+                h.Ps.AddVisual("종횡단도", DockClose.Wrap(h.Panel, () => h.Ps));
                 try { h.Ps.Size = new System.Drawing.Size(PanelW, 640); } catch { }
             }
             h.Panel?.Refresh(null);
@@ -216,7 +216,16 @@ internal sealed class SectionPanel : UserControl
         tb.LostFocus += (_, __) => CommitRoad();
         tb.LostKeyboardFocus += (_, __) => CommitRoad();
         cell.Children.Add(tb);
-        cell.MouseEnter += (_, __) => demo.Play("roadProfile");
+        // ★[JACK 1116 «수치 칸은 미리보기 뷰»] 최대 경사 · PVI 간격 칸 → 칸 값 그대로의 종단 그림(타이머 없음) · 치는 대로 다시 그림
+        bool isGrade = scale == 100;
+        tb.TextChanged += (_, __) =>
+        {
+            if (double.TryParse((tb.Text ?? "").Trim().Replace(',', '.'), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double v) && double.IsFinite(v) && v >= lo - 1e-9 && v <= hi + 1e-9)
+            { if (isGrade) demo.V1 = v / scale; else demo.V2 = v; }
+            demo.Redraw();
+        };
+        tb.GotKeyboardFocus += (_, __) => demo.Play("profVal");
+        cell.MouseEnter += (_, __) => demo.Play("profVal");
         cell.MouseLeave += (_, __) => demo.Idle();
         wp.Children.Add(cell);
         _fields.Add((tb, get, set, scale, lo, hi));
