@@ -35,6 +35,103 @@ public sealed class ExcavWallCommand
     [CommandMethod("DHEXCAVSLOPE", CommandFlags.Modal)]
     public void ToSlope() => PickSlope();   // ★[v117.16 · JACK 1112] 가시설 구간에 커서 → 빨강 → 클릭
 
+    /// <summary>★[v117.18 · JACK 1116 «가시설 변환은 기본적으로 터파기 경계선을 선택해 전체가 바뀌게 · 부분은 따로»] 터파기선(바닥) 또는 터파기 윗선을 클릭 → 그 구조물 둘레 전체가 수직(날개 없음).
+    /// 엔진 길은 부분 변환의 «둘레 전체» 갈래와 같다(구간 0~둘레 · 날개 없음).</summary>
+    [CommandMethod("DHEXCAVWALLALL", CommandFlags.Modal)]
+    public void ToWallAll() => PickWallAll();
+
+    private static void PickWallAll()
+    {
+        var doc = AcadApp.DocumentManager.MdiActiveDocument;
+        if (doc == null) return;
+        var ed = doc.Editor;
+        const string label = "가시설 변환";
+        GradingSettings.SyncToDocument(doc);
+        PickSession.Hook();
+        if (!PickSession.Begin(ed, label)) return;
+        try
+        {
+            var recs = Load(doc, out string why);
+            if (recs == null) { ed.WriteMessage($"\n[{label}] " + why); return; }
+            var rims = RimsOf(recs);
+            if (rims.Count == 0) { ed.WriteMessage($"\n[{label}] 터파기 둘레 못 읽음 → [구조물 터파기] 다시"); return; }
+
+            // 클릭 자리에서 가장 가까운 구조물 — 바닥(터파기선)과 윗선 둘 다 잰다
+            // ★[v117.18 설치 전 검토 MED] 선에서 먼 클릭(띠 폭 3배 넘음)은 받지 않음 — 빈 곳 클릭 · 이웃 구조물이 바뀌어 손으로 단 날개 구간을 잃지 않게
+            Rim? Nearest(double x, double y)
+            {
+                Rim? best = null; double bd = double.MaxValue;
+                foreach (var r in rims)
+                {
+                    double d = DistTo(r.Pts, r.Cum, x, y);
+                    var top = recs[r.Idx].FinalRing;
+                    if (top != null && top.Count >= 3) d = System.Math.Min(d, DistTo(top, GradingGeometry.CumLen2D(top), x, y));
+                    if (d < bd) { bd = d; best = r; }
+                }
+                return best != null && bd <= 3 * ZoneEditCommon.BandHalf(best.Total) ? best : null;
+            }
+            void OnMove(object? s, PointMonitorEventArgs e)
+            {
+                try
+                {
+                    if (!e.Context.PointComputed) return;
+                    var c = e.Context.ComputedPoint;
+                    var r = Nearest(c.X, c.Y);
+                    if (r == null) return;
+                    e.AppendToolTipText($"구조물 {r.Idx + 1} · 둘레 전체 {r.Total:0.00}m → 클릭 = 가시설");
+                    var dc = e.Context.DrawContext;
+                    if (dc == null) return;
+                    double half = ZoneEditCommon.BandHalf(r.Total);
+                    DrawZones(dc, recs, half);
+                    ZoneEditCommon.DrawBand(dc, GradingGeometry.SubPath(r.Pts, r.Cum, 0, r.Total), half);
+                }
+                catch (System.Exception gex) { GlyphFail(gex); }
+            }
+            var pr = GetPointWatched(ed, "\n[가시설 변환] 터파기 경계선 클릭(전체 가시설): ", OnMove);
+            if (pr.Status != PromptStatus.OK) { ed.WriteMessage($"\n[{label}] 취소."); return; }
+            var rim = Nearest(pr.Value.X, pr.Value.Y);
+            if (rim == null) { ed.WriteMessage($"\n[{label}] 터파기 경계 못 찾음 → 터파기선 위 클릭"); return; }
+            var rec = recs[rim.Idx]; double tot = rim.Total;
+
+            if (rec.MinSlope > GradingSettings.WallGateSlope + 1e-9)
+            {
+                ed.WriteMessage($"\n[{label}] 수직 불가 — 이 터파기 최소구배 1:{rec.MinSlope:0.###} > 수직 문턱 1:{GradingSettings.WallGateSlope:0.###} → [구조물 터파기] 굴착 구배 0(수직)으로 다시 만든 뒤 지정");
+                return;
+            }
+            // 이미 둘레 전체가 가시설이면 할 일 없음
+            if (rec.WallZones != null && rec.WallZones.Exists(q => q != null && !q.HasWings
+                    && GradingGeometry.SpanOf(q.T0, q.T1, tot) >= tot - MinRun))
+            { ed.WriteMessage($"\n[{label}] 구조물 {rim.Idx + 1} · 이미 둘레 전체 가시설 → 할 일 없음"); return; }
+
+            rec.WallZones ??= new System.Collections.Generic.List<SlopeZone>();
+            var z = new SlopeZone { T0 = 0, T1 = tot, WingT0 = null, WingT1 = null };
+            z.Rules.Add((0, rec.MinSlope, -1));
+            z.Ref = new System.Collections.Generic.List<Point3>(rec.Bottom);
+            int dup = rec.WallZones.RemoveAll(q => q != null);   // 둘레 전체가 옛 구간을 모두 덮는다
+            rec.WallZones.Add(z);
+            Save(doc, recs);
+            bool built = Rebuild(doc, recs, ed, rim.Idx, label);
+            if (!built) return;   // ★[v117.18 설치 전 검토 LOW] 못 지었으면 Rebuild가 이미 «구간만 저장» 줄을 냄 — 성공처럼 들리는 줄을 덧붙이지 않음
+            if (ExcavCommand.ZonesDroppedFor(rec.PolyHandle))
+                ed.WriteMessage($"\n[{label}] 구조물 {rim.Idx + 1} · 구간 안 들어감 — 터파기선 바뀜(위 ⚠) → [가시설 변환] 다시");
+            else
+                ed.WriteMessage($"\n[{label}] 구조물 {rim.Idx + 1} · 둘레 전체 {tot:0.#}m 수직" + (dup > 0 ? $" · 옛 구간 {dup}개 합침" : ""));
+        }
+        catch (System.Exception ex)
+        {
+            ed.WriteMessage($"\n[{label}] 계산 실패(프로그램 문제) → 다시 · 계속되면 로그 전달");
+            try { DiagLog.Append($"\n■ 가시설 전체 변환 예외 — {ex.GetType().Name}: {ex.Message}\n{ex.StackTrace}\n"); } catch { }
+        }
+        finally { PickSession.End(); }
+    }
+
+    private static double DistTo(System.Collections.Generic.List<Point3> pts, double[] cum, double x, double y)
+    {
+        double t = GradingGeometry.ParamAt(pts, cum, x, y);
+        var q = GradingGeometry.PointAtParam(pts, cum, t);
+        return System.Math.Sqrt((q.X - x) * (q.X - x) + (q.Y - y) * (q.Y - y));
+    }
+
     /// <summary>이 도면의 <b>모든</b> 가시설 구간을 지우고 순수 사면으로 되돌린다.</summary>
     [CommandMethod("DHEXCAVWALLCLEAR", CommandFlags.Modal)]
     public void ClearAll()
@@ -297,9 +394,10 @@ public sealed class ExcavWallCommand
             Save(doc, recs);
             bool built = Rebuild(doc, recs, ed, rim.Idx, label);
             // ★[v117.17 · 검토 LOW] 끝 줄은 다시 만든 뒤에 — 짓다가 날개 자동으로 물러났으면 «날개 2»라 하지 않는다(경고는 터파기 줄 ⚠)
-            bool fell = built && z.HasWings && ExcavCommand.WingFailedFor(rec.PolyHandle, z);   // ★[2차 검토 MED] 제 구간이 물러났을 때만
+            if (!built) return;   // ★[v117.18 설치 전 검토 LOW] 못 지었으면 Rebuild가 이미 «구간만 저장» 줄을 냄
+            bool fell = z.HasWings && ExcavCommand.WingFailedFor(rec.PolyHandle, z);   // ★[2차 검토 MED] 제 구간이 물러났을 때만
             // ★[v117.17 · 설치 전 검토 LOW] 터파기선이 바뀌어 구간이 통째로 버려졌으면(위 ⚠) «수직 · 날개 2»라 하지 않는다
-            if (built && ExcavCommand.ZonesDroppedFor(rec.PolyHandle))
+            if (ExcavCommand.ZonesDroppedFor(rec.PolyHandle))
                 ed.WriteMessage($"\n[{label}] 구조물 {rim.Idx + 1} · 구간 안 들어감 — 터파기선 바뀜(위 ⚠) → [가시설 변환] 다시");
             else
                 ed.WriteMessage($"\n[{label}] 구조물 {rim.Idx + 1} · {pick.Span:0.#}m 수직" + (z.HasWings ? (fell ? " · 날개 자동(위 ⚠)" : " · 날개 2") : pick.Whole ? "" : " · 날개 자동")

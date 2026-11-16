@@ -25,7 +25,7 @@ public static class GradingSettings
     /// <b>같은 번호를 단 빌드가 여러 개</b>가 되어, 어느 것이 깔렸는지 물으면 답할 수가 없었다.</para>
     /// <para><c>x.0</c> = 화면·명령이 바뀌어 <b>사용자가 다르게 일하게</b> 되는 판 ·
     /// <c>x.y</c> = 같은 화면에서 결함을 고친 판.</para></summary>
-    public const string Version = "v117.17.0 (2026-11-16)";
+    public const string Version = "v117.18.0 (2026-11-16)";
 
     /// <summary>★★[v32.20 · JACK 0812 판단] <b>이력 본문을 비웠다 — 이제 여기는 정본을 가리키는 이정표다.</b>
     /// <para>78,748자 한 줄이 이 파일에 얹혀 있었는데, <b>출력도 참조도 없었다</b>(코드 어디서도 안 읽는다).
@@ -885,7 +885,7 @@ public static class GradingSettings
     /// 결과가 확 바뀌었다(v17.6 '같은 부지·같은 설정인데 옹벽 6장↔163장'의 뿌리). 번들 있는 도면은
     /// 종전대로 SyncToDocument가 도면 값으로 덮는다(도면이 정본) — 이 값은 '기록 없는 새 도면'의
     /// 시작값만 맡는다. 저장은 정지옵션 [저장]에서만(RestoreFrom의 도면 맞춤은 사용자 선택이 아님).</summary>
-    private const string PrefsRegKey = @"Software\DHGrading";
+    internal const string PrefsRegKey = @"Software\DHGrading";
 
     /// <summary>애드인 시작 시 1회 — 마지막으로 정지옵션에서 저장한 사면형상을 복원.</summary>
     public static void LoadUserPrefs()

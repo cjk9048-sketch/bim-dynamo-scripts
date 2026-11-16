@@ -9,7 +9,7 @@ namespace DH.Grading.Civil;
 
 /// <summary>★★[v111.7.2 · JACK 1102 «마우스에 메모로 못 붙여?»] <b>자리 찍기 + 커서를 따라다니는 이름표(우리가 그린다)</b>.
 /// <para>v111.7.1은 AutoCAD 풍선 글(<c>PointMonitor</c> · <c>AppendToolTipText</c>)을 썼는데 JACK 화면에 안 떴다 — 그 풍선은 AutoCAD 설정(롤오버 · 커서가 객체 위에 머묾)에 달렸다.
-/// 이제 점 찍기를 <c>DrawJig</c>로 받아 커서 오른쪽 아래(화면 18 px · 18 px)에 이름표를 직접 그린다(화면 px 크기 — 확대 · 축소해도 같은 크기).</para>
+/// 이제 점 찍기를 <c>DrawJig</c>로 받아 커서 오른쪽 위(화면 18 px · 20 px — ★v117.18 전엔 오른쪽 아래라 동적 입력 상자에 덮임)에 이름표를 직접 그린다(화면 px 크기 — 확대 · 축소해도 같은 크기).</para>
 /// <para>★★[JACK 1104] 꼴 = <b>흰 카드 + 검은 테 + 검은 글 한 줄</b>(옛 1103 짙은 회색 카드 · 주황 띠 · 둘째 줄 키 안내는 없앰 — <c>hint</c>는 받기만 하고 안 그림).
 /// 모양은 모두 지그 그림(일시 그래픽)이라 도면에 아무것도 안 남는다(DBMOD 그대로) — 질문이 끝나면(점 · Enter · Esc · 오류) 지그와 함께 사라진다.
 /// 크기는 Windows 배율(DPI)을 곱한다 — 150 %면 1.5배(화면 px이 실제 화소라 그대로 두면 작아 보임).</para>
@@ -87,6 +87,8 @@ internal static class CursorLabel
     // ★★[v112.4 · JACK 1104 스샷 «희미하고 멍텅구리 · 도화 느낌 나게(이름 · 로고는 넣지 말고)»] 원인 = 지그의 면 채우기를 AutoCAD가 반투명(50 %)으로 그림
     //   (스샷 화소: 흰 바탕 = 정확히 128 회색 · 글 · 선은 그대로) → 바탕을 면 채우기가 아니라 화면 1 화소 간격 가로선으로 깔아 불투명하게 ·
     //   색 = 도화 청록(DhBrand.BrandHi #0A6269) 바탕 + 흰 굵은 글 + 밝은 청록 테(검은 화면에서도 테가 보이게) + 왼쪽 옅은 청록 띠
+    /// <summary>★[v117.18] 카드 밑변이 커서보다 위로 몇 px(커서 오른쪽 위 — 동적 입력 상자 · 풍선은 오른쪽 아래에 뜸).</summary>
+    internal const double UpPx = 20;
     internal const double OffPx = 18, MainPx = 15, HintPx = 11, PadLPx = 11, PadRPx = 12, PadTPx = 7, PadBPx = 7, GapPx = 5, BarPx = 4, RadPx = 4;
     internal static readonly (byte R, byte G, byte B) CardRgb = (0x0A, 0x62, 0x69), EdgeRgb = (0x5F, 0xB3, 0xB8),
         AccentRgb = (0xA8, 0xE0, 0xE3), MainRgb = (0xFF, 0xFF, 0xFF), HintRgb = (0xD6, 0xEE, 0xEF);
@@ -258,10 +260,12 @@ internal static class CursorLabel
                 double wM = _ext.MaxPoint.X - _ext.MinPoint.X, wH = two ? _extH.MaxPoint.X - _extH.MinPoint.X : 0;
                 // 줄 높이는 글자 크기(글자마다 다른 실제 범위가 아니라) — 두 줄 간격이 이름마다 안 흔들리게
                 double hM = MainPx * u, hH = HintPx * u;
-                double x0 = OffPx * u, yT = -OffPx * u;
+                // ★[v117.18 · JACK 1116 스샷 «마우스에 붙는 라벨들 모두 위치조정 — 좌표상자때문에 겹쳐서 안보여»] 카드 = 커서 오른쪽 <b>위</b>
+                //   (오른쪽 아래는 AutoCAD 동적 입력 좌표 상자 · Civil 측점 풍선 · 객체 스냅 글이 뜨는 자리 — 거기에 카드를 두면 덮임)
+                double x0 = OffPx * u, yB = UpPx * u;
                 double xT = x0 + (BarPx + PadLPx) * u;                                   // 글 왼쪽 끝
                 double x1 = xT + System.Math.Max(wM, wH) + PadRPx * u;
-                double yB = yT - (PadTPx * u + hM + (two ? GapPx * u + hH : 0) + PadBPx * u);
+                double yT = yB + (PadTPx * u + hM + (two ? GapPx * u + hH : 0) + PadBPx * u);
                 var card = RoundRect(x0, yT, x1, yB, RadPx * u);
                 var tr = draw.SubEntityTraits;
                 try { tr.Transparency = new Autodesk.AutoCAD.Colors.Transparency(255); } catch { }   // 불투명(되는 판이면)

@@ -611,7 +611,7 @@ internal sealed class GradingPanel : UserControl
         // ★[JACK 1112 «도킹창 맨 위 = 설명 애니메이션 창»] 도화 로고 아래 고정(스크롤 밖) — 한 번에 하나: 애니메이션 · 절토 · 성토 · 옹벽 그림
         // ★[v117.14.1 · JACK 1112 «모든 설명 애니메이션은 해당 도킹박스 안에서 크기가 같아야 해 · 좀 키워 너무 작아» · «옹벽 단면에 갖다 대면 작아져»]
         //   한 틀(논리 TopW × TopH)에 모든 칸을 꽉 채워 겹쳐 두고, 그 틀을 Viewbox로 창 폭에 맞춰 늘인다 — 칸마다 크기가 같고 창이 넓으면 같이 커진다.
-        top.Children.Add(DemoFrame.Wrap(_demo, _hostCut, _hostFill, _hostExcav, _hostTerr, _hostSec));   // 공용 틀(종횡단도 · 터파기 창도 같은 틀)
+        top.Children.Add(DemoFrame.Wrap("Grading", _demo, _hostCut, _hostFill, _hostExcav, _hostTerr, _hostSec));   // 공용 틀(종횡단도 · 터파기 창도 같은 틀)
         DockPanel.SetDock(top, Dock.Top);
         deck.Children.Add(top);
 
@@ -1557,7 +1557,7 @@ internal sealed class GradingPanel : UserControl
         var slot = new Grid { Width = 420, Height = 300 };
         slot.Children.Add(vb);
         var st = new StackPanel();
-        st.Children.Add(DemoFrame.HelpBadge());   // ★[v117.15.1 · JACK 1112 «도움말 글머리»] 예시 그림 칸도 같은 머리
+        // ★[v117.15.1 · JACK 1112 «도움말 글머리»] 예시 그림 칸도 같은 머리
         st.Children.Add(slot);
         cap = new TextBlock { Text = caption, MaxWidth = 420, MinHeight = 30, FontSize = 11, Foreground = DhBrand.Ink, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(2, 4, 2, 0) };
         st.Children.Add(cap);

@@ -39,6 +39,7 @@ using AcadApp = Autodesk.AutoCAD.ApplicationServices.Application;
 [assembly: CommandClass(typeof(DH.Grading.Civil.PickCommands))]                       // DHPICKPLAN/GROUND/EXCAV/CLEAR/STATUS(도킹창이 부르는 찍기)
 [assembly: CommandClass(typeof(DH.Grading.Civil.GradingPalette))]
 [assembly: CommandClass(typeof(DH.Grading.Civil.ExcavPalette))]
+[assembly: CommandClass(typeof(DH.Grading.Civil.Commands.ExcavResetCommand))]            // DHEXCAVRESET(터파기 초기화)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.ExcavWallCommand))]           // DHEXCAVWALL/SLOPE/WALLCLEAR(가시설 구간)                       // DHEXCAVPANEL(구조물 터파기 도킹창)                     // DHGRADEPANEL(계획부지 정지 도킹창)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.MapPickCommand))]            // DHMAPPICK(지도에서 범위 고르기)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.MapPalette))]                // DHCONTOURBOX(지도 도킹바가 넘긴 범위로 지표면 가져오기)

@@ -840,6 +840,8 @@ public sealed class ExcavCommand
                     if (!clipped)
                     {
                         log.AppendLine($"■ {tag} — 클립 실패라 합치지 않음(오버사이즈 면을 넣으면 지표면이 통째로 틀어진다)");
+                        // ★[v117.18 · 1116 키트 xs2a(첫 생성 1:2도 같은 실패)] 실패 까닭(클립경계 주입[원본 · 정규화] 실패 글)이 LastLog에만 있고 진단 로그엔 안 남았다 → 던지기 전에 남김
+                        if (k == newIdx) { try { DiagLog.Append("\n" + log.ToString()); } catch { } }
                         if (k == newIdx) throw new System.Exception("굴착 상단선을 경계로 못 넣음 — 계산 실패(프로그램 문제) → 다시 · 계속되면 로그 전달");   // ★[v117.17] 단답형
                         continue;
                     }

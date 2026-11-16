@@ -37,15 +37,19 @@ internal sealed class FixDemoView : Border
         ["defer"] = (5.6, "옹벽 합성 미루기 — 켜면 옹벽만 쌓아 두고 [옹벽 합성] 한 번에 · 끄면 옹벽마다 바로 합성"),
         // ★[v117.13 · JACK 1112 «구조물 터파기에서도 내용을 설명하는 애니메이션 — 맨 위 · 1~4번(3번 생성은 생략) · 마우스 올리면»]
         // ★[v117.15.1 · JACK 1112 «계획지표면하고 원지반이 번갈아 나오는데 — 각 선택 단추에 맞춰서»] 고른(올린) 쪽 한 판만
+        ["exBaseWhy"] = (9.0, "2. 기준면 — 어디서부터 팔지 → 종단 · 횡단도 터파기선 · 토공이 달라짐"),
         ["exBasePlan"] = (6.5, ExCapA),
         ["exBaseGround"] = (6.5, ExCapB),
         ["exBase"] = (13.0, ExCapA),   // ★[v117.15] 시공순서 두 판(A 6.5초 → B 6.5초) · 설명 글은 판마다 바뀜(ExBase)
-        ["exTarget"] = (4.2, "2. 대상 — 구조물 바닥 경계(닫힌 폴리선) 클릭 → 터파기선 · 원지반은 비우면 자동"),
-        ["exWall"] = (4.8, "4. 가시설 — 시작점 → 둘레 따라 끝점 → 날개 → 그 구간 수직(흙막이) · [사면 변환]은 거꾸로"),   // ★[v117.16] 글만
+        ["exTarget"] = (4.2, "1. 터파기선 — 구조물 바닥 경계(닫힌 폴리선) 클릭 → 터파기선"),
+        ["exWall"] = (4.8, "4. 가시설 — 터파기선 클릭 → 둘레 전체 수직(흙막이) · 일부만 [부분 변환] · [사면 변환]은 거꾸로"),   // ★[v117.16] 글만
         // ★[v117.15 · JACK 1112 «터파기선 선택 · 원지반 선택 애니메이션이 똑같아 · 사면수정 부분도 다 똑같아 — 좀 구체적으로»] 단추마다 제 장면(공용 터파기 평면)
         ["exPick"] = (5.0, "터파기선 선택 — 정지된 부지 안 구조물 바닥 클릭 → 터파기선"),
-        ["exGround"] = (5.4, "원지반 선택 — 부지 밖 원지반 지표면 클릭 · 비우면 자동"),
-        ["exToWall"] = (5.4, "가시설 변환 — 시작점 → 둘레 따라 끝점 → 날개 → 그 구간 수직(흙막이)"),   // ★[v117.16 · JACK 1112 «직접 노선상에서 선택»] 글만(장면은 그대로)
+        ["exGround"] = (5.4, "바꾸기 — 부지 밖 원지반 지표면 클릭 · 안 바꾸면 자동"),
+        ["exToWall"] = (5.4, "부분 변환 — 시작점 → 둘레 따라 끝점 → 날개 → 그 구간 수직(흙막이)"),   // ★[v117.16 · JACK 1112 «직접 노선상에서 선택»] 글만(장면은 그대로)
+        ["exSlope"] = (9.0, "3. 굴착 구배 1 : n — 세로 1 · 가로 n · n이 클수록 완만 · 넓게 팜 · 0 = 수직(가시설)"),
+        ["exToWallAll"] = (4.6, "가시설 변환 — 터파기 경계선 클릭 → 둘레 전체가 수직(흙막이)"),
+        ["exReset"] = (4.4, "터파기 초기화 — 터파기 결과 전부 지움 · 터파기선은 남음"),
         ["exToSlope"] = (4.8, "사면 변환 — 가시설 구간 클릭 → 그 구간 다시 사면"),
         ["exClear"] = (4.6, "전체 해제 — 가시설 구간 전부 → 다시 사면"),
         // ★[JACK 1112 «계획지표면 · 진입도로 종횡단도 팝업 — 단추마다 예시»] ★[v117.14.1 «계획부지생성 평면도처럼 · 측점 기능은 평면 · 종단 어디서나»] 위 평면 + 아래 종단
@@ -61,6 +65,17 @@ internal sealed class FixDemoView : Border
         ["shapeMiter"] = (4.4, "사면형상 직각 — 볼록한 모서리를 각지게 세움"),
         ["shapeRound"] = (4.4, "사면형상 라운드 — 볼록한 모서리를 둥글게"),
         ["terrace"] = (5.6, "산지 대소단 — 간격 높이마다 넓은 소단(대소단) · 간격 = 대소단 사이 높이"),
+        // ★[v117.18 · JACK 1116 «진입도로 도킹창 — 항목마다 설명 애니메이션»] 노선 · 횡단 · 포장 · 사면 · 경로 그리기 · 폴리선 선택 · 종단수정 · 옹벽 · 측구 · 결과
+        ["roadAlign"] = (5.6, "노선 — 꺾인 곳이 곡선 반경 R로 둥글어짐 · R을 바꾸면 곡선도 바뀜"),
+        ["roadXsec"] = (6.0, "횡단 — 차로 반폭 · 횡단경사 % · 길어깨 폭 · 길어깨 경사"),
+        ["roadPave"] = (6.0, "포장 — 아스팔트 · 콘크리트 → 층마다 두께(mm)"),
+        ["roadSlope"] = (6.4, "사면 — 도로 끝에서 지반까지 · 절토 · 성토 구배 1:n · 단높이마다 소단"),
+        ["roadDraw"] = (6.4, "도로 경로 그리기 — 점을 차례로 찍기 → Enter → 꺾인 곳은 곡선 · 도로 설정 값으로 생성"),
+        ["roadPick"] = (5.6, "폴리선 선택 — 그려 둔 폴리선 클릭 → 그 선이 도로로"),
+        ["roadProfile"] = (6.6, "종단수정 — PVI 점 잡고 위 · 아래로 끌기 → 경사 바뀜"),
+        ["roadWall"] = (6.2, "옹벽 — 구간 시작 · 끝 클릭 → 그 구간 사면이 옹벽으로"),
+        ["roadDitch"] = (6.4, "측구 — 형식 · 치수 고르기 → [구간 지정] 두 점 → 도로 가장자리 측구"),
+        ["roadResult"] = (5.8, "결과 — [업데이트] → 토공량 · 경사 · 옹벽 합계 (예시 값)"),
     };
 
     /// <summary>현재 장면 키.</summary>
@@ -77,7 +92,7 @@ internal sealed class FixDemoView : Border
         BorderBrush = DhBrand.Line; BorderThickness = new Thickness(1); CornerRadius = new CornerRadius(6);
         Background = DhBrand.Card; Padding = new Thickness(4);
         var st = new StackPanel();
-        st.Children.Add(DemoFrame.HelpBadge());   // ★[v117.15.1 · JACK 1112 «모든 애니메이션 창 좌측 상단에 도움말 글머리 — 도화 스타일 · 박스»]
+        // ★[v117.15.1 · JACK 1112 «모든 애니메이션 창 좌측 상단에 도움말 글머리 — 도화 스타일 · 박스»]
         st.Children.Add(new Viewbox { Child = _cv, Stretch = Stretch.Uniform, StretchDirection = StretchDirection.Both, MaxWidth = W * Scale });   // ★[v117.12 · JACK 1112 «그림 영역 너무 크니 지금의 70 %»]
         // ★[v117.14.1 · JACK 1112 «애니메이션 아래 도움말에 단순한 글씨만 넣지 말고 해당 버튼 모양 그대로 · 크기는 적당히»] 단추 장면이면 글 앞에 진짜 단추 모양(누를 수 없음 · 창 스킨 그대로)
         // ★[v117.15 · JACK 1112 «애니메이션의 버튼을 지금보다 조금 작게 · 흰색 말고 도화 배경색 옅은 초록색 버튼으로 · 모든 애니메이션 전부»] 단추 모양 = 옅은 초록 알약(도화 청록 글자)
@@ -90,8 +105,15 @@ internal sealed class FixDemoView : Border
         st.Children.Add(capRow);
         Child = st;
         _tm.Tick += (_, __) => { try { Draw(_key, _sw.Elapsed.TotalSeconds % Spec[_key].Period); } catch { _tm.Stop(); } };
+        // ★[v117.18 · JACK 1116 «도움말 체크 끄면 접힘»] 안 보이면(접힘 · 다른 칸이 위) 타이머 멈춤 — 쉬는 동안 CPU 0 · 다시 보이면 돌던 것은 처음부터 다시
+        IsVisibleChanged += (_, e) =>
+        {
+            if (!(bool)e.NewValue) { _resume = _tm.IsEnabled; _tm.Stop(); }
+            else if (_resume) { _resume = false; Play(_key); }
+        };
         Idle();
     }
+    bool _resume;
 
     /// <summary>단추에 마우스 — 그 예시를 처음부터 돌린다.</summary>
     public void Play(string key)
@@ -108,6 +130,7 @@ internal sealed class FixDemoView : Border
         }
         else { _chip.Visibility = Visibility.Collapsed; _cap.Text = cap; }
         _played = true;
+        if (IsLoaded && !IsVisible) return;   // ★[v117.18] 도움말 체크를 꺼 접힌 칸 — 타이머 안 돌림(CPU 0)
         _sw.Restart(); _tm.Start();
     }
 
@@ -141,7 +164,7 @@ internal sealed class FixDemoView : Border
     static readonly Color ChipBgC = Color.FromRgb(0xDC, 0xEF, 0xE9), ChipLineC = Color.FromRgb(0x9C, 0xC8, 0xBE), ChipInkC = Color.FromRgb(0x00, 0x48, 0x4E);
     static readonly Brush ChipBg = Fz(0xDC, 0xEF, 0xE9), ChipLine = Fz(0x9C, 0xC8, 0xBE);
     /// <summary>설명 글 앞에 단추 모양을 붙이는 장면(진짜 단추에서 부르는 것) — 칸 제목 · 라디오 · 체크 장면은 글만.</summary>
-    static readonly HashSet<string> ButtonKeys = new() { "toWall", "toSlope", "add", "delete", "pickPlan", "pickGround", "exPick", "exGround", "exToWall", "exToSlope", "exClear", "pfProfile", "pfAdd", "pfFb", "pfDel", "pfRev", "xsView" };
+    static readonly HashSet<string> ButtonKeys = new() { "toWall", "toSlope", "add", "delete", "pickPlan", "pickGround", "exPick", "exGround", "exToWall", "exToWallAll", "exReset", "exToSlope", "exClear", "pfProfile", "pfAdd", "pfFb", "pfDel", "pfRev", "xsView", "roadDraw", "roadPick" };
 
     /// <summary>마우스가 나감 — 타이머를 멈추고 마지막 그림(결과)에서 멈춘다.</summary>
     public void Idle()
@@ -221,6 +244,7 @@ internal sealed class FixDemoView : Border
             case "delete": SiteAdd(t, true); break;
             case "defer": Defer(t); break;
             case "exBase": ExBase(t); break;
+            case "exBaseWhy": ExBaseWhy(t); break;
             case "exBasePlan": ExBase(t, 1); break;
             case "exBaseGround": ExBase(t, 2); break;
             case "exTarget": ExTarget(t); break;
@@ -228,6 +252,9 @@ internal sealed class FixDemoView : Border
             case "exPick": ExPick(t); break;
             case "exGround": ExGround(t); break;
             case "exToWall": ExToWall(t); break;
+            case "exSlope": ExSlope(t); break;
+            case "exToWallAll": ExToWallAll(t); break;
+            case "exReset": ExReset(t); break;
             case "exToSlope": ExToSlope(t); break;
             case "exClear": ExClear(t); break;
             case "pfProfile": PfProfile(t); break;
@@ -241,6 +268,16 @@ internal sealed class FixDemoView : Border
             case "shapeMiter": Shape(t, false); break;
             case "shapeRound": Shape(t, true); break;
             case "terrace": Terrace(t); break;
+            case "roadAlign": RoadAlign(t); break;
+            case "roadXsec": RoadXsec(t); break;
+            case "roadPave": RoadPave(t); break;
+            case "roadSlope": RoadSlope(t); break;
+            case "roadDraw": RoadDraw(t); break;
+            case "roadPick": RoadPick(t); break;
+            case "roadProfile": RoadProfile(t); break;
+            case "roadWall": RoadWall(t); break;
+            case "roadDitch": RoadDitch(t); break;
+            case "roadResult": RoadResult(t); break;
         }
     }
 
@@ -961,7 +998,7 @@ internal sealed class FixDemoView : Border
     //    A 계획지표면 기준: ① 원지반 ② 포크레인이 층층이 성토(계획지표면까지) ③ 성토면에서 터파기 — 성토층을 뚫으니 더 깊음 ④ 구조물 · 되메우기
     //    B 원지반 기준:     ① 원지반 ② 원지반에서 터파기 ③ 구조물 · 되메우기 ④ 성토(계획지표면까지)
     //    손대지 않은 원지반은 울퉁불퉁 · 계획면 · 터파기선 · 구조물은 곧게 · «터파기 깊이» 치수가 판마다 바뀜(깊음 ↔ 얕음) · 아래 설명 글도 판마다 바뀜
-    const string ExCapA = "계획지표면 기준 — 성토 먼저 → 성토면에서 파기(더 깊음)", ExCapB = "원지반 기준 — 원지반에서 파기 → 구조물 → 성토";
+    const string ExCapA = "계획지표면 기준 — 먼저 성토 → 계획면에서 팜 → 깊음 · 터파기 많음", ExCapB = "원지반 기준 — 먼저 팜 → 구조물 → 둘레 성토 · 터파기 적음";
     static readonly Brush ExYel = Fz(0xF0, 0xB4, 0x1C), ExYelD = Fz(0xB8, 0x86, 0x10), ExDark = Fz(0x3C, 0x3C, 0x3C), ExWheel = Fz(0x8A, 0x8A, 0x8A), ExGlass = Fz(0xCF, 0xE8, 0xF4),
         ExLoad = Fz(0x9A, 0x7B, 0x4F), ExBack = Fz(0xE6, 0xD3, 0xAC), ExOrg = Fz(0xE0, 0x7A, 0x1F), ExOrgT = Fz(0xC0, 0x5A, 0x10);
     const double ExCurl = 80 * Math.PI / 180, ExDump = -60 * Math.PI / 180;   // 버킷 각 — 0 = 파기(이빨 아래) · 말아 쥠 · 쏟기
@@ -1011,6 +1048,92 @@ internal sealed class FixDemoView : Border
             var e = new Ellipse { Width = 15, Height = 11, Fill = A(Color.FromRgb(0x9A, 0x7B, 0x4F), load) };
             Canvas.SetLeft(e, lc.X - 7.5); Canvas.SetTop(e, lc.Y - 5.5); _cv.Children.Add(e);
         }
+    }
+
+    // ★[v117.18 · JACK 1116 «왜 기준면 선택이 필요한지 — 종단 · 횡단 · 토공이 달라진다 · 포크레인도 넣고»] 같은 구덩이를 두 기준으로 나란히 — 포크레인이 선 높이(= 파기 시작면)가 다름 → 횡단도 터파기선 → 토공 막대
+    void ExcavatorAt(double x, double yG, double sc, Point wrLocal, double phi, double load)
+    {
+        int n0 = _cv.Children.Count;
+        Excavator(0, 0, wrLocal, phi, load);   // 원점에 그려 → 묶어서 줄이고 옮김(포크레인 그림은 그대로 재사용)
+        var g = new Canvas();
+        while (_cv.Children.Count > n0) { var c = _cv.Children[n0]; _cv.Children.RemoveAt(n0); g.Children.Add(c); }
+        g.RenderTransform = new MatrixTransform(sc, 0, 0, sc, x, yG);
+        _cv.Children.Add(g);
+    }
+
+    void ExBaseWhy(double t)
+    {
+        const double k = 0.4, sc = 0.6, pw = 198, gy = 96, py = 66, by = 128, bw = 26;
+        var fillC = Color.FromRgb(0xB9, 0xD7, 0xA8);
+        Tx(8, 5, "같은 구덩이 · 파기 시작면만 다름", 12, Dim, true);
+        for (int i = 0; i < 2; i++)
+        {
+            double ox = 6 + i * 210, cx = ox + 100, sl = i == 0 ? py : gy;
+            _cv.Children.Add(new Rectangle { Width = pw, Height = 124, Fill = A(Colors.White, 0.5), Stroke = A(InkC, 0.18), StrokeThickness = 1 });
+            Canvas.SetLeft(_cv.Children[^1], ox); Canvas.SetTop(_cv.Children[^1], 26);
+            Pl(new[] { new Point(ox, gy), new Point(ox + pw, gy), new Point(ox + pw, 150), new Point(ox, 150) }, A(SoilC, 0.45), null, 0);
+            double fp = i == 0 ? Seg(t, 0.2, 1.4) : 0, lvl = gy - (gy - py) * fp;
+            if (fp > 0.001) Pl(new[] { new Point(ox, lvl), new Point(ox + pw, lvl), new Point(ox + pw, gy), new Point(ox, gy) }, A(fillC, 0.75), null, 0);
+            Ln(new Point(ox, gy), new Point(ox + pw, gy), Ground, 2);
+            if (i == 0 && fp > 0.999) Ln(new Point(ox, py), new Point(ox + pw, py), Profile, 2.4);
+            else Ln(new Point(ox, py), new Point(ox + pw, py), A(ProfC, 0.75), 1.6, dash: true);
+            TxB(ox + 150, py - 18, "계획면", 11, Profile, true);
+            if (i == 0 && fp > 0.5) TxB(ox + 160, py + 6, "성토", 11, Profile, true, Seg(fp, 0.5, 0.8));
+            TxB(ox + 150, gy + 3, "원지반", 11, Ground, true);
+            // 구덩이 — 시작면(왼쪽 = 계획면 · 오른쪽 = 원지반)에서 아래로
+            var lt = new Point(cx - bw - k * (by - sl), sl); var rt = new Point(cx + bw + k * (by - sl), sl);
+            var hole = new List<Point> { lt, new(cx - bw, by), new(cx + bw, by), rt };
+            double dp = Seg(t, 1.8, 3.6), yb = sl + (by - sl) * dp;
+            if (dp > 0.001)
+            {
+                var hc = ClipAbove(hole, yb);
+                if (hc.Count >= 3) { Pl(hc, DhBrand.Card, null, 0); Pl(hc, null, ExOrg, 2.5, closed: false); }
+            }
+            // 포크레인 — 선 높이 = 파기 시작면(왼쪽은 성토 위 · 오른쪽은 원지반)
+            double ys = i == 0 ? lvl : gy, ex = ox + 2;
+            double osc = t > 1.8 && t < 3.9 ? 0.5 - 0.5 * Math.Cos(2 * Math.PI * (t - 1.8) / 0.9) : 0;
+            var rest = new Point(120, -17);
+            var tgt = new Point((cx - bw - 4 - ex) / sc, (Math.Max(yb, sl) - 2 - ys) / sc);
+            ExcavatorAt(ex, ys, sc, L(rest, tgt, osc), ExCurl * osc * 0.5, 0);
+            // 깊이 치수 + 이름
+            double da = Seg(t, 3.6, 4.2);
+            if (da > 0.01)
+            {
+                var ink = A(Color.FromRgb(0xC0, 0x5A, 0x10), da); double dx = ox + 188;
+                Ln(new Point(dx, sl), new Point(dx, by), ink, 1.5);
+                Pl(new[] { new Point(dx - 3, sl + 6), new Point(dx, sl), new Point(dx + 3, sl + 6) }, null, ink, 1.4, closed: false);
+                Pl(new[] { new Point(dx - 3, by - 6), new Point(dx, by), new Point(dx + 3, by - 6) }, null, ink, 1.4, closed: false);
+                TxB(cx - 28, 131, i == 0 ? "터파기 깊이 큼" : "터파기 깊이 작음", 11, i == 0 ? Fz(0xC0, 0x30, 0x28) : Fz(0x1B, 0x6B, 0x4D), true, da);
+            }
+            // 횡단도 꼬리표 — 종단 · 횡단도가 그리는 터파기선의 시작면
+            double ta = Seg(t, 4.2, 4.8);
+            if (ta > 0.01)
+            {
+                Key(ox + 4, 153, "횡단도", ta, 12);
+                TxB(ox + 62, 155, i == 0 ? "터파기선 = 계획면부터" : "터파기선 = 원지반부터", 11, ExOrgT, true, ta);
+            }
+            // 토공 막대 — 상대 크기(예시)
+            double bp = Seg(t, 5.2, 6.4);
+            if (bp > 0.01)
+            {
+                double[] rel = i == 0 ? new[] { 1.0, 1.0 } : new[] { 0.55, 0.6 };
+                string[] nm = { "터파기", "되메우기" };
+                Brush[] bc = { ExOrg, Fz(0xB8, 0x9A, 0x5E) };
+                for (int r = 0; r < 2; r++)
+                {
+                    double y0 = 202 + r * 22;
+                    Tx(ox + 4, y0, nm[r], 11, Txt);
+                    _cv.Children.Add(new Rectangle { Width = 120 * rel[r] * bp, Height = 14, Fill = bc[r], RadiusX = 2, RadiusY = 2 });
+                    Canvas.SetLeft(_cv.Children[^1], ox + 62); Canvas.SetTop(_cv.Children[^1], y0 + 1);
+                }
+                TxB(ox + 4, 246, i == 0 ? "토공 많음" : "토공 적음", 13, i == 0 ? Fz(0xC0, 0x30, 0x28) : Fz(0x1B, 0x6B, 0x4D), true, bp);
+            }
+        }
+        double ha = Seg(t, 5.0, 5.6);
+        TxB(8, 184, "토공 (상대 크기 · 예시)", 11, Dim, true, ha);
+        double la = Seg(t, 6.8, 7.4);
+        TxB(8, 268, "종단 · 횡단도의 터파기선이 달라짐 → 토공 차이", 11, Txt, true, la);
+        TxB(8, 283, "절토부 = 어느 쪽이든 계획면부터(부지 절토와 안 겹치게)", 11, Dim, true, Seg(t, 7.6, 8.2));
     }
 
     // 1. 기준면 — 시공순서 두 판(A 계획지표면 기준 → B 원지반 기준)
@@ -1150,6 +1273,7 @@ internal sealed class FixDemoView : Border
             TxB(xd + 2, my - 26, "터파기", 12, ExOrgT, true, da);
             TxB(xd + 2, my - 11, "깊이", 12, ExOrgT, true, da);
             TxB(xd + 2, my + 5, bm ? "얕음" : "깊음", 13, bm ? Fz(0x1B, 0x6B, 0x4D) : Fz(0xC0, 0x30, 0x28), true, da);
+            TxB(10, 28, bm ? "터파기 깊이 = 원지반 − 바닥" : "터파기 깊이 = 계획고 − 바닥", 12, ExOrgT, true, da);
         }
         // ── 제목 · 판 이름(큰 단추 모양) · 순서 띠(아래 흙 위 흰 띠 — 붐이 위로 올라가도 안 가림) ──
         Tx(10, 8, "단면", 13, Dim, true);
@@ -1359,6 +1483,61 @@ internal sealed class FixDemoView : Border
         TxB(wm.X - 40, wm.Y + 14, "가시설(수직)", 13, Fz(0x30, 0x30, 0x30), true, Seg(t, 3.3, 3.7));
         double press = t >= 1.0 && t < 1.4 ? (t - 1.0) / 0.4 : 0;
         if (t < 2.4) Ptr(L(ExHome, XP(ka, ExD + 7), Seg(t, 0.2, 1.0)), press);
+    }
+
+    // ★[v117.18 · JACK 1116 «굴착 구배 애니메이션이 없어 — 측면으로»] 단면 — 구덩이 바닥 · 비탈 1:n(세로 1 · 가로 n) · n이 커지면 완만 · 0이면 수직(가시설)
+    void ExSlope(double t)
+    {
+        const double gy = 100, by = 214, cx = 210, hb = 56;
+        // n 시간표: 0.3 → 0.5 → 1.0 → 0(수직)
+        double n = t < 2.4 ? 0.3 : t < 3.4 ? 0.3 + 0.2 * Seg(t, 2.4, 3.4) : t < 5.0 ? 0.5 : t < 6.0 ? 0.5 + 0.5 * Seg(t, 5.0, 6.0) : t < 7.2 ? 1.0 : 1.0 * (1 - Seg(t, 7.2, 8.2));
+        double h = by - gy, w = n * h;
+        Tx(10, 8, "단면", 13, Dim, true);
+        Pl(new[] { new Point(0, gy), new Point(W, gy), new Point(W, 292), new Point(0, 292) }, A(SoilC, 0.45), null, 0);
+        var hole = new[] { new Point(cx - hb - w, gy), new Point(cx - hb, by), new Point(cx + hb, by), new Point(cx + hb + w, gy) };
+        Pl(hole, DhBrand.Card, null, 0);
+        Ln(new Point(0, gy), new Point(cx - hb - w, gy), Ground, 2); Ln(new Point(cx + hb + w, gy), new Point(W, gy), Ground, 2);
+        bool wall = n < 0.02;
+        Pl(hole, null, wall ? Fz(0x30, 0x30, 0x30) : ExOrg, wall ? 4.5 : 2.8, closed: false);
+        TxB(10, gy + 4, "원지반", 12, Ground, true);
+        // 세로 1 · 가로 n 다리(오른쪽 비탈 옆)
+        double lx = cx + hb + w;
+        var ink = Fz(0xC0, 0x5A, 0x10);
+        if (!wall)
+        {
+            Ln(new Point(lx + 14, gy), new Point(lx + 14, by), ink, 1.5);
+            TxB(lx + 18, (gy + by) / 2 - 9, "1", 15, ExOrgT, true);
+            Ln(new Point(cx + hb, by + 14), new Point(lx, by + 14), ink, 1.5);
+            TxB((cx + hb + lx) / 2 - 6, by + 16, "n", 15, ExOrgT, true);
+        }
+        string lab = wall ? "1 : 0  =  수직(가시설)" : $"1 : {n:0.0#}";
+        Key(150, 38, lab, 1, 18);
+        string note = wall ? "비탈 없음 · 흙막이로 섬" : n < 0.4 ? "가파름 · 좁게 팜" : n < 0.75 ? "보통" : "완만 · 넓게 팜(터파기 많음)";
+        TxB(150, 72, note, 12, Txt, true);
+    }
+
+    // ★[v117.18 · JACK 1116 «가시설 변환 = 터파기 경계선 클릭하면 전체가 바뀌게»] 평면 — 터파기선 클릭 → 둘레 전체 빨강 → 한꺼번에 수직
+    void ExToWallAll(double t)
+    {
+        double red = Seg(t, 1.2, 1.4) * (1 - Seg(t, 2.0, 2.3)), u = Seg(t, 2.2, 3.2);
+        var w = new List<(int A, int B, double U, double Red)>();
+        for (int e = 0; e < XEs.Length; e++) { var s = XSeg(e, 0, 1); w.Add((s.A, s.B, u, red)); }
+        ExPlanDraw(1, w.ToArray());
+        TxB(196, 150, "구조물", 12, Txt, true);
+        TxB(250, 6, "둘레 전체 수직", 13, Fz(0x30, 0x30, 0x30), true, Seg(t, 3.0, 3.4));
+        double press = t >= 1.0 && t < 1.4 ? (t - 1.0) / 0.4 : 0;
+        if (t < 2.4) Ptr(L(ExHome, XP(XEs[2] + XEm[2] / 2, ExD + 7), Seg(t, 0.2, 1.0)), press);
+    }
+
+    // ★[v117.18 · JACK 1116 «초기화가 없어»] 평면 — [터파기 초기화] → 터파기(비탈 띠)만 사라지고 터파기선(바닥)은 남음
+    void ExReset(double t)
+    {
+        double g = 1 - Seg(t, 1.6, 2.6);
+        ExPlanDraw(g, System.Array.Empty<(int, int, double, double)>(), 2);
+        Key(290, 250, "터파기 초기화", Seg(t, 0.2, 0.5));
+        TxB(250, 6, "터파기선은 남음", 13, Fz(0xC0, 0x5A, 0x10), true, Seg(t, 2.6, 3.0));
+        double press = t >= 1.0 && t < 1.4 ? (t - 1.0) / 0.4 : 0;
+        if (t < 2.4) Ptr(L(ExHome, new Point(330, 262), Seg(t, 0.2, 1.0)), press);
     }
 
     // [사면 변환] — 가시설 한 구간에서 시작 → 그 구간 클릭 → 빨강 → 비탈 띠가 다시 펼쳐짐 «다시 사면»
@@ -1712,5 +1891,391 @@ internal sealed class FixDemoView : Border
             Pl(des, null, A(ProfC, a), 2.0, closed: false);
         }
         if (t < 2.0) Ptr(L(new Point(400, 140), new Point(18, 180), Seg(t, 0.2, 1.0)), Pulse(t, 1.0));
+    }
+
+    // ══ ★[v117.18 · JACK 1116 «진입도로 도킹창 — 항목마다 설명 애니메이션»] 노선 · 횡단 · 포장 · 사면 · 경로 그리기 · 폴리선 선택 · 종단수정 · 옹벽 · 측구 · 결과 ══
+    //    그림 크기 · 글씨 크기는 기존 장면과 같은 420 × 300 · 설명 글은 «무엇 → 할 일».
+    static readonly Color RdBlueC = Color.FromRgb(0x2F, 0x6F, 0xD0), RdAsphC = Color.FromRgb(0x44, 0x44, 0x4A);
+    static readonly Point[] RdV = { new(26, 240), new(130, 84), new(250, 216), new(396, 76) };   // 꺾인 노선(평면 장면 공용)
+
+    static double TW(string s, double size) { double w = 0; foreach (var ch in s) w += ch > 0x2E80 ? size : size * 0.56; return w; }
+
+    /// <summary>꺾인 점마다 반지름 d(px) 만큼 둥글린 점열(d = 0이면 꺾인 그대로).</summary>
+    static List<Point> Fillet(Point[] v, double d)
+    {
+        var r = new List<Point> { v[0] };
+        for (int i = 1; i < v.Length - 1; i++)
+        {
+            var p = v[i]; double l0 = Dist(p, v[i - 1]), l1 = Dist(p, v[i + 1]);
+            var a = L(p, v[i - 1], Math.Min(d, l0 * 0.45) / l0); var b = L(p, v[i + 1], Math.Min(d, l1 * 0.45) / l1);
+            for (int j = 0; j <= 10; j++) { double u = j / 10.0, w = 1 - u; r.Add(new Point(w * w * a.X + 2 * w * u * p.X + u * u * b.X, w * w * a.Y + 2 * w * u * p.Y + u * u * b.Y)); }
+        }
+        r.Add(v[^1]);
+        return r;
+    }
+    /// <summary>점열 앞쪽 u(0..1) 몫.</summary>
+    static List<Point> PartOf(IList<Point> pts, double u)
+    {
+        var r = new List<Point> { pts[0] };
+        double tot = 0; for (int i = 1; i < pts.Count; i++) tot += Dist(pts[i - 1], pts[i]);
+        double want = tot * Math.Clamp(u, 0, 1), acc = 0;
+        for (int i = 1; i < pts.Count; i++)
+        {
+            double l = Dist(pts[i - 1], pts[i]);
+            if (acc + l >= want) { if (l > 0) r.Add(L(pts[i - 1], pts[i], (want - acc) / l)); return r; }
+            r.Add(pts[i]); acc += l;
+        }
+        return r;
+    }
+    void Dot(Point p, double r, Brush f)
+    {
+        var e = new Ellipse { Width = r * 2, Height = r * 2, Fill = f };
+        Canvas.SetLeft(e, p.X - r); Canvas.SetTop(e, p.Y - r); _tgt.Children.Add(e);
+    }
+    void DashPl(IList<Point> pts, Brush br, double th, double d1 = 4, double d2 = 3)
+        => _tgt.Children.Add(new Polyline { Points = new PointCollection(pts), Stroke = br, StrokeThickness = th, StrokeDashArray = new DoubleCollection { d1, d2 }, StrokeLineJoin = PenLineJoin.Round });
+    /// <summary>도로 띠(회색 폭 · 흰 중심 점선) + 파란 선.</summary>
+    void RoadBand(IList<Point> c, double op)
+    {
+        if (op <= 0.01) return;
+        Pl(c, null, A(Color.FromRgb(0x9A, 0x9A, 0x9A), 0.6 * op), 18, closed: false);
+        DashPl(c, A(Colors.White, op), 1.2, 6, 5);
+        Pl(c, null, A(RdBlueC, op), 2.2, closed: false);
+    }
+    /// <summary>곡선 반경 R 표시 — 곡선 시작 · 끝 접선에서 둥근 곡선의 가운데까지(중심점 · 점선 · «R»).</summary>
+    void RadiusMark(Point[] v, int i, double d, double op)
+    {
+        if (op <= 0.01) return;
+        var p = v[i]; double l0 = Dist(p, v[i - 1]), l1 = Dist(p, v[i + 1]);
+        var a = L(p, v[i - 1], Math.Min(d, l0 * 0.45) / l0); var b = L(p, v[i + 1], Math.Min(d, l1 * 0.45) / l1);
+        var m = new Point(0.25 * a.X + 0.5 * p.X + 0.25 * b.X, 0.25 * a.Y + 0.5 * p.Y + 0.25 * b.Y);
+        var mid = L(a, b, 0.5); double dl = Math.Max(1e-6, Dist(mid, p));
+        var dir = new Point((mid.X - p.X) / dl, (mid.Y - p.Y) / dl);
+        var c = new Point(m.X + dir.X * 40, m.Y + dir.Y * 40);
+        var br = A(RedC, op);
+        Ln(c, m, br, 1.4, true); Dot(c, 2.6, br);
+        TxB((c.X + m.X) / 2 + 3, (c.Y + m.Y) / 2 - 8, "R", 12, Red, true, op);
+    }
+    void DimH(double x0, double x1, double y, string s, double op, double ty = -16)
+    {
+        if (op <= 0.01) return;
+        var br = A(RedC, op);
+        Ln(new Point(x0, y), new Point(x1, y), br, 1.4);
+        Ln(new Point(x0, y - 4), new Point(x0, y + 4), br, 1.4); Ln(new Point(x1, y - 4), new Point(x1, y + 4), br, 1.4);
+        TxB((x0 + x1) / 2 - TW(s, 11) / 2, y + ty, s, 11, Red, true, op);
+    }
+
+    // 노선 — 꺾인 선이 그려지고 → 꺾인 곳이 곡선 반경 R로 둥글어짐 → R 표시
+    void RoadAlign(double t)
+    {
+        double draw = Seg(t, 0.3, 1.5), u = Seg(t, 2.0, 3.2);
+        if (u <= 0) Pl(PartOf(RdV, draw), null, RouteBr, 2.6, closed: false);
+        else { DashPl(RdV, A(RdBlueC, 0.35), 1.4); Pl(Fillet(RdV, 46 * u), null, RouteBr, 2.6, closed: false); }
+        double dots = Seg(t, 1.5, 1.8) * (1 - u);
+        for (int i = 1; i < 3; i++) if (dots > 0.05) Dot(RdV[i], 4, A(RedC, dots));
+        for (int i = 1; i < 3; i++) RadiusMark(RdV, i, 46, Seg(t, 3.2, 3.6));
+        TxB(14, 12, "곡선 반경 R(m)", 12, Txt, true, Seg(t, 3.3, 3.7));
+    }
+
+    // 횡단 — 차로 반폭 · 횡단경사 · 길어깨 폭 · 길어깨 경사
+    void RoadXsec(double t)
+    {
+        var sf = new[] { new Point(74, 146), new Point(110, 140), new Point(210, 130), new Point(310, 140), new Point(346, 146) };
+        var soil = new List<Point> { new(20, 154), new(74, 164), new(110, 158), new(210, 148), new(310, 158), new(346, 164), new(400, 154), new(400, 262), new(20, 262) };
+        Pl(soil, A(SoilC, 0.45), null, 0);
+        var pv = new List<Point>(sf); for (int i = sf.Length - 1; i >= 0; i--) pv.Add(new Point(sf[i].X, sf[i].Y + 14));
+        Pl(pv, Fz(0x7A, 0x7A, 0x80), Fz(0x55, 0x55, 0x5A), 1);
+        Pl(new[] { sf[0], sf[1] }, null, Fz(0xC8, 0xB0, 0x70), 5, closed: false, flatEnds: true);
+        Pl(new[] { sf[3], sf[4] }, null, Fz(0xC8, 0xB0, 0x70), 5, closed: false, flatEnds: true);
+        Ln(new Point(210, 120), new Point(210, 252), Dim, 1, true);
+        TxB(216, 238, "중심", 11, Txt, false, 1);
+        DimH(110, 210, 90, "반폭 좌", Seg(t, 0.6, 1.1));
+        DimH(210, 310, 90, "반폭 우", Seg(t, 1.3, 1.8));
+        double sl = Seg(t, 2.4, 2.9);
+        if (sl > 0.01)
+        {
+            Ln(new Point(210, 130), new Point(310, 130), A(RedC, sl), 1.2, true);
+            Ln(new Point(310, 130), new Point(310, 140), A(RedC, sl), 2.4);
+            TxB(236, 108, "횡단경사 %", 11, Red, true, sl);
+        }
+        DimH(310, 346, 190, "길어깨", Seg(t, 3.5, 4.0), 8);
+        double ss = Seg(t, 4.3, 4.8);
+        if (ss > 0.01)
+        {
+            Ln(new Point(310, 140), new Point(346, 146), A(RedC, ss), 3);
+            TxB(268, 214, "길어깨 경사 %", 11, Red, true, ss);
+        }
+    }
+
+    // 포장 — 아스팔트 · 콘크리트 층이 위에서 아래로 쌓이며 두께 표시
+    void RoadPave(double t)
+    {
+        void Col(double x0, double w, string title, (string n, double mm, Color c)[] ls, double st)
+        {
+            TxB(x0, 52, title, 13, Txt, true, Seg(t, st - 0.4, st));
+            double y = 84;
+            for (int i = 0; i < ls.Length; i++)
+            {
+                double a = Seg(t, st + 0.55 * i, st + 0.55 * i + 0.45), h = 14 + ls[i].mm * 0.10;
+                if (a > 0.01)
+                {
+                    double yy = y - 10 * (1 - a);
+                    Pl(new[] { new Point(x0, yy), new Point(x0 + w, yy), new Point(x0 + w, yy + h), new Point(x0, yy + h) }, A(ls[i].c, a), A(Colors.Black, 0.35 * a), 1);
+                    TxB(x0 + w + 6, yy + h / 2 - 8, $"{ls[i].n} {ls[i].mm:0}", 11, Txt, false, a);
+                }
+                y += h;
+            }
+            double sa = Seg(t, st + 0.55 * ls.Length, st + 0.55 * ls.Length + 0.4);
+            Pl(new[] { new Point(x0, y), new Point(x0 + w, y), new Point(x0 + w, y + 36), new Point(x0, y + 36) }, A(SoilC, 0.45 * sa), null, 0);
+            TxB(x0 + 6, y + 8, "노상", 11, Dim, false, sa);
+        }
+        Col(20, 100, "아스팔트", new[] { ("표층", 50.0, Color.FromRgb(0x3A, 0x3A, 0x40)), ("기층", 100.0, Color.FromRgb(0x62, 0x62, 0x6A)), ("보조기층", 200.0, Color.FromRgb(0xB5, 0xA4, 0x80)) }, 0.8);
+        Col(222, 100, "콘크리트", new[] { ("슬래브", 250.0, Color.FromRgb(0xC9, 0xC9, 0xCC)), ("보조기층", 150.0, Color.FromRgb(0xB5, 0xA4, 0x80)) }, 0.8);
+        double ja = Seg(t, 3.0, 3.5);
+        if (ja > 0.01)
+            foreach (double jx in new[] { 255.0, 289.0 })
+            {
+                Ln(new Point(jx, 84), new Point(jx, 100), A(RedC, ja), 1.6);
+            }
+        TxB(282, 62, "줄눈", 11, Red, true, ja);
+        TxB(20, 262, "두께 mm", 11, Dim, false, Seg(t, 2.6, 3.0));
+    }
+
+    /// <summary>사면 선 — 도로 끝 e에서 dir(−1 왼쪽 · +1 오른쪽)로 · up = 위(절토) · 지반 g에 닿으면 끝.</summary>
+    static List<Point> SlopeLine(Point e, int dir, bool up, double n, double stepH, double benchW, Func<double, double> g)
+    {
+        var r = new List<Point> { e }; var p = e;
+        for (int k = 0; k < 12; k++)
+        {
+            double dy = up ? -stepH : stepH, dx = dir * stepH * n;
+            double hit = -1;
+            for (int j = 1; j <= 24; j++)
+            {
+                double f = j / 24.0, qx = p.X + dx * f, qy = p.Y + dy * f;
+                if (up ? qy <= g(qx) : qy >= g(qx)) { hit = f; break; }
+            }
+            if (hit > 0) { r.Add(new Point(p.X + dx * hit, p.Y + dy * hit)); return r; }
+            p = new Point(p.X + dx, p.Y + dy); r.Add(p);
+            var b = new Point(p.X + dir * benchW, p.Y);
+            if (up ? b.Y <= g(b.X) : b.Y >= g(b.X)) { r.Add(b); return r; }
+            p = b; r.Add(p);
+        }
+        return r;
+    }
+
+    // 사면 — 도로 끝에서 절토(위)로 · 성토(아래)로 단 + 소단이 지반에 닿을 때까지
+    void RoadSlope(double t)
+    {
+        double G(double x) => (x <= 210 ? 190 + (x - 210) * 0.42 : 190 + (x - 210) * 0.20) + Rough(x * 0.9) * 0.3;
+        var gnd = new List<Point>(); for (double x = 0; x <= 420; x += 6) gnd.Add(new Point(x, G(x)));
+        var soil = new List<Point>(gnd) { new(420, 300), new(0, 300) };
+        Pl(soil, A(SoilC, 0.45), null, 0);
+        var cut = SlopeLine(new Point(130, 190), -1, true, 1.0, 16, 10, G);
+        var fil = SlopeLine(new Point(290, 190), 1, false, 1.5, 16, 10, G);
+        double uc = Seg(t, 0.9, 2.7), uf = Seg(t, 2.6, 4.4);
+        // 깎는 흙(붉은 옅음) · 쌓는 흙(옅은 초록)
+        if (uc > 0.01)
+        {
+            var poly = new List<Point>(cut); for (double x = cut[^1].X; x <= 130; x += 6) poly.Add(new Point(x, G(x)));
+            Pl(poly, A(RedC, 0.16 * uc), null, 0);
+        }
+        if (uf > 0.01)
+        {
+            var poly = new List<Point>(fil); for (double x = fil[^1].X; x >= 290; x -= 6) poly.Add(new Point(x, G(x)));
+            Pl(poly, A(Color.FromRgb(0x7F, 0xBF, 0x6A), 0.5 * uf), null, 0);
+        }
+        Pl(gnd, null, Ground, 1.6, closed: false);
+        Pl(new[] { new Point(130, 190), new Point(290, 190), new Point(290, 200), new Point(130, 200) }, Fz(0x7A, 0x7A, 0x80), Fz(0x55, 0x55, 0x5A), 1);
+        Pl(PartOf(cut, uc), null, Profile, 2.4, closed: false);
+        Pl(PartOf(fil, uf), null, Profile, 2.4, closed: false);
+        TxB(16, 20, "절토 1:n", 12, Red, true, Seg(t, 2.0, 2.4));
+        TxB(330, 20, "성토 1:n", 12, Green, true, Seg(t, 3.9, 4.3));
+        // 소단(첫 소단) 표시
+        double ba = Seg(t, 4.7, 5.2);
+        if (ba > 0.01 && cut.Count > 3)
+        {
+            var b0 = cut[2]; var b1 = cut[3];
+            Ln(new Point(b0.X, b0.Y - 3), new Point(b1.X, b1.Y - 3), A(RedC, ba), 3);
+            TxB(b1.X - 6, b1.Y - 26, "소단", 11, Red, true, ba);
+        }
+    }
+
+    // 도로 경로 그리기 — 점을 차례로 찍고 → Enter → 꺾인 곳 곡선 → 도로 띠
+    void RoadDraw(double t)
+    {
+        double[] ck = { 0.7, 1.5, 2.3, 3.1 };
+        int n = 0; for (int i = 0; i < 4; i++) if (t >= ck[i]) n = i + 1;
+        double mo = Seg(t, 4.2, 5.0);
+        if (mo <= 0.01)
+        {
+            var pts = new List<Point>(); for (int i = 0; i < n; i++) pts.Add(RdV[i]);
+            if (n >= 2) Pl(pts, null, RouteBr, 2.4, closed: false);
+            foreach (var p in pts) Dot(p, 3.5, Red);
+        }
+        else
+        {
+            var cv = Fillet(RdV, 46 * mo);
+            RoadBand(cv, Math.Min(1, mo * 1.5));
+        }
+        Key(330, 16, "Enter", Seg(t, 3.7, 3.9) * (1 - Seg(t, 4.1, 4.3)));
+        if (t < 4.0)
+        {
+            var home = new Point(380, 280); Point m;
+            if (t < ck[0]) m = L(home, RdV[0], Seg(t, 0.1, ck[0]));
+            else { m = RdV[0]; for (int i = 1; i < 4; i++) if (t >= ck[i - 1]) m = L(RdV[i - 1], RdV[i], Seg(t, ck[i - 1] + 0.2, ck[i])); }
+            Ptr(m, Pulse(t, ck));
+        }
+    }
+
+    // 폴리선 선택 — 그려 둔 폴리선 클릭 → 빨강 · 도로로
+    void RoadPick(double t)
+    {
+        double sel = Seg(t, 1.5, 1.8), mo = Seg(t, 2.3, 3.4);
+        if (mo <= 0.01)
+        {
+            Pl(RdV, null, Fz(0x77, 0x77, 0x77), 2.2, closed: false);
+            if (sel > 0.01) Pl(RdV, null, A(RedC, 0.7 * sel), 3.4, closed: false);
+        }
+        else RoadBand(Fillet(RdV, 46 * mo), Math.Min(1, mo * 1.5));
+        TxB(18, 14, "그려 둔 폴리선", 12, Txt, false, 1 - mo);
+        TxB(18, 14, "도로", 12, Green, true, mo);
+        if (t < 2.4)
+        {
+            var tgt = L(RdV[0], RdV[1], 0.55);
+            Ptr(L(new Point(380, 280), tgt, Seg(t, 0.2, 1.2)), Pulse(t, 1.3));
+        }
+    }
+
+    // 종단수정 — 종단도의 PVI 점을 잡고 위 · 아래로 끌면 경사가 바뀜
+    void RoadProfile(double t)
+    {
+        double[] xs = { 30, 150, 270, 390 };
+        double d1 = Seg(t, 1.5, 2.8), d2 = Seg(t, 4.0, 5.3);
+        double[] ys = { 170, 150 - 52 * d1, 128 + 36 * d2, 150 };
+        var gnd = new List<Point>(); for (double x = 14; x <= 406; x += 6) gnd.Add(new Point(x, 210 + Rough(x * 1.3) * 1.1));
+        Pl(new List<Point>(gnd) { new(406, 290), new(14, 290) }, A(SoilC, 0.4), null, 0);
+        Pl(gnd, null, Ground, 1.6, closed: false);
+        TxB(18, 268, "원지반", 11, Dim, false, 1);
+        for (int i = 0; i < 4; i++) Ln(new Point(xs[i], ys[i]), new Point(xs[i], 262), Dim, 1, true);
+        var pts = new List<Point>(); for (int i = 0; i < 4; i++) pts.Add(new Point(xs[i], ys[i]));
+        Pl(pts, null, Profile, 2.6, closed: false);
+        for (int i = 0; i < 3; i++)
+        {
+            double g = (ys[i] - ys[i + 1]) / (xs[i + 1] - xs[i]) * 14;
+            TxB((xs[i] + xs[i + 1]) / 2 - 18, (ys[i] + ys[i + 1]) / 2 - 24, $"{g:+0.0;-0.0;0.0} %", 11, Txt, true, 1);
+        }
+        bool act1 = t >= 1.1 && t < 2.9, act2 = t >= 3.6 && t < 5.4;
+        for (int i = 0; i < 4; i++)
+        {
+            bool act = (i == 1 && act1) || (i == 2 && act2);
+            var c = new Point(xs[i], ys[i]);
+            Pl(new[] { new Point(c.X, c.Y - 7), new Point(c.X + 7, c.Y), new Point(c.X, c.Y + 7), new Point(c.X - 7, c.Y) }, act ? Red : Brushes.White, act ? Red : Profile, 1.8);
+        }
+        TxB(xs[1] - 14, ys[1] + 12, "PVI", 11, Txt, true, Seg(t, 0.3, 0.7));
+        Point m;
+        var home = new Point(400, 280);
+        var p1 = new Point(xs[1], ys[1]); var p2 = new Point(xs[2], ys[2]);
+        if (t < 1.1) m = L(home, p1, Seg(t, 0.2, 1.0));
+        else if (t < 2.9) m = p1;
+        else if (t < 3.6) m = L(p1, p2, Seg(t, 2.9, 3.5));
+        else m = p2;
+        if (t < 5.6) Ptr(m, Pulse(t, 1.1, 3.6));
+    }
+
+    // 옹벽 — 평면: 도로 띠 · 아래 사면 띠 · 구간 시작 · 끝 클릭 → 그 구간 사면이 옹벽으로
+    void RoadWall(double t)
+    {
+        const double x0 = 140, x1 = 290, yr = 136, yb = 216;
+        double u = Seg(t, 3.0, 4.2);
+        double Toe(double x) { double w = Math.Clamp(Math.Min(x - x0, x1 - x) / 16 + 0.5, 0, 1); return yb - (yb - yr - 10) * u * S(w); }
+        Pl(new[] { new Point(16, 96), new Point(404, 96), new Point(404, yr), new Point(16, yr) }, A(Color.FromRgb(0x9A, 0x9A, 0x9A), 0.6), null, 0);
+        Ln(new Point(16, 116), new Point(404, 116), Brushes.White, 1.2, true);
+        var toe = new List<Point>(); for (double x = 16; x <= 404; x += 4) toe.Add(new Point(x, Toe(x)));
+        var area = new List<Point> { new(16, yr), new(404, yr) }; for (int i = toe.Count - 1; i >= 0; i--) area.Add(toe[i]);
+        Pl(area, A(Color.FromRgb(0xB9, 0xD7, 0xA8), 0.6), null, 0);
+        for (double x = 22; x <= 400; x += 10) { double ty = Toe(x); if (ty - yr > 5) Ln(new Point(x, yr), new Point(x, ty), A(Colors.Black, 0.25), 1); }
+        Ln(new Point(16, yr), new Point(404, yr), Fz(0x55, 0x55, 0x55), 1.2);
+        if (u > 0.01)
+        {
+            Pl(new[] { new Point(x0, yr), new Point(x1, yr), new Point(x1, yr + 9), new Point(x0, yr + 9) }, A(WallC, u), null, 0);
+            TxB((x0 + x1) / 2 - 12, yr + 14, "옹벽", 12, Txt, true, u);
+        }
+        foreach (var (x, a0, lab) in new[] { (x0, 0.9, "시작"), (x1, 1.9, "끝") })
+        {
+            double a = Seg(t, a0, a0 + 0.3);
+            if (a <= 0.01) continue;
+            Ln(new Point(x, 84), new Point(x, 232), A(RedC, a), 1.4, true);
+            TxB(x - TW(lab, 11) / 2, 66, lab, 11, Red, true, a);
+        }
+        Key(330, 256, "Enter", Seg(t, 2.5, 2.7) * (1 - Seg(t, 2.9, 3.1)));
+        if (t < 2.6)
+        {
+            var home = new Point(380, 280); Point m;
+            var a0p = new Point(x0, 246); var a1p = new Point(x1, 246);
+            m = t < 0.9 ? L(home, a0p, Seg(t, 0.1, 0.8)) : t < 1.9 ? L(a0p, a1p, Seg(t, 1.0, 1.8)) : a1p;
+            Ptr(m, Pulse(t, 0.9, 1.9));
+        }
+    }
+
+    // 측구 — 평면에서 두 점(구간) 클릭 → 도로 가장자리에 측구 띠 · 아래 단면 = U형 + 그레이팅 + 물길
+    void RoadDitch(double t)
+    {
+        Pl(new[] { new Point(16, 30), new Point(404, 30), new Point(404, 66), new Point(16, 66) }, A(Color.FromRgb(0x9A, 0x9A, 0x9A), 0.6), null, 0);
+        Ln(new Point(16, 48), new Point(404, 48), Brushes.White, 1.2, true);
+        double xa = 110, xb = 310, g = Seg(t, 1.5, 2.6);
+        foreach (var (x, a0) in new[] { (xa, 0.7), (xb, 1.4) })
+        {
+            double a = Seg(t, a0, a0 + 0.3);
+            if (a > 0.01) Ln(new Point(x, 24), new Point(x, 88), A(RedC, a), 1.4, true);
+        }
+        if (g > 0.01) Pl(new[] { new Point(xa, 66), new Point(xa + (xb - xa) * g, 66), new Point(xa + (xb - xa) * g, 74), new Point(xa, 74) }, Fz(0x55, 0x66, 0x70), null, 0);
+        TxB(xa + 2, 76, "구간", 11, Red, true, Seg(t, 2.0, 2.4));
+        // 단면
+        double a1 = Seg(t, 2.6, 3.3);
+        if (a1 > 0.01)
+        {
+            Pl(new[] { new Point(16, 150), new Point(404, 150), new Point(404, 280), new Point(16, 280) }, A(SoilC, 0.45 * a1), null, 0);
+            Pl(new[] { new Point(16, 140), new Point(210, 140), new Point(210, 152), new Point(16, 152) }, A(RdAsphC, a1), null, 0);
+            var u = new[] { new Point(210, 140), new Point(224, 140), new Point(224, 214), new Point(266, 214), new Point(266, 140), new Point(280, 140), new Point(280, 228), new Point(210, 228) };
+            Pl(u, A(Color.FromRgb(0xC9, 0xC9, 0xCC), a1), A(Colors.Black, 0.4 * a1), 1.2);
+            double wa = Seg(t, 3.5, 4.1);
+            if (wa > 0.01) Pl(new[] { new Point(224, 214 - 40 * wa), new Point(266, 214 - 40 * wa), new Point(266, 214), new Point(224, 214) }, A(Color.FromRgb(0x5A, 0x9B, 0xE0), 0.7), null, 0);
+            double ga = Seg(t, 4.4, 5.0);
+            if (ga > 0.01) { Pl(new[] { new Point(224, 136), new Point(266, 136), new Point(266, 142), new Point(224, 142) }, A(Color.FromRgb(0x33, 0x33, 0x33), ga), null, 0); for (double x = 230; x < 266; x += 8) Ln(new Point(x, 137), new Point(x, 141), A(Colors.White, ga), 1.2); }
+        }
+        DimH(224, 266, 114, "안폭", Seg(t, 3.0, 3.5), -16);
+        double hv = Seg(t, 3.2, 3.7);
+        if (hv > 0.01) { var br = A(RedC, hv); Ln(new Point(296, 140), new Point(296, 228), br, 1.4); Ln(new Point(292, 140), new Point(300, 140), br, 1.4); Ln(new Point(292, 228), new Point(300, 228), br, 1.4); TxB(304, 176, "안높이", 11, Red, true, hv); }
+        TxB(284, 232, "벽", 11, Red, true, Seg(t, 3.4, 3.9));
+        TxB(300, 260, "그레이팅", 11, Txt, true, Seg(t, 4.6, 5.1));
+        if (t < 2.0)
+        {
+            var home = new Point(380, 120);
+            Point m = t < 0.7 ? L(home, new Point(xa, 94), Seg(t, 0.1, 0.65)) : t < 1.4 ? L(new Point(xa, 94), new Point(xb, 94), Seg(t, 0.8, 1.35)) : new Point(xb, 94);
+            Ptr(m, Pulse(t, 0.7, 1.4));
+        }
+    }
+
+    // 결과 — [업데이트] → 토공량 · 경사 · 옹벽 합계(예시 값)
+    void RoadResult(double t)
+    {
+        Key(24, 16, "업데이트", Seg(t, 0.1, 0.3));
+        Pl(new[] { new Point(24, 62), new Point(396, 62), new Point(396, 262), new Point(24, 262) }, Brushes.White, Fz(0xCC, 0xCC, 0xCC), 1.2);
+        var rows = new (string n, string v, double w, Color c)[]
+        {
+            ("절토량", "12,340 ㎥", 200, Color.FromRgb(0xD9, 0x34, 0x2B)),
+            ("성토량", "8,120 ㎥", 132, Color.FromRgb(0x2E, 0x9E, 0x44)),
+            ("최대 종단경사", "6.2 %", 70, Color.FromRgb(0xD4, 0xA0, 0x00)),
+            ("옹벽", "2개소 · 84 m", 90, Color.FromRgb(0x50, 0x50, 0x50)),
+        };
+        for (int i = 0; i < rows.Length; i++)
+        {
+            double a = Seg(t, 1.5 + 0.55 * i, 1.9 + 0.55 * i), y = 78 + i * 46;
+            TxB(40, y, rows[i].n, 12, Txt, true, a);
+            TxB(300 - 0, y, rows[i].v, 12, Txt, true, a);
+            if (a > 0.01) Pl(new[] { new Point(40, y + 22), new Point(40 + rows[i].w * a, y + 22), new Point(40 + rows[i].w * a, y + 30), new Point(40, y + 30) }, A(rows[i].c, 0.85), null, 0);
+        }
+        TxB(330, 268, "예시 값", 10, Dim, false, Seg(t, 3.5, 3.9));
+        if (t < 1.4) Ptr(L(new Point(380, 250), new Point(52, 30), Seg(t, 0.1, 0.8)), Pulse(t, 0.8));
     }
 }

@@ -115,7 +115,7 @@ internal sealed class SectionPanel : UserControl
         var deck = new DockPanel { LastChildFill = true };
         var top = new StackPanel { Margin = new Thickness(10, 10, 10, 0) };
         top.Children.Add(head);
-        top.Children.Add(DemoFrame.Wrap(demo));   // ★[v117.14.1 · JACK 1112 «종횡단도 애니메이션 창 제각각 → 계획부지 생성처럼 고정 · 같은 크기»]
+        top.Children.Add(DemoFrame.Wrap("Section", demo));   // ★[v117.14.1 · JACK 1112 «종횡단도 애니메이션 창 제각각 → 계획부지 생성처럼 고정 · 같은 크기»]
         DockPanel.SetDock(top, Dock.Top);
         deck.Children.Add(top);
         deck.Children.Add(DhBrand.Watermark(new ScrollViewer

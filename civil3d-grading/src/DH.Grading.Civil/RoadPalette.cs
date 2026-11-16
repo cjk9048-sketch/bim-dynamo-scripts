@@ -80,7 +80,7 @@ internal sealed class RoadPanel : UserControl
         top.Children.Add(head);
         // ★[v117.17 · JACK 1112 «모든 도킹팝업창 맨 위 = 설명 애니메이션 칸»] 진입도로 창도 정지 · 종횡단도 · 터파기 창처럼 로고 아래 고정 틀(옛: ■ 옹벽 칸 오른쪽 작은 칸)
         _demo = new FixDemoView("칸 · 단추에 마우스 → 설명", "add");
-        top.Children.Add(DemoFrame.Wrap(_demo));
+        top.Children.Add(DemoFrame.Wrap("Road", _demo));
         top.Children.Add(_title);
         top.Children.Add(_note);
         var deck = new DockPanel { LastChildFill = true };
@@ -97,11 +97,10 @@ internal sealed class RoadPanel : UserControl
 
         // ── ■ 도로 설정 — 작은 칸 셋(한 번에 하나 펼침 · 창을 만들 때마다 «노선»이 열린 채로) ──
         // ★★[v111.7 · JACK 1102 «도킹창 묶음 정리»] 작은 칸 «종단» · «옹벽 제안»은 새 큰 칸 ■ 종단 · ■ 옹벽으로 옮김 — 여기는 값만(노선 · 횡단 · 사면)
-        const string G = "도로:설정칸";
         const string GT = "도로:큰칸";   // ★[v117.12 · JACK 1112] 큰 칸(설정 · 종단 · 옹벽 · 측구)은 한 번에 하나만 펼침 — ■ 결과는 묶음 밖(늘 펼침)
         // ★★[v113.3 · JACK 1105 «진입도로 생성을 누르면 진입도로 창이 뜨고, 창에 도로 그리기랑 폴리선 선택 · 별도 팝업은 만들지 말고»] 창 맨 위 — 새 도로 만들기(늘 켜짐 · 아래 ■ 도로 설정 값으로)
         var mk = new WrapPanel { Margin = new Thickness(0, 2, 0, 6) };
-        Button MakeBtn(string text, string cmd, string tip, bool primary)
+        Button MakeBtn(string text, string cmd, string tip, bool primary, string? demoKey)
         {
             var b = new Button { Content = text, Height = 30, MinWidth = 72, Padding = new Thickness(12, 0, 12, 0), Margin = new Thickness(0, 0, 6, 0), VerticalContentAlignment = VerticalAlignment.Center, ToolTip = tip };
             if (primary) try { if (DhBrand.Skin != null) b.Style = (Style)DhBrand.Skin["DhPrimary"]; } catch { }
@@ -114,26 +113,43 @@ internal sealed class RoadPanel : UserControl
                 try { doc.SendStringToExecute("\x03\x03" + cmd + " ", true, false, false); }
                 catch (System.Exception ex) { _note.Text = text + " 실패 — " + ex.Message; }
             };
+            if (demoKey != null) { b.MouseEnter += (_, __) => _demo.Play(demoKey); b.MouseLeave += (_, __) => _demo.Idle(); }   // ★[v117.18] 단추에 마우스 → 맨 위 설명
             mk.Children.Add(b);
             return b;
         }
-        MakeBtn("도로 경로 그리기", "DHROADDRAW", "점을 차례로 찍고 Enter — 꺾인 곳은 곡선 반경으로 곡선 · 아래 도로 설정 값으로 만듭니다", true);
-        MakeBtn("폴리선 선택", "DHROAD", "그려 둔 폴리선 · 3D 폴리선 · Civil 노선을 골라 아래 도로 설정 값으로 만듭니다", false);
-        _root.Children.Add(mk);
+        MakeBtn("도로 경로 그리기", "DHROADDRAW", "점을 차례로 찍고 Enter — 꺾인 곳은 곡선 반경으로 곡선 · 아래 도로 설정 값으로 만듭니다", true, "roadDraw");
+        MakeBtn("폴리선 선택", "DHROAD", "그려 둔 폴리선 · 3D 폴리선 · Civil 노선을 골라 아래 도로 설정 값으로 만듭니다", false, "roadPick");
         GradingDialog.ForgetOpen("도로:노선", "도로:횡단", "도로:포장", "도로:사면");
-        var secSet = GradingDialog.AddCollapsible(_root, "■ 도로 설정", "노선 · 횡단 · 포장 · 사면", first: true, open: true, key: "도로:설정", group: GT);
+        // ★★[v117.18 · JACK 1116 «도로 설정 아래 노선 · 횡단 · 포장 · 사면은 늘 펼침 · 항목마다 설명 애니메이션»] 접는 칸이 아니라 제목만(화살표 · 접힘 · 묶음 없음) — 제목 · 칸에 마우스 → 맨 위 설명
+        StackPanel Plain(Panel parent, string title, string tip, bool sub, string? demoKey, bool first = false)
+        {
+            var head = new Border
+            {
+                Child = new TextBlock { Text = title, FontSize = sub ? 12 : 13, FontWeight = FontWeights.Bold, Foreground = sub ? DhBrand.Ink : DhBrand.Brand },
+                Background = System.Windows.Media.Brushes.Transparent, Padding = new Thickness(0, sub ? 2 : 3, 0, sub ? 2 : 3),
+                Margin = new Thickness(0, first ? 0 : sub ? 8 : 14, 0, sub ? 3 : 5), ToolTip = tip,
+            };
+            var line = new Border { Height = 1, Background = DhBrand.Line, Margin = new Thickness(0, 0, 0, sub ? 8 : 11), ToolTip = tip };
+            var body = new StackPanel { Margin = new Thickness(12, 0, 0, 0) };
+            var blk = new StackPanel();
+            blk.Children.Add(head); blk.Children.Add(line); blk.Children.Add(body);
+            parent.Children.Add(blk);
+            if (demoKey != null) { blk.MouseEnter += (_, __) => _demo.Play(demoKey); blk.MouseLeave += (_, __) => _demo.Idle(); }
+            return body;
+        }
+        var secSet = Plain(_root, "■ 도로 설정", "노선 · 횡단 · 포장 · 사면", false, null, first: true);
 
-        _host = GradingDialog.AddCollapsible(secSet, "노선", "꺾인 곳 곡선 반경 — [경로 그리기] · [폴리선 선택] 둘 다 · 바꾸면 열린 도로의 곡선도 바뀝니다", open: true, key: "도로:노선", group: G, level: 2);
+        _host = Plain(secSet, "노선", "꺾인 곳 곡선 반경 — [경로 그리기] · [폴리선 선택] 둘 다 · 바꾸면 열린 도로의 곡선도 바뀝니다", true, "roadAlign");
         _curve = Row(("곡선 반경 m", d => d.CurveR, (d, v) => { d.CurveR = v; RoadDesign.LastCurveR = v; _recurve = true; }, 1, 3, 1000))[0];
 
-        _host = GradingDialog.AddCollapsible(secSet, "횡단", "차로 · 길어깨 폭과 경사", open: false, key: "도로:횡단", group: G, level: 2);
+        _host = Plain(secSet, "횡단", "차로 · 길어깨 폭과 경사", true, "roadXsec");
         // ★[설치 전 검토 L4] 칸마다 받는 범위(창에 보이는 단위) — 밖이면 안 쓰고 되돌림
         Row(("차로 반폭 좌", d => d.HalfL, (d, v) => d.HalfL = v, 1, 1, 20), ("우", d => d.HalfR, (d, v) => d.HalfR = v, 1, 1, 20));
         Row(("횡단경사 %", d => d.CrossSlope, (d, v) => d.CrossSlope = v, 100, 0, 10), ("길어깨", d => d.ShoulderL, (d, v) => { d.ShoulderL = v; d.ShoulderR = v; }, 1, 0, 5),
             ("길어깨 경사 %", d => d.ShoulderSlope, (d, v) => d.ShoulderSlope = v, 100, 0, 10));
 
         // ★★[v116.8 · JACK 1110 «도로 설정에 포장 — 아스팔트 · 콘크리트 고르고 횡단 · 3D에 따라 표현»] 종류(늘 켜짐 · 열린 도로 없으면 새 도로 값) → 그 종류 층 두께(mm) · 콘크리트는 줄눈 간격
-        _host = GradingDialog.AddCollapsible(secSet, "포장", "아스팔트 · 콘크리트 · 층 두께", open: false, key: "도로:포장", group: G, level: 2);
+        _host = Plain(secSet, "포장", "아스팔트 · 콘크리트 · 층 두께", true, "roadPave");
         var paveRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(2, 2, 0, 6) };
         paveRow.Children.Add(new TextBlock { Text = "종류", FontSize = 11, Foreground = DhBrand.Sub, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0) });
         _paveKind = new ComboBox { Width = 96, Height = 26, ToolTip = "횡단도 포장 층 · 3D 질감 — 도로 면 · 토공은 그대로 · 두께 첫 값은 예시" };
@@ -148,13 +164,16 @@ internal sealed class RoadPanel : UserControl
         Row(("슬래브 mm", d => d.PaveC[0], (d, v) => d.PaveC[0] = v, 1000, 100, 600), ("보조기층", d => d.PaveC[1], (d, v) => d.PaveC[1] = v, 1000, 0, 1000));
         Row(("줄눈 간격 m", d => d.JointGap, (d, v) => d.JointGap = v, 1, 2, 20));
 
-        _host = GradingDialog.AddCollapsible(secSet, "사면", "절토 · 성토 구배(1:n) · 단높이 · 소단폭", open: false, key: "도로:사면", group: G, level: 2);
+        _host = Plain(secSet, "사면", "절토 · 성토 구배(1:n) · 단높이 · 소단폭", true, "roadSlope");
         Row(("절토 1:", d => d.CutSlope, (d, v) => d.CutSlope = v, 1, 0.1, 10), ("단높이", d => d.CutBenchH, (d, v) => d.CutBenchH = v, 1, 0.5, 50), ("소단", d => d.CutBenchW, (d, v) => d.CutBenchW = v, 1, 0, 10));
         Row(("성토 1:", d => d.FillSlope, (d, v) => d.FillSlope = v, 1, 0.1, 10), ("단높이", d => d.FillBenchH, (d, v) => d.FillBenchH = v, 1, 0.5, 50), ("소단", d => d.FillBenchW, (d, v) => d.FillBenchW = v, 1, 0, 10));
 
         // ── ■ 종단 ──
         // ★★[v111.7 · JACK 1102 «도킹창 묶음 정리»] 값(최대 경사 · PVI 간격) → [PVI 넣기] [PVI 지우기](옛 ■ 진입도로 수정에서 옮김) → [종단 자동으로 다시](옛 [종단 초안 다시] — 명령에서 한 번 물음)
-        _host = GradingDialog.AddCollapsible(_root, "■ 종단", "최대 종단경사 · PVI 간격 · PVI 넣기 · 지우기", open: false, key: "도로:종단", group: GT);
+        // ★[v117.18 · JACK 1116] [도로 경로 그리기] [폴리선 선택]은 ■ 도로 설정 바로 아래 · ■ 종단 → «종단수정»
+        _root.Children.Add(mk);
+        _host = GradingDialog.AddCollapsible(_root, "■ 종단수정", out var profBadge, "최대 종단경사 · PVI 간격 · PVI 넣기 · 지우기", open: false, key: "도로:종단", group: GT);
+        HookBig(profBadge, _host, "roadProfile");
         Row(("최대 경사 %", d => d.MaxGrade, (d, v) => d.MaxGrade = v, 100, 0.5, 30), ("PVI 간격", d => d.MinPviLen, (d, v) => d.MinPviLen = v, 1, 1, 500));
         // ★[v111.2 · JACK 1030 «PVI 수정 기능 — 넣기 · 삭제»] 종단도에서 찍기(Enter까지 여러 번)
         Buttons(("PVI 넣기", "DHROADPVIADD", "종단도를 찍은 측점에 PVI를 넣습니다 — 지금 계획선 위라 모양은 그대로, 넣은 뒤 잡아끌어 높이를 바꿉니다(Enter 끝)", false),
@@ -167,7 +186,9 @@ internal sealed class RoadPanel : UserControl
 
         // ── ■ 옹벽 ──
         // ★★[v111.7 · JACK 1102] [옹벽 변환] [사면 변환](옛 ■ 진입도로 수정에서 옮김 — 전체 해제는 명령 안 C · 부지와 같음) → 옹벽 제안 한 줄(제안 높이 · [사업 경계]) · 풍선 글은 쉬운 말로
-        _host = GradingDialog.AddCollapsible(_root, "■ 옹벽", "옹벽 변환 · 사면 변환 · 옹벽 추가 · 삭제", open: false, key: "도로:옹벽", group: GT);
+        _host = GradingDialog.AddCollapsible(_root, "■ 옹벽", out var wallBadge, "옹벽 변환 · 사면 변환 · 옹벽 추가 · 삭제", open: false, key: "도로:옹벽", group: GT);
+        var wallBody = _host;
+        HookBig(wallBadge, _host, "roadWall");
         // ★★[v113.0 · JACK 1104 «옹벽 변환은 소단선 변형 · 폴리선 옹벽 추가는 별도 단추»] [사면→옹벽] · [옹벽→사면] · [옹벽 추가](풍선 글 짧게)
         // ★[v117.12 · JACK 1112] 부지 창과 같은 자리 — 왼쪽 단추(1줄 사면→옹벽 · 옹벽→사면 / 2줄 옹벽 추가 · 옹벽 삭제) · 오른쪽 예시 칸(FixDemoView). 단추 그대로 Buttons와 같이 Act로 명령을 보내고 _needRoad로 켜짐을 맞춘다
         {
@@ -189,7 +210,8 @@ internal sealed class RoadPanel : UserControl
                 // 꺼진 단추는 마우스 일을 안 받는다 — 감싼 테두리가 받아 예시를 돌린다
                 var hit = new Border { Background = System.Windows.Media.Brushes.Transparent, Child = b };
                 hit.MouseEnter += (_, __) => demo.Play(key);
-                hit.MouseLeave += (_, __) => demo.Idle();
+                // ★[v117.18] 단추를 벗어나도 ■ 옹벽 칸 안이면 칸 설명으로 · 칸 밖이면 멈춤(이벤트 순서가 달라 한 박자 뒤에 봄)
+                hit.MouseLeave += (_, __) => Dispatcher.BeginInvoke(new Action(() => { if (wallBody.IsMouseOver) demo.Play("roadWall"); else demo.Idle(); }), System.Windows.Threading.DispatcherPriority.Input);
                 row.Children.Add(hit);
                 return b;
             }
@@ -202,7 +224,8 @@ internal sealed class RoadPanel : UserControl
         // ★[v116.4 · JACK 1109 «옹벽 제안 기능은 필요 없으니 없앨 것»] 옹벽 제안 한 줄(제안 높이 · [사업 경계]) 없앰 — 옛 기록 칸(SuggestH · LimitHandle)은 읽기만 하고 안 씀
 
         // ── ■ 측구 ★★[도로 마무리 ② · 계획 6.3 · JACK 1102 «드롭박스 · 대표단면 + 치수»] 형식 → 그 형식 치수(mm) → [구간 지정](두 점 · 쪽 = 첫 점) ──
-        _host = GradingDialog.AddCollapsible(_root, "■ 측구", "측구 단면 · 구간 지정", open: false, key: "도로:측구", group: GT);
+        _host = GradingDialog.AddCollapsible(_root, "■ 측구", out var ditchBadge, "측구 단면 · 구간 지정", open: false, key: "도로:측구", group: GT);
+        HookBig(ditchBadge, _host, "roadDitch");
         // ★[v117.12 · JACK 1112] 형식 · 치수 · 그레이팅 · 경고는 «측구 단면» 팝업으로 — 칸은 여기서 만들고(저장 · 켜짐 규칙 그대로) 창이 열릴 때만 그 안에 붙인다
         var ditchDock = _host;
         _ditchBody = new StackPanel();
@@ -250,7 +273,8 @@ internal sealed class RoadPanel : UserControl
         _host.Children.Add(ditchRow);
 
         // ── ■ 결과 ──
-        _host = GradingDialog.AddCollapsible(_root, "■ 결과", "토공량 · 높이 · 경사 · 옹벽", open: true, key: "도로:결과");
+        _host = GradingDialog.AddCollapsible(_root, "■ 결과", out var resBadge, "토공량 · 높이 · 경사 · 옹벽", open: true, key: "도로:결과");
+        HookBig(resBadge, _host, "roadResult");
         var resCard = Card(_result);
         resCard.ToolTip = $"최대 종단경사가 {ProfileSheetRules.WarnGrade * 100:0} %(경고 문턱 — 고정)를 넘으면 빨간 글로 알립니다 · ■ 종단 «최대 경사 %»는 자동 초안 한도(그 사이는 경고 없음)";
         _host.Children.Add(resCard); _needRoad.Add(resCard);
@@ -278,6 +302,18 @@ internal sealed class RoadPanel : UserControl
         };
         _root.Children.Add(_resetBtn);
         Show(null);
+    }
+
+    /// <summary>★[v117.18] 접는 큰 칸 — 제목 줄 · 펼친 칸에 마우스 → 그 칸 설명(맨 위) · 나가면 멈춤.</summary>
+    void HookBig(TextBlock badge, FrameworkElement body, string key)
+    {
+        var head = (badge.Parent as FrameworkElement)?.Parent as FrameworkElement;   // 요약칸 → 머리 줄 → 머리(누르는 자리)
+        foreach (var fe in new[] { head, body })
+        {
+            if (fe == null) continue;
+            fe.MouseEnter += (_, __) => _demo.Play(key);
+            fe.MouseLeave += (_, __) => _demo.Idle();
+        }
     }
 
     StackPanel _ditchBody = null!;

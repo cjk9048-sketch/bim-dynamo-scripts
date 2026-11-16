@@ -75,7 +75,7 @@ public sealed class ResetCommand
     internal static string LastAskForTest = "";
 
     /// <summary>확인 창 — <b>기본 «아니오»</b>(Enter로 지워지지 않게 — <see cref="CreateGradingCommand"/>의 AskMoving이 짚은 함정).</summary>
-    private static bool Ask(string text, string title)
+    internal static bool Ask(string text, string title)
     {
         LastAskForTest = text;
         if (SelfCheckLog.Headless) return _answerForTest ?? false;
