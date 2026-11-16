@@ -101,6 +101,8 @@ public static partial class RoadGrade
         /// <summary>★★[v114.3 · JACK 1105 진입도로 옹벽 추가] 선 옹벽 기록(그린 원본 · 세계 XY — 노선을 고쳐도 자리 그대로). 엔진(<see cref="Run"/>)은 안 쓴다 —
         /// 면을 지은 뒤 <see cref="ApplyWalls"/>가 그 시도 면 위에 얹는다. 지문(입력이 바뀌었나)에만 든다.</summary>
         public List<LineWall> LineWalls = new();
+        /// <summary>★[v117.18.12 · JACK 1116 «꺾임 소단: 단차 / 전이»] 급한 굽이 안쪽 소단 — 거짓 = 단차(옛 셈 그대로 · 기본) · 참 = 전이(두 다리 높이를 소단 따라 섞음 · 고리 엔진만 · <see cref="RoadRing"/> Trans).</summary>
+        public bool BendTrans;
     }
 
     public sealed class SlopeAt

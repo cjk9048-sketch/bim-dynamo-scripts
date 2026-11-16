@@ -18,6 +18,8 @@ internal sealed class RoadDesign
     /// <summary>★[v117.19 · JACK 1116 «굽이 평탄화»] 급한 굽이 구간 종단을 0 %로 — 켜짐 · 편 뒤 PVI(BendApplied = [S, Z, …]) · 펴기 전 PVI(BendBackup). 끄면 BendApplied와 같을 때만 BendBackup으로 되돌림. 옛 기록 = 꺼짐 · 빈 배열.</summary>
     public bool BendFlat;
     public double[] BendBackup = Array.Empty<double>(), BendApplied = Array.Empty<double>();
+    /// <summary>★[v117.18.12 · JACK 1116 «꺾임 소단: 단차 / 전이»] 급한 굽이 안쪽 소단 — 거짓 = 단차(기본 · 옛 기록) · 참 = 전이(<see cref="RoadGrade.Input.BendTrans"/>). 도로 면 지문에 듦(켰을 때만).</summary>
+    public bool BendTrans;
     public double SuggestH = 0;                // 옹벽 제안 높이(0 = 안 봄)
     public string LimitHandle = "";             // 사업 경계 폴리선 핸들
     public string GroundHandle = "";            // ★[v117.19 · JACK 1116 «창마다 [원지반 선택]»] 이 도로가 놓일 원지반의 핸들(고른 것 · 빈 글 = 자동 — 원지반이 하나면 그것). 정지면이 바탕이면 안 씀. 옛 기록 = 빈 글
@@ -161,6 +163,7 @@ internal sealed class RoadDesign
         HalfL = t.HalfL; HalfR = t.HalfR; CrossSlope = t.CrossSlope; ShoulderL = t.ShoulderL; ShoulderR = t.ShoulderR; ShoulderSlope = t.ShoulderSlope;
         CutSlope = t.CutSlope; CutBenchH = t.CutBenchH; CutBenchW = t.CutBenchW; FillSlope = t.FillSlope; FillBenchH = t.FillBenchH; FillBenchW = t.FillBenchW;
         MaxGrade = t.MaxGrade; MinPviLen = t.MinPviLen; CurveR = t.CurveR;
+        BendTrans = t.BendTrans;   // ★[v117.18.12] 꺾임 소단(사면 설정)
         // ★[v116.8] 포장도 물려받음(배열은 사본 — 새 도로 · 창 초안 · 열린 도로가 같은 배열을 나눠 쓰지 않게)
         PaveKind = t.PaveKind; PaveA = (double[])t.PaveA.Clone(); PaveC = (double[])t.PaveC.Clone(); JointGap = t.JointGap;
         FixPave();

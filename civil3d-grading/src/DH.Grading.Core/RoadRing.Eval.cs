@@ -39,7 +39,7 @@ public static partial class RoadRing
         public int Group; public double SStar, Blend;
     }
 
-    public sealed class Evaluator
+    public sealed partial class Evaluator
     {
         public readonly Deck D; public readonly Prof Pc, Pf; public readonly double Mu, Reach;
         /// <summary>★[v117.16] 단면 번호마다 절토 · 성토 단면(0 = 기본 = Pc · Pf).</summary>
@@ -261,6 +261,7 @@ public static partial class RoadRing
             _grid = new SegGrid(_bx, _by, _bz, 4.0);
             _deckIx = new TriGrid(d.Tris, 2.0);
             BuildRelays();
+            InitTrans();   // ★[v117.18.12 · JACK 1116 «꺾임 소단 전이»] 전이 켠 도로 · 급한 굽이 있을 때만(아니면 아무것도 안 함 — 비트 같음)
         }
 
         /// <summary>★[v117.16] 가지치기용 — 모든 단면 중 가장 작은 F(성토 · 절토). 단면이 하나면 기본 그대로(옛 셈과 비트 같음).</summary>
@@ -522,8 +523,15 @@ public static partial class RoadRing
         }
         [ThreadStatic] static (double Sig, double Vb, double Z, double Off, double S)[]? _bAcc;
 
-        /// <summary>lo · hi · 이긴 원천 · 가장 가까운 둘레(도로 면 밖 점).</summary>
+        /// <summary>lo · hi · 이긴 원천 · 가장 가까운 둘레(도로 면 밖 점).
+        /// ★[v117.18.12 · JACK 1116 «꺾임 소단 전이»] 전이 켠 굽이가 있으면 그 덧씌움(<see cref="ApplyTrans"/>)까지.</summary>
         public void LoHi(double x, double y, ref Pt pt)
+        {
+            LoHi0(x, y, ref pt);
+            if (_tr != null) ApplyTrans(x, y, ref pt);
+        }
+
+        void LoHi0(double x, double y, ref Pt pt)
         {
             Interlocked.Increment(ref Evals);
             double alpha = LoHiCore(x, y, ref pt, _corr, -1, 0, 0, out var sec);

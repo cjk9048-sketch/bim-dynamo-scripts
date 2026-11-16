@@ -121,6 +121,8 @@ if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "bendflat")
 }
 // ★[v117.18.1] BLOCKTEST_ONLY=rjack — JACK 도로 덤프 소단선 끊김 계측(BLOCKTEST_RRJACK = 덤프 폴더)
 if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "rjack") { RoadRingJack.Run(); return 0; }
+// ★[v117.18.12 · JACK 1116 «꺾임 소단 전이»] BLOCKTEST_ONLY=rtrans — 급한 굽이 안쪽 소단 전이(단차 ↔ 전이 · 소단선 턱 · 소단 기울기 상한 · 단마다 한 줄 변환 · 못 하면 단차)
+if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "rtrans") { RoadRingTransition.Run(); return Environment.ExitCode; }
 // ★[v116] BLOCKTEST_ONLY=ring — 고리 엔진(S236)만
 if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "ring")
 {

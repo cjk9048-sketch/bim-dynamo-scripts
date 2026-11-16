@@ -21,6 +21,8 @@ public static partial class RoadRing
         var o = new List<RoadGrade.TierLine>();
         if (b?.Ev == null) { o.AddRange(lines); return o; }
         var ev = b.Ev; int m = ev.D.B.Count;
+        // ★[v117.18.12 · JACK 1116 «꺾임 소단 전이»] 전이를 못 한 굽이(단차 그대로)마다 한 줄
+        foreach (var t in ev.Trans) if (!t.Ok && (t.Tiers.Count > 0 || t.Why.Length > 0)) st.Review.Add($"꺾임 {t.No + 1} · 전이 못 함({t.Why}) → 단차");
         double[] Br(Prof p) { var l = new List<double>(); for (int i = 1; i < p.E.Count; i++) l.Add(p.E[i].D); return l.ToArray(); }
         // ★[v117.16] 단면마다(변환 옹벽 변형 단면 — 그 점을 이긴 원천의 단면 꺾임으로 잼)
         var bcA = ev.PcA.Select(Br).ToArray(); var bfA = ev.PfA.Select(Br).ToArray();

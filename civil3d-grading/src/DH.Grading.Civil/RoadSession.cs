@@ -851,6 +851,7 @@ internal sealed class RoadSession
         // ★[도로 마무리 ② · 계획 6.1 · 비평 M6] 측구는 있을 때만(측구 없는 도로 지문 = 옛 문자열 그대로)
         if (inp.Ditches.Count > 0) sb.Append("|측구").Append(System.Text.Json.JsonSerializer.Serialize(inp.Ditches, opt));
         if (inp.LineWalls.Count > 0) sb.Append("|선옹벽2").Append(System.Text.Json.JsonSerializer.Serialize(inp.LineWalls, opt));   // ★[v114.3] 있을 때만(판 2 · 여유 포함 — 벽 없는 도로 지문 그대로)
+        if (inp.BendTrans) sb.Append("|꺾임전이");   // ★[v117.18.12] 켰을 때만(단차 도로 지문 = 옛 문자열 그대로) — 바꾸면 «지표면 업데이트 필요»
         // ★[v115 · 설치 전 검토 R8] 엔진이 바뀌면(굽은 안쪽 새 길 · B1 격자 · 선 옹벽) 옛 판 면은 한 번 «수정됨 — [업데이트]»
         //   ★[v116 · 고리 엔진 §4 M5a] 토막 엔진(고리 · 옛)도 — 벽을 넣거나 빼 엔진이 바뀌면 지문이 바뀐다
         // ★[v116.7] tag 끝 «|옛!» = 선 옹벽 도로의 앞 판 토큰(벽 있는 토막 «|옛» · 없는 토막 «|고리» — 그때 판 EngineOf)
@@ -916,6 +917,7 @@ internal sealed class RoadSession
         string vals = System.Text.Json.JsonSerializer.Serialize(new { inp.Sec, inp.Cut, inp.Fill, inp.TierWalls, inp.Walls, inp.MinSlope, inp.SectionGap, inp.EdgeStep }, opt);
         if (inp.Ditches.Count > 0) vals += "|측구" + System.Text.Json.JsonSerializer.Serialize(inp.Ditches, opt);   // ★[도로 마무리 ②] 있을 때만
         if (inp.LineWalls.Count > 0) vals += "|선옹벽2" + System.Text.Json.JsonSerializer.Serialize(inp.LineWalls, opt);   // ★[v114.3] 있을 때만
+        if (inp.BendTrans) vals += "|꺾임전이";   // ★[v117.18.12] 켰을 때만
         if (engine) vals += EngineTag + EngineOf(inp);   // ★[v115 · R8] «무엇이 바뀌었나»에서는 값 몫으로 보임 · ★[v116] 토막 엔진도
         var bs = new System.Text.StringBuilder(baseSurf.IsNull ? "" : baseSurf.Handle.ToString());
         if (inp.Base != null)
@@ -961,6 +963,7 @@ internal sealed class RoadSession
                     LineWalls = d.CoreLineWalls(out _, out _),   // ★[v114.3 · JACK 1105 진입도로 옹벽 추가] 선 옹벽(세계 XY · 엔진은 안 씀 — 면을 지은 뒤 얹음 · 지문에만)
                     Base = ground, SuggestH = 0,   // ★[v116.4 · JACK 1109] 옹벽 제안 없앰 — 옛 기록 SuggestH는 안 씀
                     SectionGap = Math.Max(0.5, GradingSettings.VertexSpacing),   // ★[v111.2] 삼각망 해상도 = 부지 둘레 점 간격
+                    BendTrans = d.BendTrans,   // ★[v117.18.12 · JACK 1116 «꺾임 소단 전이»] 급한 굽이 안쪽 소단 단차 / 전이
                 },
             });
         }

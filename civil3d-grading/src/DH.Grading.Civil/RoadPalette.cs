@@ -180,6 +180,17 @@ internal sealed class RoadPanel : UserControl
         _host = Plain(secSet, "사면", "절토 · 성토 구배(1:n) · 단높이 · 소단폭", true, "roadSlope");
         Row(("절토 1:", d => d.CutSlope, (d, v) => d.CutSlope = v, 1, 0.1, 10), ("단높이", d => d.CutBenchH, (d, v) => d.CutBenchH = v, 1, 0.5, 50), ("소단", d => d.CutBenchW, (d, v) => d.CutBenchW = v, 1, 0, 10));
         Row(("성토 1:", d => d.FillSlope, (d, v) => d.FillSlope = v, 1, 0.1, 10), ("단높이", d => d.FillBenchH, (d, v) => d.FillBenchH = v, 1, 0.5, 50), ("소단", d => d.FillBenchW, (d, v) => d.FillBenchW = v, 1, 0, 10));
+        // ★[v117.18.12 · JACK 1116 «꺾임 소단: 단차 / 전이»] 급한 굽이 안쪽 소단 — 도로마다 · 기본 단차 · 바꾸면 «지표면 업데이트 필요»(지문) · 애니메이션 없음
+        {
+            var bRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(2, 2, 0, 6), ToolTip = "급한 굽이 안쪽 소단 — 단차: 다리마다 수평 · 모퉁이 턱 / 전이: 두 다리 높이를 이어 기울게 · 못 하면 단차" };
+            bRow.Children.Add(new TextBlock { Text = "꺾임 소단", FontSize = 11, Foreground = DhBrand.Sub, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0) });
+            _bendStep = new RadioButton { Content = "단차", GroupName = "roadBendTrans", IsChecked = true, FontSize = 11.5, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 10, 0) };
+            _bendTrans = new RadioButton { Content = "전이", GroupName = "roadBendTrans", FontSize = 11.5, VerticalAlignment = VerticalAlignment.Center };
+            _bendStep.Checked += (_, __) => BendTransChanged(false);
+            _bendTrans.Checked += (_, __) => BendTransChanged(true);
+            bRow.Children.Add(_bendStep); bRow.Children.Add(_bendTrans);
+            _host.Children.Add(bRow);
+        }
 
         // ★[v117.19 · JACK 1116 «창마다 [원지반 선택]»] 원지반 — 도로마다(기록에 저장) · 정지면이 바탕이면 안 씀 · 하나면 자동 · 둘 이상이면 고르기(안 고르면 만들기 막힘 → 깜박)
         _host = Plain(secSet, "원지반", "이 도로가 놓일 원지반 — 정지면이 없고 원지반이 2개 이상일 때 고릅니다", true, null);
@@ -398,6 +409,27 @@ internal sealed class RoadPanel : UserControl
         try { _s.SaveDesign(); _s.Recompute(); } catch (System.Exception ex) { _note.Text = "저장 실패 — " + ex.Message; }
     }
     CheckBox _ditchLid = null!;
+    RadioButton _bendStep = null!, _bendTrans = null!;
+
+    /// <summary>★[v117.18.12 · JACK 1116 «꺾임 소단: 단차 / 전이»] 설계에 적고 다시 계산(지문이 바뀌어 «지표면 업데이트 필요») · 열린 도로 없으면 새 도로 값 · 명령 중이면 되돌림.</summary>
+    void BendTransChanged(bool on)
+    {
+        if (_loading) return;
+        var doc = AcadApp.DocumentManager.MdiActiveDocument;
+        if (_s == null) { if (doc != null) DraftOf(doc).BendTrans = on; return; }
+        if (Busy(_s.Doc))
+        {
+            _loading = true;
+            try { (_s.Design.BendTrans ? _bendTrans : _bendStep).IsChecked = true; }
+            finally { _loading = false; }
+            _note.Text = "명령 중에는 값을 바꾸지 않습니다 — 명령을 끝낸(Esc) 뒤 다시 넣으세요";
+            return;
+        }
+        var d = _s.Fresh();
+        if (d.BendTrans == on) return;
+        d.BendTrans = on;
+        try { _s.SaveDesign(); _s.Recompute(); } catch (System.Exception ex) { _note.Text = "저장 실패 — " + ex.Message; }
+    }
     StackPanel _ditchU = null!, _ditchL = null!;
 
     /// <summary>★[도로 마무리 ②] 형식 드롭박스 — 그 형식 치수 칸만 보임 · 설계에 적음(다음 [구간 지정]의 형식 · 다시 계산은 안 함).</summary>
@@ -794,6 +826,8 @@ internal sealed class RoadPanel : UserControl
                 _paveA.Visibility = pk == 0 ? Visibility.Visible : Visibility.Collapsed;
                 _paveC.Visibility = pk == 1 ? Visibility.Visible : Visibility.Collapsed;
             }
+            // ★[v117.18.12] 꺾임 소단 단차 / 전이
+            ((s?.Design ?? draftS)?.BendTrans == true ? _bendTrans : _bendStep).IsChecked = true;
             ShowGround(s);
             var r = s?.Last;
             _note.Text = s == null ? "" : s.Note;

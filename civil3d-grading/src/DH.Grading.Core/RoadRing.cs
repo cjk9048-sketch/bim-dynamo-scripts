@@ -77,6 +77,8 @@ public static partial class RoadRing
         public bool SharpAt(double s) { foreach (var w in Sharp) if (s >= w.S0 - 1e-9 && s <= w.S1 + 1e-9) return true; return false; }
         /// <summary>단 하나(첫 단 소단까지) 거리 — 급한 굽이가 k단 소단선에 미치는 측점 범위 = 구간 ± k × 이 값(소단선은 가장자리에서 k단 몫 떨어져 굽이 둘레를 쓸고 감).</summary>
         public double BendReach;
+        /// <summary>★[v117.18.12 · JACK 1116 «꺾임 소단 전이»] 급한 굽이 안쪽 소단 전이 켬(<see cref="RoadGrade.Input.BendTrans"/>) — 평가기가 읽음.</summary>
+        public bool Trans;
         /// <summary>측점 s · 단 k의 소단선이 닿는 급한 굽이 번호(구간 ± k × <see cref="BendReach"/> 안 · 여럿이면 가장 가까운 것 · 없으면 −1).</summary>
         public int SharpZone(double s, int k)
         {
@@ -266,7 +268,7 @@ public static partial class RoadRing
         if (recs.Count > 0) (X, Y, S, Z) = InsertStations(X, Y, S, Z, recs.SelectMany(r => new[] { r.S0, r.S1 }).ToList());
         int n = X.Length;
         var d = new Deck { X = X, Y = Y, S = S, Z = Z, Length = S[^1], MinSlope = inp.MinSlope };
-        d.Sharp.AddRange(sharp); d.RecSnaps.AddRange(snaps); d.BendReach = Math.Max(inp.Cut.BenchH * inp.Cut.Slope + inp.Cut.BenchW, inp.Fill.BenchH * inp.Fill.Slope + inp.Fill.BenchW);
+        d.Sharp.AddRange(sharp); d.RecSnaps.AddRange(snaps); d.Trans = inp.BendTrans; d.BendReach = Math.Max(inp.Cut.BenchH * inp.Cut.Slope + inp.Cut.BenchW, inp.Fill.BenchH * inp.Fill.Slope + inp.Fill.BenchW);
         d.Recs.AddRange(recs); d.RecProf = recProf.ToArray(); d.ProfKeys.Clear(); d.ProfKeys.AddRange(profKeys);
         var sec = inp.Sec;
         // 측점마다 가로 점(왼쪽 바깥 → 오른쪽 바깥) — 옵셋(좌 −) · 높이 차
