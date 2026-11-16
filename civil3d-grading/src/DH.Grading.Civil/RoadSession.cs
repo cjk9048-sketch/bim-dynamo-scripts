@@ -324,10 +324,20 @@ internal sealed class RoadSession
         var db = _doc.Database;
         var cdoc = Autodesk.Civil.ApplicationServices.CivilDocument.GetCivilDocument(db);
         var id = FindSurface(db, cdoc, Design.BaseSurface);
+        // ★[v117.19] 바탕이 정지면이 아니고 고른 원지반(GroundHandle)이 있으면 이름이 아니라 <b>핸들</b>이 먼저 — 지운 «원지반_2» 이름을 새로 가져온 면이 이어받아도 그 면으로 안 간다. 지워졌으면 «고르지 않음»(멈춤)
+        if (!string.IsNullOrEmpty(Design.GroundHandle) && !Commands.SectionCommand.IsBase(Design.BaseSurface ?? "", Commands.SectionCommand.PadSurfaceBase))
+        {
+            var gid = GroundSet.Resolve(db, Design.GroundHandle);
+            if (gid.IsNull) return false;
+            id = gid;
+            string gn = GroundSet.NameOf(db, gid);
+            if (gn.Length > 0 && Design.BaseSurface != gn) { Design.BaseSurface = gn; try { SaveDesign(); } catch { } }
+        }
         if (id.IsNull)
         {
-            var (pid, pname) = RoadBuilder.PickBase(db, cdoc);
-            if (pid.IsNull) return false;
+            // ★[v117.18.6 · JACK 1116 원지반 여럿] 도로에 기억한 원지반(GroundHandle) · 2개 이상인데 안 골랐으면 고르지 않고 멈춤(조용히 첫 원지반 금지)
+            var (pid, pname) = RoadBuilder.PickBase(db, cdoc, Design.GroundHandle, out bool needPick);
+            if (pid.IsNull || needPick) return false;
             id = pid;
             if (Design.BaseSurface != pname)
             {
@@ -620,10 +630,11 @@ internal sealed class RoadSession
                     var prW = (CivilDb.Profile)tr.GetObject(PlanId, OpenMode.ForRead);
                     var pvW = new List<(double, double)>();
                     foreach (CivilDb.ProfilePVI q in prW.PVIs) pvW.Add((q.RawStation, q.Elevation));
-                    var st = ProfileSheetRules.Steep(pvW, ProfileSheetRules.WarnGrade);
+                    double warnG = Design.MaxGrade;   // ★[JACK 1116 «도킹창 15 %인데 결과는 20 % 넘음»] 경고 문턱 = 도킹창 «최대 경사 %»(고정 20 % 없앰)
+                    var st = ProfileSheetRules.Steep(pvW, warnG);
                     double ivW = Math.Max(1.0, GradingSettings.XsecInterval);
                     GradeWarn = st.Count == 0 ? ""
-                              : $"⚠ 종단경사 {Math.Abs(st.WorstPct):0.0} % — {ProfileSheetRules.WarnGrade * 100:0} % 넘음 (측점 {StationMarks.Fmt(st.S0, ivW)} ~ {StationMarks.Fmt(st.S1, ivW)}"
+                              : $"⚠ 종단경사 {Math.Abs(st.WorstPct):0.0} % — {warnG * 100:0.#} % 넘음 (측점 {StationMarks.Fmt(st.S0, ivW)} ~ {StationMarks.Fmt(st.S1, ivW)}"
                                 + (st.Count > 1 ? $" 외 {st.Count - 1}곳" : "") + ")";
                 }
                 catch { GradeWarn = ""; }

@@ -66,6 +66,8 @@ internal sealed class SectionPanel : UserControl
 {
     private readonly bool _road;
     private readonly List<Button> _needPlan = new();   // 계획지표면이 있어야 누르는 단추(리본이 껐던 것과 같다)
+    // ★[v117.18.6 · JACK 1116 «종단도 생성 전까지 수정 단추 · 횡단도 생성 · 수정 단추 끔 · 횡단도 생성 전까지 횡단뷰 수정 끔»] 부지 종단뷰 · 횡단뷰가 있어야 켜는 단추
+    private readonly List<Button> _needProf = new(), _needXsec = new();
 
     public SectionPanel(bool road)
     {
@@ -113,10 +115,10 @@ internal sealed class SectionPanel : UserControl
             sec1.Children.Add(SubHead("종단도 수정"));
             var row1b = new WrapPanel { Margin = new Thickness(0, 0, 0, 6) };
             sec1.Children.Add(row1b);
-            Add(row1b, demo, "측점 추가", "DHSTATION", "pfAdd", true, "노선 위 클릭 → 측점 추가");
-            Add(row1b, demo, "측점 전후", "DHSTATIONFB", "pfFb", true, "노선 위 클릭 → 횡단만 (전)(후) 두 장");
-            Add(row1b, demo, "측점 지우기", "DHSTATIONDEL", "pfDel", true, "측점 근처 클릭 → 수동 측점 삭제 · 횡단도 같이");
-            Add(row1b, demo, "시점↔종점", "DHPROFILEREV", "pfRev", false, "종단 방향 뒤집기 · 다시 누르면 처음");
+            Add(row1b, demo, "측점 추가", "DHSTATION", "pfAdd", true, "노선 위 클릭 → 측점 추가", gate: "prof");
+            Add(row1b, demo, "전후 측점 추가", "DHSTATIONFB", "pfFb", true, "노선 위 클릭 → 횡단만 (전)(후) 두 장", gate: "prof");   // ★[JACK 1116] «측점 전후» → «전후 측점 추가»
+            Add(row1b, demo, "측점 지우기", "DHSTATIONDEL", "pfDel", true, "측점 근처 클릭 → 수동 측점 삭제 · 횡단도 같이", gate: "prof");
+            Add(row1b, demo, "시점↔종점", "DHPROFILEREV", "pfRev", false, "종단 방향 뒤집기 · 다시 누르면 처음", gate: "prof");
         }
 
         // ── 2. 횡단도 ──
@@ -135,11 +137,12 @@ internal sealed class SectionPanel : UserControl
         else
         {
             // ★[v117.18.3 · JACK 1116 «횡단도 생성 초록색 버튼 · 그 아래 소제목 횡단도 수정 · 횡단뷰 수정 단추 → 도면설정 팝업»]
-            Add(row2, demo, "횡단도 생성", "DHXVIEW", "xsView", true, "종단도 측점대로 횡단면도 · 자리 클릭 · 종단도 먼저", primary: true);
+            Add(row2, demo, "횡단도 생성", "DHXVIEW", "xsView", true, "종단도 측점대로 횡단면도 · 자리 클릭 · 종단도 먼저", primary: true, gate: "prof");
             sec2.Children.Add(SubHead("횡단도 수정"));
             var row2b = new WrapPanel { Margin = new Thickness(0, 0, 0, 6) };
             sec2.Children.Add(row2b);
-            Add(row2b, demo, "횡단뷰 수정", "DHSHEETSET", "xsView", false, "도면 설정 — 횡단도 축척 · 측점 간격 · 배치");
+            Add(row2b, demo, "횡단뷰 수정", "DHSHEETSET", "xsView", false, "도면 설정 — 횡단도 축척 · 측점 간격 · 배치", gate: "xsec");
+            AddXq(sec2, demo);
         }
 
         // ── 배치 — 예시는 맨 위 고정 ──
@@ -285,6 +288,62 @@ internal sealed class SectionPanel : UserControl
 
     private void OnPick() => Refresh(null);
 
+    // ★[JACK 1116 «수량표 항목»] 횡단 수량표 오른쪽 칸 중 잴 것 — 도면에 저장(XsecQtyOptions) · 다음 [횡단도 생성]부터 반영 · 꺼진 항목은 표에 –
+    private readonly List<CheckBox> _xq = new();
+    private bool _xqLoading;
+    private static readonly (string Name, int Bit)[] XqItems =
+    {
+        ("벌개재근", XsecQtyOptions.Clear), ("표토제거", XsecQtyOptions.Strip), ("면고르기", XsecQtyOptions.Smooth),
+        ("식생공법", XsecQtyOptions.Seed), ("층따기", XsecQtyOptions.Bench),
+    };
+
+    private int XqMaskNow() { int m = 0; for (int i = 0; i < _xq.Count; i++) if (_xq[i].IsChecked == true) m |= XqItems[i].Bit; return m; }
+
+    private void AddXq(StackPanel sec, FixDemoView demo)
+    {
+        sec.Children.Add(SubHead("수량표 항목"));
+        var box = new WrapPanel { Margin = new Thickness(2, 0, 0, 6), Background = Brushes.Transparent };
+        foreach (var (name, _) in XqItems)
+        {
+            var cb = new CheckBox { Content = name, Margin = new Thickness(0, 0, 12, 4), Foreground = DhBrand.Ink };
+            cb.Click += (_, __) => SaveXq(demo);
+            _xq.Add(cb); box.Children.Add(cb);
+        }
+        box.ToolTip = "횡단 수량표 오른쪽 칸 · 끄면 안 재고 표에 – · 다음 횡단도 생성부터 · 층따기 1 : 4는 일반 값(근거 없음)";
+        box.MouseEnter += (_, __) => { demo.XqMask = XqMaskNow(); demo.Play("xqty"); };
+        box.MouseLeave += (_, __) => demo.Idle();
+        sec.Children.Add(box);
+        LoadXq();
+    }
+
+    private void LoadXq()
+    {
+        if (_xq.Count == 0) return;
+        try
+        {
+            var doc = AcadApp.DocumentManager.MdiActiveDocument;
+            int m = doc != null ? XsecQtyOptions.Read(doc.Database).Mask : XsecQtyOptions.Default;
+            _xqLoading = true;
+            for (int i = 0; i < _xq.Count; i++) _xq[i].IsChecked = (m & XqItems[i].Bit) != 0;
+        }
+        catch { }
+        finally { _xqLoading = false; }
+    }
+
+    private void SaveXq(FixDemoView demo)
+    {
+        if (_xqLoading) return;
+        try
+        {
+            var doc = AcadApp.DocumentManager.MdiActiveDocument;
+            if (doc == null) return;
+            int m = XqMaskNow();
+            using (doc.LockDocument()) XsecQtyOptions.Write(doc.Database, m);
+            demo.XqMask = m; demo.Redraw();
+        }
+        catch (System.Exception ex) { try { AcadApp.DocumentManager.MdiActiveDocument?.Editor?.WriteMessage("\n[수량표 항목] 저장 실패 — " + ex.Message); } catch { } }
+    }
+
     /// <summary>단추 하나 — 꺼진 단추는 마우스 일을 안 받으므로 감싼 테두리가 예시를 돌린다.</summary>
     /// <summary>★[v117.18.3] 칸 안 소제목(«종단도 수정» · «횡단도 수정»).</summary>
     private static TextBlock SubHead(string text) => new()
@@ -292,9 +351,13 @@ internal sealed class SectionPanel : UserControl
         Text = text, FontSize = 12, FontWeight = FontWeights.SemiBold, Foreground = DhBrand.Ink, Margin = new Thickness(0, 4, 0, 4),
     };
 
-    private void Add(Panel row, FixDemoView demo, string text, string cmd, string demoKey, bool needPlan, string tip, bool primary = false)
+    private void Add(Panel row, FixDemoView demo, string text, string cmd, string demoKey, bool needPlan, string tip, bool primary = false, string gate = "")
     {
+        if (gate == "prof") tip += " · 꺼짐 = 종단도 생성 먼저";
+        else if (gate == "xsec") tip += " · 꺼짐 = 횡단도 생성 먼저";
         var b = new Button { Content = text, MinWidth = 96, Height = 30, Margin = new Thickness(0, 0, 6, 6), ToolTip = tip };
+        ToolTipService.SetShowOnDisabled(b, true);
+        if (gate == "prof") _needProf.Add(b); else if (gate == "xsec") _needXsec.Add(b);
         if (primary) { b.MinWidth = 120; try { if (DhBrand.Skin != null) b.Style = (Style)DhBrand.Skin["DhPrimary"]; } catch { } }   // ★[v117.18.3] 도화 초록 단추
         b.Click += (_, __) => PickSession.Send(AcadApp.DocumentManager.MdiActiveDocument, cmd);
         var hit = new Border { Background = Brushes.Transparent, Child = b };
@@ -308,6 +371,7 @@ internal sealed class SectionPanel : UserControl
     internal void Refresh(bool? hasPlan)
     {
         if (_road) return;
+        LoadXq();
         try
         {
             bool plan;
@@ -319,7 +383,45 @@ internal sealed class SectionPanel : UserControl
             }
             bool on = plan && !PickSession.Busy;
             foreach (var b in _needPlan) b.IsEnabled = on;
+            // ★[v117.18.6] 종단뷰 · 횡단뷰가 있어야 — 계획면 조건(_needPlan)과 겹치면 둘 다 맞아야 켬
+            var d = AcadApp.DocumentManager.MdiActiveDocument;
+            var (prof, xs) = d != null ? SiteSheets(d.Database) : (false, false);
+            foreach (var b in _needProf) b.IsEnabled = prof && !PickSession.Busy && (!_needPlan.Contains(b) || on);
+            foreach (var b in _needXsec) b.IsEnabled = xs && !PickSession.Busy && (!_needPlan.Contains(b) || on);
         }
         catch { }
+    }
+
+    /// <summary>★[v117.18.6] 부지(진입도로 아닌 «DH선형») 노선에 종단뷰 · 횡단뷰가 있나 — 노선 · 검토선만 훑음(모형 공간 전체를 안 훑음).</summary>
+    internal static (bool Prof, bool Xsec) SiteSheets(Autodesk.AutoCAD.DatabaseServices.Database db)
+    {
+        bool prof = false, xs = false;
+        try
+        {
+            using var tr = db.TransactionManager.StartTransaction();
+            var cdoc = Autodesk.Civil.ApplicationServices.CivilDocument.GetCivilDocument(db);
+            foreach (Autodesk.AutoCAD.DatabaseServices.ObjectId aid in cdoc.GetAlignmentIds())
+            {
+                try
+                {
+                    if (tr.GetObject(aid, Autodesk.AutoCAD.DatabaseServices.OpenMode.ForRead) is not Autodesk.Civil.DatabaseServices.Alignment al) continue;
+                    if (RoadDesign.Has(tr, aid)) continue;
+                    if (!prof && al.Name.StartsWith(Commands.SectionCommand.AlignBase, System.StringComparison.Ordinal) && al.GetProfileViewIds().Count > 0) prof = true;
+                    if (!xs)
+                        foreach (Autodesk.AutoCAD.DatabaseServices.ObjectId gid in al.GetSampleLineGroupIds())
+                        {
+                            if (tr.GetObject(gid, Autodesk.AutoCAD.DatabaseServices.OpenMode.ForRead) is not Autodesk.Civil.DatabaseServices.SampleLineGroup g) continue;
+                            foreach (Autodesk.AutoCAD.DatabaseServices.ObjectId sid in g.GetSampleLineIds())
+                                if (tr.GetObject(sid, Autodesk.AutoCAD.DatabaseServices.OpenMode.ForRead) is Autodesk.Civil.DatabaseServices.SampleLine sl && sl.GetSectionViewIds().Count > 0) { xs = true; break; }
+                            if (xs) break;
+                        }
+                    if (prof && xs) break;
+                }
+                catch { }
+            }
+            tr.Commit();
+        }
+        catch { }
+        return (prof, xs);
     }
 }

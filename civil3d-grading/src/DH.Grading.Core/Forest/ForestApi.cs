@@ -359,7 +359,7 @@ public sealed class ForestApiClient : IDisposable
         }
         catch (Exception ex) when (ex is HttpRequestException or OperationCanceledException or IOException or InvalidDataException or JsonException or FormatException or KeyNotFoundException or InvalidOperationException or ObjectDisposedException or UriFormatException)
         {
-            return (null, "회사 API 못 씀 — " + ex.GetType().Name + " → 다른 창고로", 0, 0);
+            return (null, "회사 API 못 씀 — " + ex.GetType().Name + " → 도면 폴더 사본으로", 0, 0);
         }
     }
 }

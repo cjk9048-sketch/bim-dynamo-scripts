@@ -40,7 +40,7 @@ public static class ExcavPalette
                     DockEnabled = DockSides.Left | DockSides.Right,
                     MinimumSize = new System.Drawing.Size(PanelW, 380),
                 };
-                _ps.AddVisual("터파기", DockClose.Wrap(_panel, () => _ps));
+                _ps.AddVisual("터파기", DockClose.Wrap(_panel, () => _ps, _panel.ResetButton));
                 try { _ps.Size = new System.Drawing.Size(PanelW, 620); } catch { }
 
                 // ★[계획 §4 · 걷는 자리 5] 창을 닫거나 말아 두면 빨간 표시를 걷는다.

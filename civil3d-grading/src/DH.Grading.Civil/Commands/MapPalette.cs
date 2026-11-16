@@ -624,6 +624,20 @@ internal sealed class MapPanel : UserControl
         try { AcadApp.DocumentManager.MdiActiveDocument?.Editor.WriteMessage("\n[서버 지표면] " + why); } catch { }
     }
 
+    /// <summary>주소 검색 — 통신은 C#에서(키 · 로그), 결과만 <c>geo:[..]</c>로 지도에 돌려준다.</summary>
+    private async System.Threading.Tasks.Task SearchAndReplyAsync(string q)
+    {
+        string msg;
+        try
+        {
+            var hits = await MapSearch.SearchAsync(q);
+            msg = hits == null ? "geo:null"
+                : "geo:" + System.Text.Json.JsonSerializer.Serialize(hits.ConvertAll(h => new { t = h.Label, c = h.Cat, x = h.Lon, y = h.Lat }));
+        }
+        catch (System.Exception ex) { try { DiagLog.Append("\n[지도검색] 오류 — " + ex.GetType().Name); } catch { } msg = "geo:null"; }
+        try { await Dispatcher.InvokeAsync(() => { try { _web?.CoreWebView2?.PostWebMessageAsString(msg); } catch { } }); } catch { }
+    }
+
     private void OnMessageCore(CoreWebView2WebMessageReceivedEventArgs e)
     {
         string raw;
@@ -632,6 +646,13 @@ internal sealed class MapPanel : UserControl
         if (string.IsNullOrEmpty(raw)) return;
 
         // 지도가 제 상태를 알려 온 것 — 검은 화면일 때 왜인지 로그에 남는다.
+        if (raw.StartsWith("{\"kind\":\"search\"", StringComparison.Ordinal))
+        {
+            string q = "";
+            try { using var d = System.Text.Json.JsonDocument.Parse(raw); q = (d.RootElement.GetProperty("q").GetString() ?? "").Trim(); } catch { }
+            _ = SearchAndReplyAsync(q);
+            return;
+        }
         if (raw.IndexOf("\"diag\"", StringComparison.Ordinal) >= 0)
         {
             try { DiagLog.Append("\n[지도도킹바] " + raw); } catch { }

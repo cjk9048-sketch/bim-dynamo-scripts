@@ -146,6 +146,14 @@ internal static class QtyKeeper
             }
             else if (hasQ) { r.Fill = q.Fill; r.Cut = q.Cut; r.Backfill = q.Backfill; r.ExcSoilLe = q.ExcShallow; r.ExcSoilGt = q.ExcDeep; }
             if (hasQ) { r.FillW = q.FillW; r.CutW = q.CutW; }
+            if (led != null)
+            {
+                // ★[JACK 1116] 횡단 수량표 오른쪽 칸 — 면고르기 · 벌개 · 표토는 측점별 길이(2D 산출서 «길이» 열)
+                double sF = led.Get(QtyKey.OfRight(QtyKeyKind.Smooth, false)), sC = led.Get(QtyKey.OfRight(QtyKeyKind.Smooth, true));
+                if (!double.IsNaN(sF) || !double.IsNaN(sC)) { r.FillW = N(sF, 0); r.CutW = N(sC, 0); }
+                r.Clear = Add(led.Get(QtyKey.OfRight(QtyKeyKind.Clear, false)), led.Get(QtyKey.OfRight(QtyKeyKind.Clear, true)));
+                r.Strip = Add(led.Get(QtyKey.OfRight(QtyKeyKind.Strip, false)), led.Get(QtyKey.OfRight(QtyKeyKind.Strip, true)));
+            }
             res.Add(r);
         }
         if (otherRock) notes.Add("연암 · 보통암 · 경암 수량은 표에 넣지 않음(토사 · 풍화암만)");

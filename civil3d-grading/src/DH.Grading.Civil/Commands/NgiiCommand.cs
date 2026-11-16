@@ -102,8 +102,7 @@ public sealed class NgiiCommand
             using (var dl = doc.LockDocument())
             using (var tr = db.TransactionManager.StartTransaction())
             {
-                // 다시 불러오면 교체 — 안 지우면 겹겹이 쌓인다.
-                ImportGisCommand.EraseOnLayers(db, tr, ImportGisCommand.GroundImportLayers);
+                // ★[v117.19 · JACK 1116] 다시 불러와도 옛 원지반 · 재료를 안 지운다 — 새 원지반(원지반_2 …)이 추가되고 재료엔 그 주인 표시가 붙는다.
                 ObjectId layMain = ImportGisCommand.EnsureLayer(db, tr, ImportGisCommand.LayerContour, 8);
                 ObjectId layIdx = ImportGisCommand.EnsureLayer(db, tr, ImportGisCommand.LayerContourIndex, 30);
                 ObjectId laySpot = ImportGisCommand.EnsureLayer(db, tr, ImportGisCommand.LayerSpot, 2);

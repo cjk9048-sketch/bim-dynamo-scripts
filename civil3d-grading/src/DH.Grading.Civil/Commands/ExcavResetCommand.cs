@@ -1,4 +1,4 @@
-using System.Text.RegularExpressions;
+﻿using System.Text.RegularExpressions;
 using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.Runtime;
 using AcadApp = Autodesk.AutoCAD.ApplicationServices.Application;
@@ -16,7 +16,7 @@ public sealed class ExcavResetCommand
     private static readonly Regex Virt = new("^" + Regex.Escape(ExcavCommand.VirtName) + @"\d+(_\d+)?$");
     private static readonly Regex CutBack = new(@"^터파기_절토복원\d+_\d+_DH(_\d+)?$");
 
-    private static bool Ours(string nm) =>
+    internal static bool Ours(string nm) =>
         SectionCommand.IsBase(nm, ExcavCommand.SurfName) || SectionCommand.IsBase(nm, ExcavCommand.BaseName)
         || SectionCommand.IsBase(nm, ViewSurfaceCommand.AllName) || SectionCommand.IsBase(nm, ViewSurfaceCommand.ExcavAllName)
         || Virt.IsMatch(nm) || CutBack.IsMatch(nm);
@@ -117,10 +117,10 @@ public sealed class ExcavResetCommand
             }
             poly = NoriCommand.FindByHandle(db, rec.PolyHandle);
             if (poly.IsNull) { ed.WriteMessage($"\n[{label}] 터파기선 지워짐 → 터파기선 다시 선택 뒤 [생성]"); return; }
-            var ground = PickSession.ResolveForUse(doc, PickSession.KeyGround);
-            if (ground.IsNull) ground = NoriCommand.FindByHandle(db, rec.GroundHandle);
-            if (ground.IsNull) ground = NoriCommand.FindByHandle(db, GradingSettings.LastGroundHandle);
-            if (ground.IsNull) { ed.WriteMessage($"\n[{label}] 원지반 못 찾음 → 기준면 칸 [바꾸기]로 선택"); return; }
+            // ★[v117.19 · JACK 1116] 이 창에서 고른 것 → 이 터파기 기록의 원지반 → 하나면 자동 · 둘 이상이면 막음
+            var ground = GroundSet.ForExcav(doc, rec.PolyHandle, out bool needGround, out _);
+            if (needGround) { ed.WriteMessage($"\n[{label}] 원지반 2개 이상 → [원지반 선택]"); try { ExcavPalette.Say("원지반 2개 이상 → [원지반 선택]"); } catch { } return; }
+            if (ground.IsNull) { ed.WriteMessage($"\n[{label}] 원지반 못 찾음 → [원지반 선택]"); return; }
             bool made;
             try
             {

@@ -37,6 +37,8 @@ internal static class PickSession
     internal const string KeyPlan = "계획경계";
     internal const string KeyGround = "원지반";
     internal const string KeyExcav = "터파기선";
+    /// <summary>★[v117.19 · JACK 1116 «창마다 [원지반 선택]»] 터파기 창의 원지반 — 정지 창의 <see cref="KeyGround"/>와 따로(한 창에서 고른 것이 다른 창으로 새지 않게).</summary>
+    internal const string KeyExcavGround = "터파기 원지반";
 
     /// <summary>도면에 매달아 두는 열쇠 — 다른 애드인과 안 부딪히게 길게 짓는다.</summary>
     private const string UserDataKey = "DH.Grading.PickSession";
@@ -208,7 +210,7 @@ internal static class PickSession
         foreach (var kv in m)
         {
             if (kv.Value.Mark != null) continue;
-            if (kv.Key == KeyGround) continue;                 // 지표면은 애초에 못 칠한다
+            if (kv.Key == KeyGround || kv.Key == KeyExcavGround) continue;                 // 지표면은 애초에 못 칠한다
             var id = Commands.NoriCommand.FindByHandle(doc.Database, kv.Value.Handle);
             if (!id.IsNull) kv.Value.Mark = PickMark.Paint(doc, doc.Database, id);
         }
@@ -371,6 +373,7 @@ public sealed class PickCommands
     internal const string CmdPlan = "DHPICKPLAN";
     internal const string CmdGround = "DHPICKGROUND";
     internal const string CmdExcav = "DHPICKEXCAV";
+    internal const string CmdExcavGround = "DHPICKEXGROUND";
     /// <summary>★[검토 0909 · 낮음] 형제 셋은 상수인데 이것만 문자열로 박혀 있었다.</summary>
     internal const string CmdBuild = "DHGRADEBUILD";
     internal const string CmdExcavBuild = "DHEXCAVBUILD";
@@ -389,6 +392,11 @@ public sealed class PickCommands
     [CommandMethod(CmdGround, CommandFlags.Modal)]
     public static void PickGround() => PickOne(PickSession.KeyGround, "원지반",
         "\n원지반 지표면을 선택: ", wantSurface: true);
+
+    /// <summary>★[v117.19] 터파기 창의 원지반 — 정지 창 것과 따로 담는다.</summary>
+    [CommandMethod(CmdExcavGround, CommandFlags.Modal)]
+    public static void PickExcavGround() => PickOne(PickSession.KeyExcavGround, "원지반",
+        "\n터파기에 쓸 원지반 지표면을 선택: ", wantSurface: true);
 
     /// <summary>★★★[계획 5b단계] <b>고른 것으로 정지면을 만든다</b> — 도킹창의 [지표면 생성]이 부른다.
     ///
@@ -537,15 +545,15 @@ public sealed class PickCommands
             //     <c>LastGroundHandle</c>은 <b>도면이 바뀔 때마다 지워지고 도면에서 되살아나지 않는다</b> —
             //     즉 <b>어제 만든 도면을 열면 여기가 늘 실패했다</b>. 창을 열기만 해도 지워진다.
             //   → ①사람이 창에서 고른 것 ②마지막 정지에 쓴 지반 차례로 본다.
-            ObjectId groundId = PickSession.ResolveForUse(doc, PickSession.KeyGround);
-            if (groundId.IsNull)
-                try
-                {
-                    using var trG = db.TransactionManager.StartTransaction();
-                    groundId = Commands.NoriCommand.FindByHandle(db, GradingSettings.LastGroundHandle);
-                    trG.Commit();
-                }
-                catch { }
+            // ★[v117.19 · JACK 1116] 터파기 창은 자기 원지반 자리(KeyExcavGround) · 그 터파기 기록 → 원지반 하나면 자동 · 둘 이상이면 막고 [원지반 선택] 안내
+            ObjectId groundId = GroundSet.ForExcav(doc, boxId.Handle.ToString(), out bool needGround, out _);
+            if (needGround)
+            {
+                ed.WriteMessage("\n[구조물 터파기] 원지반 2개 이상 → [원지반 선택]");
+                try { DiagLog.Append("\n■ 터파기 막힘 — 원지반 여러 장 · 고른 것 없음\n"); } catch { }
+                try { ExcavPalette.Say("원지반 2개 이상 → [원지반 선택]"); } catch { }
+                return;
+            }
 
             // ★★[검토 0909 · 높음] <b>TIN인지 보고 넘긴다.</b>
             //   <c>FindByHandle</c>은 핸들만 보고 형을 안 본다. 그런데 <c>DoExcav</c>는
@@ -565,8 +573,8 @@ public sealed class PickCommands
 
             if (groundId.IsNull)
             {
-                ed.WriteMessage("\n[구조물 터파기] 원지반을 못 찾았습니다 — 창의 [원지반 선택]으로 골라 주세요.");
-                PickSession.Send(doc, CmdGround);      // 그 자리에서 고르게 이어 준다
+                ed.WriteMessage("\n[구조물 터파기] 원지반 못 찾음 → [원지반 선택]");
+                PickSession.Send(doc, CmdExcavGround);      // 그 자리에서 고르게 이어 준다
                 return;
             }
             ed.WriteMessage($"\n[구조물 터파기] 원지반 = {gname}"
@@ -638,7 +646,7 @@ public sealed class PickCommands
         PickSession.Hook();                 // ★한 번도 안 찍었어도 수명 관리는 걸려 있어야 한다
         var ed = doc.Editor;
         ed.WriteMessage("\n[찍기] 지금 고른 것:");
-        foreach (var key in new[] { PickSession.KeyPlan, PickSession.KeyGround, PickSession.KeyExcav })
+        foreach (var key in new[] { PickSession.KeyPlan, PickSession.KeyGround, PickSession.KeyExcav, PickSession.KeyExcavGround })
         {
             var s = PickSession.Peek(doc, key);
             // ★<b>보기만 한다</b> — 여기서 지우면 되돌리기로 살린 것도 못 돌아온다(검토 0909).
@@ -789,7 +797,7 @@ public sealed class PickCommands
             // ★[v117.16 · JACK 1112 «원지반 선택에서 정지면_DH가 골라져 터파기 오류» — 검토로 찾은 오류] 원지반 자리에 우리가 만든 면(«…_DH» — 정지면_DH ·
             //   최종지표면_DH · 진입도로_DH 등)을 고르면 그 자리에서 거절(고르기 전 값 그대로). 종전엔 아무 말 없이 받아 [터파기 지표면 생성]에서야
             //   «원지반과 계획지표면이 같은 면» 오류. 예외: 마지막 정지가 실제로 쓴 원지반(LandXML 원지반 이름이 정지면_DH인 도면 — GradingBuilder 주석)은 받음.
-            if (wantSurface && key == PickSession.KeyGround && SelfCheck.IsOurSurfaceName(name) && !IsLastGround(doc, r.ObjectId))
+            if (wantSurface && (key == PickSession.KeyGround || key == PickSession.KeyExcavGround) && SelfCheck.IsOurSurfaceName(name) && !IsLastGround(doc, r.ObjectId))
             {
                 ed.WriteMessage($"\n[찍기] 원지반 아님 — «{name}»은 이 프로그램이 만든 면 → 부지 밖 원지반 지표면 클릭 · 비우면 자동(고른 것 그대로)");
                 try { DiagLog.Append($"\n[찍기] 원지반 거절 — {name}(우리 면 이름 · 마지막 정지의 원지반 아님)"); } catch { }

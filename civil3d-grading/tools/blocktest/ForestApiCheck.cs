@@ -247,10 +247,10 @@ static class ForestApiCheck
             bool leak = apiBase != null && apiBase.Length > 8 && (note.Contains(apiBase) || pk.Log.Contains(apiBase));
             check($"S236 ⑥ 못 쓸 때 — {name}", ok(pk) && !leak && (noteOk?.Invoke(note) ?? true), $"창고={pk.Source?.Describe ?? "없음"} · 글 «{note}» «{pk.Log}»");
         }
-        Case("닫힌 주소 → 창고", "http://127.0.0.1:1", p => p.Source is FolderForestSource && !p.FromApi, tilesDir, dwg, n => n.StartsWith("회사 API 못 씀"));
-        using (var f500 = new Fake(recs, 2, "500")) Case("서버 500 → 창고", f500.Base, p => p.Source is FolderForestSource, tilesDir, dwg, n => n.StartsWith("회사 API 못 씀"));
-        using (var fcut = new Fake(recs, 2, "cut")) Case("끊긴 응답(end 줄 없음) → 창고", fcut.Base, p => p.Source is FolderForestSource, tilesDir, dwg, n => n.StartsWith("회사 API 못 씀"));
-        Case("주소 없음(키 파일에 gisapi 없음) → 창고, 글 없음", "", p => p.Source is FolderForestSource, tilesDir, dwg, n => n.Length == 0);
+        Case("닫힌 주소 → 없음(타일 폴더 안 봄 · 사본 아직 없음)", "http://127.0.0.1:1", p => p.Source == null && !p.FromApi, tilesDir, dwg, n => n.StartsWith("회사 API 못 씀"));
+        using (var f500 = new Fake(recs, 2, "500")) Case("서버 500 → 없음", f500.Base, p => p.Source == null, tilesDir, dwg, n => n.StartsWith("회사 API 못 씀"));
+        using (var fcut = new Fake(recs, 2, "cut")) Case("끊긴 응답(end 줄 없음) → 없음", fcut.Base, p => p.Source == null, tilesDir, dwg, n => n.StartsWith("회사 API 못 씀"));
+        Case("주소 없음(키 파일에 gisapi 없음) → 없음, 글 없음", "", p => p.Source == null, tilesDir, dwg, n => n.Length == 0);
         {   // API 못 씀 + 창고 없음 → 도면 폴더 사본
             int w = ForestSource.CopyUsed(src, keyList, src.Index.Tiles.Keys.Select(k => (int.Parse(k.Split('_')[0], CultureInfo.InvariantCulture), int.Parse(k.Split('_')[1], CultureInfo.InvariantCulture))).ToList(), dwg);
             Case("닫힌 주소 + 창고 없음 → 도면 폴더 사본", "http://127.0.0.1:1", p => p.FromCopy && p.Source != null, Path.Combine(root, "없는폴더"), dwg, n => n.StartsWith("회사 API 못 씀"));

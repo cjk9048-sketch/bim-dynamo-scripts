@@ -827,7 +827,7 @@ public sealed class RibbonApp : IExtensionApplication
                 "종횡단도", "DHSECPANEL ", "계획지표면 종단도 · 횡단도 창 — 열고 닫기", "종단");
             btnSecSite.ToolTip = MakeTip("계획지표면 종횡단도 (DHSECPANEL)",
                 "오른쪽에 **종횡단도 창**이 열립니다(다시 누르면 닫힘).\n" +
-                "1. 종단도 — 종단도 · 측점 추가 · 측점 전후 · 측점 지우기 · 시점↔종점\n" +
+                "1. 종단도 — 종단도 · 측점 추가 · 전후 측점 추가 · 측점 지우기 · 시점↔종점\n" +
                 "2. 횡단도 — 횡단도 그리기", null);
             var btnSecRoad = MakeButton(
                 "종횡단도", "DHROADSECPANEL ", "진입도로 종단도 · 횡단도 창 — 열고 닫기", "횡단");
@@ -934,11 +934,11 @@ public sealed class RibbonApp : IExtensionApplication
             splitRoad.Current = btnRoadDraw;
             // ★★[v113.3 · JACK 1105 «스플릿으로 하지 말고 그냥 진입도로 생성 — 누르면 진입도로 창이 뜨고 창에 도로 그리기랑 폴리선 선택 · 별도 팝업 말고 · 기존 진입도로 창 버튼은 없애»]
             //   리본에는 단추 하나(스플릿 · [진입도로 창]은 만들어만 두고 안 얹음 — 명령 DHROADDRAW · DHROAD · DHROADPANEL은 그대로 산다)
-            var btnRoadNew = MakeButton("진입도로\n생성", "DHROADNEW ", "진입도로 창을 엽니다 — 도로 설정을 정하고 [도로 경로 그리기] 또는 [폴리선 선택]으로 만듭니다", "노리선");
+            var btnRoadNew = MakeButton("진입도로\n생성", "DHROADNEW ", "진입도로 창을 엽니다 — 도로 설정을 정하고 [진입도로 생성](경로 그리기 / 폴리선 선택)으로 만듭니다", "노리선");
             btnRoadNew.ToolTip = MakeTip("진입도로 생성 (DHROADNEW)",
                 "**진입도로 창**이 열립니다.\n" +
                 "창의 ■ 도로 설정(곡선 반경 · 횡단 · 사면) · ■ 종단 값을 정한 뒤 창 맨 위\n" +
-                "**도로 경로 그리기**(점을 찍어 노선) 또는 **폴리선 선택**(그려 둔 폴리선 · Civil 노선)으로 만듭니다.\n" +
+                "[진입도로 생성] — **경로 그리기**(점을 찍어 노선) 또는 **폴리선 선택**(그려 둔 폴리선 · Civil 노선)으로 만듭니다.\n" +
                 "· 처음 값은 이 도면에서 마지막에 만든 도로의 값입니다", null);
             // ★★[계획 8단계 · JACK 지시 3 "UI에서 사면수정버튼은 없애고"]
             //   사면 수정은 <b>도킹창 안</b>으로 들어갔다 — 정지는 [정지 창], 터파기는 [터파기 창].

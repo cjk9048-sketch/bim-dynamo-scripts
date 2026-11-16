@@ -13,6 +13,8 @@ public sealed class QtyStation
     public double Backfill = double.NaN;
     /// <summary>성토면 · 절토면 가로 폭(m) — 면고르기 길이.</summary>
     public double FillW = double.NaN, CutW = double.NaN;
+    /// <summary>★[JACK 1116] 벌개재근 · 표토제거 가로 길이(m · 성토부 + 절토부) — 횡단 수량표 오른쪽 칸. NaN = 안 켬 · 못 잼.</summary>
+    public double Clear = double.NaN, Strip = double.NaN;
 }
 
 /// <summary>U형 측구 규격 하나의 묶음(같은 규격 전부 합).</summary>

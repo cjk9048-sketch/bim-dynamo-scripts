@@ -130,12 +130,14 @@ internal sealed class QtyXlsxPanel : UserControl
         N(s1, "터파기 구분 H (m)", "deep", "횡단 수량표와 같은 값", "qtyDeep");
         var s2 = GradingDialog.AddCollapsible(root, "임목폐기물", out var b2, null, false, true);
         Hook(HeadOf(b2), "qtyForestArea");
-        N(s2, "밀도 (주/100㎡)", "density", "", "qtyDensity"); N(s2, "흉고직경 (m)", "dbh", "", "qtyDbh"); N(s2, "근원직경 (m)", "root", "", "qtyRoot");
-        N(s2, "수고 (m)", "height", "비움 = 임상도 평균", "qtyHeight"); _num[^1].Box.ToolTip = "비우면 임상도 임분고 면적가중평균";
-        var s3 = GradingDialog.AddCollapsible(root, "상수", out var b3, null, false, false);
+        N(s2, "밀도 (주/100㎡)", "density", "", "qtyDensity"); N(s2, "흉고직경 (m)", "dbh", "", "qtyDbh"); N(s2, "근원직경 (m)", "root", "", "qtyRoot");   // 양식 값 · 근원직경×4 = 뿌리직경
+        N(s2, "수고 (m)", "height", "비움 = 임상도 평균 → 못 구하면 7.2", "qtyHeight"); _num[^1].Box.ToolTip = "숫자 = 그 값\n비움 = 임상도 평균(공사 범위 안 숲 높이 면적평균)\n임상도 못 읽음 · 숲 없음 = 7.2 m(양식)";
+        var s3 = GradingDialog.AddCollapsible(s2, "상수 (양식 값)", out var b3, "임목폐기물 계산에만 쓰는 값 · 2D 산출서 양식 값", false, false, null, null, 2);
         Hook(HeadOf(b3), "qtyConst");
         N(s3, "뿌리부 K (ton/㎥)", "kroot", "", "qtyConst0"); N(s3, "뿌리 비율 f", "f", "", "qtyConst1"); N(s3, "수간 단위중량 W₀", "w0", "", "qtyConst2");
         N(s3, "형상계수 K", "kform", "", "qtyConst3"); N(s3, "할증률 P", "p", "", "qtyConst4"); N(s3, "지상부 할증", "sur", "", "qtyConst5");
+        string[] ct = { "뿌리부 단위중량 1.3 ton/㎥", "뿌리분 중 실제 뿌리 비율 · 50 % 적용", "수간 단위체적당 단위중량(ton/㎥) · 목재 0.8 · 자연상태", "수간의 형상계수 · 수종마다 다르나 보통 0.5", "지상부 중량 할증률 · 가지와 잎에 따라 약 0.3 ~ 1.0 · 양식 0.5", "지상부 발생량 V = (π·d²/4)·H·1.3 · 할증(가지와 잎)" };
+        for (int i = 0; i < 6; i++) _num[_num.Count - 6 + i].Box.ToolTip = ct[i] + "\n출처: 2D 산출서 양식(2.0 토공 · 임목폐기물산근)";
         deck.Children.Add(DhBrand.Watermark(new ScrollViewer { Content = root, VerticalScrollBarVisibility = ScrollBarVisibility.Auto }));
         Content = deck;
     }

@@ -42,7 +42,7 @@ public sealed class ImportGisCommand
 
     internal const string GroundSurfaceName = "원지반";
 
-    /// <summary>원지반을 만들 때 <b>갈아 끼우는</b> 레이어 — 서버·수치지도 두 경로가 같이 쓴다.</summary>
+    /// <summary>원지반 재료가 올라가는 레이어 — 서버·수치지도 두 경로가 같이 쓴다.</summary>
     internal static readonly string[] GroundImportLayers =
         { LayerContour, LayerContourIndex, LayerSpot };
 
@@ -138,20 +138,8 @@ public sealed class ImportGisCommand
             var ids = new ObjectIdCollection();
             using (var tr = db.TransactionManager.StartTransaction())
             {
-                // ★★[검토 0901] <b>표고점도 같이 지운다.</b> 수치지도로 받은 뒤 서버로 다시 받으면
-                //   지표면은 새로 만들어지는데 표고점 851개는 <b>아무 지표면도 안 문 채</b> 남는다.
-                //   레이어가 꺼져 있어 눈에도 안 띈다. 두 경로가 <b>같은 목록</b>을 지워야 한다(§50).
-                // ★[검토 0917] 지적도와 <b>같은 자</b>를 쓴다 — 못 지웠으면 그 자리에서 멈춘다.
-                //   (§65 "두 경로가 다른 자를 쓴다"가 바로 이번 중복의 뿌리였다)
-                int cFail = EraseOnLayers(db, tr, GroundImportLayers);   // 다시 불러오면 교체
-                if (cFail > 0)
-                {
-                    ed.WriteMessage($"\n[등고선] 이전 등고선·표고점 {cFail}개를 못 지웠습니다 — 새로 그리지 않았습니다."
-                        + "\n  해당 레이어의 잠금을 풀고 다시 하세요.");
-                    AcadApp.ShowAlertDialog($"등고선을 다시 가져오지 못했습니다.\n\n"
-                        + $"이전 자료 {cFail}개를 못 지웠습니다(레이어 잠금 확인).");
-                    return false;
-                }
+                // ★★[v117.19 · JACK 1116 «서버 지표면이 하나밖에 안 가져와져»] <b>다시 불러와도 옛 원지반 · 재료를 안 지운다 — 추가.</b>
+                //   새 원지반 = «원지반_2 · _3 …» · 재료는 아래 BuildGroundSurface가 그 원지반의 주인 표시(<see cref="GroundSet.Tag"/>)를 붙인다. 지우기는 [원지반 삭제].
                 ObjectId layMain = EnsureLayer(db, tr, LayerContour, 8);            // 주곡선 회색
                 ObjectId layIdx = EnsureLayer(db, tr, LayerContourIndex, 30);       // 계곡선 주황
                 // ★원본 선은 꺼 둔다 — 지표면이 제 등고선을 그리므로 두 벌이 겹친다(JACK 0901).
@@ -586,7 +574,7 @@ public sealed class ImportGisCommand
 
     // ── 공통 ──────────────────────────────────────────────────────────────────
 
-    /// <summary>등고선 폴리선들로 "원지반" TIN 지표면 생성(있으면 교체). 반환=안내문.</summary>
+    /// <summary>등고선 폴리선들로 "원지반" TIN 지표면 생성(있으면 원지반_2 … 추가). 반환=안내문.</summary>
     /// <summary>문서 잠금 — 실패해도 넘어간다(명령 안이면 이미 잠겨 있다).</summary>
     private static IDisposable SafeLock(Document doc)
     {
@@ -599,28 +587,23 @@ public sealed class ImportGisCommand
     /// 한 곳만 고쳐져 있었다(검토 0901) — 그래서 인프라웍스가 지층면을 원지반으로 오인했다.</para></summary>
     internal static ObjectId FindGroundSurface(Database db, out string name, out int tris)
     {
+        // ★[v117.19 · JACK 1116] 원지반이 «원지반 · 원지반_2 …» 여러 장이면 — 부지가 쓴 원지반 · 없으면 가장 오래된 것(핸들 순). 하나뿐이면 종전 규칙(삼각형 제일 많은 것).
+        //   창마다 고른 원지반이 있는 쪽(진입도로 · 터파기 · 부지)은 이 함수가 아니라 <see cref="GroundSet.ForWindow"/>를 쓴다.
         name = ""; tris = 0;
-        ObjectId best = ObjectId.Null;
         try
         {
-            var civilDoc = Autodesk.Civil.ApplicationServices.CivilApplication.ActiveDocument;
-            using var tr = db.TransactionManager.StartTransaction();
-            foreach (ObjectId sid in civilDoc.GetSurfaceIds())
+            var l = GroundSet.List(db, withTris: true);
+            if (l.Count >= 2)
             {
-                try
-                {
-                    if (tr.GetObject(sid, OpenMode.ForRead) is not Autodesk.Civil.DatabaseServices.TinSurface ts) continue;
-                    string nm = ts.Name ?? "";
-                    if (nm.Contains("_DH") || nm.StartsWith("DH_", System.StringComparison.Ordinal)) continue;
-                    int n = 0; try { n = ts.Triangles.Count; } catch { }
-                    if (n > tris) { tris = n; best = sid; name = nm; }
-                }
-                catch { }
+                var site = GroundSet.SiteGround(db);
+                var pick = l.Find(g => g.Id == site);
+                if (pick.Id.IsNull) pick = l[0];
+                name = pick.Name; tris = pick.Tris;
+                return pick.Id;
             }
-            tr.Commit();
         }
         catch { }
-        return best;
+        return GroundSet.LegacyLargest(db, out name, out tris);
     }
 
     /// <summary>원지반이 있는가 — 리본 단추를 켜고 끄는 데 쓴다.</summary>
@@ -642,32 +625,31 @@ public sealed class ImportGisCommand
                                              ObjectIdCollection spotIds = null,
                                              ObjectIdCollection breakIds = null)
     {
-        if (contourIds.Count == 0) return "지표면 생략(등고선 없음)";
+        if (contourIds.Count == 0) { DiscardGround(db, ObjectId.Null, spotIds, breakIds); return "지표면 생략(등고선 없음)"; }
+        ObjectId surfId = ObjectId.Null;
         try
         {
-            using (var tr0 = db.TransactionManager.StartTransaction())
-            {
-                GradingBuilder.EraseSurfacesByBaseName(tr0, GroundSurfaceName);   // 다시 불러오면 교체
-                tr0.Commit();
-            }
-            // ★★★[검토 0901] <b>이름이 정말 비었는지 보고 만든다.</b>
-            //   지우기가 실패해도(다른 것이 이 지표면을 물고 있으면 그렇다) 조용히 넘어가는데,
-            //   그 상태로 같은 이름을 만들면 터진다 — 그때는 <b>옛 등고선은 이미 지웠고</b>
-            //   <b>레이어도 이미 꺼 놓은</b> 뒤라 화면에 낡은 지표면만 남고 사유를 알 수 없다.
+            // ★[v117.19 · JACK 1116] 옛 원지반을 지우지 않는다 — 빈 이름(원지반 → 원지반_2 → …)에 새로 만든다.
             string useName = GroundSurfaceName;
             try
             {
                 using var trChk = db.TransactionManager.StartTransaction();
-                if (GradingBuilder.SurfaceExistsByBaseName(trChk, GroundSurfaceName))
-                {
-                    useName = GradingBuilder.UniqueName(db, trChk, GroundSurfaceName);
-                    ed.WriteMessage($"\n[지표면] 옛 '{GroundSurfaceName}'을 못 지웠습니다"
-                                  + $" — 새 이름 '{useName}'으로 만듭니다(옛것을 지우고 다시 하세요).");
-                }
+                useName = GradingBuilder.UniqueName(db, trChk, GroundSurfaceName);
                 trChk.Commit();
             }
             catch { }
-            ObjectId surfId = TinSurface.Create(db, useName);
+            if (useName != GroundSurfaceName) ed.WriteMessage($"\n[지표면] 원지반이 이미 있어 '{useName}'으로 추가합니다(옛 원지반은 그대로).");
+            surfId = TinSurface.Create(db, useName);
+            // ★[v117.19] 재료에 주인 표시 — <b>정의를 붙이기 전에</b>(붙인 뒤에 ForWrite로 열면 소스가 바뀐 것으로 보여 새 원지반이 «낡음» 표시가 됨).
+            //   [원지반 삭제]가 고른 원지반의 재료만 지우도록 · 레이어는 그대로 · 못 붙여도 면은 산다(옛 도면처럼 «주인 모름»)
+            try
+            {
+                var mat = new System.Collections.Generic.List<ObjectId>();
+                foreach (ObjectIdCollection c in new[] { contourIds, spotIds, breakIds }) if (c != null) foreach (ObjectId m in c) mat.Add(m);
+                int nt = GroundSet.Tag(db, mat, surfId.Handle.ToString());
+                if (nt != mat.Count) ed.WriteMessage($"\n[지표면] 재료 {mat.Count}개 중 {nt}개만 주인 표시");
+            }
+            catch (System.Exception tx) { try { DiagLog.Append("\n■ 원지반 재료 주인 표시 실패 — " + tx.Message + "\n"); } catch { } }
             using var tr = db.TransactionManager.StartTransaction();
             var surf = (TinSurface)tr.GetObject(surfId, OpenMode.ForWrite);
             // ★[v113.0 · JACK 1104 «원지반이 0 레이어에 생김»] 종전엔 레이어를 안 정해 그때 현재 레이어에 생겼다 → 서버 · DXF · 등고선 세 길 모두 «DH-원지반»
@@ -742,8 +724,25 @@ public sealed class ImportGisCommand
         catch (System.Exception ex)
         {
             ed.WriteMessage("\n[등고선] 지표면 생성 실패 — " + ex.Message);
+            DiscardGround(db, surfId, contourIds, spotIds, breakIds);   // 빈 면 · 방금 그린 재료를 남기지 않음
             return "지표면 생성 실패: " + ex.Message;
         }
+    }
+
+    /// <summary>★[v117.19] 못 지은 원지반의 뒷정리 — 만들다 만 면(있으면)과 방금 그린 재료를 지운다. 실패해도 조용히(로그만).</summary>
+    static void DiscardGround(Database db, ObjectId surfId, params ObjectIdCollection[] mats)
+    {
+        try
+        {
+            using var tr = db.TransactionManager.StartTransaction();
+            if (!surfId.IsNull && !surfId.IsErased) try { tr.GetObject(surfId, OpenMode.ForWrite).Erase(); } catch { }
+            foreach (var c in mats)
+                if (c != null)
+                    foreach (ObjectId m in c)
+                        try { if (!m.IsNull && !m.IsErased) tr.GetObject(m, OpenMode.ForWrite, false, true).Erase(); } catch { }
+            tr.Commit();
+        }
+        catch (System.Exception ex) { try { DiagLog.Append("\n■ 원지반 뒷정리 실패 — " + ex.Message + "\n"); } catch { } }
     }
 
     /// <summary>[JACK 0731] '원지반' 전용 지표면 스타일 확보 — 삼각망 대신 등고선 표시.

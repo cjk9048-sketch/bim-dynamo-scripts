@@ -2149,8 +2149,14 @@ public sealed partial class XsecViewCommand
                                 //   검사도 같은 것을 부르므로 갈라질 수 없다.
                                 Put(c0, Rr.Item, spec.SpanRight(src, segEnd), spec.RightColSpan(src, segEnd));
                                 if (Rr.Sub != null) tb.Cells[row, c0 + DH.Grading.Core.QtyTableSpec.ColItem].TextString = Rr.Sub;
-                                // ★[검토 MED-7] 오른쪽 값은 아직 통로가 없다(공종 수량은 STEP 4).
-                                if (!spec.IsFillerRight(src)) tb.Cells[row, c0 + DH.Grading.Core.QtyTableSpec.ColValue].TextString = QT.Blank;
+                                // ★[JACK 1116] 오른쪽 값 = 공종 길이(m) — 안 켰거나 못 잰 칸은 –
+                                if (!spec.IsFillerRight(src))
+                                {
+                                    double vR = (led != null && Rr.Key is DH.Grading.Core.QtyKey kr) ? led.Get(kr) : double.NaN;
+                                    string tR = Fmt(vR);
+                                    if (tR != QT.Blank) filled++;
+                                    tb.Cells[row, c0 + DH.Grading.Core.QtyTableSpec.ColValue].TextString = tR;
+                                }
                             }
                         }
                     }
@@ -4334,7 +4340,8 @@ public sealed partial class XsecViewCommand
         System.Action<DH.Grading.Core.WallExcav.Xs2D> x2sink = null,
         System.Collections.Generic.IReadOnlyList<DH.Grading.Core.IGroundSurface> extraEdges = null,
         System.Collections.Generic.IReadOnlyList<DH.Grading.Core.StructModel> structs = null,
-        double[] stOut = null)
+        double[] stOut = null,
+        XqCtx xq = null)
     {
         // ★[v111.5 · 검토 M1] csP = 계획면(부지 = 정지면 캐시 · 진입도로 = FirstOf(진입도로, 바탕면)) · extraEdges = 가장자리를 따로 다듬을 면(진입도로 · 바탕 — 합친 면의 경계 계단)
         // 절단선의 좌우 끝을 구한다 — 종단도·횡단도가 쓰는 것과 <b>같은 함수</b>다.
@@ -4742,7 +4749,24 @@ public sealed partial class XsecViewCommand
                        + (qq.NoPlanCells > 0
                           ? $"  ⚠계획면이 없는 칸 {qq.NoPlanCells}개는 <b>원지반 기준</b>으로 셌다(터파기가 부풀 수 있다)"
                           : ""));
+        // ★[JACK 1116] 오른쪽 공종 길이(벌개재근 · 표토제거 · 면고르기 · 식생공법 · 층따기) — 켠 것만 · 정의는 XsecQtyRight
+        if (xq != null && led != null && gy != null && py2 != null)
+            try
+            {
+                var fi = xq.Forest?.Intervals(lx, ly, rx, ry, -wl, wl + wr);
+                var xr = DH.Grading.Core.XsecQtyRight.Measure(xs, gy, py2, fi, xq.O);
+                DH.Grading.Core.XsecQtyRight.Put(led, xr);
+                dbg?.Append($" | 공종 길이 벌개 {xr.ClearFill:F2}/{xr.ClearCut:F2} 표토 {xr.StripFill:F2}/{xr.StripCut:F2} 면고르기 {xr.SmoothFill:F2}/{xr.SmoothCut:F2} 층따기 {xr.Bench:F2}");
+            }
+            catch (System.Exception exQ) { dbg?.Append(" | ⚠공종 길이 실패 — " + exQ.Message); }
         return qq;
+    }
+
+    /// <summary>★[JACK 1116] 오른쪽 공종 길이를 잴 때 쓰는 것 — 켠 항목 · 임상도 입목지(못 읽으면 null).</summary>
+    internal sealed class XqCtx
+    {
+        public DH.Grading.Core.XsecQtyRight.Opts O;
+        public DH.Grading.Core.Forest.ForestSection Forest;
     }
 
     /// <summary>노선을 연다 — 못 열면 <c>null</c>.</summary>
@@ -5123,6 +5147,28 @@ public sealed partial class XsecViewCommand
                               + (csPadR != null ? " · 부지 정지면 선은 그림만(수량은 계획면으로)" : ""));
             }
 
+            // ★[JACK 1116] 오른쪽 공종 길이 — 켠 항목만 · 벌개재근은 횡단선이 걸친 범위의 임상도 입목지(못 읽으면 벌개 «–» + 표 밑 안내)
+            var xo = XsecQtyOptions.OptsOf(db);
+            XqCtx xqCtx = null;
+            if (xo.Clear || xo.Strip || xo.Smooth || xo.Seed || xo.Bench)
+            {
+                xqCtx = new XqCtx { O = xo };
+                if (xo.Clear)
+                {
+                    double bx0 = double.MaxValue, by0 = double.MaxValue, bx1 = double.MinValue, by1 = double.MinValue;
+                    foreach (var s0 in sl)
+                        if (SectionCommand.TryCut(al0, s0.St, wl, wr, out var c0))
+                            foreach (var (px0, py0) in new[] { (c0.Left.X, c0.Left.Y), (c0.Right.X, c0.Right.Y) })
+                            { bx0 = System.Math.Min(bx0, px0); bx1 = System.Math.Max(bx1, px0); by0 = System.Math.Min(by0, py0); by1 = System.Math.Max(by1, py0); }
+                    string why = "횡단선 없음";
+                    if (bx0 <= bx1) xqCtx.Forest = XsecForestLoad.Load(db, bx0, by0, bx1, by1, log, out why);
+                    if (xqCtx.Forest == null)
+                    {
+                        wallFoot = (wallFoot.Length > 0 ? wallFoot + " · " : "") + "벌개재근 — 임상도 못 읽음";
+                        log?.AppendLine("  ⚠벌개재근 — 임상도 못 읽음(" + why + ") — 벌개 칸은 –, 나머지는 그대로");
+                    }
+                }
+            }
             foreach (var s in sl)
             {
                 try
@@ -5140,7 +5186,7 @@ public sealed partial class XsecViewCommand
                     var q = QtyAt(tr, al0, s.St, wl, wr, csG, planQ, csE, dbg,
                                   strata, csW, led, DH.Grading.Core.QuantityTable.DeepLimitM,
                                   qtyBasis, csWx, secRec, secOut, backRec, backOut,
-                                  x2ctx, x2ctx == null ? null : x => x2map[s.Name] = x, roadEdges, structs, stOut);
+                                  x2ctx, x2ctx == null ? null : x => x2map[s.Name] = x, roadEdges, structs, stOut, xqCtx);
                     if (stOut[2] > 0) sdirty.Add(s.Name);
                     if (stOut[3] > 0.1) sbelow.Add(s.Name);
                     if (!double.IsNaN(stOut[0]))

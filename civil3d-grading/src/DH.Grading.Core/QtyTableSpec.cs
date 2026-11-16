@@ -77,7 +77,7 @@ public sealed class QtyTableSpec
     public readonly record struct LeftRow(string Group, string Sub, string Item, QtyKey? Key);
 
     /// <summary>오른쪽 한 줄 — 공종. 값 열쇠는 아직 없다(길이 기반 수량은 다음 단계).</summary>
-    public readonly record struct RightRow(string Item, string Sub);
+    public readonly record struct RightRow(string Item, string Sub, QtyKey? Key = null);
 
     private QtyTableSpec(IReadOnlyList<RockClass> rocks, IReadOnlyList<DepthClass> depths,
                          IReadOnlyList<WaterClass> waters, IReadOnlyList<RockClass> floorTrim,
@@ -381,16 +381,16 @@ public sealed class QtyTableSpec
         // ── 오른쪽: 공종 ──────────────────────────────────────────────────
         var R = new List<RightRow>
         {
-            new("벌개재근", "성토부"), new(null, "절토부"),
-            new("표토제거", "성토부"), new(null, "절토부"),
-            new("면고르기", "성토부"), new(null, "절토부"),
+            new("벌개재근", "성토부", QtyKey.OfRight(QtyKeyKind.Clear, false)), new(null, "절토부", QtyKey.OfRight(QtyKeyKind.Clear, true)),
+            new("표토제거", "성토부", QtyKey.OfRight(QtyKeyKind.Strip, false)), new(null, "절토부", QtyKey.OfRight(QtyKeyKind.Strip, true)),
+            new("면고르기", "성토부", QtyKey.OfRight(QtyKeyKind.Smooth, false)), new(null, "절토부", QtyKey.OfRight(QtyKeyKind.Smooth, true)),
         };
         // 바닥면고르기는 <b>터파기에 나온 암종</b>만큼 줄이 선다(JACK).
         for (int i = 0; i < trim.Count; i++)
             R.Add(new RightRow(i == 0 ? "바닥면고르기" : null, NameOf(trim[i])));
-        R.Add(new RightRow("식생공법", "성토부"));
-        R.Add(new RightRow(null, "절토부"));
-        R.Add(new RightRow("층 따 기", null));
+        R.Add(new RightRow("식생공법", "성토부", QtyKey.OfRight(QtyKeyKind.Seed, false)));
+        R.Add(new RightRow(null, "절토부", QtyKey.OfRight(QtyKeyKind.Seed, true)));
+        R.Add(new RightRow("층 따 기", null, QtyKey.OfRight(QtyKeyKind.Bench, false)));
         R.Add(new RightRow("잡 석 부 설", null));
 
         // ── ★ 두 단의 길이를 맞춘다 — <b>표는 직사각형이라야 한다</b>.
@@ -712,7 +712,7 @@ public sealed class QtyTableFold
 
 /// <summary>수량 하나를 가리키는 열쇠. <b>표와 계산이 같은 열쇠를 쓴다</b> —
 /// 종전엔 줄 번호로 이어 붙였는데, 줄이 실행 중에 늘고 줄면 번호가 곧 어긋난다.</summary>
-public enum QtyKeyKind { Fill, Cut, Exc, Backfill, StructFill, StructBackfill }
+public enum QtyKeyKind { Fill, Cut, Exc, Backfill, StructFill, StructBackfill, Clear, Strip, Smooth, Seed, Bench }
 
 public readonly record struct QtyKey(QtyKeyKind Kind, RockClass Rock, DepthClass Depth, WaterClass Water)
 {
@@ -723,6 +723,8 @@ public readonly record struct QtyKey(QtyKeyKind Kind, RockClass Rock, DepthClass
     /// <summary>★[v117.4] 불러온 구조물 공제 — 성토 · 되메우기에서 뺀 넓이(그 두 줄은 뺀 값 · 이 줄은 얼마 뺐는지).</summary>
     public static QtyKey OfStructFill() => new(QtyKeyKind.StructFill, RockClass.Soil, DepthClass.Le, WaterClass.Land);
     public static QtyKey OfStructBackfill() => new(QtyKeyKind.StructBackfill, RockClass.Soil, DepthClass.Le, WaterClass.Land);
+    /// <summary>★[JACK 1116] 오른쪽 공종 길이(m) — 성토부 = <c>Depth Le</c> · 절토부 = <c>Depth Gt</c> (층따기는 성토부 한 칸). <see cref="XsecQtyRight"/>.</summary>
+    public static QtyKey OfRight(QtyKeyKind kind, bool cut) => new(kind, RockClass.Soil, cut ? DepthClass.Gt : DepthClass.Le, WaterClass.Land);
 }
 
 /// <summary>한 측점의 수량 장부 — <b>열쇠로 넣고 열쇠로 뺀다</b>.

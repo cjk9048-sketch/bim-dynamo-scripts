@@ -66,8 +66,8 @@ public static class QtyReportXlsx
             new("Y","Z", null,"바닥면고르기","토   사","길 이","면 적"),
             new("AA","AB", s=>s.FillW,"성토면고르기","토   사","길 이","면 적"),
             new("AC","AD", s=>s.CutW,"절토면고르기","토사","길 이","면 적"),
-            new("AE","AF", null,"벌개제근","","길 이","면 적"),
-            new("AG","AH", null,"표토제거","","길 이","면 적"),
+            new("AE","AF", s=>s.Clear,"벌개제근","","길 이","면 적"),
+            new("AG","AH", s=>s.Strip,"표토제거","","길 이","면 적"),
             new("AI","AJ", null,"잡석부설","","길 이","면 적"),
             new("AK","AL", null,"층따기","","면 적","입 적"),
             new("AN","AO", s=>s.ExcSoilGt,"터파기","토사("+gt+")","면 적","입 적"),
@@ -137,9 +137,14 @@ public static class QtyReportXlsx
         if (double.IsFinite(m.Clearing))
         {
             ws.Cell($"AF{tot}").Value = QtyReportCalc.R2(m.Clearing); ws.Cell($"AF{tot}").Style.NumberFormat.Format = Fmt;
-            ws.Cell($"AH{tot}").FormulaA1 = $"AF{tot}"; ws.Cell($"AH{tot}").Style.NumberFormat.Format = Fmt;
-            totals["AF"] = $"{Q(ws.Name)}!AF{tot}"; totals["AH"] = $"{Q(ws.Name)}!AH{tot}";
-            ws.Cell($"AM{tot}").Value = "벌개제근 = 임상도 입목지 ∩ 공사범위(측점별 폭 없음) · 표토제거 = 같은 면적";
+            totals["AF"] = $"{Q(ws.Name)}!AF{tot}";
+            if (QtyReportCalc.Has(st, s => s.Strip)) ws.Cell($"AM{tot}").Value = "벌개제근 계 = 임상도 입목지 ∩ 공사범위(면적) · 윗줄은 횡단 길이 평균";
+            else
+            {
+                ws.Cell($"AH{tot}").FormulaA1 = $"AF{tot}"; ws.Cell($"AH{tot}").Style.NumberFormat.Format = Fmt;
+                totals["AH"] = $"{Q(ws.Name)}!AH{tot}";
+                ws.Cell($"AM{tot}").Value = "벌개제근 = 임상도 입목지 ∩ 공사범위(측점별 폭 없음) · 표토제거 = 같은 면적";
+            }
         }
         var all = ws.Range($"B2:AO{tot}");
         all.Style.Border.OutsideBorder = XLBorderStyleValues.Thin; all.Style.Border.InsideBorder = XLBorderStyleValues.Hair;

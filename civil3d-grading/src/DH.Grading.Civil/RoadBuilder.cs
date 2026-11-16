@@ -1,4 +1,4 @@
-using Autodesk.AutoCAD.ApplicationServices;
+﻿using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.Geometry;
 using DH.Grading.Core;
@@ -24,9 +24,9 @@ internal static class RoadBuilder
         {
             try
             {
-                if (tr.GetObject(sid, OpenMode.ForRead) is not CivilDb.TinSurface s) continue;
+                if (tr.GetObject(sid, OpenMode.ForRead) is not CivilDb.TinSurface s || SurfaceRetire.IsRetired(s)) continue;   // 물러난 면(«원지반(옛)»)은 바탕 후보가 아님
                 if (Commands.SectionCommand.IsBase(s.Name, Commands.SectionCommand.PadSurfaceBase)) { pad = sid; padNm = s.Name; }
-                else if (ground.IsNull && (s.Name == "원지반" || s.Name.StartsWith("원지반", StringComparison.Ordinal))) { ground = sid; groundNm = s.Name; }
+                else if (ground.IsNull && Commands.SectionCommand.IsBase(s.Name, Commands.ImportGisCommand.GroundSurfaceName)) { ground = sid; groundNm = s.Name; }
                 else if (!s.Name.Contains("_DH") && !s.Name.StartsWith("DH_", StringComparison.Ordinal))
                 {   // ★[v117.18.3 · JACK 1116 «계획부지 없이 진입도로만 — 지표면이 안 만들어져»] 이름이 «원지반»이 아닌 원지반(LandXML · 수치지도 등) — 원지반 고르는 규칙(ImportGisCommand.FindGroundSurface)과 같게: 우리 면(_DH)이 아닌 것 중 세모 제일 많은 것
                     int n = 0; try { n = s.Triangles.Count; } catch { }
@@ -38,6 +38,21 @@ internal static class RoadBuilder
         tr.Commit();
         if (!pad.IsNull) return (pad, padNm);
         return !ground.IsNull ? (ground, groundNm) : (other, otherNm);
+    }
+
+    /// <summary>★[v117.19 · JACK 1116] 바탕면 + 이 도로가 고른 원지반. 정지면_DH가 있으면 종전대로 그 위 · 없으면 고른 원지반(<paramref name="groundHandle"/> — 지워졌으면 «고르지 않음») ·
+    /// 고르지 않았고 원지반이 둘 이상이면 <paramref name="needPick"/> = true + Null(만들기를 막고 [원지반 선택] 안내) · 하나면 자동.</summary>
+    internal static (ObjectId Id, string Name) PickBase(Database db, CivilApp.CivilDocument cdoc, string groundHandle, out bool needPick)
+    {
+        needPick = false;
+        var b = PickBase(db, cdoc);
+        if (b.Id.IsNull || Commands.SectionCommand.IsBase(b.Name, Commands.SectionCommand.PadSurfaceBase)) return b;
+        var chosen = GroundSet.Resolve(db, groundHandle);
+        if (!chosen.IsNull) return (chosen, GroundSet.NameOf(db, chosen));
+        var l = GroundSet.List(db);
+        if (l.Count >= 2) { needPick = true; return (ObjectId.Null, ""); }
+        if (l.Count == 1) return (l[0].Id, l[0].Name);   // 하나뿐이면 그것(2인자 규칙이 옛 면을 집지 않게)
+        return b;
     }
 
     /// <summary>폴리선 → 노선. 호(bulge)는 그대로 · 직선끼리 꺾인 곳은 반경 R 곡선(접선이 짧으면 반경을 0.7배씩 줄여 3 m까지 · 그래도 안 되면 꺾인 채 두고 알림).</summary>

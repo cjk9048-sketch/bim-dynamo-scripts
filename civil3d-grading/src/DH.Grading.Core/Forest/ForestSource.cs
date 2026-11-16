@@ -72,7 +72,9 @@ public static class ForestSource
             if (r.Source != null) { apiPolys = r.Polys; return new Pick(r.Source, "", false, false, ForestApi.Label, false, true); }
             apiNote = r.Note;
         }
-        return Open(tiles, isDefault, seen, dwgDir);
+        // ★[v117.18.6 · JACK 1116 «기타 설정 임상도 타일은 필요 없지 않아? 회사 API로 해결» → «타일 폴더 없앰»] API 못 쓰면 도면 폴더 사본만(타일 폴더 안 봄)
+        if (OpenCopy(dwgDir, out var copy, out string cwhy)) return new Pick(copy, "", false, false, "회사 API 못 씀 → 도면 폴더 사본", true);
+        return new Pick(null, "임상도 못 읽음 — 회사망에서 다시", false, true, "회사 API 못 씀" + (cwhy.Length > 0 ? " · " + cwhy : "") + " · 사본 없음", false);
     }
 
     /// <summary>읽기 · 풀기에서 «그 파일이 나쁨»으로 보는 예외(그 밖 예외는 위로 — 진단 로그).</summary>

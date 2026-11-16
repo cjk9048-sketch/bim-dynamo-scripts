@@ -1,4 +1,4 @@
-using System.Windows;
+﻿using System.Windows;
 using System.Windows.Controls;
 using Autodesk.AutoCAD.Windows;
 using DH.Grading.Core;
@@ -110,16 +110,28 @@ internal sealed class RoadPanel : UserControl
                 if (doc == null) return;
                 Commit();   // 칸에 친 값을 먼저 받음(새 도로가 그 값으로)
                 // ★[C# \x 함정] "\x03\x03" + 명령(붙여 쓰면 \x03D가 '='로 먹힘)
-                try { doc.SendStringToExecute("\x03\x03" + cmd + " ", true, false, false); }
+                string run = (b.Tag as string) == "pick-by-radio" && _makeCmd != null ? _makeCmd() : cmd;
+                try { doc.SendStringToExecute("\x03\x03" + run + " ", true, false, false); }
                 catch (System.Exception ex) { _note.Text = text + " 실패 — " + ex.Message; }
             };
             if (demoKey != null) { b.MouseEnter += (_, __) => _demo.Play(demoKey); b.MouseLeave += (_, __) => _demo.Idle(); }   // ★[v117.18] 단추에 마우스 → 맨 위 설명
             mk.Children.Add(b);
             return b;
         }
-        MakeBtn("도로 경로 그리기", "DHROADDRAW", "점을 차례로 찍고 Enter — 꺾인 곳은 곡선 반경으로 곡선 · 아래 도로 설정 값으로 만듭니다", true, "roadDraw");
-        MakeBtn("폴리선 선택", "DHROAD", "그려 둔 폴리선 · 3D 폴리선 · Civil 노선을 골라 아래 도로 설정 값으로 만듭니다", false, "roadPick");
-        GradingDialog.ForgetOpen("도로:노선", "도로:횡단", "도로:포장", "도로:사면");
+        // ★[v117.18.6 · JACK 1116 «도로 경로 그리기는 진입도로 생성으로 · 옆에 원형 선택 단추 — 경로 그리기 · 폴리선 선택 · 기본은 경로 그리기»]
+        var rbDraw = new RadioButton { Content = "경로 그리기", IsChecked = true, GroupName = "roadMake", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(4, 0, 10, 0), FontSize = 11.5,
+                                       ToolTip = "점을 차례로 찍고 Enter — 꺾인 곳은 곡선 반경으로 곡선" };
+        var rbPick = new RadioButton { Content = "폴리선 선택", GroupName = "roadMake", VerticalAlignment = VerticalAlignment.Center, FontSize = 11.5,
+                                       ToolTip = "그려 둔 폴리선 · 3D 폴리선 · Civil 노선을 고름" };
+        var mkBtn = MakeBtn("진입도로 생성", "DHROADDRAW", "고른 방법(경로 그리기 / 폴리선 선택)으로 아래 도로 설정 값의 진입도로를 만듭니다", true, null);
+        mkBtn.Tag = "pick-by-radio";
+        mkBtn.MouseEnter += (_, __) => _demo.Play(rbPick.IsChecked == true ? "roadPick" : "roadDraw");
+        mkBtn.MouseLeave += (_, __) => _demo.Idle();
+        rbDraw.MouseEnter += (_, __) => _demo.Play("roadDraw"); rbDraw.MouseLeave += (_, __) => _demo.Idle();
+        rbPick.MouseEnter += (_, __) => _demo.Play("roadPick"); rbPick.MouseLeave += (_, __) => _demo.Idle();
+        _makeCmd = () => rbPick.IsChecked == true ? "DHROAD" : "DHROADDRAW";
+        mk.Children.Add(rbDraw); mk.Children.Add(rbPick);
+        GradingDialog.ForgetOpen("도로:노선", "도로:횡단", "도로:포장", "도로:사면", "도로:설정", "도로:수정");   // ★[JACK 1116] 창을 만들 때마다 ■ 도로 설정 열림 · ■ 진입도로 수정 닫힘
         // ★★[v117.18 · JACK 1116 «도로 설정 아래 노선 · 횡단 · 포장 · 사면은 늘 펼침 · 항목마다 설명 애니메이션»] 접는 칸이 아니라 제목만(화살표 · 접힘 · 묶음 없음) — 제목 · 칸에 마우스 → 맨 위 설명
         StackPanel Plain(Panel parent, string title, string tip, bool sub, string? demoKey, bool first = false)
         {
@@ -137,7 +149,8 @@ internal sealed class RoadPanel : UserControl
             if (demoKey != null) { blk.MouseEnter += (_, __) => _demo.Play(demoKey); blk.MouseLeave += (_, __) => _demo.Idle(); }
             return body;
         }
-        var secSet = Plain(_root, "■ 도로 설정", "노선 · 횡단 · 포장 · 사면", false, null, first: true);
+        // ★[JACK 1116 «처음엔 도로 설정 열림 · 진입도로 수정을 열면 닫힘»] 접는 칸 + 아코디언 묶음 «도로»(■ 진입도로 수정과 한 번에 하나만 열림)
+        var secSet = GradingDialog.AddCollapsible(_root, "■ 도로 설정", "노선 · 횡단 · 포장 · 사면", first: true, open: true, key: "도로:설정", group: "도로");
 
         _host = Plain(secSet, "노선", "꺾인 곳 곡선 반경 — [경로 그리기] · [폴리선 선택] 둘 다 · 바꾸면 열린 도로의 곡선도 바뀝니다", true, "roadAlign");
         _curve = Row(("곡선 반경 m", d => d.CurveR, (d, v) => { d.CurveR = v; RoadDesign.LastCurveR = v; _recurve = true; }, 1, 3, 1000))[0];
@@ -168,12 +181,31 @@ internal sealed class RoadPanel : UserControl
         Row(("절토 1:", d => d.CutSlope, (d, v) => d.CutSlope = v, 1, 0.1, 10), ("단높이", d => d.CutBenchH, (d, v) => d.CutBenchH = v, 1, 0.5, 50), ("소단", d => d.CutBenchW, (d, v) => d.CutBenchW = v, 1, 0, 10));
         Row(("성토 1:", d => d.FillSlope, (d, v) => d.FillSlope = v, 1, 0.1, 10), ("단높이", d => d.FillBenchH, (d, v) => d.FillBenchH = v, 1, 0.5, 50), ("소단", d => d.FillBenchW, (d, v) => d.FillBenchW = v, 1, 0, 10));
 
+        // ★[v117.19 · JACK 1116 «창마다 [원지반 선택]»] 원지반 — 도로마다(기록에 저장) · 정지면이 바탕이면 안 씀 · 하나면 자동 · 둘 이상이면 고르기(안 고르면 만들기 막힘 → 깜박)
+        _host = Plain(secSet, "원지반", "이 도로가 놓일 원지반 — 정지면이 없고 원지반이 2개 이상일 때 고릅니다", true, null);
+        var gRow = new DockPanel { Margin = new Thickness(0, 0, 0, 4), LastChildFill = true };
+        _groundBtn = new Button { Content = "원지반 선택", MinWidth = 90, Height = 26, ToolTip = "이 도로에 쓸 원지반 지표면을 도면에서 클릭" };
+        _groundBtn.Click += (_, __) =>
+        {
+            var d0 = AcadApp.DocumentManager.MdiActiveDocument;
+            if (d0 == null) return;
+            Commit();
+            PickSession.Send(d0, "DHROADGROUND");
+        };
+        DockPanel.SetDock(_groundBtn, Dock.Right);
+        gRow.Children.Add(_groundBtn);
+        _groundTxt = new TextBlock { Text = "원지반: 자동", Margin = new Thickness(0, 0, 8, 0), VerticalAlignment = VerticalAlignment.Center, Foreground = DhBrand.Sub, TextTrimming = TextTrimming.CharacterEllipsis };
+        gRow.Children.Add(_groundTxt);
+        _host.Children.Add(gRow);
+
         // ★[v117.18 · JACK 1116] [도로 경로 그리기] [폴리선 선택]은 ■ 도로 설정 바로 아래 · ■ 종단 → «종단수정»
         _root.Children.Add(mk);
         // ── ■ 옹벽 ──
         // ★★[v111.7 · JACK 1102] [옹벽 변환] [사면 변환](옛 ■ 진입도로 수정에서 옮김 — 전체 해제는 명령 안 C · 부지와 같음) → 옹벽 제안 한 줄(제안 높이 · [사업 경계]) · 풍선 글은 쉬운 말로
         // ★[v117.18.4 · JACK 1116 «진입도로 수정 열림펼침 제목 안에 옹벽 · 측구»] 한 접는 칸 + 소제목 둘
-        var editBody = GradingDialog.AddCollapsible(_root, "■ 진입도로 수정", out var editBadge, "옹벽 · 측구", open: false, key: "도로:수정");
+        var editBody = GradingDialog.AddCollapsible(_root, "■ 진입도로 수정", out var editBadge, "옹벽 · 측구", open: false, key: "도로:수정", group: "도로");
+        _editBadge = editBadge;
+        editBadge.Foreground = DhBrand.Warn; editBadge.FontWeight = FontWeights.Bold;
         HookBig(editBadge, editBody, "roadWall");
         _host = Plain(editBody, "옹벽", "옹벽 변환 · 사면 변환 · 옹벽 추가 · 삭제", true, "roadWall", first: true);
         var wallBody = _host;
@@ -258,11 +290,16 @@ internal sealed class RoadPanel : UserControl
         _needRoad.Add(segBtn);
         ditchRow.Children.Add(ditchBtn); ditchRow.Children.Add(segBtn);
         _host.Children.Add(ditchRow);
+        // ★[JACK 1116 «업데이트는 진입도로 수정 안에 · 지표면 업데이트 · 대상이면 빨강»] ■ 진입도로 수정 맨 끝 · 빨강 = 고친 것이 있음(StateText 깜박 판정과 같음)
+        var updHost = new StackPanel { Margin = new Thickness(0, 10, 0, 0) };
+        editBody.Children.Add(updHost);
+        _host = updHost;
+        _updateBtn = Buttons(("지표면 업데이트", "DHROADUPDATE", "지표면 · 종단도 · 횡단도를 한꺼번에 다시 만듭니다 — 고친 것이 있으면 빨갛게 깜박입니다", false))[0];
 
         // ── ■ 결과 ──
-        _host = Plain(_root, "■ 결과", "토공량 · 높이 · 경사 · 옹벽", false, "roadResult");   // ★[v117.18.4 · JACK 1116 «결과쪽은 항상 열려 있어야 해»] 접는 칸 아님
+        _host = Plain(_root, "■ 결과", "토공량 · 높이 · 경사 · 옹벽", false, null);   // ★[JACK 1116 «업데이트 창 도움말은 필요 없어 — 예시 값 때문에 더 헷갈려»] 결과 칸 · 업데이트 단추 예시 장면 없앰   // ★[v117.18.4 · JACK 1116 «결과쪽은 항상 열려 있어야 해»] 접는 칸 아님
         var resCard = Card(_result);
-        resCard.ToolTip = $"최대 종단경사가 {ProfileSheetRules.WarnGrade * 100:0} %(경고 문턱 — 고정)를 넘으면 빨간 글로 알립니다 · 종횡단도 창 «최대 경사 %»는 자동 초안 한도(그 사이는 경고 없음)";
+        resCard.ToolTip = "최대 종단경사가 종횡단도 창 «최대 경사 %»를 넘으면 빨간 글로 알립니다";
         _host.Children.Add(resCard); _needRoad.Add(resCard);
         // ★★★[v111.7.2 · JACK 1102 «측점(PVI) 움직일 때마다 모든 게 재작성되니 오래 걸린다 · 마지막에 팝업창 단추를 누르면 한꺼번에 업데이트»]
         //   저절로 다시 만들기 · [다시 시도] 없앰 → [업데이트] 하나(늘 보임 · 고친 것이 있으면 깜박 + 상태 줄) · 한 명령 · 실행 취소 한 번
@@ -271,7 +308,7 @@ internal sealed class RoadPanel : UserControl
         // ★★[도로 마무리 ① · 계획 5.3 · 비평 M6] 이 판 앞 도로 — 끝 맞춤 제안 한 줄 + [끝 맞추기](한 번 누르면 그 뒤 [업데이트]가 늘 맞춤)
         _endsLine = new TextBlock { FontSize = 11, Foreground = DhBrand.Ink, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(2, 0, 0, 2), Visibility = Visibility.Collapsed };
         _host.Children.Add(_endsLine);
-        _endsBtn = Buttons(("끝 맞추기", "DHROADENDS", "노선 끝을 부지 바닥 끝 · 본 도로 포장 끝에 맞춥니다(넘치면 자르고 · 20 m 안 못 미치면 늘림 · 끝 높이 = 바닥 높이) — 그 뒤 [업데이트]가 늘 맞춥니다", false))[0];
+        _endsBtn = Buttons(("끝 맞추기", "DHROADENDS", "노선 끝을 부지 바닥 끝 · 본 도로 포장 끝에 맞춥니다(넘치면 자르고 · 20 m 안 못 미치면 늘림 · 끝 높이 = 바닥 높이) — 그 뒤 [지표면 업데이트]가 늘 맞춥니다", false))[0];
         _endsBtn.Visibility = Visibility.Collapsed;
         // ★[v111.10 · 계획_초기화.md 3.5 · JACK 1103 «창마다 초기화 단추 = 주황»] [진입도로 초기화] — 창 맨 끝 얇은 줄 아래 · 도면의 모든 진입도로.
         //   열린 도로가 없어도(도면에 도로가 있으면) 켜져야 한다 → Buttons · Act · _needRoad를 안 쓰고 바로 보냄(Act는 세션이 없으면 아무것도 안 보냄)
@@ -286,11 +323,6 @@ internal sealed class RoadPanel : UserControl
             catch (System.Exception ex) { _note.Text = "진입도로 초기화 실패 — " + ex.Message; }
         };
         _root.Children.Add(_resetBtn);
-        // ★[v117.18.4 · JACK 1116 «업데이트 버튼은 맨 아래 독립적으로 · 위에서 무엇을 고치든 반짝»] 칸 밖 맨 끝 · 깜박임은 StateText(바뀜 열쇠)가 정함 — 모든 고침이 Recompute를 거치므로 한 길
-        var updHost = new StackPanel { Margin = new Thickness(0, 10, 0, 0) };
-        _root.Children.Add(updHost);
-        _host = updHost;
-        _updateBtn = Buttons(("업데이트", "DHROADUPDATE", "지표면 · 종단도 · 횡단도를 한꺼번에 다시 만듭니다", true))[0];
         Show(null);
     }
 
@@ -333,6 +365,9 @@ internal sealed class RoadPanel : UserControl
     }
 
     Button _updateBtn = null!;
+    TextBlock _editBadge = null!;
+    Button _groundBtn = null!;
+    TextBlock _groundTxt = null!;
     Button _resetBtn = null!;
     Button _endsBtn = null!;
     TextBlock _endsLine = null!, _ditchWarn = null!;
@@ -443,7 +478,7 @@ internal sealed class RoadPanel : UserControl
         bool stale = s.StaleKey.Length > 0;
         var lines = new List<string>();
         // ★[도로 마무리 ① · 계획 5.3] 끝 맞춤을 켠 도로가 맞춤이 필요함(바닥이 움직였거나 PVI를 끝 밖으로 옮김) — [업데이트]가 맞춤
-        if (s.Design.EndsOn && s.EndsStale.Length > 0) lines.Add("끝 맞춤 필요 — [업데이트]");
+        if (s.Design.EndsOn && s.EndsStale.Length > 0) lines.Add("끝 맞춤 필요 — [지표면 업데이트]");
         if (!stale)
         {
             var have = new List<string>();
@@ -459,9 +494,9 @@ internal sealed class RoadPanel : UserControl
             string fail = s.FailWhy;
             // ★[v111.10 · 계획_초기화.md 3.4 · 4장] «아직 안 만듦» · «지워짐» · «최종면만 옛것»을 «고침»과 가른 글(열쇠 · 업데이트 판정은 그대로)
             lines.Add(fail.Length > 0 ? FailText(fail)
-                    : s.SurfaceMissing ? (s.Design.SurfaceHandle.Length == 0 ? "지표면 아직 없음 — [업데이트]" : "지표면 지워짐 — [업데이트]")
-                    : s.SurfaceStale.Length + s.SheetStale.Length + s.XsecStale.Length == 0 && s.FinalStale ? "최종지표면 옛것 — [업데이트]"
-                    : "고친 것이 있습니다 — [업데이트]를 누르세요");
+                    : s.SurfaceMissing ? (s.Design.SurfaceHandle.Length == 0 ? "지표면 아직 없음 — [지표면 업데이트]" : "지표면 지워짐 — [지표면 업데이트]")
+                    : s.SurfaceStale.Length + s.SheetStale.Length + s.XsecStale.Length == 0 && s.FinalStale ? "최종지표면 옛것 — [지표면 업데이트]"
+                    : "고친 것이 있습니다 — [지표면 업데이트]를 누르세요");
         }
         // ★[v111.7 · 설치 전 검토 M3] 다시 그리다 못 그려 옛것이 지워졌으면 늘 남음(U로 되돌리면 꺼짐) — 옛 ■ 도면 줄에서 옮김
         if (s.SheetLost.Length > 0) lines.Add(s.SheetLost);
@@ -477,8 +512,8 @@ internal sealed class RoadPanel : UserControl
         "다시 해도 남음" => "다시 만들어도 다름 — 진단 로그 확인",
         "계산 오류" => "계산 오류 — 값을 확인하세요",
         _ when w.StartsWith("실패 — ") => "다시 만들지 못함 — " + w[5..],
-        _ when w.Contains(RoadAutoRules.WhySheetPlace) || w.Contains(RoadAutoRules.WhySheetOverlap) || w.Contains(RoadAutoRules.WhyXsecPlace) => w + " — [업데이트]를 누르면 자리를 묻습니다",
-        _ when w.Contains(RoadAutoRules.WhyXsecRefused) => w + " — [업데이트]로 다시",
+        _ when w.Contains(RoadAutoRules.WhySheetPlace) || w.Contains(RoadAutoRules.WhySheetOverlap) || w.Contains(RoadAutoRules.WhyXsecPlace) => w + " — [지표면 업데이트]를 누르면 자리를 묻습니다",
+        _ when w.Contains(RoadAutoRules.WhyXsecRefused) => w + " — [지표면 업데이트]로 다시",
         _ => w,
     };
 
@@ -541,6 +576,9 @@ internal sealed class RoadPanel : UserControl
         _host.Children.Add(wp);
         return boxes;
     }
+
+    /// <summary>★[v117.18.6] [진입도로 생성] — 원형 단추에 따라 DHROADDRAW / DHROAD.</summary>
+    Func<string>? _makeCmd;
 
     List<Button> Buttons(params (string Text, string Cmd, string Tip, bool Primary)[] items)
     {
@@ -696,10 +734,32 @@ internal sealed class RoadPanel : UserControl
         var t = new RoadDesign();
         var s = RoadSession.Of(doc);
         t.CopyShapeFrom(s != null ? s.Design : DraftOf(doc));
+        t.GroundHandle = (s != null ? s.Design : DraftOf(doc)).GroundHandle;   // ★[v117.19] 원지반 고름은 모양 값이 아니라 따로 — 새 도로가 이어받음
         return t;
     }
 
     internal void Show(RoadSession? s) { ShowCore(s); _demo?.RedrawHeld(); }
+
+    /// <summary>★[v117.19] «원지반» 줄 — 정지면이 바탕이면 «정지면 위» · 고른 것 «● 이름» · 하나면 «이름 (자동)» · 둘 이상인데 안 골랐으면 «⚠ 2개 이상 →» + [원지반 선택] 깜박. 읽기만(명령 중엔 안 건드림).</summary>
+    void ShowGround(RoadSession? s)
+    {
+        try
+        {
+            var doc = AcadApp.DocumentManager.MdiActiveDocument;
+            if (doc == null || Busy(doc)) return;
+            var db = doc.Database;
+            string h = s != null ? s.Design.GroundHandle : DraftOf(doc).GroundHandle;
+            var (id, nm) = RoadBuilder.PickBase(db, Autodesk.Civil.ApplicationServices.CivilDocument.GetCivilDocument(db), h, out bool need);
+            bool pad = !id.IsNull && Commands.SectionCommand.IsBase(nm, Commands.SectionCommand.PadSurfaceBase);
+            int n = GroundSet.List(db).Count;
+            bool chosen = !pad && !GroundSet.Resolve(db, h).IsNull;
+            _groundTxt.Text = pad ? "원지반: 정지면 위 (자동)" : need ? "⚠ 원지반 2개 이상 →" : id.IsNull ? "원지반 없음" : chosen ? "원지반: ● " + nm : "원지반: " + nm + " (자동)";
+            _groundTxt.Foreground = need ? System.Windows.Media.Brushes.OrangeRed : chosen ? DhBrand.Brand : DhBrand.Sub;
+            _groundBtn.Visibility = !pad && n >= 2 ? Visibility.Visible : Visibility.Collapsed;
+            Blink(_groundBtn, need);
+        }
+        catch { }
+    }
 
     void ShowCore(RoadSession? s)
     {
@@ -734,6 +794,7 @@ internal sealed class RoadPanel : UserControl
                 _paveA.Visibility = pk == 0 ? Visibility.Visible : Visibility.Collapsed;
                 _paveC.Visibility = pk == 1 ? Visibility.Visible : Visibility.Collapsed;
             }
+            ShowGround(s);
             var r = s?.Last;
             _note.Text = s == null ? "" : s.Note;
             // ★[도로 마무리 ②] ■ 측구 — 형식 · 그레이팅 · 경고
@@ -754,13 +815,16 @@ internal sealed class RoadPanel : UserControl
             SetState(_autoState, stText);
             _autoState.Foreground = stWarn ? DhBrand.Warn : DhBrand.Sub;
             Blink(_updateBtn, stBlink);
+            // ★[JACK 1116] 대상이면 빨강(DhCaution) · 아니면 기본 모양 · 접힌 ■ 진입도로 수정 제목에 «지표면 업데이트 필요»
+            try { if (stBlink && DhBrand.Skin != null) _updateBtn.Style = (Style)DhBrand.Skin["DhCaution"]; else _updateBtn.ClearValue(FrameworkElement.StyleProperty); } catch { }
+            _editBadge.Text = stBlink ? "지표면 업데이트 필요" : "";
             _result.Inlines.Clear();
             if (r == null) return;
             if (r.Error.Length > 0) { _result.Text = r.Error; return; }
             var wl = s!.Design.TierWalls.Where(w => w.Length >= 2).ToList();
             double wallLen = wl.Sum(w => Math.Abs(w[1] - w[0]));
             // ★★[v111.7.2 · JACK 1102 «20 %까지는 문제없이 — 그 이상이면 경고»] 최대 종단경사가 20 %(고정)를 넘으면 그 줄을 빨갛게 + 어디인지 한 줄
-            bool over = double.IsFinite(s.GradeNow) && s.GradeNow > ProfileSheetRules.WarnGrade + 1e-6;
+            bool over = double.IsFinite(s.GradeNow) && s.GradeNow > s.Design.MaxGrade + 1e-6;   // ★[JACK 1116] 문턱 = 도킹창 «최대 경사 %»
             void L(string t, bool red = false)
             {
                 if (_result.Inlines.Count > 0) _result.Inlines.Add(new System.Windows.Documents.LineBreak());

@@ -28,7 +28,7 @@ public sealed class ResetCommand
     private static readonly string[] RoadBaseNames = { RoadSession.SurfBase, RoadSession.TempSurf };   // ★[v111.1.1 · JACK 1030] 진입도로 면 · 작업 면
     // ★[v32.2] 순수 정지면(종단·횡단용)도 우리 산출물이라 같이 지운다 — 안 지우면 <b>낡은 순수면이 남아</b>
     //   초기화 뒤에도 종단이 그걸 보고 옛 형상을 그린다(지표면 목록에서 눈에 안 띄어 더 고약하다).
-    private static readonly string[] SiteBaseNames = BuildSiteBaseNames();
+    internal static readonly string[] SiteBaseNames = BuildSiteBaseNames();
     private static readonly string[] SurfaceBaseNames = FinalBaseNames.Concat(SiteBaseNames).Concat(RoadBaseNames).ToArray();
 
     /// <summary>★[검토 0914 · 낮음] 옹벽 조각 이름은 <b>세어서</b> 만든다 —
@@ -241,9 +241,9 @@ public sealed class ResetCommand
     ///  · keepGround=true([전체 초기화] — JACK 1023): 가져온 것 중 '원지반'과 그 재료(등고선 · 표고점 · 범위 밖 자료)는 남긴다.
     ///  · ★[v111.10] keepGround=false여도 남의 면이 원지반을 쓰면 원지반은 물러남(«원지반(옛)» · 숨김) + 그 재료 선은 안 지움(지우면 정의에 느낌표).
     /// 반환=(지운 지표면 수, 지운 객체 수, 번들 제거 여부).</summary>
-    internal static (int surfs, int ents, bool bundleCleared) ResetCore(Document doc, bool includeImported, bool keepGround = false, System.Collections.Generic.ICollection<ObjectId>? onlyGround = null)
+    internal static (int surfs, int ents, bool bundleCleared) ResetCore(Document doc, bool includeImported, bool keepGround = false, System.Collections.Generic.ICollection<ObjectId>? onlyGround = null, bool keepGroundMaterial = false)
     {
-        var rep = Wipe(doc, Scope.All, includeImported, keepGround, onlyGround);
+        var rep = Wipe(doc, Scope.All, includeImported, keepGround, onlyGround, keepGroundMaterial);
         string ret = rep.Ret.Retired.Count + rep.Ret.Failed.Count > 0 ? rep.RetireLine : "";
         if (ret.Length > 0) try { doc.Editor.WriteMessage("\n[초기화] " + ret); } catch { }
         try { DiagLog.Append($"\n■ 초기화(ResetCore · 가져온 것 {includeImported} · 원지반 남김 {keepGround})\n  {rep.Log.ToString().Replace("\n", "\n  ")}\n"); } catch { }
@@ -269,7 +269,7 @@ public sealed class ResetCommand
     /// <summary>★★★[v111.10 · 계획_초기화.md 3.1 ~ 3.3] 초기화 몸통 — 부품을 갈래대로 부른다.
     /// 차례: 진입도로 미리보기 끔 → (부지) 종단도 잔재 → 트랜잭션 하나[XML 정리 → (부지) «DH선형» 노선 · 뷰 → 진입도로 → 지울 면 목록 V → 물러날 면 P(읽기만) →
     /// (부지) «DH-» 선(남김 목록 · P에 원지반이 들면 그 재료도 남김) → 면(V − P 지움 · P 물러남) → (부지) 번호 옹벽 선 · 기록 · 보이기 / (도로) 정지면_DH 숨어 있으면 켬] → (도로) 노리선 → (부지) 세션 메모리.</summary>
-    internal static Report Wipe(Document doc, Scope scope, bool includeImported, bool keepGround, System.Collections.Generic.ICollection<ObjectId>? onlyGround = null)
+    internal static Report Wipe(Document doc, Scope scope, bool includeImported, bool keepGround, System.Collections.Generic.ICollection<ObjectId>? onlyGround = null, bool keepGroundMaterial = false, bool keepRoads = false)
     {
         Database db = doc.Database;
         var R = new Report();
@@ -296,6 +296,7 @@ public sealed class ResetCommand
         {
             var kinds = site ? (System.Collections.Generic.ICollection<DH.Grading.Core.SheetBookRules.Kind>)DH.Grading.Core.SheetBookRules.Kinds
                              : new[] { DH.Grading.Core.SheetBookRules.Kind.RProf, DH.Grading.Core.SheetBookRules.Kind.RXsec };
+            if (keepRoads) kinds = kinds.Where(k => k != DH.Grading.Core.SheetBookRules.Kind.RProf && k != DH.Grading.Core.SheetBookRules.Kind.RXsec).ToList();   // ★[JACK 1116] 남기는 도로의 종단 · 횡단 탭
             R.Tabs = SheetBookBuilder.EraseTabs(db, kinds, purge: site, R.Log);
         }
         catch (System.Exception tx) { R.Log.AppendLine("도면화 탭 못 지움 — " + tx.Message); }
@@ -312,7 +313,7 @@ public sealed class ResetCommand
             // ⓪ [종단·횡단 0731] 우리가 만든 Civil3D 객체(선형·종단·종단도·측점선·횡단도)를 **먼저** — 딸린 종단·뷰를 남긴 채 선형만 지우면 남은 뷰가 깨진 참조가 된다.
             //    ★표면 종단(«-바탕» 등)을 그 면보다 먼저 지운다(V86 — 표면 종단이 따라 그리는 면 + U 위험)
             if (site) R.Ents += EraseSectionObjects(db, tr);
-            R.Ents += EraseRoadsPart(db, tr, R.Log);
+            if (!keepRoads) R.Ents += EraseRoadsPart(db, tr, R.Log);   // ★[JACK 1116] keepRoads = 도로는 부르는 쪽이 도로마다 따로(WipeRoads)
 
             // ① 지울 면 목록 V — 이름으로만(★[v111.10] 도로 면도 이름으로 — 이름 바꿔 남긴 «진입도로_1안» · 복사한 노선 기록이 가리키는 남의 면은 남김)
             var V = new System.Collections.Generic.List<ObjectId>();
@@ -327,6 +328,7 @@ public sealed class ResetCommand
                     if (sid.IsNull || sid.IsErased || tr.GetObject(sid, OpenMode.ForRead) is not CivilDb.Surface s) continue;
                     string nm = s.Name ?? "";
                     bool road = RoadBaseNames.Any(b => SectionCommand.IsBase(nm, b));
+                    if (keepRoads && (road || FinalSurfaceBuilder.IsRoadSurface(s))) continue;   // 남기는 도로의 면
                     if (road) nRoadSurf++;
                     bool hit = names.Any(b => SectionCommand.IsBase(nm, b))
                             // ★★[v105.1.2 · JACK 1023 스샷 — 옹벽배면_DH가 남음] 목록은 새 기능이 생길 때마다 빠진다 — 이름 규칙(«…_DH» · «…_DH이전» · «…_DH합성전»)으로 남은 우리 면도(부지 갈래만)
@@ -349,7 +351,7 @@ public sealed class ResetCommand
             {
                 var keep = new System.Collections.Generic.HashSet<string>(System.StringComparer.OrdinalIgnoreCase);
                 if (!includeImported || onlyGround != null) keep.UnionWith(ImportGisCommand.ImportLayers);
-                if (keepGround || R.GroundRetired || onlyGround != null) keep.UnionWith(GroundKeepLayers);   // ★[v111.10] 물러난 원지반의 재료 선도 남김
+                if (keepGround || R.GroundRetired || onlyGround != null || keepGroundMaterial) keep.UnionWith(GroundKeepLayers);   // keepGroundMaterial = 부른 쪽([원지반 삭제])이 재료를 주인 표시로 따로 지움 — 레이어째 지우지 않음   // ★[v111.10] 물러난 원지반의 재료 선도 남김
                 if (scope == Scope.Site) keep.UnionWith(SiteKeepLayers);
                 R.Ents += EraseEntitiesOnDhLayers(db, tr, keep);
             }
@@ -699,9 +701,11 @@ public sealed class ResetCommand
     /// <para>종단도 장식(표식 DH_ROADSHEET — 도곽 · 밴드 · 글씨) → 종단뷰 → 종단 → 노선(우리가 만든 «DH도로…») → 주인 없는 노선 라벨 → «DH도로-» 레이어에 남은 것(도로 선 · 노리선 · 옹벽선).</para>
     /// <para>사람이 만든 Civil 노선으로 연 도로는 노선을 남기고 우리 종단 · 종단뷰 · 설계 기록만 지운다. 사업 경계 · 고른 폴리선(직접 그린 것)은 남김.</para>
     /// <para>★[v111.10 · 계획 3.1] 도로 면은 여기서 안 지운다 — 면은 이름으로만 골라 물러남 규칙으로(<see cref="Wipe"/>). 설계 기록이 가리키는 면의 이름이 우리 꼴이 아니면 로그 한 줄(남김).</para></summary>
-    private static int EraseRoadsPart(Database db, Transaction tr, System.Text.StringBuilder log)
+    private static int EraseRoadsPart(Database db, Transaction tr, System.Text.StringBuilder log, System.Collections.Generic.ICollection<ObjectId>? only = null)
     {
         int n = 0;
+        // ★[JACK 1116 · 원지반 삭제] only = 이 노선들의 것만(null = 도로 전부) — 한 도면의 다른 도로는 그대로
+        var onlyH = only == null ? null : new System.Collections.Generic.HashSet<string>(only.Select(a => a.Handle.ToString()), System.StringComparer.OrdinalIgnoreCase);
         try
         {
             var cdoc = Autodesk.Civil.ApplicationServices.CivilDocument.GetCivilDocument(db);
@@ -715,13 +719,14 @@ public sealed class ResetCommand
             }
             // ① 종단도 장식(표식)
             var tagged = new System.Collections.Generic.List<ObjectId>();
-            foreach (ObjectId id in ms) try { if (tr.GetObject(id, OpenMode.ForRead) is AcadEntity e && SheetTag.IsRoad(e)) tagged.Add(id); } catch { }
+            foreach (ObjectId id in ms) try { if (tr.GetObject(id, OpenMode.ForRead) is AcadEntity e && SheetTag.Of(e, out string tagRoad, out _, out _) && (onlyH == null || onlyH.Contains(tagRoad))) tagged.Add(id); } catch { }
             n += Kill(tagged);
             // ② 노선 — 우리 것(이름 «DH도로…») · 사람 것(설계 기록만 있음)
             var ours = new System.Collections.Generic.List<ObjectId>(); var theirs = new System.Collections.Generic.HashSet<ObjectId>();
             foreach (ObjectId aid in cdoc.GetAlignmentIds())
                 try
                 {
+                    if (only != null && !only.Contains(aid)) continue;
                     if (tr.GetObject(aid, OpenMode.ForRead) is not Autodesk.Civil.DatabaseServices.Alignment al) continue;
                     // ★[설치 전 검토 L] 이름을 바꿔도 우리 노선 레이어(DH도로-노선)면 우리 것
                     if (RoadBuilder.IsOurs(al)) ours.Add(aid);
@@ -790,7 +795,19 @@ public sealed class ResetCommand
             // ④ «DH도로-» 레이어에 남은 것 — 도로 선(사면선 · 소단선 · 노리선 · 옹벽선) · 남은 종단 등(사람 노선은 건너뜀 · ★[v111.10] 지표면은 빼고 — 면은 이름 + 물러남 규칙으로)
             var rest = new System.Collections.Generic.List<ObjectId>();
             foreach (ObjectId id in ms)
-                try { if (!theirs.Contains(id) && tr.GetObject(id, OpenMode.ForRead) is AcadEntity e && e is not CivilDb.Surface && RoadLayer(e.Layer)) rest.Add(id); } catch { }
+                try
+                {
+                    if (theirs.Contains(id) || tr.GetObject(id, OpenMode.ForRead) is not AcadEntity e || e is CivilDb.Surface || !RoadLayer(e.Layer)) continue;
+                    if (onlyH != null)
+                    {
+                        // 이 도로의 것만 — 선(노리선 · 사면선 …)은 선 표식 · 종단도 장식은 도로 표식 · 표식 없는 것은 남김
+                        bool mine = SheetTag.Of(e, out string tr0, out _, out _) && onlyH.Contains(tr0);
+                        if (!mine) { using var rbL = e.GetXDataForApplication(RoadSession.LineApp); var vL = rbL?.AsArray(); mine = vL != null && vL.Length >= 2 && vL[1].Value is string hL && onlyH.Contains(hL); }
+                        if (!mine) continue;
+                    }
+                    rest.Add(id);
+                }
+                catch { }
             n += Kill(rest);
         }
         catch (System.Exception ex) { try { DiagLog.Append($"\n■ 초기화 — 진입도로 지우기 중 오류: {ex.Message}\n"); } catch { } }
@@ -798,6 +815,62 @@ public sealed class ResetCommand
 
         static System.Collections.Generic.IEnumerable<ObjectId> Ids(ObjectIdCollection? c)
         { if (c == null) yield break; foreach (ObjectId id in c) yield return id; }
+    }
+
+    /// <summary>★★[JACK 1116 «원지반 삭제 — 쓰는 결과만»] 진입도로 <b>고른 몇 개만</b> 지운다 — 한 도면의 다른 도로 · 부지는 그대로.
+    /// 차례(<see cref="Wipe"/> 도로 갈래와 같음 · 도로마다로 좁힘): 도면화 탭(종단 · 횡단) → 종단도 장식 → 횡단뷰 · 측점선 · 종단뷰 · 종단(«-바탕» 포함) · 노선 → 이 도로의 선(사면 · 소단 · 옹벽 · 노리선 — 선 표식) → 도로 면(기록의 면 핸들 · 물러남 규칙).
+    /// 최종지표면 · 부지 노리선 다시 그리기는 부르는 쪽 몫.</summary>
+    internal static Report WipeRoads(Document doc, System.Collections.Generic.ICollection<ObjectId> aids)
+    {
+        Database db = doc.Database;
+        var R = new Report();
+        try { RoadSession.Stop(doc); } catch { }
+        // 도면화 탭 ④ ⑤ — 도로 전체가 한 쌍이라 도로가 하나라도 가면 옛것(남는 도로는 [도면생성]으로 다시)
+        try { R.Tabs = SheetBookBuilder.EraseTabs(db, new[] { DH.Grading.Core.SheetBookRules.Kind.RProf, DH.Grading.Core.SheetBookRules.Kind.RXsec }, purge: false, R.Log); }
+        catch (System.Exception tx) { R.Log.AppendLine("도면화 탭 못 지움 — " + tx.Message); }
+        using (var tr = db.TransactionManager.StartTransaction())
+        {
+            var V = new System.Collections.Generic.List<ObjectId>();
+            foreach (var aid in aids)
+                try
+                {
+                    var d = RoadDesign.Read(tr, aid);
+                    var sid = d == null ? ObjectId.Null : HandleId(db, d.SurfaceHandle);
+                    if (!sid.IsNull && tr.GetObject(sid, OpenMode.ForRead) is CivilDb.Surface rs
+                        && (FinalSurfaceBuilder.IsRoadSurface(rs) || RoadBaseNames.Any(b => SectionCommand.IsBase(rs.Name ?? "", b)))) V.Add(sid);
+                }
+                catch { }
+            R.Ents += EraseRoadsPart(db, tr, R.Log, aids);
+            var P = SurfaceRetire.MustStay(db, tr, V);
+            R.Ret = SurfaceRetire.Apply(db, tr, V, P);
+            R.Surfs += R.Ret.Erased;
+            R.Log.AppendLine("도로 면: " + (R.Ret.Text.Length > 0 ? R.Ret.Text : "없음"));
+            tr.Commit();
+        }
+        return R;
+    }
+
+    /// <summary>★[JACK 1116] 부지 초기화(<see cref="Wipe"/> keepRoads)가 지울 면 이름인가 — 최종면 · 정지면 가족 · 우리 면 이름 규칙(도로 면은 아님). 읽기만.</summary>
+    internal static bool WipesSiteName(string nm)
+        => FinalBaseNames.Concat(SiteBaseNames).Any(b => SectionCommand.IsBase(nm, b)) || SelfCheck.IsOurSurfaceName(nm);
+
+    /// <summary>★[JACK 1116 «원지반 삭제»] 남는 진입도로의 횡단(표본선 묶음 + 횡단뷰)만 지운다 — 묶음이 지워질 면을 원천으로 물고 있을 때(Civil이 지워진 원천을 읽다 죽음).
+    /// 노선 · 종단 · 도로 면은 그대로 · 설계 기록의 횡단 칸만 비움([횡단도 생성]으로 다시). 면을 지우기 <b>전에</b> 부른다. 반환 = 지운 객체 수.</summary>
+    internal static int EraseRoadXsec(Database db, Transaction tr, System.Collections.Generic.ICollection<ObjectId> aids)
+    {
+        int n = 0;
+        foreach (var aid in aids)
+        {
+            var d = RoadDesign.Read(tr, aid);
+            if (d == null) continue;
+            var ids = d.XsecViews.Select(h => HandleId(db, h)).ToList();
+            ids.Add(HandleId(db, d.XsecGroup));
+            foreach (var id in ids)
+                if (!id.IsNull && !id.IsErased) { tr.GetObject(id, OpenMode.ForWrite, false, true).Erase(); n++; }   // 못 지우면 예외 — 부르는 쪽이 면 지우기를 멈춤
+            d.XsecGroup = ""; d.XsecStamp = ""; d.XsecViews = new System.Collections.Generic.List<string>();
+            d.Write(tr, aid);
+        }
+        return n;
     }
 
     /// <summary>★[JACK 0902] 초기화 뒤에 <b>우리 것이 무엇이 남았는지</b> 센다 — 새 트랜잭션에서 되읽어 이름까지(§53).

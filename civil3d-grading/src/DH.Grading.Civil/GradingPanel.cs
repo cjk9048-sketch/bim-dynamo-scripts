@@ -175,18 +175,10 @@ internal sealed class GradingPanel : UserControl
         //
         //   <para>★칸을 하나로 하면 <b>요약도 하나</b>여야 한다. 두 badge를 합쳐
         //   <c>· 경계 ● 지반 ● · ⚠값 확인</c>처럼 한 줄로 적는다(<see cref="SyncBadge"/>).</para>
-        var secTarget = GradingDialog.AddCollapsible(root, "■ 계획부지생성", out _makeBadge,
-                                                     "무엇으로 만들지 고르고 · 어떻게 세울지 정하고 · 만든다",
-                                                     first: true, open: true,
-                                                     // ★★★[검토 0915 · 높음] <b>묶음(group)을 뺀다.</b>
-                                                     //   묶음은 <b>아코디언</b>이다 — 하나를 펴면 나머지를 닫는다
-                                                     //   (<see cref="GradingDialog"/> 486줄). 그러면 JACK이 말한
-                                                     //   <i>"열림상태로 놔"</i>가 <b>처음 한 번 접었다 펴는 순간</b> 무너진다.
-                                                     //   게다가 접힌 상태는 <c>SectionOpen</c>에 <b>static으로 기억</b>돼
-                                                     //   창을 껐다 켜도 닫힌 채로 뜬다(404줄이 <c>open:true</c>를 이긴다).
-                                                     //   ★묶음을 둔 까닭은 <b>다섯 칸이 850px을 넘던 것</b>이었는데
-                                                     //     이제 <b>칸이 둘</b>이라 그 까닭이 사라졌다.
-                                                     key: "정지:계획부지생성", group: null);
+        // ★[JACK 1116] 큰 칸 머리(■ 계획부지생성)는 탭 제목으로 대신 — 안쪽 접이식 칸(사면 설정 · 기타 설정)은 그대로
+        var secTarget = new StackPanel();
+        _makeBadge = new TextBlock();
+        root.Children.Add(secTarget);
         // ★[JACK 1112 «경계 선택 · 원지반 선택을 한 줄로 · 미선택 선택 그 부분도»] 한 줄에 둘(단추 + 상태) — 좁으면 아래로 내려간다. 단추에 올리면 맨 위 설명 칸에 장면.
         var pickGrid = new Grid { Margin = new Thickness(0, 0, 0, 8) };
         pickGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
@@ -475,9 +467,8 @@ internal sealed class GradingPanel : UserControl
         //     ★단추는 <b>기존 명령을 그대로 부른다</b>(DHWALL/DHSLOPE) — 671줄짜리 편집기를
         //       베끼지 않는다(§20). 도킹창은 <b>부르는 자리</b>일 뿐이다.
         // ★[JACK 0915] <i>"3계획부지수정은 그냥 앞에 머리기호 똑같은거 넣고 계획부지 수정이라고 하고 <b>열림상태로</b> 놔"</i>
-        var secFix = GradingDialog.AddCollapsible(root, "■ 계획부지 수정",
-            "옹벽 변환 · 사면 변환 · 옹벽 추가",
-            open: true, key: "정지:계획부지수정", group: null);   // ★묶음 없음 — 위 주석과 같은 까닭
+        var secFix = new StackPanel { Visibility = Visibility.Collapsed };   // ★[JACK 1116] 두 번째 탭 «계획부지 수정» 몸
+        root.Children.Add(secFix);   // ★묶음 없음 — 위 주석과 같은 까닭
         // ★[v117.11 · JACK 1112 «사면 옹벽 변환 단추 두 개를 한 열 · 다음 열에 옹벽 추가 · 제거를 한 열 · 예시 영상은 단추 옆 한 칸 안에서 4개 단추를 다 반영»]
         //   왼쪽 = 단추(1줄 사면→옹벽 · 옹벽→사면 / 2줄 옹벽 추가 · 옹벽 삭제 / 3줄 옛 옹벽 옮기기(있을 때만)) · 오른쪽 = 예시 칸(FixDemoView — 올린 단추의 그림 애니메이션)
         // ★[JACK 1112] 예시 칸은 창 맨 위(_demo)로 옮겼다 — 여기는 단추만(2×2 + 옛 옹벽 옮기기)
@@ -515,6 +506,7 @@ internal sealed class GradingPanel : UserControl
         target = wRow;
         _migrate = WBtn("옛 옹벽 옮기기", "DHWALLMIGRATE", "옛 모양(선 바깥 계단) 선 옹벽을 같은 선으로 새 모양(다단 · 수직)으로 다시 짓습니다.");   // ★[v117.x] 옛 모양이 있을 때만 보임
         _migrate.Visibility = Visibility.Collapsed;
+        HookScene(_migrate, "migrate");   // ★[JACK 1116] 안 보일 땐 마우스가 안 닿으므로 보일 때만 동작
         // ★[v117.12 · JACK 1112 «용지 경계 기능은 없애»] [용지 경계] 단추 없앰(DHLANDBOUND 명령 · 기초 외곽 검사도 없앰)
         // ★[v102.2 · JACK 0930 «옹벽합성 버튼은 없애고 노선 선정과정이 끝나면 자동으로 진행되게»] [옹벽 합성] 버튼 없앰 —
         //   옹벽 변환(부분 지정)이 옹벽을 끝까지 지으면 합성이 이어서 돈다(ZoneEditCommon). DHWALLCOMP 명령은 남는다(손으로 다시 합성 · 복구용)
@@ -532,11 +524,17 @@ internal sealed class GradingPanel : UserControl
         // ★★★[v103.1.15 · JACK 1020 «고른 구간 안쪽 · 양끝 10m · 정지 창에서 바꿀 수 있게»] 구배 전이(m) — 설명은 풍선 글만(JACK 1014 «설명 적게»)
         var bRow = new WrapPanel { Margin = new Thickness(2, 0, 0, 4) };
         _blend = Cell(bRow, "구배 전이(m)", GradingSettings.ZoneBlendLength);
+        // ★[JACK 1116] 구배 전이 = 수치 칸 → 타이머 없는 미리보기(칸 값 그대로 · 치는 대로 다시 그림)
+        void BlendPlay() { BlendVal(); Scene("blend"); _demo.Redraw(); }
+        bRow.MouseEnter += (_, __) => BlendPlay(); bRow.MouseLeave += (_, __) => SceneEnd("blend");
+        _blend.GotKeyboardFocus += (_, __) => BlendPlay(); _blend.LostKeyboardFocus += (_, __) => SceneEnd("blend");
+        _blend.TextChanged += (_, __) => { BlendVal(); _demo.Redraw(); };
         bRow.ToolTip = "[사면 변환]으로 구배·소단을 바꾼 구간의 양끝 안쪽에서 사면이 서서히 바뀌는 길이입니다.\n0이면 끊어서 바뀝니다(경계가 깨질 수 있음). 바꾼 값은 다음 재생성부터 들어갑니다.";
         secFix.Children.Add(bRow);
         var cRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 6), Visibility = Visibility.Collapsed };
         _compose = new Button { Content = "옹벽 합성", MinWidth = 104, Height = 30, Margin = new Thickness(0, 0, 8, 0), ToolTip = "모아 둔 옹벽을 정지면_DH에 한 번에 합성합니다(DHWALLCOMP)." };
         _compose.Click += (_, __) => PickSession.Send(Doc, "DHWALLCOMP");
+        HookScene(cRow, "compose");   // ★[JACK 1116]
         _compInfo = new TextBlock { VerticalAlignment = VerticalAlignment.Center, FontSize = 12, Foreground = DhBrand.Sub };
         cRow.Children.Add(_compose); cRow.Children.Add(_compInfo);
         _compRow = cRow;
@@ -553,10 +551,9 @@ internal sealed class GradingPanel : UserControl
         // ── ★[v111.10 · JACK 1103 «UI에 버튼이 있으니 필요 없음»] ■ 도면([종단도] [횡단도] + 옛 면 알림)은 없앰 — 리본 [계획지표면] 패널 [종단도] · [횡단도] 그대로 ──
         // ── ★[v111.10 · 계획_초기화.md 3.5 · JACK 1103 «창마다 초기화 단추 = 주황»] [계획지표면 초기화] — 창 맨 끝 얇은 줄 아래 ──
         //   보내는 문은 다른 단추와 같다(<see cref="PickSession.Send"/> — ^C^C) · 값 반영(Apply)은 안 한다(창 값을 안 읽음) · 지울 것이 없으면 꺼짐(<see cref="RefreshReset"/>)
-        root.Children.Add(new Border { Height = 1, Background = DhBrand.Line, Margin = new Thickness(0, 10, 0, 6) });
+        //   ★[JACK 1116] 스크롤 칸이 아니라 맨 아래 줄 [닫기] 앞(왼쪽)에 둔다 — 탭과 상관없이 보임(<see cref="ResetButton"/> → <see cref="DockClose.Wrap"/>)
         _resetBtn = DhBrand.CautionButton("계획지표면 초기화", "정지면 · 옹벽 · 터파기 · 종단도 · 횡단도 · 진입도로를 지웁니다. 원지반 · 지층 · 직접 그린 것은 남습니다.");
         _resetBtn.Click += (_, __) => PickSession.Send(Doc, "DHGRADERESET");
-        root.Children.Add(_resetBtn);
 
         // 값이 바뀌면 예시를 바로 다시 그린다 — 도킹창의 값어치가 여기 있다.
         // ★★★[JACK 0910 <i>"별도의 값저장없이 도킹창에 넣은 값이 상시 저장된다고 생각하면 될것같은데"</i>]
@@ -612,6 +609,7 @@ internal sealed class GradingPanel : UserControl
         // ★[v117.14.1 · JACK 1112 «모든 설명 애니메이션은 해당 도킹박스 안에서 크기가 같아야 해 · 좀 키워 너무 작아» · «옹벽 단면에 갖다 대면 작아져»]
         //   한 틀(논리 TopW × TopH)에 모든 칸을 꽉 채워 겹쳐 두고, 그 틀을 Viewbox로 창 폭에 맞춰 늘인다 — 칸마다 크기가 같고 창이 넓으면 같이 커진다.
         top.Children.Add(DemoFrame.Wrap("Grading", _demo, _hostCut, _hostFill, _hostExcav, _hostTerr, _hostSec));   // 공용 틀(종횡단도 · 터파기 창도 같은 틀)
+        top.Children.Add(BuildTabs(secTarget, secFix));   // ★[JACK 1116] 계획부지 생성 | 계획부지 수정 — 스크롤 밖 고정
         DockPanel.SetDock(top, Dock.Top);
         deck.Children.Add(top);
 
@@ -1406,6 +1404,46 @@ internal sealed class GradingPanel : UserControl
         parent.Children.Add(row);
         return b;
     }
+
+    /// <summary>[계획부지 초기화]를 아래 줄(<see cref="DockClose.Wrap"/>)로 옮겨 달 때 쓴다 — 켜짐 · 클릭 · 풍선 글은 그대로 이 패널이 관리.</summary>
+    internal Button ResetButton => _resetBtn;
+
+    /// <summary>구배 전이 칸 값을 미리보기 장면에 넣는다(0 이상 숫자일 때만).</summary>
+    private void BlendVal()
+    {
+        if (double.TryParse((_blend.Text ?? "").Trim().Replace(',', '.'), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double v) && double.IsFinite(v) && v >= 0) _demo.V1 = v;
+    }
+
+    /// <summary>★[JACK 1116] 탭 머리 — 도화 청록 분절 단추(고른 쪽 청록 바탕 · 흰 글 / 아닌 쪽 옅은 바탕). 도킹창이 살아 있는 동안 고른 탭을 기억(<see cref="_tabFix"/>).</summary>
+    private FrameworkElement BuildTabs(Panel make, Panel fix)
+    {
+        var grid = new Grid { Margin = new Thickness(0, 8, 0, 2) };
+        grid.ColumnDefinitions.Add(new ColumnDefinition()); grid.ColumnDefinitions.Add(new ColumnDefinition());
+        var tabs = new Border[2];
+        string[] names = { "계획부지 생성", "계획부지 수정" };
+        void Paint()
+        {
+            for (int i = 0; i < 2; i++)
+            {
+                bool on = (i == 1) == _tabFix;
+                tabs[i].Background = on ? DhBrand.Brand : DhBrand.BrandDim;
+                ((TextBlock)tabs[i].Child).Foreground = on ? Brushes.White : DhBrand.Brand;
+            }
+            make.Visibility = _tabFix ? Visibility.Collapsed : Visibility.Visible;
+            fix.Visibility = _tabFix ? Visibility.Visible : Visibility.Collapsed;
+        }
+        for (int i = 0; i < 2; i++)
+        {
+            int idx = i;
+            var tb = new TextBlock { Text = names[i], FontSize = 13, FontWeight = FontWeights.SemiBold, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
+            tabs[i] = new Border { Child = tb, Height = 30, Cursor = System.Windows.Input.Cursors.Hand, Focusable = true, CornerRadius = i == 0 ? new CornerRadius(6, 0, 0, 6) : new CornerRadius(0, 6, 6, 0), BorderBrush = DhBrand.Brand, BorderThickness = new Thickness(1) };
+            tabs[i].MouseLeftButtonUp += (_, __) => { _tabFix = idx == 1; Paint(); };
+            Grid.SetColumn(tabs[i], i); grid.Children.Add(tabs[i]);
+        }
+        Paint();
+        return grid;
+    }
+    private bool _tabFix;
 
     // ── ★[JACK 1112] 맨 위 설명 칸 ──────────────────────────────────────
     /// <summary>맨 위 칸에 하나만 보인다 — "demo" · "cut" · "fill" · "excav".</summary>

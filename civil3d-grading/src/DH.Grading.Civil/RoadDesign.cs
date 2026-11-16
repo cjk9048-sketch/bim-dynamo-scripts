@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using Autodesk.AutoCAD.DatabaseServices;
 using DH.Grading.Core;
 
@@ -20,6 +20,7 @@ internal sealed class RoadDesign
     public double[] BendBackup = Array.Empty<double>(), BendApplied = Array.Empty<double>();
     public double SuggestH = 0;                // 옹벽 제안 높이(0 = 안 봄)
     public string LimitHandle = "";             // 사업 경계 폴리선 핸들
+    public string GroundHandle = "";            // ★[v117.19 · JACK 1116 «창마다 [원지반 선택]»] 이 도로가 놓일 원지반의 핸들(고른 것 · 빈 글 = 자동 — 원지반이 하나면 그것). 정지면이 바탕이면 안 씀. 옛 기록 = 빈 글
     public string PlanProfile = "", BaseProfile = "", BaseSurface = "";
     public string SurfaceHandle = "";           // [도로 면 만들기]로 만든 지표면(다시 만들면 이것을 지우고 같은 이름으로)
     public string SurfaceSig = "";              // ★[v111.2] 그 면을 만든 입력 지문 — 지금 설계와 다르면 도킹창 알림

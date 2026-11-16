@@ -83,10 +83,18 @@ internal static class MapPage
   button.go{background:#2f6fed;border-color:#2f6fed;font-weight:bold}
   button:disabled{opacity:.45;cursor:default}
   #info{color:#c9d3e8}   /* 아랫줄 맨 앞이라 오른쪽으로 밀던 margin-left:auto 는 뺀다 */
+  #slist div{padding:6px 10px;cursor:pointer;border-bottom:1px solid #3a4258}
+  #slist div:hover{background:#3b4764}
   #noweb{display:none;flex:1 1 auto;background:#fff;
          padding:24px;font-size:15px;line-height:1.7}
 </style></head><body>
 <div id='bar'>
+ <div class='row' id='srow' style='display:none;position:relative'>
+  <input id='q' type='text' placeholder='주소 · 지번 · 장소 검색' style='flex:1 1 140px;min-width:0;padding:6px 8px;border-radius:6px;border:1px solid #4a5268;background:#11151d;color:#eaeef7;font:inherit'>
+  <button id='sbtn'>검색</button>
+  <span id='smsg' style='color:#ffb020'></span>
+  <div id='slist' style='display:none;position:absolute;left:0;right:0;top:100%;z-index:1000;background:#2b3242;border:1px solid #4a5268;border-radius:6px;max-height:220px;overflow:auto'></div>
+ </div>
  <div class='row'>
   <span><b>모서리 2곳</b> 클릭</span>
   <button id='clr'>다시 찍기</button>
@@ -275,10 +283,45 @@ internal static class MapPage
                   if(!EMBED) document.body.style.opacity=.6; },
       function(){ info.textContent='전송 실패'; send.disabled=false; });
   });
+  // ★[주소 검색] 도킹바(EMBED)에서만 — 통신은 C#이 한다(키 · 로그). 결과는 'geo:[{t,c,x,y}]' 로 온다.
+  var smk=null, sq=document.getElementById('q'), slist=document.getElementById('slist'), smsg=document.getElementById('smsg');
+  function goHit(h){
+    slist.style.display='none'; smsg.textContent='';
+    var ll=L.latLng(h.y,h.x);
+    map.setView(ll,17);                       // 한가운데 · 17단계(지적도 시작 단계)
+    if(smk) map.removeLayer(smk);
+    smk=L.circleMarker(ll,{radius:7,color:'#ff3b30',weight:3,fillOpacity:0.2}).addTo(map);
+    fit();
+  }
+  function doSearch(){
+    var q=sq.value.trim(); if(!q||quit) return;
+    smsg.textContent='검색 중…'; slist.style.display='none';
+    try{ window.chrome.webview.postMessage(JSON.stringify({kind:'search',q:q})); }catch(e){ smsg.textContent='검색 실패 — 인터넷 · 키 확인'; }
+  }
+  if(EMBED){
+    document.getElementById('srow').style.display='flex';
+    document.getElementById('sbtn').addEventListener('click',doSearch);
+    sq.addEventListener('keydown',function(e){ if(e.key==='Enter') doSearch(); });
+    map.on('click',function(){ slist.style.display='none'; if(smk){map.removeLayer(smk);smk=null;} });
+  }
+  function onGeo(j){
+    var a=null; try{ a=JSON.parse(j); }catch(e){}
+    if(!a){ smsg.textContent='검색 실패 — 인터넷 · 키 확인'; return; }
+    if(!a.length){ smsg.textContent='주소 못 찾음 → 다시 입력'; return; }
+    if(a.length===1){ goHit(a[0]); return; }
+    smsg.textContent=''; slist.innerHTML='';
+    a.forEach(function(h){
+      var d=document.createElement('div'); d.textContent=h.t+'  ('+h.c+')';
+      d.addEventListener('click',function(){ goHit(h); });
+      slist.appendChild(d);
+    });
+    slist.style.display='block';
+  }
   // ★CAD가 거절하면 알려 준다 — 안 그러면 '받는 중…'에서 멈춘 것처럼 보인다.
   if(EMBED && window.chrome && window.chrome.webview){
     window.chrome.webview.addEventListener('message',function(ev){
       var m=(typeof ev.data==='string')?ev.data:'';
+      if(m.indexOf('geo:')===0){ onGeo(m.substring(4)); return; }
       if(m.indexOf('reject:')===0){ info.textContent=m.substring(7); send.disabled=!box; }
     });
   }

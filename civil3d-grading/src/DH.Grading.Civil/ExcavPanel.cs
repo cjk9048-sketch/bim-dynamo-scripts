@@ -66,13 +66,15 @@ internal sealed class ExcavPanel : UserControl
     /// <summary>사람이 이 도면에서 라디오를 <b>직접 만졌는가</b> — 만졌으면 안 덮는다.</summary>
     private bool _userChoseBasis;
 
+    internal Button ResetButton => _reset;
+
     internal ExcavPanel()
     {
         var root = new StackPanel { Margin = new Thickness(10, 4, 10, 10) };
         DhBrand.Apply(this);
         Background = DhBrand.Wall;
 
-        var head = DhBrand.Header("구조물 터파기", "지하 구조물을 앉히려고 파는 자리",
+        var head = DhBrand.Header("구조물 터파기", null,
                                   drag: null, onClose: null, logoHeight: 17, titleSize: 13,
                                   pad: new Thickness(0, 0, 0, 6));
         head.Background = Brushes.Transparent;
@@ -93,7 +95,7 @@ internal sealed class ExcavPanel : UserControl
         // ── 2. 대상 ───────────────────────────────────────────────────────
         var secTarget = GradingDialog.AddCollapsible(root, "1. 터파기선", out _targetBadge,
             "구조물 바닥 경계(계획고가 들어간 닫힌 폴리선)",
-            first: true, open: false, key: "터파기:1.터파기선", group: G);
+            first: true, open: true, key: "터파기:1.터파기선:" + System.Guid.NewGuid(), group: null);
         var row = new DockPanel { Margin = new Thickness(0, 0, 0, 8), LastChildFill = true };
         _pick = new Button { Content = "터파기선 선택", MinWidth = 130, Height = 30 };
         _pick.Click += (_, __) => PickSession.Send(Doc, PickCommands.CmdExcav);
@@ -115,7 +117,7 @@ internal sealed class ExcavPanel : UserControl
         //   처음엔 전부 접힘 · 하나 열면 나머지 닫힘 · 접힌 칸은 제목 옆에 상태 요약.
         var secBase = GradingDialog.AddCollapsible(root, "2. 기준면", out _baseBadge,
             "성토부를 어디서부터 팔지 — 절토부는 어느 쪽이든 계획면",
-            open: false, key: "터파기:2.기준면", group: G);
+            open: true, key: "터파기:2.기준면:" + System.Guid.NewGuid(), group: null);
         _basePlan = GradingDialog.AddRadioPair(secBase, "기준면", "계획지표면", false, out _baseGround, "원지반",
             "계획지표면 = 계획고까지 성토·다짐한 뒤 팝니다(그만큼 깊어집니다).\n"
           + "원지반 = 먼저 파고 구조물을 세운 뒤 둘레를 성토합니다.\n"
@@ -134,8 +136,8 @@ internal sealed class ExcavPanel : UserControl
         //   (자동 = 기록 · 마지막 정지에 쓴 지반 — 못 찾을 때만 [바꾸기]로 고른다. 세션 핸들 하나에 기대지 않음 — 검토 0909)
         var gRow = new DockPanel { Margin = new Thickness(0, 0, 0, 8), LastChildFill = true };
         _pickGround = new Button { Content = "원지반 선택", MinWidth = 90, Height = 26 };
-        _pickGround.ToolTip = "원지반을 자동으로 못 찾았습니다 — 부지 밖 원지반 지표면을 고르세요.";
-        _pickGround.Click += (_, __) => PickSession.Send(Doc, PickCommands.CmdGround);
+        _pickGround.ToolTip = "이 터파기에 쓸 원지반 지표면을 도면에서 클릭 — 원지반이 2개 이상이거나 못 찾을 때";
+        _pickGround.Click += (_, __) => PickSession.Send(Doc, PickCommands.CmdExcavGround);
         _pickGroundHit = new Border { Background = Brushes.Transparent, Child = _pickGround };
         DockPanel.SetDock(_pickGroundHit, Dock.Right);
         gRow.Children.Add(_pickGroundHit);
@@ -171,7 +173,7 @@ internal sealed class ExcavPanel : UserControl
         //     어차피 구배로만 치는 거야."</i> 소단·대소단·옹벽형태는 여기 없다.
         var secDig = GradingDialog.AddCollapsible(root, "3. 굴착", out _digBadge,
             "터파기 제원은 구배 하나입니다(단높이·소단은 안 씁니다)",
-            open: false, key: "터파기:3.굴착", group: G);
+            open: true, key: "터파기:3.굴착:" + System.Guid.NewGuid(), group: null);
         _slope = GradingDialog.AddRow(secDig, "굴착 구배  1 :", Commands.ExcavCommand.Slope, "");
         _slope.ToolTip = "0을 넣으면 수직(가시설)입니다. 너무 작은 값은 자동으로 하한으로 올립니다.";
         _wallChk = new CheckBox { Content = "가시설", Margin = new Thickness(12, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center, ToolTip = "둘레 전체 수직(1 : 0.01) — 구배 안 씀" };
@@ -213,7 +215,7 @@ internal sealed class ExcavPanel : UserControl
         try { if (DhBrand.Skin != null) _build.Style = (Style)DhBrand.Skin["DhPrimary"]; } catch { }
         _build.Click += (_, __) => { _slopeEdited = false; PickSession.Send(Doc, PickCommands.CmdExcavBuild); };
         // ★[v117.18 · JACK 1116 «생성 후 구배 변경시 업데이트할 버튼»] [생성] 옆 [업데이트] — 만든 터파기가 있을 때만 켜짐 · 값이 만든 값과 다르면 깜박
-        _update = new Button { Content = "업데이트", MinWidth = 90, Height = 34, Margin = new Thickness(8, 6, 0, 6) };
+        _update = DhBrand.CautionButton("지표면 업데이트", ""); _update.MinWidth = 90; _update.Height = 34; _update.Margin = new Thickness(8, 6, 0, 6);
         _update.ToolTip = "만든 터파기를 지금 구배 · 기준면으로 다시 만듭니다(가시설 구간은 유지).";
         _update.Click += (_, __) => { _slopeEdited = false; PickSession.Send(Doc, "DHEXCAVUPDATE"); };
         var buildRow = new StackPanel { Orientation = Orientation.Horizontal };
@@ -228,7 +230,7 @@ internal sealed class ExcavPanel : UserControl
         //     ★<b>소단·대소단·라운드·옹벽형태는 없다</b>(JACK 지시 11~13).
         var secWall = GradingDialog.AddCollapsible(root, "4. 가시설", out var wallBadge,
             "일부 구간만 수직(흙막이) — 전체는 ③ 가시설",   // ★[v117.16 · JACK 1112 «직접 노선상에서 선택»]
-            open: false, key: "터파기:4.가시설", group: G);
+            open: true, key: "터파기:4.가시설:" + System.Guid.NewGuid(), group: null);
         var wRow = new WrapPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 6) };
         Button WBtn(string t, string cmd, string tip)
         {
@@ -245,7 +247,7 @@ internal sealed class ExcavPanel : UserControl
             "가시설 구간에 커서 → 빨강 → 클릭 → 그 구간 다시 사면");   // ★[v117.16 · JACK 1112]
         _clearWall = WBtn("전체 해제", "DHEXCAVWALLCLEAR",
             "이 도면의 가시설 구간을 전부 지우고 순수 사면으로 다시 만듭니다.");
-        _wallNote = new TextBlock { Text = "③ 가시설 체크 중 — 전부 수직", FontSize = 11, Foreground = DhBrand.Warn, Margin = new Thickness(0, 0, 0, 6), Visibility = Visibility.Collapsed };
+        _wallNote = new TextBlock { Text = "가시설 체크 중 — 전체가 가시설", FontSize = 11, Foreground = DhBrand.Sub, Margin = new Thickness(0, 0, 0, 6), Visibility = Visibility.Collapsed };
         secWall.Children.Add(_wallNote);
         secWall.Children.Add(wRow);
         secWall.Children.Add(new TextBlock
@@ -256,11 +258,9 @@ internal sealed class ExcavPanel : UserControl
         });
 
         // ★[v117.18 · JACK 1116 «초기화가 없어»] 맨 아래 — 터파기 결과 전부 지움(터파기선 · 원지반 · 계획지표면은 남김)
-        _reset = new Button { Content = "터파기 초기화", MinWidth = 130, Height = 30, Margin = new Thickness(0, 10, 0, 4), HorizontalAlignment = HorizontalAlignment.Left,
-            ToolTip = "터파기 지표면 · 기록 · 가시설 구간을 지웁니다. 터파기선 · 원지반 · 계획지표면은 남습니다." };
+        _reset = DhBrand.CautionButton("터파기 초기화", "터파기 지표면 · 기록 · 가시설 구간을 지웁니다. 터파기선 · 원지반 · 계획지표면은 남습니다.");
+        _reset.IsEnabled = false;
         _reset.Click += (_, __) => PickSession.Send(Doc, "DHEXCAVRESET");
-        var resetHit = new Border { Background = Brushes.Transparent, Child = _reset, HorizontalAlignment = HorizontalAlignment.Left };
-        root.Children.Add(resetHit);
 
         // 값이 바뀌면 세션에 바로 옮긴다 — 만들기가 그것을 읽는다.
         _slope.TextChanged += (_, __) => PushSlope();
@@ -271,7 +271,6 @@ internal sealed class ExcavPanel : UserControl
         var deck = new DockPanel { LastChildFill = true };
         var top = new StackPanel { Margin = new Thickness(10, 10, 10, 0) };
         top.Children.Add(head);
-        top.Children.Add(_status);
         top.Children.Add(_said);
         // ★[v117.13 · JACK 1112 «구조물 터파기에서도 내용을 설명하는 애니메이션 — 위치는 맨 위 · 1~4번(3번은 생성이니 생략) · 마우스를 올려놨을 때»]
         //   예시 칸(FixDemoView) = 맨 위 고정(값 칸과 같이 밀려 내려가지 않음) · 칸 제목 · 칸 안에 마우스 → 그 칸 예시 · 나가면 멈춤
@@ -312,7 +311,7 @@ internal sealed class ExcavPanel : UserControl
         _slope.GotKeyboardFocus += (_, __) => PlaySlopeVal();
         _slope.TextChanged += (_, __) => { SlopeVal(); demo.Redraw(); };
         _wallChk.Checked += (_, __) => { SlopeVal(); demo.Redraw(); }; _wallChk.Unchecked += (_, __) => { SlopeVal(); demo.Redraw(); };
-        HookBtn(resetHit, "exReset", "exReset");
+        HookBtn(_reset, "exReset", "exReset");
         string[] wKeys = { "exToWall", "exToSlope", "exClear" };
         for (int wi = 0; wi < _wallHits.Count && wi < wKeys.Length; wi++) HookBtn(_wallHits[wi], wKeys[wi], "exWall");
         top.Children.Add(DemoFrame.Wrap("Excav", demo));   // ★[v117.14.1 · JACK 1112 «설명 애니메이션은 도킹박스 안에서 크기가 같아야»] 고정 틀
@@ -563,20 +562,32 @@ internal sealed class ExcavPanel : UserControl
                    ? "⚠계획지표면 없음 — 이대로 [생성]하면 멈춤 → [계획부지 정지] 먼저"
                    : "계획지표면 없음 — 고르려면 → [계획부지 정지] 먼저")
                 : (wantPlan
-                   ? "계획고까지 성토 뒤 팜 → 성토부 더 깊음 · 종단 · 횡단 · 토공이 이 기준"
-                   : "원지반에서 먼저 팜 → 구조물 → 둘레 성토 · 종단 · 횡단 · 토공이 이 기준");
+                   ? "성토 후 터파기 → 성토부 터파기 깊이 증가 · 종단 · 횡단 · 토공 기준"
+                   : "원지반 기준 터파기 → 구조물 → 둘레 성토 · 종단 · 횡단 · 토공 기준");
             _baseHint.Foreground = hasPlan ? DhBrand.Sub : DhBrand.Warn;
 
-            var g = doc == null ? null : PickSession.Peek(doc, PickSession.KeyGround);
-            // ★[v117.18] «원지반: 자동(면 이름)» · 직접 골랐으면 «원지반: ● 이름» — 이름은 기록 → 마지막 정지 지반 차례로(읽기만 · busy가 아닐 때)
-            string autoName = busy ? "" : AutoGroundName(doc);
-            // ★[v117.18.2 · JACK 1116 «바꾸기가 더 헷갈려 — 평소엔 숨김»] 이름만 «(자동)» · 못 찾을 때만 [원지반 선택]
-            bool found = g != null || autoName.Length > 0;
+            // ★[v117.19 · JACK 1116 «창마다 [원지반 선택]»] 이 창의 자리(KeyExcavGround) · 이 터파기 기록 → 원지반 하나면 «(자동)» · 둘 이상이면 «2개 이상 →» + [원지반 선택] 깜박 · 못 찾을 때도 [원지반 선택]
+            //   (읽기만 · busy가 아닐 때)
+            bool needPickG = false;
             if (!busy)
             {
-                _groundWhat.Text = g != null ? "원지반: ● " + g.What : found ? "원지반: " + autoName + " (자동)" : "⚠ 원지반 못 찾음 →";
-                _groundWhat.Foreground = g != null ? DhBrand.Brand : found ? DhBrand.Sub : Brushes.OrangeRed;
-                _pickGroundHit.Visibility = found ? Visibility.Collapsed : Visibility.Visible;
+                string gName = ""; bool chosenG = false; int nG = 0;
+                try
+                {
+                    var gdb = doc!.Database;
+                    string polyH = "";
+                    try { var pi = PickSession.TryResolve(doc, PickSession.KeyExcav, out _); if (!pi.IsNull) polyH = pi.Handle.ToString(); } catch { }
+                    var gid = GroundSet.ForExcavPeek(doc, polyH, out needPickG, out chosenG);   // 보기만 — 고름을 잊지 않음(되먹임 방지)
+                    nG = GroundSet.List(gdb).Count;
+                    if (!gid.IsNull) gName = GroundSet.NameOf(gdb, gid);
+                    if (gName.Length == 0 && !needPickG) gName = AutoGroundName(doc);
+                }
+                catch { }
+                bool found = gName.Length > 0;
+                _groundWhat.Text = needPickG ? "⚠ 원지반 2개 이상 →" : chosenG && found ? "원지반: ● " + gName : found ? "원지반: " + gName + " (자동)" : "⚠ 원지반 못 찾음 →";
+                _groundWhat.Foreground = chosenG ? DhBrand.Brand : found && !needPickG ? DhBrand.Sub : Brushes.OrangeRed;
+                _pickGroundHit.Visibility = (!found || nG >= 2) ? Visibility.Visible : Visibility.Collapsed;
+                try { RoadPanel.Blink(_pickGround, needPickG); } catch { }
             }
 
             _pick.IsEnabled = !busy;
@@ -587,11 +598,11 @@ internal sealed class ExcavPanel : UserControl
             _build.IsEnabled = !busy && has && _slopeOk;
             // 가시설 구간은 <b>이미 만든 터파기</b>가 있어야 고칠 수 있다.
             bool madeAny = doc != null && HasExcav(doc);
-            bool vertAll = _wallChk.IsChecked == true;   // ③ 가시설 체크 중 — 전부 수직이라 구간 도구는 쉼
+            bool vertAll = _wallChk.IsChecked == true;   // ③ 가시설 체크 중 — 전체가 이미 수직 → [부분 변환]만 쉼([사면 변환] · [전체 해제]는 그대로)
             _wallNote.Visibility = vertAll ? Visibility.Visible : Visibility.Collapsed;
             _toPart.IsEnabled = !busy && madeAny && !vertAll;
-            _toSlope.IsEnabled = !busy && madeAny && !vertAll;
-            _clearWall.IsEnabled = !busy && madeAny && !vertAll;
+            _toSlope.IsEnabled = !busy && madeAny;
+            _clearWall.IsEnabled = !busy && madeAny;
             // ★★★[3차 검토 0909 · 치명2] <b>명령이 도는 중에는 안 비춘다.</b>
             //   <c>Refresh</c>는 <c>PickSession.Changed</c> 구독자인데, <c>Begin()</c>이 그것을 쏜다 —
             //   즉 <b>[생성]을 누르는 그 순간</b> 방금 친 구배가 옛 기록값으로 되돌아가
@@ -608,7 +619,7 @@ internal sealed class ExcavPanel : UserControl
                 if (b != null)
                 {
                     string pickedGround = "";
-                    try { var gi = PickSession.TryResolve(doc, PickSession.KeyGround, out _); if (!gi.IsNull) pickedGround = gi.Handle.ToString(); } catch { }
+                    try { var gi = PickSession.TryResolve(doc, PickSession.KeyExcavGround, out _); if (!gi.IsNull) pickedGround = gi.Handle.ToString(); } catch { }
                     stale = System.Math.Abs(b.Slope - Commands.ExcavCommand.Slope) > 1e-6
                          || b.Base != (_basePlan.IsChecked == true ? 1 : 0)
                          || (pickedGround.Length > 0 && pickedGround != b.GroundHandle);

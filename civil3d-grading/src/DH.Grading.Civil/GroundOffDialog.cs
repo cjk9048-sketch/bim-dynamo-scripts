@@ -16,7 +16,8 @@ internal sealed class GroundOffDialog : Window
     internal System.Collections.Generic.List<string> Chosen
         => _rows.Where(r => r.Cb.IsChecked == true).Select(r => r.It.Name).ToList();
 
-    internal GroundOffDialog(System.Collections.Generic.IList<Item> items)
+    /// <param name="hasLegacy">주인 표시 없는 옛 등고선 · 표고점이 도면에 있나 — 있을 때만 안내 글을 보임.</param>
+    internal GroundOffDialog(System.Collections.Generic.IList<Item> items, bool hasLegacy = false)
     {
         Title = "원지반 삭제";
         Width = 460;
@@ -48,7 +49,7 @@ internal sealed class GroundOffDialog : Window
             _rows.Add((it, cb));
             cb.Click += (_, __) => ok.IsEnabled = _rows.Any(r => r.Cb.IsChecked == true);
         }
-        sp.Children.Add(new TextBlock { Text = "등고선 · 표고점은 원지반을 다 지울 때만 같이 지움", Foreground = DhBrand.Sub, FontSize = 11, Margin = new Thickness(0, 4, 0, 0) });
+        if (hasLegacy) sp.Children.Add(new TextBlock { Text = "주인 모르는 옛 등고선 · 표고점은 원지반을 다 지울 때만 지움", Foreground = DhBrand.Sub, FontSize = 11, Margin = new Thickness(0, 4, 0, 0) });
         ok.Click += (_, __) => DialogResult = true;
         DhBrand.Dress(this, "원지반 삭제", null, sp, ok, close);
     }

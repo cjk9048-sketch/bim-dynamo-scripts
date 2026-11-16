@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using Autodesk.AutoCAD.ApplicationServices;
@@ -130,6 +130,9 @@ public sealed class CropGroundCommand
                 {
                     using var trE = db.TransactionManager.StartTransaction();
                     gext = ((Entity)trE.GetObject(gid, OpenMode.ForRead)).GeometricExtents;
+                    // ★[v117.19 · JACK 1116] 원지반이 여러 장이면 범위는 <b>전부 합친 것</b> — 한 장에만 안 걸려도 다른 장이 걸리면 자른다(자르기는 모든 면에 적용)
+                    foreach (var g in GroundSet.List(db))
+                        if (g.Id != gid) try { gext.AddExtents(((Entity)trE.GetObject(g.Id, OpenMode.ForRead)).GeometricExtents); } catch { }
                     trE.Commit();
                 }
                 catch (System.Exception eex)

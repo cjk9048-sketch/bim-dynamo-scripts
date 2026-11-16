@@ -14,7 +14,7 @@ namespace DH.Grading.Civil.Commands;
 /// 서버 · DXF 길과 같은 자리라 [원지반 삭제] · 원지형 자르기 · [초기화]가 그대로 이어진다(자르기는 재료를 다른 레이어로 옮긴다 — 원본이면 사람 선이 옮겨진다).</para>
 /// <para>나누기 — 한 가닥 안 표고가 같으면(1 mm 안) <b>등고선</b> · 제각각인 3D 선은 <b>브레이크라인</b> · 표고 든 점(POINT)은 <b>표고점</b>.
 /// 표고 0은 버린다(DXF 길과 같음 — 측량 안 된 자리). 쓸 등고선의 표고가 두 가지 안 되면 만들지 않는다.</para>
-/// <para>지표면 짓기는 <see cref="ImportGisCommand.BuildGroundSurfaceFrom"/> 한 벌(이름 · 스타일 · 정밀도 · 옛 원지반 교체 — 서버 · DXF처럼 묻지 않는다).</para></summary>
+/// <para>지표면 짓기는 <see cref="ImportGisCommand.BuildGroundSurfaceFrom"/> 한 벌(이름 · 스타일 · 정밀도 · 원지반 추가(원지반_2 …) — 서버 · DXF처럼 묻지 않는다).</para></summary>
 public sealed class GroundContourCommand
 {
     const double FlatTol = 0.001;   // 한 가닥 안 표고 차가 이 안이면 등고선
@@ -147,7 +147,7 @@ public sealed class GroundContourCommand
         string? csWarn = null;
         try { csWarn = NgiiCommand.BeltCheck(epsg, x0, y0, x1, y1); } catch { }
 
-        // ── 재료 사본 — 옛 재료를 갈아 끼우고 3D 선 · 점을 그린다(꺼 둔다) ──────
+        // ── 재료 사본 — 3D 선 · 점을 그린다(꺼 둔다) ──────
         var contourIds = new ObjectIdCollection();
         var breakIds = new ObjectIdCollection();
         var spotIds = new ObjectIdCollection();
@@ -156,9 +156,7 @@ public sealed class GroundContourCommand
         try
         {
             using var tr = db.TransactionManager.StartTransaction();
-            int cFail = ImportGisCommand.EraseOnLayers(db, tr, ImportGisCommand.GroundImportLayers);
-            if (cFail > 0)
-                return (false, $"이전 등고선 · 표고점 {cFail}개를 못 지웠습니다 — 새로 만들지 않았습니다.\n\n해당 레이어의 잠금을 풀고 다시 하세요.");
+            // ★[v117.19 · JACK 1116] 옛 재료를 안 지운다 — 새 원지반이 추가되고(원지반_2 …) 재료엔 그 주인 표시가 붙는다.
             ObjectId layMain = ImportGisCommand.EnsureLayer(db, tr, ImportGisCommand.LayerContour, 8);
             ObjectId layIdx = ImportGisCommand.EnsureLayer(db, tr, ImportGisCommand.LayerContourIndex, 30);
             ObjectId laySpot = ImportGisCommand.EnsureLayer(db, tr, ImportGisCommand.LayerSpot, 2);

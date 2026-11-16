@@ -12,8 +12,9 @@ public static class RoadProfileDraft
         public List<(double S, double Z)> Pvi = new();
         public double MaxGrade;            // 실제 최대 경사(절댓값)
         public bool EndUnreachable;        // 종점 높이를 최대 경사로 못 맞춤(그래도 곧은 선으로 잇고 알림)
+        public double Limit;               // ★[JACK 1116] 쓴 최대 경사 한도(칸 값)
         public int StationAdded;           // ★[v111.2] 주측점마다 더한 PVI 수(모양 그대로 · 잡아끌기용)
-        public string Text => $"PVI {Pvi.Count}개" + (StationAdded > 0 ? $"(주측점 {StationAdded}개 포함)" : "") + $" · 최대 종단경사 {MaxGrade * 100:F1} %" + (EndUnreachable ? " · ⚠종점 높이를 경사 한도로 못 맞춤" : "");
+        public string Text => $"PVI {Pvi.Count}개" + (StationAdded > 0 ? $"(주측점 {StationAdded}개 포함)" : "") + $" · 최대 종단경사 {MaxGrade * 100:F1} %" + (EndUnreachable ? $" · ⚠시점 · 종점 높이 차가 커서 {Limit * 100:0.#} % 안 됨 → 최소 {MaxGrade * 100:0.#} %" : "");
     }
 
     public static Result Make(IReadOnlyList<double> s, IReadOnlyList<double> g, double startZ, double endZ,
@@ -26,6 +27,7 @@ public static class RoadProfileDraft
         if (!double.IsFinite(startZ)) startZ = g[0];
         if (!double.IsFinite(endZ)) endZ = g[n - 1];
         maxGrade = Math.Max(1e-4, maxGrade);
+        res.Limit = maxGrade;
         minLen = double.IsFinite(minLen) ? Math.Max(0, minLen) : 20;      // ★[설치 전 검토 L4] 음수면 아래 a++가 배열 밖으로
         // ① 고르게(창 = minLen)
         var sm = new double[n];

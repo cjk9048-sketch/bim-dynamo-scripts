@@ -1,4 +1,4 @@
-using Autodesk.AutoCAD.ApplicationServices;
+﻿using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.Geometry;
 using DH.Grading.Core;
@@ -416,7 +416,7 @@ internal static class GroundCropBuilder
                 {
                     if (sid.IsNull || sid.IsErased) continue;
                     if (tr.GetObject(sid, OpenMode.ForRead) is not CivilDb.Surface s) continue;
-                    var u = new Surf { Id = sid, Name = s.Name ?? "", Handle = sid.Handle.ToString(), K = Classify(s), IsGround = sid == groundId };
+                    var u = new Surf { Id = sid, Name = s.Name ?? "", Handle = sid.Handle.ToString(), K = Classify(s), IsGround = sid == groundId || Commands.SectionCommand.IsBase(s.Name ?? "", Commands.ImportGisCommand.GroundSurfaceName) };   // ★[v117.19] «원지반_2 …»도 원지반(사람 면이 아님)
                     u.User = u.K == Kind.Ground && !OurName(u.Name) && !u.IsGround;   // 원지반(FindGroundSurface가 고른 면)은 사람 면으로 안 셈
                     try { u.Snap = s.HasSnapshot; } catch { }
                     try { u.Ood0 = s.IsOutOfDate; } catch { }

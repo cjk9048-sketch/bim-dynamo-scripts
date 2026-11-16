@@ -95,7 +95,7 @@ public static class TerrainMesh
         }
 
         // 세모와 칸(축 평행 상자) 겹침 — 칸 상자는 이미 세모 상자와 겹치니 세모 세 변의 바깥쪽 판정만 남는다
-        static bool TriBox(double ax, double ay, double bx, double by, double cx, double cy, double x0, double y0, double x1, double y1)
+        internal static bool TriBox(double ax, double ay, double bx, double by, double cx, double cy, double x0, double y0, double x1, double y1)
         {
             double area = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
             if (area == 0) return false;
@@ -229,8 +229,13 @@ public static class TerrainMesh
                 int i1 = (int)Math.Floor((Math.Max(inp.X[a], Math.Max(inp.X[b], inp.X[c])) - o.GX0) / o.GCell);
                 int j0 = (int)Math.Floor((Math.Min(inp.Y[a], Math.Min(inp.Y[b], inp.Y[c])) - o.GY0) / o.GCell);
                 int j1 = (int)Math.Floor((Math.Max(inp.Y[a], Math.Max(inp.Y[b], inp.Y[c])) - o.GY0) / o.GCell);
+                // ★[JACK 1116 «건물이 빨갛게 — 바깥인데»] 세모 상자 전체가 아니라 세모와 실제로 겹치는 칸만 표시(길고 비스듬한 세모가 빈 땅 칸까지 «바뀜»으로 만들던 것)
                 for (int j = Math.Max(0, j0); j <= Math.Min(o.GH - 1, j1); j++)
-                    for (int i = Math.Max(0, i0); i <= Math.Min(o.GW - 1, i1); i++) o.GMark[j * o.GW + i] = true;
+                    for (int i = Math.Max(0, i0); i <= Math.Min(o.GW - 1, i1); i++)
+                    {
+                        double cx0 = o.GX0 + i * o.GCell, cy0 = o.GY0 + j * o.GCell;
+                        if (Output.TriBox(inp.X[a], inp.Y[a], inp.X[b], inp.Y[b], inp.X[c], inp.Y[c], cx0, cy0, cx0 + o.GCell, cy0 + o.GCell)) o.GMark[j * o.GW + i] = true;
+                    }
             }
         }
 

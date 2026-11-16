@@ -202,6 +202,13 @@ public sealed class InfraworksCommand
 
         try
         {
+            // ★[JACK 1116 «3D 보기가 원지형만 있을 때도»] 정지 번들이 없으면 원지반만으로 3D(번들 있으면 종전 길 그대로)
+            if (web != null)
+            {
+                System.Collections.Generic.List<GradingBundle>? any; string whyNo;
+                using (Transaction trB = db.TransactionManager.StartTransaction()) { any = GradingBundleStore.TryLoadAll(db, trB, out whyNo); trB.Commit(); }
+                if (any == null || any.Count == 0) return RunGroundOnly(doc, web, whyNo, epsgDwgFallback: GradingSettings.ExportEpsg);
+            }
             System.Collections.Generic.List<GradingBundle>? regions;
             string note;
             using (Transaction tr = db.TransactionManager.StartTransaction())
@@ -1005,6 +1012,48 @@ public sealed class InfraworksCommand
             try { DiagLog.Append($"\n■ {cmd} 오류 — " + ex); } catch { }
         }
         return webPath;
+    }
+
+    /// <summary>★[JACK 1116] 정지 번들이 없을 때의 [3D 보기] — 원지반 TIN(여럿이면 부지가 쓴 것 · 없으면 가장 오래된 것) 하나를 지형으로, 수목 · 위성 · 지적 · 측점은 그 범위로. 부지 · 옹벽 · 도로 면은 없다.</summary>
+    static string? RunGroundOnly(Document doc, Web3DCollect web, string whyNo, int epsgDwgFallback)
+    {
+        Editor ed = doc.Editor; Database db = doc.Database;
+        var gid = ImportGisCommand.FindGroundSurface(db, out string gname, out int gtris);
+        if (gid.IsNull || gtris == 0)
+        {
+            const string none = "3D 보기 — 지표면 없음 → 원지반 가져오기 먼저";
+            ed.WriteMessage("\n" + none);
+            if (!SelfCheckLog.Headless) AcadApp.ShowAlertDialog(none);
+            try { DiagLog.Append("\n■ DH3D — 정지 번들 없음(" + whyNo + ") · 원지반 없음\n"); } catch { }
+            return null;
+        }
+        try
+        {
+            var log = new System.Text.StringBuilder();
+            int epsg = epsgDwgFallback;
+            string csCode = KoreaCs.Read(db);
+            int? det = KoreaCs.ResolveEpsgFromCode(csCode);
+            if (det.HasValue) epsg = det.Value;
+            var belt = ShapefileWriter.Belt(epsg);
+            web.Epsg = epsg; web.BeltCm = belt?.cm ?? 127; web.BeltFn = belt?.fn ?? 600000;
+            web.Dwg = System.IO.Path.GetFileName(doc.Name); web.DwgKey = doc.Name;
+            web.TerrainId = gid; web.TerrainName = gname; web.GroundName = gname;
+            log.AppendLine($"3D 보기(원지반만) · 정지 번들 없음({whyNo}) · 좌표계 EPSG:{epsg} · 지형 «{gname}» 세모 {gtris:N0}");
+            int nG = GroundSet.List(db).Count;
+            if (nG >= 2) web.Warn.Add($"원지반이 {nG}장 — 3D에는 «{gname}» 하나만 넣었습니다");
+            string? path = Web3DBuilder.Build(db, web, log, SelfCheckLog.Headless && SkipSatelliteForTest);
+            int nw = web.Warn.Distinct().Count();
+            ed.WriteMessage("\n3D 보기 완료(원지반만 · «" + gname + "»)" + (nw == 0 ? "\n  ⚠ 없음" : $"\n  ⚠ {nw}건 — 첫 건: {Short(web.Warn[0])}") + $"\n  자세한 내용: {DiagLog.FilePath}");
+            try { DiagLog.Append("\n■ DH3D(3D 보기 · 원지반만)\n  " + log.ToString().TrimEnd().Replace("\n", "\n  ") + "\n"); } catch { }
+            return path;
+        }
+        catch (System.Exception ex)
+        {
+            ed.WriteMessage("\n[DH3D 오류] " + ex.Message);
+            if (!SelfCheckLog.Headless) AcadApp.ShowAlertDialog("3D 보기 중 오류:\n" + ex.Message);
+            try { DiagLog.Append("\n■ DH3D 오류(원지반만) — " + ex); } catch { }
+            return null;
+        }
     }
 
     /// <summary>토공량 상세 CSV — 원지반=기준, 정지면_DH=비교로 임시 체적표면을 만들어 절토/성토량을 읽고 지운다.
