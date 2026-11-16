@@ -174,7 +174,8 @@ internal sealed class RoadSession
         //   ★[설치 전 검토 L] 지금 면이 이 설계 그대로인데(지문 같음) 옛 엔진 길로 지어졌으면(Civil이 고리 면을 거절 등) 판정도 옛 엔진 — 미리보기(CalcPiece)와 같은 법
         bool oldBuilt = false;
         try { oldBuilt = d.SurfaceSig.Length > 0 && PathAt(d.SurfacePath, 0) is string pk0 && pk0 != RingPath && SigOfAll(pcs, BaseSurfId) == d.SurfaceSig; } catch { }
-        if (RingBase(inp) && !oldBuilt)
+        // ★[v117.17 · 설치 전 검토 MED-3] [옹벽 변환] 든 도로는 옛 엔진 면이 남아 있어도(v117.15 이하에서 지은 같은 지문) 고리 면으로만 — 못 지으면 아래에서 거절
+        if (RingBase(inp) && (!oldBuilt || RingTier(inp)))
         {
             try
             {
@@ -192,9 +193,15 @@ internal sealed class RoadSession
                     }
                     whyR = rr.Error;
                 }
+                // ★[v117.17 · JACK 1116 «남은 것 모두» · 검토 LOW] 2단부터 [옹벽 변환] 든 도로는 옛 엔진으로 안 물러섬(면 짓기와 같은 법) — 단답형 거절 · 기술 까닭은 로그
+                if (RingTier(inp)) { try { DiagLog.Append($"\n[진입도로] {Name} — 옹벽 판정 P0 — 고리 면 못 지음(옹벽 변환 든 도로 · 옛 엔진 안 씀) — {whyR}"); } catch { } P0Note = Steps(miss + " · 거절)"); return (null, null, null, null, "", TierRingRefuse, null); }
                 try { DiagLog.Append($"\n[진입도로] {Name} — 옹벽 판정 P0 — ⚠고리 면 못 지음({whyR}) → 옛 엔진"); } catch { }
             }
-            catch (System.Exception exR) { try { DiagLog.Append($"\n[진입도로] {Name} — 옹벽 판정 P0 — ⚠고리 면 예외 → 옛 엔진 — {exR}"); } catch { } }
+            catch (System.Exception exR)
+            {
+                if (RingTier(inp)) { try { DiagLog.Append($"\n[진입도로] {Name} — 옹벽 판정 P0 — 고리 면 예외(옹벽 변환 든 도로 · 옛 엔진 안 씀) — {exR}"); } catch { } P0Note = Steps(miss + " · 거절)"); return (null, null, null, null, "", TierRingRefuse, null); }
+                try { DiagLog.Append($"\n[진입도로] {Name} — 옹벽 판정 P0 — ⚠고리 면 예외 → 옛 엔진 — {exR}"); } catch { }
+            }
         }
         var r = RoadGrade.Run(inp);
         if (r.Error.Length > 0) return (null, null, null, null, "", "도로 계산 실패 — " + r.Error, null);
@@ -691,7 +698,8 @@ internal sealed class RoadSession
                 pc.Ring = null; pc.OldR = null;
                 if (RingBase(pc.Inp))   // ★[v116.7] 선 옹벽만 있는 토막도 고리(면 · 옹벽 판정과 같은 엔진)
                 {
-                    if (surfNow && PathAt(Design.SurfacePath, k) != RingPath) ringNote = "⚠고리 면을 못 지어 옛 엔진으로 지은 면";
+                    // ★[v117.17 · 설치 전 검토 MED-3] [옹벽 변환] 든 토막은 옛 엔진 면이 남아 있어도 고리 면 미리보기(못 지으면 거절) — 옛 엔진 미리보기로 안 감
+                    if (surfNow && PathAt(Design.SurfacePath, k) != RingPath && !RingTier(pc.Inp)) ringNote = "⚠고리 면을 못 지어 옛 엔진으로 지은 면";
                     else
                     {
                         var swR = System.Diagnostics.Stopwatch.StartNew();
@@ -707,6 +715,13 @@ internal sealed class RoadSession
                             ringNote = "⚠" + b.Note + " → 옛 엔진";
                         }
                         catch (System.Exception exR) { ringNote = "⚠고리 면 미리보기 예외 — " + exR.Message + " → 옛 엔진"; try { DiagLog.Append($"\n[진입도로] {Name} — 토막 {k + 1} {ringNote} — {exR}"); } catch { } }
+                        // ★[v117.17 · JACK 1116 «남은 것 모두» · 검토 LOW] 2단부터 [옹벽 변환] 든 토막은 옛 엔진 미리보기 · 고를 선으로 안 물러섬(면 짓기와 같은 법) — 단답형 거절(계산 오류 자리 · 선 없음)
+                        if (RingTier(pc.Inp))
+                        {
+                            try { DiagLog.Append($"\n[진입도로] {Name} — 토막 {k + 1} 미리보기 고리 면 못 지음(옹벽 변환 든 도로 · 옛 엔진 안 씀) — {ringNote.TrimStart('⚠').Replace(" → 옛 엔진", "")}"); } catch { }
+                            pc.R = new RoadGrade.Result { Error = TierRingRefuse }; pc.Lines = new();
+                            return "⚠" + TierRingRefuse;
+                        }
                     }
                 }
                 var r = RoadGrade.Run(pc.Inp); pc.R = r;
@@ -1333,6 +1348,8 @@ internal sealed class RoadSession
     internal string TierGuardWhy = "";
     /// <summary>★[v117.16] 옹벽 변환 기록 든 도로의 고리 면을 못 지은 까닭 머리(단답형 · 기술 까닭은 로그) — <see cref="Commands.RoadCommand"/>가 이 머리로 알림을 가름.</summary>
     internal const string TierRingWhy = "고리 면 못 지음";
+    /// <summary>★[v117.17 · JACK 1116 «남은 것 모두»] 옹벽 변환 든 도로를 고리 면으로 못 지었을 때 화면 글(단답형 — 면 짓기 · 미리보기 · [옹벽 추가] 같은 글).</summary>
+    internal const string TierRingRefuse = TierRingWhy + " → [사면 변환]으로 옹벽 되돌리기";
     /// <summary>★[v117.15] 옛 엔진 면 노트 → 깨진 까닭(빈 글 = 멀쩡) — 굽은 안쪽 «→ 옛 흘러내림 길» 물러섬 · 선 따라 TIN 틈 칸(0.5 m 계단) · 칸 면(0.5 m 모자이크).</summary>
     internal static string TierBroken(string tnote)
     {
@@ -1453,7 +1470,7 @@ internal sealed class RoadSession
                 if (TierGuard) { TierGuardWhy = TierRingWhy + " — " + whyT; throw new InvalidOperationException("옹벽 변환 거절 — " + TierRingWhy); }
                 // ★[설치 전 검토 LOW] 화면엔 단답형만 · 기술 까닭(whyT)은 진단 로그로
                 try { DiagLog.Append("\n[진입도로] 고리 면 못 지음(옹벽 변환 든 도로) — " + whyT); } catch { }
-                throw new InvalidOperationException(TierRingWhy + " → [사면 변환]으로 옹벽 되돌리기");
+                throw new InvalidOperationException(TierRingRefuse);
             }
         }
         var r = RoadGrade.Run(inp);
@@ -1731,6 +1748,15 @@ internal sealed class RoadSession
             }
             catch (System.Exception exR) { why.Add($"토막 {k + 1} 예외 — {exR.Message}"); try { DiagLog.Append($"\n[진입도로] {Name} — 토막 {k + 1} 고리 면 예외 — {exR}"); } catch { } }
         }
+        // ★[v117.17 · JACK 1116 «남은 것 모두» · 검토 LOW] 2단부터 [옹벽 변환] 든 토막이 있으면 옛 엔진으로 안 물러섬(한 토막 도로와 같은 법) — 단답형 거절 · 기술 까닭은 로그
+        void TierRefuse(string tech)
+        {
+            _pendingRingNote = "";
+            try { DiagLog.Append($"\n[진입도로] {Name} — 고리 면 못 지음(옹벽 변환 든 빈 구간 도로 · 옛 엔진 안 씀) — {tech}"); } catch { }
+            if (TierGuard) { TierGuardWhy = TierRingWhy + " — " + tech; throw new InvalidOperationException("옹벽 변환 거절 — " + TierRingWhy); }
+            throw new InvalidOperationException(TierRingRefuse);
+        }
+        if (Enumerable.Range(0, n).Any(k => RingTier(pcs[k].Inp) && ringB[k] == null)) TierRefuse(string.Join(" / ", why));
         if (ringB.Any(b => b != null))
         {
             var trisM = new List<WallDaylight.Tri>(); var linesM = new List<RoadGrade.TierLine>(); var rsM = new List<RoadGrade.Result>(); var notesM = new List<string>(); var paths = new List<string>();
@@ -1747,6 +1773,7 @@ internal sealed class RoadSession
                 }
                 if (rr == null)
                 {
+                    if (RingTier(pcs[k].Inp)) TierRefuse(string.Join(" / ", why));
                     Old(k);
                     if (oldN[k].StartsWith("⚠")) exactM = false;
                     trisM.AddRange(oldT[k]!); linesM.AddRange(oldL[k]!); rsM.Add(oldR[k]!); notesM.Add(oldN[k]); paths.Add(PathOf(oldN[k]));
@@ -1765,6 +1792,7 @@ internal sealed class RoadSession
             {
                 why.Add(CivilWhy(exC));
                 _pendingPath = null;
+                if (pcs.Any(p => RingTier(p.Inp))) TierRefuse("Civil이 섞은 토막 면을 못 받음 — " + string.Join(" / ", why));
                 try { DiagLog.Append($"\n[진입도로] {Name} — ⚠고리 면 섞은 토막 면을 Civil이 못 받음({exC.Message}) → 모든 토막 옛 엔진으로 다시(토막 {n})"); } catch { }
             }
         }

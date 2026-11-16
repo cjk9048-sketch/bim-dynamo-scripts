@@ -407,6 +407,29 @@ static class UDitchCheck
                   string.Format(ci, "왕복 {0} 솔리드 {1}({2} · {3:F6}) 보고서 {4} 단차 {5}(판 {6} · {7:F3}/{8:F3})", okJ, okS, why, gr?.Volume, okR, okF, ms.Count(q => q.Part == "그레이팅"), ex.GrateLen, ls.ULength));
         }
 
+        // ⑮ ★[v117.17 · JACK 1116 «남은 것 모두»] 기록 판 — 새 칸(Follow · Grating · Samp) 쓸 때만 2 · 아니면 1(옛 애드인이 읽음) · 옛 JSON 그대로 읽힘 · 단차 측구 마디 바닥고에 NaN 없음 · 길이 글(U · 관)
+        {
+            var plain = new UDitch.Record(); plain.Ditches.Add(new UDitch.Ditch { Id = "D-001", Pts = new() { new[] { 0.0, 0.0, 50.0 }, new[] { 10.0, 0.0, 49.0 } }, StartInvert = 49.7, EndInvert = 48.7 });
+            string j1 = UDitch.ToJson(plain);
+            var fol = new UDitch.Record(); fol.Ditches.Add(new UDitch.Ditch { Id = "D-001", Follow = true });
+            var gra = new UDitch.Record(); gra.Ditches.Add(new UDitch.Ditch { Id = "D-001", Grating = true });
+            var smp = new UDitch.Record(); smp.Ditches.Add(new UDitch.Ditch { Id = "D-001", Samp = new() { new[] { 0.0, 5.0 } } });
+            string j2 = UDitch.ToJson(fol);
+            bool okV = j1.Contains("\"Version\": 1") && j2.Contains("\"Version\": 2") && UDitch.ToJson(gra).Contains("\"Version\": 2") && UDitch.ToJson(smp).Contains("\"Version\": 2")
+                       && UDitch.TryParse(j1, out var b1, out _) && b1.Version == 1 && !b1.Ditches[0].Follow
+                       && UDitch.TryParse(j2, out var b2, out _) && b2.Version == 2 && b2.Ditches[0].Follow
+                       && UDitch.TryParse("{\"Version\": 1, \"Ditches\": [ { \"Id\": \"D-001\" } ]}", out var bo, out _) && bo.Ditches.Count == 1
+                       && !UDitch.TryParse("{\"Version\": 3}", out _, out string w3) && w3.Contains("새 판");
+            var nf = Follow(60, (x, y) => x - ox2 < 30 ? 81.4 : 72.5);
+            var pn = UDitch.ProfileOf(nf, S);
+            bool okN = pn.Error == "" && pn.Lay is { Follow: true } && pn.Inv.All(double.IsFinite) && pn.Top.All(double.IsFinite);
+            string lt = UDitch.LengthText(nf, S);
+            var ln = UDitch.LayoutOf(nf, S);
+            bool okT = lt.StartsWith("60.0 m(U ") && lt.Contains(" · 관 ") && lt.Contains(ln.ULength.ToString("0.0", ci)) && (ln.Basins.Count == 0 || lt.Contains(" · 집수정 " + ln.Basins.Count + ")")) && !UDitch.LengthText(plain.Ditches[0], S).Contains("(");
+            check("S260 UD⑮ 기록 판 — 새 칸 없으면 판 1 · Follow / Grating / Samp 있으면 판 2 · 옛 JSON 읽힘 · 판 3 거절 · 단차 측구 마디 바닥고 · 윗면 모두 유한 · 길이 글 «60.0 m(U · 관)»",
+                  okV && okN && okT, $"판 {okV} 마디 {okN} 길이 {lt}");
+        }
+
         // ⑭ ★[v117.16 검토 HIGH] 1:1.5 법면 단차(위 81.40 · 법면 13.35 m · 아래 72.50) — 옛 판 = 관이 법면 위로 최대 1.5 m 드러남 · 끝에서 0.26 m 위 → 이제 법면 밑을 흙덮개 두고 따라 내려감
         {
             Func<double, double, double> g = (x, y) => { double t = x - ox2; return t < 30 ? 81.4 : t > 30 + 8.9 * 1.5 ? 72.5 : 81.4 - (t - 30) / 1.5; };

@@ -119,6 +119,7 @@ static class RoadCorridorCheck
     public static void Run(Action<string, bool, string> check0)
     {
         void Check(string n, bool ok, string d) => check0("S270 RC" + n, ok, d);
+        RoadRing.VerifyReflWalk = true;   // ★[v117.17] 앞 · 뒤 첫 오목 꼭짓점 훑기 = 옛 꼭짓점마다 걷기(다르면 예외)
         bool was = RoadRing.Corridor;
         try
         {

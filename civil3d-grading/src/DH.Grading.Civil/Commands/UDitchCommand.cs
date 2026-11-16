@@ -361,9 +361,8 @@ public sealed class UDitchCommand
         UDitchStore.Save(c.Db, tr, c.Rec);
         tr.Commit();
         index = k;
-        var q = UDitch.Qty(d);
         var lay = UDitch.LayoutOf(d, c.S);
-        msg = string.Format(Ic, "{0} — 길이 {1:0.00} m · 지표면 {2}{3}{4}", d.Id, q.Length, d.Surface,
+        msg = string.Format(Ic, "{0} — 길이 {1} · 지표면 {2}{3}{4}", d.Id, UDitch.LengthText(d, c.S, "0.00"), d.Surface,
                             lay.Basins.Count > 0 ? $" · 단차 {lay.Basins.Count} → 집수정 + 관로" : "", why.Length > 0 ? " · ⚠" + why : "");
         c.Log.AppendLine("  " + msg);
         foreach (var ln in lay.Log) c.Log.AppendLine("    " + ln);

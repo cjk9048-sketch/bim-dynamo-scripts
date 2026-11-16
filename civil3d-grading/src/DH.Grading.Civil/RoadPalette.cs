@@ -78,6 +78,9 @@ internal sealed class RoadPanel : UserControl
         head.Background = System.Windows.Media.Brushes.Transparent;
         var top = new StackPanel { Margin = new Thickness(10, 10, 10, 0) };
         top.Children.Add(head);
+        // ★[v117.17 · JACK 1112 «모든 도킹팝업창 맨 위 = 설명 애니메이션 칸»] 진입도로 창도 정지 · 종횡단도 · 터파기 창처럼 로고 아래 고정 틀(옛: ■ 옹벽 칸 오른쪽 작은 칸)
+        _demo = new FixDemoView("칸 · 단추에 마우스 → 설명", "add");
+        top.Children.Add(DemoFrame.Wrap(_demo));
         top.Children.Add(_title);
         top.Children.Add(_note);
         var deck = new DockPanel { LastChildFill = true };
@@ -168,7 +171,7 @@ internal sealed class RoadPanel : UserControl
         // ★★[v113.0 · JACK 1104 «옹벽 변환은 소단선 변형 · 폴리선 옹벽 추가는 별도 단추»] [사면→옹벽] · [옹벽→사면] · [옹벽 추가](풍선 글 짧게)
         // ★[v117.12 · JACK 1112] 부지 창과 같은 자리 — 왼쪽 단추(1줄 사면→옹벽 · 옹벽→사면 / 2줄 옹벽 추가 · 옹벽 삭제) · 오른쪽 예시 칸(FixDemoView). 단추 그대로 Buttons와 같이 Act로 명령을 보내고 _needRoad로 켜짐을 맞춘다
         {
-            var demo = new FixDemoView { Margin = new Thickness(6, 0, 0, 4), VerticalAlignment = VerticalAlignment.Top };
+            var demo = _demo;   // ★[v117.17] 예시 칸은 창 맨 위 고정 틀(여기는 단추만)
             var wGrid = new Grid { Margin = new Thickness(0, 2, 0, 2) };
             wGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             wGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
@@ -176,8 +179,8 @@ internal sealed class RoadPanel : UserControl
             var wRow1 = new StackPanel { Orientation = Orientation.Horizontal };
             var wRow2 = new StackPanel { Orientation = Orientation.Horizontal };
             wCol.Children.Add(wRow1); wCol.Children.Add(wRow2);
-            Grid.SetColumn(wCol, 0); Grid.SetColumn(demo, 1);
-            wGrid.Children.Add(wCol); wGrid.Children.Add(demo);
+            Grid.SetColumn(wCol, 0);
+            wGrid.Children.Add(wCol);
             Button WB(Panel row, string text, string cmd, string tip, string key)
             {
                 var b = new Button { Content = text, MinWidth = 96, Height = 30, Margin = new Thickness(0, 0, 6, 4), VerticalContentAlignment = VerticalAlignment.Center, ToolTip = tip };
@@ -369,9 +372,38 @@ internal sealed class RoadPanel : UserControl
         try { _resetBtn.IsEnabled = s != null || Commands.ResetCommand.AnyRoad(AcadApp.DocumentManager.MdiActiveDocument?.Database); }
         catch { _resetBtn.IsEnabled = true; }
         // ★[v117.14.1 · JACK 1112 «옹벽 삭제 버튼은 옹벽 추가가 한 번이라도 수행돼 삭제시킬 게 있을 때만 활성화»] 이 도로의 [옹벽 추가] 기록이 있을 때만
-        try { if (_roadDel != null) _roadDel.IsEnabled = s != null && (s.Design?.BoundWalls?.Count ?? 0) > 0; } catch { }
+        RefreshWallDel(s);
     }
+
+    /// <summary>★[v117.17 · JACK 1116 «남은 것 모두» · v117.14.1 검토 LOW] [옹벽 삭제] 켜짐 — U · UNDO 명령 끝 훅에서는 s.Design이 옛것(0.35 초 다시 계산 전 · 세션의 바뀜 표시도 이 훅 뒤에 섬).
+    /// 지금 값으로 한 번 켜고, 명령 끝 처리가 다 끝난 뒤(Background) 한 번 더 — <see cref="RoadSession.Fresh"/>(바뀜 표시가 있을 때만 설계 기록 하나를 다시 읽음 · 없으면 안 읽음).
+    /// 다시 계산이 끝나면 Show → RefreshReset이 또 부름.</summary>
+    void RefreshWallDel(RoadSession? s)
+    {
+        if (_roadDel == null) return;
+        try { _roadDel.IsEnabled = s != null && (s.Design?.BoundWalls?.Count ?? 0) > 0; } catch { }
+        if (s == null || _wallDelQueued) return;   // ★[설치 전 검토 L-6] 한 번만 걸어 둠(여러 번 불러도 하나로)
+        try
+        {
+            _wallDelQueued = true;
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                _wallDelQueued = false;
+                try
+                {
+                    // ★[설치 전 검토 L-6] 다른 명령이 도는 중이면(그 명령의 메시지 고리 안) 설계를 다시 읽지 않음 — 다시 계산 끝(Show → RefreshReset)이 맞춤
+                    if (AcadApp.DocumentManager.MdiActiveDocument is { } docW && Busy(docW)) return;
+                    if (_roadDel != null && ReferenceEquals(s, _s)) _roadDel.IsEnabled = (s.Fresh()?.BoundWalls?.Count ?? 0) > 0;
+                }
+                catch { }
+            }), System.Windows.Threading.DispatcherPriority.Background);
+        }
+        catch { _wallDelQueued = false; }
+    }
+    bool _wallDelQueued;
     TextBlock _autoState = null!;
+    /// <summary>★[v117.17] 창 맨 위 설명 칸(옹벽 단추 예시 — 정지 창과 같은 장면).</summary>
+    FixDemoView _demo = null!;
     /// <summary>★[v117.14.1] [옹벽 삭제](DHROADWALLDEL) — 지울 [옹벽 추가] 기록이 있을 때만 켬(<see cref="RefreshReset"/>).</summary>
     Button? _roadDel;
 

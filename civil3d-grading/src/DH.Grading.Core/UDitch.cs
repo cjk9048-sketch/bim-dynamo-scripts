@@ -15,7 +15,14 @@ namespace DH.Grading.Core;
 /// 단위 = m · 좌표 = 도면 WCS(m로 가정). 단면 꼴은 진입도로 측구와 같은 <see cref="DitchSection.U"/>(뚜껑 자리 없음 — 1단계).</summary>
 public static partial class UDitch
 {
-    public const int RecordVersion = 1;
+    /// <summary>★[v117.17 · JACK 1116 «남은 것 모두»] 이 애드인이 읽는 가장 높은 판 — 2 = 지표 따라감 · 표본 · 그레이팅(<see cref="NeedsV2"/>). 쓸 땐 <see cref="WriteVersion"/>(새 칸을 쓸 때만 2 — 옛 애드인(판 1)은 «새 판 기록»이라 거절해 칸을 말없이 버리지 않음).</summary>
+    public const int RecordVersion = 2;
+    /// <summary>쓰는 판 — 새 칸(Follow · Grating · Samp)을 쓰면 2 · 아니면 1(옛 애드인도 읽음).</summary>
+    public static int WriteVersion(Record r) => NeedsV2(r) ? 2 : 1;
+    public static bool NeedsV2(Record r)
+    {
+        return r.Ditches.Any(d => d.Follow || d.Grating || (d.Samp?.Count ?? 0) > 0);
+    }
     static readonly CultureInfo Ic = CultureInfo.InvariantCulture;
 
     // ══════════════════════════════ 설정 · 규격 표 ══════════════════════════════
@@ -225,7 +232,11 @@ public static partial class UDitch
         public string Updated { get; set; } = "";
     }
 
-    public static string ToJson(Record r) => JsonSerializer.Serialize(r, Jo);
+    public static string ToJson(Record r)
+    {
+        r.Version = WriteVersion(r);   // ★[v117.17 · JACK 1116 «남은 것 모두»] 새 칸 쓸 때만 2
+        return JsonSerializer.Serialize(r, Jo);
+    }
 
     /// <summary>★[v117.16 검토 LOW] [[a, b], …]를 줄바꿈 없이 한 값으로(들여쓰기 기록 안에서도) · NaN = "NaN" · 읽기는 숫자 · "NaN" 모두.</summary>
     internal sealed class CompactPairs : JsonConverter<List<double[]>>
@@ -516,7 +527,7 @@ public static partial class UDitch
             {
                 pr.Lay = lay;
                 if (lay.Error.Length > 0) { pr.Error = lay.Error; return pr; }
-                for (int i = 0; i < n; i++) { pr.Inv[i] = lay.InvAt(pr.Sta[i]); pr.Top[i] = pr.Inv[i] + H; pr.Ground[i] = p[i][2]; }
+                for (int i = 0; i < n; i++) { pr.Inv[i] = InvNear(lay, pr.Sta[i]); pr.Top[i] = pr.Inv[i] + H; pr.Ground[i] = p[i][2]; }
                 pr.SlopePct = (lay.StartInv - lay.EndInv) / pr.Length * 100;
                 pr.MaxAbove = lay.MaxAbove; pr.MaxBelow = lay.MaxBelow;
                 pr.Warn.AddRange(lay.Warn);
@@ -546,6 +557,21 @@ public static partial class UDitch
         if (pr.MaxAbove > 0.05) pr.Warn.Add(string.Format(Ic, "측구 윗면이 지표면 위로 최대 {0:0.00} m", pr.MaxAbove));
         if (pr.Ground.Any(g => !double.IsFinite(g))) pr.Warn.Add("지표면 밖 점이 있음(그 점은 깊이 검사 안 함)");
         return pr;
+    }
+
+    /// <summary>★[v117.17 · JACK 1116 «남은 것 모두»] 마디 바닥고 — 집수정 · 관 구간 안이면 NaN 대신 가장 가까운 U 구간의 끝 값(Profile.Inv · Top을 읽는 쪽이 NaN을 안 받게).</summary>
+    static double InvNear(Layout lay, double s)
+    {
+        double v = lay.InvAt(s);
+        if (double.IsFinite(v)) return v;
+        double best = double.NaN, bd = double.MaxValue;
+        foreach (var g in lay.Segs)
+        {
+            double d0 = Math.Abs(s - g.S0), d1 = Math.Abs(s - g.S1);
+            if (d0 < bd) { bd = d0; best = g.V0; }
+            if (d1 < bd) { bd = d1; best = g.V1; }
+        }
+        return best;
     }
 
     /// <summary>맞댄 이음으로 지을 수 있는 가장 큰 꺾임(°).</summary>

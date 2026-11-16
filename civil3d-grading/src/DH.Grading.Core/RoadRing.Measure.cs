@@ -25,6 +25,8 @@ public static partial class RoadRing
         public string Split = "";
         /// <summary>경계 — 데이라잇 꼭짓점 수 · 0.1 mm 넘는 수 · 최대(부호) · 자리 · 꼬리표별 넘는 수 · 경계 변 × 원지반 변 교점 넘는 수 · 최대.</summary>
         public int BndN, BndOver, CrossN, CrossOver, BndEdge, ZSnapped; public double BndMax, CrossMax; public string BndAt = "";
+        /// <summary>★[v117.17] 끊김선이 데이라잇 현을 지나 끼운 선 위 Φ = 0 점 수(<see cref="DaylightOnLines"/>).</summary>
+        public int DlOnLines;
         public readonly SortedDictionary<string, int> BndTag = new();
         public string Text
         {
@@ -35,9 +37,9 @@ public static partial class RoadRing
                            MsEval, MsRegion, MsLines, MsTri, MsFix, MsAll, Evals, OwnWins, OtherWins, BlendUsed, NearEvolute, LegPartial, PairViews)
                      + string.Format(ci, " · 소단선 {0}줄 · 묶음 {1} · 조각 {2}(묶음당 최다 {3}) · M1 기울기 {4:F3}(종단 넘음 {5:F3}) · 뜀 {6:F3} m{7} · 측점 따라 넘음 {8:F3}(뜀 {9:F4} m{10})",
                            Lines, Groups, Pieces, MaxPer, M1Slope, M1Excess, M1Jump, M1At.Length > 0 ? " @" + M1At : "", M1Sta, M1StaJump, M1StaAt.Length > 0 ? " @" + M1StaAt : "")
-                     + string.Format(ci, " · 경계 |P0−G| 꼭짓점 {0:N0} 중 0.1 mm 넘음 {1}(최대 {2:F2} mm{3}){4} · 원지반 변 교점 {5:N0} 중 넘음 {6}(최대 {7:F2} mm) · 찾는 거리 · 바탕 끝 {8}",
+                     + string.Format(ci, " · 경계 |P0−G| 꼭짓점 {0:N0} 중 0.1 mm 넘음 {1}(최대 {2:F2} mm{3}){4} · 원지반 변 교점 {5:N0} 중 넘음 {6}(최대 {7:F2} mm) · 찾는 거리 · 바탕 끝 {8} · 선 위 데이라잇 {10}",
                            BndN, BndOver, BndMax * 1000, BndAt.Length > 0 ? " @" + BndAt : "", BndTag.Count > 0 ? " [" + string.Join(" · ", BndTag.Select(kv => kv.Key + " " + kv.Value)) + "]" : "",
-                           CrossN, CrossOver, CrossMax * 1000, BndEdge, ZSnapped);
+                           CrossN, CrossOver, CrossMax * 1000, BndEdge, ZSnapped, DlOnLines);
             }
         }
     }

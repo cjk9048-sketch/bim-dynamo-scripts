@@ -66,12 +66,14 @@ internal static class WallPolyDraw
     /// <param name="extNote">이어 짓기 안내(찍을 끝 프롬프트에 붙임 — 예: «옹벽 1에 이어 짓습니다»).</param>
     /// <param name="ask">★[v117.16] 걸음(0 = end1 · 1 = end0)마다 묻는 글 — 없으면 옹벽 폴리곤 글(종전).</param>
     /// <param name="outDirs">★[v117.16] 찍은 날개 방향을 받을 그릇 — 없으면 안 채운다(종전).</param>
+    /// <param name="head">★[v117.17 · JACK 1116 «남은 것 모두»] 명령줄 머리(예: «[가시설 변환]») — 있으면 거절 글을 그 머리 아래 단답형으로 · 조립 메모는 로그(<paramref name="log"/>)에만.
+    /// 없으면(부지 [옹벽 변환]) 종전 글 그대로.</param>
     internal static List<Point3>? Run(Document doc, IReadOnlyList<Point3> dayRing,
                                       IReadOnlyList<Point3> seg,
                                       (double X, double Y) nStart, (double X, double Y) nEnd, int outwardSide,
                                       out List<Point3>? wallChain, out List<bool>? isWall, out string log,
                                       (double X, double Y)? fixA = null, (double X, double Y)? fixB = null, string extNote = "",
-                                      System.Func<int, string>? ask = null, Picked? outDirs = null)
+                                      System.Func<int, string>? ask = null, Picked? outDirs = null, string? head = null)
     {
         log = ""; wallChain = null; isWall = null;
         if (outDirs != null) outDirs.N = 0;
@@ -234,9 +236,15 @@ internal static class WallPolyDraw
                     {
                         // 안쪽을 향했는지 · 데이라잇에 안 닿는지를 갈라 알린다
                         double dd = (p.X - from.X) * nrm.X + (p.Y - from.Y) * nrm.Y;
-                        ed.WriteMessage(dd <= 0
-                            ? "\n  구간 노선 안쪽으로는 못 그립니다 — 노선 바깥(사면 쪽)을 찍으세요."
-                            : "\n  그 방향으로는 데이라잇에 닿지 않습니다 — 부지 쪽을 찍으세요.");
+                        // ★[v117.17 · JACK 1116 «남은 것 모두»] 머리가 있으면(터파기 가시설 날개) 단답형 — 없으면 종전 글 그대로
+                        if (head != null)
+                            ed.WriteMessage(dd <= 0
+                                ? $"\n{head} 날개 못 그림 — 바닥 쪽을 향함 → 바깥(사면 쪽) 클릭"
+                                : $"\n{head} 날개 못 그림 — 터파기 윗선에 안 닿음 → 사면 쪽 클릭");
+                        else
+                            ed.WriteMessage(dd <= 0
+                                ? "\n  구간 노선 안쪽으로는 못 그립니다 — 노선 바깥(사면 쪽)을 찍으세요."
+                                : "\n  그 방향으로는 데이라잇에 닿지 않습니다 — 부지 쪽을 찍으세요.");
                         step--;                                // 같은 점을 다시 받는다
                         continue;
                     }
@@ -310,7 +318,8 @@ internal static class WallPolyDraw
             try { ed.WriteMessage("\n[옹벽 폴리곤] ⚠측선을 찍은 방향(맞닿은 옹벽 쪽은 지은 방향) 그대로 잇지 못했습니다 — 새 쪽 끝을 다른 방향으로 찍어 보세요."); } catch { }
             return null;
         }
-        if (!usedRay || asmNote.Contains("⚠"))
+        // ★[v117.17 · JACK 1116 «남은 것 모두»] 머리가 있으면(터파기 가시설 날개) 조립 메모는 로그에만 — 쓸지 말지는 부르는 쪽이 단답형으로 말한다(ExcavWing.Region)
+        if (head == null && (!usedRay || asmNote.Contains("⚠")))
             try { ed.WriteMessage("\n[옹벽 폴리곤] " + System.Text.RegularExpressions.Regex.Replace(asmNote, "<[^>]+>", "")); } catch { }
         bool simple = ring.Count >= 3 && GradingGeometry.RingIsSimple(ring);
         double area = ring.Count >= 3 ? GradingGeometry.RingAreaNts(ring) : 0;

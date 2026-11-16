@@ -14,6 +14,8 @@ public static partial class RoadRing
 {
     /// <summary>★[v117.16 · 되돌리기 스위치] 코리더식 높이 규칙 — 거짓이면 옛 E2(v116 ~ v117.15) 그대로(하네스 A/B · 문제 시 한 줄 바꿔 117.16.1). 사용자 설정 없음.</summary>
     public static bool Corridor = true;
+    /// <summary>★[v117.17] [하네스 전용] 앞 · 뒤 첫 오목 꼭짓점 훑기를 옛 꼭짓점마다 걷기와 견줌(다르면 예외).</summary>
+    internal static bool VerifyReflWalk;
     /// <summary>★[v117.16] 같은 무리 두 발 섞는 폭 상한(m) — 계획 W = [0.25, 2D] · 둘째 발 찾는 거리(D + W)를 줄이려고 10 m로 막음(성능 예산).</summary>
     public const double BlendWMax = 10.0;
     /// <summary>★[v117.16] 무리 경계 — Δσ/(π·D)가 이 아래면 같은 다리(φ = 1) · 위 끝 넘으면 다른 다리(φ = 0) · 사이 매끈하게.</summary>
@@ -221,13 +223,39 @@ public static partial class RoadRing
                 _ccum[i + 1] = _ccum[i] + (tn < 0 ? -tn : 0);
                 refl[i] = tn < 0;
             }
+            // ★[v117.17 · JACK 1116 «남은 것 모두» · 짓기 시간] 앞 · 뒤 첫 오목 꼭짓점 — 꼭짓점마다 걷던 O(m²)을 한 바퀴 훑기 둘(O(m))로(같은 값).
+            //   앞: nxt(i) = i(오목) · 아니면 i+1이 오목이면 i+1 · 변 i+1이 다른 쪽이면 −1 · 아니면 nxt(i+1) (변 j(j → j+1)가 같은 쪽일 때만 넘어감)
+            //   뒤: prv(i) = i(오목) · 아니면 i−1이 오목이면 i−1 · 변 i−2가 변 i−1과 다른 쪽이면 −1 · 아니면 prv(i−1) (변 j−1이 같은 쪽일 때만)
             _nxtR = new int[_m]; _prvR = new int[_m];
-            for (int i = 0; i < _m; i++)
             {
-                int f = -1; for (int k = 0, j = i; k < _m; k++, j = (j + 1) % _m) { if (refl[j]) { f = j; break; } if (_ss[j] != _ss[i]) break; }   // 앞: 변 j(j → j+1)가 같은 쪽일 때만 넘어감
-                _nxtR[i] = f;
-                int b2 = -1; for (int k = 0, j = i; k < _m; k++, j = (j - 1 + _m) % _m) { if (refl[j]) { b2 = j; break; } if (_ss[(j - 1 + _m) % _m] != _ss[(i - 1 + _m) % _m]) break; }   // 뒤: 변 j−1이 같은 쪽일 때만
-                _prvR[i] = b2;
+                int Mo(int q) => ((q % _m) + _m) % _m;
+                // 앞 — 값이 바로 정해지는 꼭짓점(오목 · 다음 변이 다른 쪽)에서 거꾸로 한 바퀴
+                int a = -1;
+                for (int i = 0; i < _m && a < 0; i++) if (refl[i] || (!refl[Mo(i + 1)] && _ss[Mo(i + 1)] != _ss[i])) a = i;
+                if (a < 0) Array.Fill(_nxtR, -1);
+                else
+                    for (int k = 0; k < _m; k++)
+                    {
+                        int i = Mo(a - k), n1 = Mo(i + 1);
+                        _nxtR[i] = refl[i] ? i : refl[n1] ? n1 : _ss[n1] != _ss[i] ? -1 : k == 0 ? -1 : _nxtR[n1];
+                    }
+                // 뒤 — 값이 바로 정해지는 꼭짓점(오목 · 앞 앞 변이 다른 쪽)에서 앞으로 한 바퀴
+                int bA = -1;
+                for (int i = 0; i < _m && bA < 0; i++) if (refl[i] || (!refl[Mo(i - 1)] && _ss[Mo(i - 2)] != _ss[Mo(i - 1)])) bA = i;
+                if (bA < 0) Array.Fill(_prvR, -1);
+                else
+                    for (int k = 0; k < _m; k++)
+                    {
+                        int i = Mo(bA + k), p1 = Mo(i - 1);
+                        _prvR[i] = refl[i] ? i : refl[p1] ? p1 : _ss[Mo(i - 2)] != _ss[p1] ? -1 : k == 0 ? -1 : _prvR[p1];
+                    }
+                if (VerifyReflWalk)
+                    for (int i = 0; i < _m; i++)
+                    {
+                        int f = -1; for (int k = 0, j = i; k < _m; k++, j = (j + 1) % _m) { if (refl[j]) { f = j; break; } if (_ss[j] != _ss[i]) break; }
+                        int b2 = -1; for (int k = 0, j = i; k < _m; k++, j = (j - 1 + _m) % _m) { if (refl[j]) { b2 = j; break; } if (_ss[(j - 1 + _m) % _m] != _ss[(i - 1 + _m) % _m]) break; }
+                        if (f != _nxtR[i] || b2 != _prvR[i]) throw new InvalidOperationException($"refl walk mismatch i {i}: nxt {f}/{_nxtR[i]} prv {b2}/{_prvR[i]}");
+                    }
             }
             FindBends();
             _grid = new SegGrid(_bx, _by, _bz, 4.0);

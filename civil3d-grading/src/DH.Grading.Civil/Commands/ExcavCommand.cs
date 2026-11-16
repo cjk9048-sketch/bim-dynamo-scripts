@@ -225,6 +225,8 @@ public sealed class ExcavCommand
         var log = new System.Text.StringBuilder();
         LastLog = "";
         WingWarn = "";
+        WingFailed.Clear();
+        ZonesDropped.Clear();
         log.AppendLine($"[터파기 지표면] {System.DateTime.Now:yyyy-MM-dd HH:mm:ss}  [DH.Grading {GradingSettings.Version}]");
 
         string boxHandle = boxPolyId.Handle.ToString();
@@ -242,16 +244,18 @@ public sealed class ExcavCommand
         {
             var box0 = BoundaryReader.Read(tr, boxPolyId);
             if (box0 == null || box0.Count < 3)
-                throw new System.Exception("구조물 바닥 경계를 읽지 못했습니다(닫힌 폴리선이어야 합니다).");
+                throw new System.Exception("구조물 바닥선 못 읽음 — 닫힌 폴리선 아님 → 닫힌 폴리선으로 다시 그리기");   // ★[v117.17 · JACK 1116 «남은 것 모두»] 단답형
 
             var old = ExcavBundleStore.TryLoadAll(db, tr, out string ewhy, out bool tooNew);
             // ★★★[검토 0909 · 치명] <b>못 읽은 것을 "없다"로 보면 남의 기록을 지운다.</b>
             //   끝에서 <c>SaveAll</c>이 <b>이번 하나짜리로 덮어쓰고</b> 지표면도 그것만으로 다시 굽는다.
             //   되돌릴 길이 없으므로 <b>진행하지 않는다</b>.
             if (tooNew)
-                throw new System.Exception(
-                    ewhy + "\n\n지금 진행하면 이 도면의 기존 터파기 기록이 지워집니다."
-                         + "\n애드인을 최신으로 올린 뒤 다시 실행하세요.");
+            {
+                // ★[v117.17 · JACK 1116 «남은 것 모두»] 단답형 — 판 번호 같은 기술 글은 로그로
+                try { DiagLog.Append($"\n■ 터파기 — {ewhy}\n"); } catch { }
+                throw new System.Exception("터파기 기록 못 읽음 — 더 새 애드인이 만든 기록(진행하면 기존 기록 지워짐) → 애드인 업데이트 뒤 다시");
+            }
             if (old != null) recs.AddRange(old);
             else log.AppendLine($"■ 터파기 기록 없음({ewhy}) — 이번이 첫 구조물");
 
@@ -389,21 +393,25 @@ public sealed class ExcavCommand
             {
                 using var trP = db.TransactionManager.StartTransaction();
                 var sid = GradingBuilder.FindSurfaceByBaseName(trP, "정지면_DH");
-                if (sid.IsNull) bad = "계획지표면(정지면_DH)이 없습니다.";
+                if (sid.IsNull) bad = "계획지표면(정지면_DH) 없음";   // ★[v117.17] 단답형
                 // ★★[검토 0909 · 높음] <b>원지반 이름이 '정지면_DH'일 수 있다.</b>
                 //   이 저장소가 이미 아는 사실이다(GradingBuilder: "LandXML 지반 이름이 정지면_DH여도 삭제 금지").
                 //   그 도면에서 계획지표면을 고르면 <b>기준면이 원지반이 된다</b> — 그런데 기록엔 Base=1이 남아
                 //   <b>형상과 수량이 서로 다른 면을 보게 된다</b>. 이 애드인에서 가장 위험한 종류다.
-                else if (sid == groundId) bad = "원지반과 계획지표면이 같은 면입니다(이름이 '정지면_DH'인 원지반).";
+                else if (sid == groundId) bad = "원지반과 계획지표면이 같은 면(이름이 정지면_DH인 원지반)";
                 // ★★[검토 0909 · 높음] <b>TIN인지 확인하고 캐스트한다.</b> 종전엔 이 면을 처음으로
                 //   <c>TinSurface</c>로 캐스트해 삼각형을 읽는데, 체적면·격자면이면
                 //   <i>"지정한 캐스트가 잘못되었습니다"</i>라는 원인 불명 문구만 뜬다.
                 else if (trP.GetObject(sid, OpenMode.ForRead) is not TinSurface)
-                    bad = "계획지표면(정지면_DH)이 TIN 지표면이 아닙니다.";
+                    bad = "계획지표면(정지면_DH)이 TIN 아님";
                 else planBaseId = sid;
                 trP.Commit();
             }
-            catch (System.Exception px) { bad = "계획지표면을 읽지 못했습니다 — " + px.Message; }
+            catch (System.Exception px)
+            {
+                bad = "계획지표면 못 읽음";
+                try { DiagLog.Append($"\n■ 터파기 — 계획지표면 읽기 예외 {px.GetType().Name}: {px.Message}\n"); } catch { }
+            }
 
             // ★★★[검토 0909 · 높음] <b>말없이 물러서지 않는다 — 멈춘다.</b>
             //
@@ -414,9 +422,7 @@ public sealed class ExcavCommand
             //   그 사이에 터파기를 돌리면 그렇게 된다.
             //   ★이 명령의 관문 철학은 <b>"묻고 맞춘다"</b>다 — 여기도 같아야 한다.
             if (planBaseId.IsNull)
-                throw new System.Exception(
-                    bad + "\n\n[계획부지 정지]를 먼저 돌리거나, 기준면을 <원지반>으로 골라 다시 실행하세요."
-                        + "\n(기록해 둔 기준면을 말없이 바꾸지 않습니다.)");
+                throw new System.Exception($"계획지표면 기준으로 못 팜 — {bad} → [계획부지 정지] 먼저 · 또는 기준면 <원지반>으로 다시");   // ★[v117.17] 단답형(기록한 기준면은 말없이 안 바꿈)
         }
 
         using (Transaction tr = db.TransactionManager.StartTransaction())
@@ -554,9 +560,7 @@ public sealed class ExcavCommand
                     {
                         log.AppendLine($"■ {tag} — 목표면보다 낮은 데가 없어 건너뜀(팔 것이 없다)");
                         if (k == newIdx)
-                            throw new System.Exception(
-                                "구조물 바닥이 목표면보다 낮은 데가 없습니다 — 팔 것이 없습니다.\n" +
-                                "바닥 표고를 확인하시거나, 정지면을 먼저 만들어 주세요.");
+                            throw new System.Exception("팔 곳 없음 — 구조물 바닥이 목표면보다 낮은 데가 없음 → 바닥 표고 확인 · 또는 정지면 먼저");   // ★[v117.17] 단답형
                         continue;
                     }
                     // ★★★[JACK 0907 "터파기 폴리곤 영역에서 조금이라도 높은 부분이 생기면 안 되네.
@@ -598,21 +602,23 @@ public sealed class ExcavCommand
                     if (!vs.HasSlope)
                     {
                         log.AppendLine($"■ {tag} 굴착 법면 없음 — 건너뜀");
-                        if (k == newIdx) throw new System.Exception("굴착 법면이 만들어지지 않았습니다(구배·표고를 확인하세요).");
+                        if (k == newIdx) throw new System.Exception("굴착 법면 못 만듦 — 구배 · 바닥 표고가 안 맞음 → 구배 · 바닥 표고 확인");   // ★[v117.17] 단답형
                         continue;
                     }
 
                     var vid = GradingBuilder.BuildVirtualSlope(db, tr, vs.Rings, $"{VirtName}{k + 1}", vs.CornerLines, groundId);
                     if (wplan != null)
                     {
-                        var vid2 = CutWings(db, tr, vid, vs, e, wplan, $"{VirtName}{k + 1}", groundId, log, tag);
+                        var vid2 = CutWings(db, tr, vid, vs, e, wplan, $"{VirtName}{k + 1}", groundId, log, tag, out string cwhy);
                         if (!vid2.IsNull) vid = vid2;
                         else
                         {
                             // 못 깎았다 — 날개를 버리고 종전 길(구간 수직 · 끝은 저절로)로 다시 굽는다(말한다)
                             vs = GradingGeometry.Build(e.Bottom, target, p, up: true, e.WallZones);
                             vid = GradingBuilder.BuildVirtualSlope(db, tr, vs.Rings, $"{VirtName}{k + 1}", vs.CornerLines, groundId);
-                            WingWarn = $"구조물 {k + 1} 날개 못 씀 → 날개 자동(로그)";
+                            // ★[v117.17] 단답형 — 프로그램 문제면 «로그 전달» · 날개 자리 문제면 «날개 방향 바꿔 다시»
+                            if (e.WallZones != null) foreach (var fz in e.WallZones) if (fz != null && fz.HasWings) WingFailed.Add(WingKey(e.PolyHandle, fz));
+                            AddWingWarn($"구조물 {k + 1} 날개 못 씀 — {cwhy} → 날개 자동 · {WingTodo(cwhy, false)}");
                         }
                     }
                     var vTin = (TinSurface)tr.GetObject(vid, OpenMode.ForWrite);
@@ -683,13 +689,10 @@ public sealed class ExcavCommand
                     {
                         log.AppendLine($"■ {tag} 닫힌 굴착 상단선 없음 — 건너뜀(교선 {loops.Count}개 · 걸러 남은 {own.Count}개 · 열린 {nOpen}개)");
                         if (k == newIdx) throw new System.Exception(
+                            // ★[v117.17 · JACK 1116 «남은 것 모두»] 단답형(열린 선을 쓰면 면이 엉뚱하게 잘려 안 만듦 — 풀이는 이 주석과 로그)
                             nOpen > 0
-                            ? $"굴착 상단선이 닫히지 않았습니다 — 양 끝이 {openGap:F1}m 벌어져 있습니다.\n\n"
-                              + "구조물이 성토부에 너무 많이 걸쳐 굴착이 한 바퀴 돌지 못했습니다.\n"
-                              + "구조물을 절토부 쪽으로 옮기거나, 바닥 표고를 낮춰 주세요.\n\n"
-                              + "(열린 선을 그대로 쓰면 면이 엉뚱하게 잘립니다 — 그래서 만들지 않았습니다.)"
-                            : "굴착 상단선(데이라잇)을 찾지 못했습니다 — 굴착이 목표면에 닿지 않았습니다.\n" +
-                              "구배를 더 완만하게 해 보세요.");
+                            ? $"굴착 상단선 안 닫힘 — 성토부에 너무 걸쳐 양 끝이 {openGap:F1}m 벌어짐 → 구조물을 절토부 쪽으로 · 또는 바닥 표고 낮추기"
+                            : "굴착 상단선 못 찾음 — 굴착이 목표면에 안 닿음 → 구배 더 완만하게");
                         continue;
                     }
 
@@ -837,7 +840,7 @@ public sealed class ExcavCommand
                     if (!clipped)
                     {
                         log.AppendLine($"■ {tag} — 클립 실패라 합치지 않음(오버사이즈 면을 넣으면 지표면이 통째로 틀어진다)");
-                        if (k == newIdx) throw new System.Exception("굴착 상단선을 경계로 넣지 못했습니다 — 로그를 확인하세요.");
+                        if (k == newIdx) throw new System.Exception("굴착 상단선을 경계로 못 넣음 — 계산 실패(프로그램 문제) → 다시 · 계속되면 로그 전달");   // ★[v117.17] 단답형
                         continue;
                     }
                     pieces.Add((vid, tag));
@@ -850,7 +853,7 @@ public sealed class ExcavCommand
                 }
             }
 
-            if (pieces.Count == 0) throw new System.Exception("만들어진 굴착이 하나도 없습니다 — 로그를 확인하세요.");
+            if (pieces.Count == 0) throw new System.Exception("만든 굴착 없음 — 구조물마다 건너뜀 → 구조물 바닥 · 구배 확인 · 계속되면 로그 전달");   // ★[v117.17] 단답형(건너뛴 까닭은 로그)
             ObjectId outId = GradingBuilder.Composite(db, tr, SurfName, pieces, out string olog, true, groundId);
             log.AppendLine($"■ 결과 = {SurfName} — 구조물 {made}개 합침(굴착 형상만: 바닥 + 법면)\n  " + olog.Replace("\n", "\n  "));
 
@@ -930,7 +933,8 @@ public sealed class ExcavCommand
         // ★[검토 0909 · 높음] 리본으로 기준면을 바꿨으면 <b>창에도 알린다</b> —
         //   안 알리면 창은 옛 값을 보여 주고, 그 상태에서 창의 [생성]을 누르면
         //   <b>화면에 적힌 것과 다른 기준면</b>으로 파진다.
-        try { ExcavPalette.Refresh(); } catch { }
+        // ★[v117.17 · JACK 1116 «남은 것 모두» · 화면 없는 Civil 첫 터파기 시험] 창 형(PaletteSet)을 건드리면 화면 없는 Civil이 죽는다(0xC0000005 — 정지 창과 같은 가드)
+        if (!SelfCheckLog.Headless) try { ExcavPalette.Refresh(); } catch { }
         ed.WriteMessage($"\n[터파기 지표면] 완료 — {SurfName} (구조물 {made}개)" +
                         $"\n  굴착 구배 1:{useSlope:0.##}{(useSlope <= GradingSettings.WallGateSlope + 1e-9 ? " (수직)" : "")}" +
                         (WingWarn.Length > 0 ? $"\n  ⚠ {WingWarn}" : "") +
@@ -973,6 +977,9 @@ public sealed class ExcavCommand
             vs = GradingGeometry.Build(e.Bottom, target, p, up: true, e.WallZones);
             return null;
         }
+        // ★[v117.17 · JACK 1116 «남은 것 모두» · 검토 MED] 판을 넘어 센다 — 화면 한 줄은 이 구조물에서 잃은 날개 수 · 첫 까닭(두 번째 판도 실패하면 «모두 날개 자동»)
+        int nWing = wz.Count, lost = 0;
+        string firstWhy = "";
         for (int pass = 0; pass < 2 && wz.Count > 0; pass++)
         {
             vs = GradingGeometry.Build(e.Bottom, target, p, up: true, legacy.Count > 0 ? legacy : null);
@@ -992,34 +999,75 @@ public sealed class ExcavCommand
                 if (z.Ref != null && !SameRing(z.Ref, e.Bottom, 0.01))
                 {
                     failed.Add(z);
+                    if (firstWhy.Length == 0) firstWhy = "터파기선이 옮겨짐";
                     log.AppendLine($"■ {tag} 가시설 날개 [{z.T0:F1}~{z.T1:F1}m] 못 씀 — 터파기선이 옮겨짐(옛 자 ≠ 지금 바닥) → 날개 자동(엔진 구간) · 다시 지정하면 날개");
                     continue;
                 }
-                var R = ExcavWing.Region(ruler, z.T0, z.T1, z.WingT0!.Value, z.WingT1!.Value, outer, WingMargin, out string why);
+                var R = ExcavWing.Region(ruler, z.T0, z.T1, z.WingT0!.Value, z.WingT1!.Value, outer, WingMargin, out string why, out string tech);
                 var a = R == null ? null : ExcavWing.WingPath(ruler, z.T0, z.WingT0.Value, outer, vs.CornerLines, 1.0);
                 var b = R == null ? null : ExcavWing.WingPath(ruler, z.T1, z.WingT1.Value, outer, vs.CornerLines, 1.0);
                 if (R == null || a == null || b == null)
                 {
                     failed.Add(z);
-                    log.AppendLine($"■ {tag} 가시설 날개 [{z.T0:F1}~{z.T1:F1}m] 못 씀 — {(R == null ? why : "날개 선이 바깥 링에 안 닿음")} → 날개 자동(엔진 구간)");
+                    if (firstWhy.Length == 0) firstWhy = R == null ? why : "날개가 터파기 윗선에 안 닿음";
+                    log.AppendLine($"■ {tag} 가시설 날개 [{z.T0:F1}~{z.T1:F1}m] 못 씀 — {(R == null ? why + (tech.Length > 0 ? " · " + tech : "") : "날개 선이 바깥 링에 안 닿음")} → 날개 자동(엔진 구간)");
                     continue;
                 }
                 log.AppendLine($"■ {tag} 가시설 날개 [{z.T0:F1}~{z.T1:F1}m] — R {R.Count}점 · {GradingGeometry.RingAreaNts(R):F0}㎡ · 날개 선 {a.Count} · {b.Count}점"
-                             + (why.Length > 0 ? $" · ⚠{why}" : ""));
+                             + (tech.Contains("⚠") ? $" · {tech}" : ""));
                 plan.Regions.Add(R); plan.Paths.Add(a); plan.Paths.Add(b);
             }
-            if (failed.Count == 0) return plan;
-            WingWarn = $"날개 {failed.Count}곳 못 씀 → 날개 자동(로그)";
-            foreach (var f in failed) { wz.Remove(f); legacy.Add(f); }
+            if (failed.Count == 0)
+            {
+                if (lost > 0) AddWingWarn($"날개 {lost}곳 못 씀 — {firstWhy} → 날개 자동 · {WingTodo(firstWhy, false)}");
+                return plan;
+            }
+            lost += failed.Count;
+            foreach (var f in failed) { wz.Remove(f); legacy.Add(f); WingFailed.Add(WingKey(e.PolyHandle, f)); }
         }
         // 물러남 — 전부 엔진 구간(종전 길)
         vs = GradingGeometry.Build(e.Bottom, target, p, up: true, e.WallZones);
-        if (wz.Count > 0) { log.AppendLine($"■ {tag} 가시설 날개 — 전부 날개 자동(엔진 구간)"); WingWarn = "날개 못 씀 → 날개 자동(로그)"; }
+        if (wz.Count > 0)
+        {
+            foreach (var f in wz) WingFailed.Add(WingKey(e.PolyHandle, f));
+            log.AppendLine($"■ {tag} 가시설 날개 — 전부 날개 자동(엔진 구간)");
+            string w = firstWhy.Length > 0 ? firstWhy : "터파기 사면 없음";
+            AddWingWarn($"날개 {nWing}곳 모두 날개 자동 — {w} → {WingTodo(w, false)}");
+        }
+        else if (lost > 0) AddWingWarn($"날개 {lost}곳 못 씀 — {firstWhy} → 날개 자동 · {WingTodo(firstWhy, false)}");
         return null;
     }
 
+    /// <summary>★[v117.17 · 설치 전 검토 LOW] 날개 까닭(단답) → 할 일(단답) — <paramref name="picking"/> = [가시설 변환] 찍는 중(«다시»만) · 아니면 터파기를 다시 만들 때.</summary>
+    internal static string WingTodo(string why, bool picking)
+    {
+        why ??= "";
+        if (why.StartsWith("계산 실패") || why.Contains("깊어")) return "계속되면 로그 전달";
+        if (why.Contains("터파기선이 옮겨짐")) return picking ? "다시" : "[가시설 변환] 다시";
+        if (why.Contains("사면 없음") || why.Contains("윗선 없음") || why.Contains("바닥 둘레")) return "[구조물 터파기] 다시";
+        if (why.Contains("둘레 전체")) return picking ? "날개 없이 그대로" : "[가시설 변환] 다시";
+        if (why.Contains("너무 짧음")) return picking ? "구간 길게 다시" : "[가시설 변환] 구간 길게 다시";
+        return picking ? "날개 방향 바꿔 다시" : "날개 방향 바꿔 [가시설 변환] 다시";
+    }
+
+    /// <summary>★[v117.17] 날개 경고 한 줄을 더한다(구조물이 여럿이면 « / »로 잇는다 — 앞 구조물 경고를 덮지 않게).</summary>
+    private static void AddWingWarn(string s) => WingWarn = WingWarn.Length > 0 ? WingWarn + " / " + s : s;
+
+    /// <summary>★[v117.17] 마지막 터파기 만들기의 날개 경고(없으면 빈 글).</summary>
+    internal static string LastWingWarn => WingWarn;
+
+    /// <summary>★[v117.17 · 2차 검토 MED] 마지막 터파기 만들기에서 날개를 못 써 날개 자동이 된 구간(구조물 폴리선 핸들 · T0 · T1) — [가시설 변환] 끝 줄이 «제 구간»만 보고 고른다
+    /// (다른 구조물 · 같은 구조물 옛 날개의 실패로 이번 날개를 «날개 자동»이라 하지 않게).</summary>
+    private static readonly System.Collections.Generic.HashSet<string> WingFailed = new();
+    private static string WingKey(string poly, SlopeZone z) => $"{poly}|{z.T0:F4}|{z.T1:F4}";
+    internal static bool WingFailedFor(string poly, SlopeZone z) => WingFailed.Contains(WingKey(poly, z));
+
+    /// <summary>★[v117.17 · 설치 전 검토 LOW] 마지막 터파기 만들기에서 터파기선이 바뀌어 가시설 구간을 통째로 버린 구조물(폴리선 핸들).</summary>
+    private static readonly System.Collections.Generic.HashSet<string> ZonesDropped = new();
+    internal static bool ZonesDroppedFor(string poly) => ZonesDropped.Contains(poly ?? "");
+
     /// <summary>★[v117.16 · 설치 전 검토 MED] 두 닫힌 링이 같은가 — 점 수가 같고 같은 차례의 꼭짓점(XY)이 <paramref name="tol"/> 안(시작점이 달라도 한 바퀴 돌려 봄).</summary>
-    private static bool SameRing(System.Collections.Generic.IReadOnlyList<Point3> a, System.Collections.Generic.IReadOnlyList<Point3> b, double tol)
+    internal static bool SameRing(System.Collections.Generic.IReadOnlyList<Point3> a, System.Collections.Generic.IReadOnlyList<Point3> b, double tol)   // ★[v117.17] 가시설 찍기(GrooveFree)도 같은 규칙
     {
         if (a == null || b == null || a.Count != b.Count || a.Count == 0) return false;
         int n = a.Count;
@@ -1038,9 +1086,11 @@ public sealed class ExcavCommand
 
     /// <summary>★[v117.16] 첫 TIN(<paramref name="vid"/> — 사면)에서 날개 선 높이를 뜨고, 사면 링에서 R을 빼고, 날개 선을 더해 다시 굽는다.
     /// 못 하면 <see cref="ObjectId.Null"/>(부르는 쪽이 종전 길로 다시 굽는다).</summary>
+    /// <param name="why">★[v117.17 · JACK 1116 «남은 것 모두»] 못 했을 때 화면용 단답 까닭(기술 글은 <paramref name="log"/>).</param>
     private static ObjectId CutWings(Database db, Transaction tr, ObjectId vid, VirtualSlope vs, ExcavBundle e, WingPlan plan,
-                                     string name, ObjectId groundId, System.Text.StringBuilder log, string tag)
+                                     string name, ObjectId groundId, System.Text.StringBuilder log, string tag, out string why)
     {
+        why = "계산 실패(프로그램 문제)";
         try
         {
             var tin = (TinSurface)tr.GetObject(vid, OpenMode.ForRead);
@@ -1059,18 +1109,24 @@ public sealed class ExcavCommand
                     catch { miss++; }
                 }
                 // ★[설치 전 검토 LOW] 사이 점 하나라도 못 뜨면 경사 줄이 사면 위가 아니게 됨 → 종전 길
-                if (l.Count < 2 || miss > 0) { log.AppendLine($"■ {tag} 가시설 날개 — 날개 선 높이를 못 뜸(빠진 점 {miss}) → 날개 자동"); return ObjectId.Null; }
+                if (l.Count < 2 || miss > 0) { log.AppendLine($"■ {tag} 가시설 날개 — 날개 선 높이를 못 뜸(빠진 점 {miss}) → 날개 자동"); why = "날개가 터파기 사면 밖을 지남"; return ObjectId.Null; }   // ★[v117.17 · 설치 전 검토 LOW] 단답 까닭
                 lines.Add(l);
             }
             if (!ExcavWing.Carve(vs.Rings, vs.RingRise, vs.CornerLines, e.Bottom, plan.Regions, e.MinSlope,
                                  out var rings2, out var corners2, out string clog))
             {
                 log.AppendLine($"■ {tag} 가시설 날개 — 링 못 깎음({clog}) → 날개 자동");
+                // ★[v117.17] 초보 말로 — Carve 로그의 까닭 낱말을 옮김(나머지는 프로그램 문제)
+                why = clog.Contains("너무 좁음") ? "날개 사이 너무 좁음" : clog.Contains("가름") ? "날개가 사면을 둘로 가름" : clog.Contains("통째로") ? "터파기가 깊어 날개 땅을 못 막음" : why;
                 return ObjectId.Null;
             }
             corners2.AddRange(lines);
+            // ★[v117.17 · JACK 1116 «남은 것 모두» · 키트 exwing 실측] 날개 선 점이 모퉁이 부채꼴 꼭대기 점과 길게 이어져 평면 띠가 들리지 않게(0.96 m) — 띠 · 부채꼴 경계를 브레이크라인으로
+            var fanLog = new System.Text.StringBuilder();
+            var fans = ExcavWing.FanLines(vs.Rings[0], vs.Rings, vs.RingRise, plan.Regions, 1.5, corners2, fanLog);   // 모서리 능선 · 날개 선과 엇갈리는 선은 뺌(하네스 S290 F가 같은 입력으로 잰다)
+            corners2.AddRange(fans);
             var vid2 = GradingBuilder.BuildVirtualSlope(db, tr, rings2, name, corners2, groundId);
-            log.AppendLine($"■ {tag} 가시설 날개 {plan.Regions.Count}곳 깎음 — {clog} · 날개 선 {lines.Count}줄"
+            log.AppendLine($"■ {tag} 가시설 날개 {plan.Regions.Count}곳 깎음 — {clog} · 날개 선 {lines.Count}줄 · 부채꼴 경계선 {fans.Count}줄{fanLog}"
                          + (miss > 0 ? $"(높이 못 뜬 점 {miss}개 뺌)" : ""));
             return vid2;
         }
@@ -1100,6 +1156,7 @@ public sealed class ExcavCommand
         if (a <= 1e-6) return zs;
         double diff = System.Math.Abs(b - a) / a;
         if (diff <= 0.02) return zs;                    // 2%까지는 표본 간격 차이로 본다
+        if (!string.IsNullOrEmpty(prev.PolyHandle)) ZonesDropped.Add(prev.PolyHandle);   // ★[v117.17 · 설치 전 검토 LOW] [가시설 변환] 끝 줄이 «날개 2»라 하지 않게
         log.AppendLine($"■ ⚠ 가시설 구간 {zs.Count}개를 <b>버렸다</b> — 터파기선이 바뀌었다"
                      + $"(둘레 {a:0.#}m → {b:0.#}m, {diff * 100:0.#}% 차이). 구간을 다시 지정하세요.");
         // ★★[3차 검토 0909 · 높음1] <b>로그 파일에만 적으면 아무도 못 본다.</b>
@@ -1107,10 +1164,9 @@ public sealed class ExcavCommand
         //   종단에 아무것도 없는 것을 나중에 발견한다 — 조용한 실패의 전형이다.
         try
         {
-            ed.WriteMessage($"\n  ⚠ 터파기선이 바뀌어(둘레 {a:0.#}m → {b:0.#}m) <b>가시설 구간 {zs.Count}개를 버렸습니다</b>."
-                          + "\n     구간은 그린 그 자리를 기준으로 잡혀 있어, 선이 바뀌면 엉뚱한 데가 수직이 됩니다."
-                          + "\n     → [가시설 변환]으로 다시 지정해 주세요.");
-            ExcavPalette.Say($"터파기선이 바뀌어 가시설 구간 {zs.Count}개를 버렸습니다 — 다시 지정해 주세요.");
+            // ★[v117.17 · JACK 1116 «남은 것 모두»] 단답형(명령줄에 <b> 꼬리표가 새던 것도 걷음) — 까닭 풀이는 로그 줄(위)
+            ed.WriteMessage($"\n  ⚠ 가시설 구간 {zs.Count}개 버림 — 터파기선 바뀜(둘레 {a:0.#}m → {b:0.#}m) → [가시설 변환] 다시");
+            if (!SelfCheckLog.Headless) ExcavPalette.Say($"가시설 구간 {zs.Count}개 버림 — 터파기선 바뀜 → [가시설 변환] 다시");   // ★[v117.17] 화면 없는 Civil은 창을 안 건드림
         }
         catch { }
         return null;

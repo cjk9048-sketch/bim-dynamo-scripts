@@ -49,14 +49,15 @@ public sealed class ExcavWallCommand
             if (recs == null) { ed.WriteMessage("\n[가시설] " + why); return; }
             int n = 0;
             foreach (var r in recs) if (r.WallZones != null && r.WallZones.Count > 0) { r.WallZones = null; n++; }
-            if (n == 0) { ed.WriteMessage("\n[가시설] 지정된 구간이 없습니다."); return; }
+            // ★[v117.17 · JACK 1116 «남은 것 모두»] 단답형
+            if (n == 0) { ed.WriteMessage("\n[가시설] 가시설 구간 없음"); return; }
             Save(doc, recs);
-            ed.WriteMessage($"\n[가시설] 구조물 {n}개의 구간을 전부 지웠습니다 — 다시 만듭니다.");
+            ed.WriteMessage($"\n[가시설] 구조물 {n}개 가시설 구간 전부 지움 → 터파기 다시 만듦");
             Rebuild(doc, recs, ed);
         }
         catch (System.Exception ex)
         {
-            ed.WriteMessage("\n[가시설] 실패 — " + ex.Message);
+            ed.WriteMessage("\n[가시설] 계산 실패(프로그램 문제) → 다시 · 계속되면 로그 전달");
             try { DiagLog.Append($"\n■ 가시설 전체해제 예외 — {ex.GetType().Name}: {ex.Message}\n"); } catch { }
         }
     }
@@ -191,15 +192,15 @@ public sealed class ExcavWallCommand
             var p1 = GetPointWatched(ed, "\n[가시설 변환] 시작점 클릭(터파기 둘레): ", OnStart);
             if (p1.Status != PromptStatus.OK) { ed.WriteMessage($"\n[{label}] 취소."); return; }
             var h1 = NearestRim(rims, p1.Value.X, p1.Value.Y);
-            if (h1 == null) { ed.WriteMessage($"\n[{label}] 둘레 못 찾음"); return; }
+            if (h1 == null) { ed.WriteMessage($"\n[{label}] 터파기 둘레 못 찾음 → 터파기 바닥선 위 클릭"); return; }
             var rim = h1.Value.R; double ta = h1.Value.T, tot = rim.Total;
             var rec = recs[rim.Idx];
 
             // ★★[2차 검토 0909 · 보통] 하한이 수직 문턱보다 크면 세워도 형상이 안 바뀐다 — 찍기 전에 막는다(종전과 같은 판정)
             if (rec.MinSlope > GradingSettings.WallGateSlope + 1e-9)
             {
-                ed.WriteMessage($"\n[{label}] 최소구배 1:{rec.MinSlope:0.###} > 수직 문턱 1:{GradingSettings.WallGateSlope:0.###} → 수직 불가"
-                              + "\n  → [구조물 터파기] 굴착 구배 0(수직)으로 다시 생성 뒤 지정");
+                // ★[v117.17 · JACK 1116 «남은 것 모두»] 단답형 한 줄(«무엇이 문제 — 왜 → 할 일»)
+                ed.WriteMessage($"\n[{label}] 수직 불가 — 이 터파기 최소구배 1:{rec.MinSlope:0.###} > 수직 문턱 1:{GradingSettings.WallGateSlope:0.###} → [구조물 터파기] 굴착 구배 0(수직)으로 다시 만든 뒤 지정");
                 return;
             }
 
@@ -238,7 +239,7 @@ public sealed class ExcavWallCommand
             if (moved) { double d = W(tb - lastT, tot); if (d > tot * 0.5) d -= tot; acc = System.Math.Max(-tot, System.Math.Min(tot, acc + d)); }
             else { double f = W(tb - ta, tot); acc = f <= tot - f ? f : -(tot - f); }
             var pick = Stretch(ta, tb, acc, tot);
-            if (pick.Span < MinRun) { ed.WriteMessage($"\n[{label}] 구간 {pick.Span:0.##}m — 짧음({MinRun:0.#}m 이상)"); return; }
+            if (pick.Span < MinRun) { ed.WriteMessage($"\n[{label}] 구간 너무 짧음 — {pick.Span:0.##}m → {MinRun:0.#}m 이상 찍기"); return; }
             double t0 = pick.S0, t1 = pick.S1;
 
             // ── ③ 날개 — 끝점 쪽 → 시작점 쪽(옛 손 폴리곤과 같은 그리기 · 빨간 선은 터파기 윗선까지) ──
@@ -258,19 +259,27 @@ public sealed class ExcavWallCommand
                 if (!endIsT1) segO.Reverse();
                 var got = new WallPolyDraw.Picked();
                 string[] nm = { "끝점", "시작점" };
-                var poly = WallPolyDraw.Run(doc, rec.FinalRing, segO, endIsT1 ? n0 : n1, endIsT1 ? n1 : n0, endIsT1 ? ow : -ow,
+                // ★[v117.17 · JACK 1116 «남은 것 모두» · 검토 LOW] 찍기용 윗선은 날개 홈이 없는 것 — 이미 날개 단 구간 위를 다시 찍어도 홈 벽에 막히지 않게(기록에는 방향만 남음)
+                var pickRing = GrooveFree(rec, out string gnote);
+                // ★[v117.17] 머리 «[가시설 변환]» — 거절 글 단답형 · 조립 메모는 로그로만(부지 [옹벽 변환]은 head 없이 종전 그대로)
+                var poly = WallPolyDraw.Run(doc, pickRing, segO, endIsT1 ? n0 : n1, endIsT1 ? n1 : n0, endIsT1 ? ow : -ow,
                                             out _, out _, out string plog,
-                                            ask: step => $"\n[가시설 날개] {nm[step]} 쪽 날개 방향 클릭(Esc = 날개 자동): ",
-                                            outDirs: got);
-                try { DiagLog.Append($"\n■ 가시설 날개 찍기 — 구조물 {rim.Idx + 1} · [{t0:F2}~{t1:F2}m]\n{plog}"); } catch { }
+                                            ask: step => $"\n[{label}] {nm[step]} 쪽 날개 방향 클릭(Esc = 날개 자동): ",
+                                            outDirs: got, head: $"[{label}]");
+                try { DiagLog.Append($"\n■ 가시설 날개 찍기 — 구조물 {rim.Idx + 1} · [{t0:F2}~{t1:F2}m]" + (gnote.Length > 0 ? " · " + gnote : "") + $"\n{plog}"); } catch { }
                 if (got.N < 2) ed.WriteMessage($"\n[{label}] 날개 안 찍음 → 날개 자동");
-                else if (poly == null) { ed.WriteMessage($"\n[{label}] 날개 폴리곤 꼬임 → 다시(날개 방향 바꿔서)"); return; }
+                else if (poly == null) { ed.WriteMessage($"\n[{label}] 날개 못 씀 — 두 날개가 엇갈리거나 사이가 너무 좁음 → 날개 방향 바꿔 다시"); return; }
                 else
                 {
                     var a = endIsT1 ? got.DirA : got.DirB;   // T1 끝
                     var b = endIsT1 ? got.DirB : got.DirA;   // T0 끝
-                    var chk = ExcavWing.Region(rim.Pts, t0, t1, b, a, rec.FinalRing, GradingSettings.WallPolygonMargin, out string wwhy);
-                    if (chk == null) { ed.WriteMessage($"\n[{label}] 날개 못 씀 — {wwhy} → 다시"); return; }
+                    var chk = ExcavWing.Region(rim.Pts, t0, t1, b, a, pickRing, GradingSettings.WallPolygonMargin, out string wwhy, out string wtech);
+                    if (chk == null)
+                    {
+                        try { DiagLog.Append($"   가시설 날개 거절 — {wwhy}" + (wtech.Length > 0 ? " · " + wtech : "") + "\n"); } catch { }
+                        ed.WriteMessage($"\n[{label}] 날개 못 씀 — {wwhy} → {ExcavCommand.WingTodo(wwhy, true)}");   // ★[v117.17 · 설치 전 검토 LOW] 할 일은 까닭 따라
+                        return;
+                    }
                     wT0 = b; wT1 = a;
                 }
             }
@@ -284,18 +293,46 @@ public sealed class ExcavWallCommand
             // ★[2차 검토 0909 · 보통] 겹치는 옛 구간은 걷어내고 넣는다.
             int dup = rec.WallZones.RemoveAll(q => Overlaps(q.T0, q.T1, t0, t1, tot));
             rec.WallZones.Add(z);
-            ed.WriteMessage($"\n[{label}] 구조물 {rim.Idx + 1} · {pick.Span:0.#}m 수직" + (z.HasWings ? " · 날개 2" : pick.Whole ? "" : " · 날개 자동")
-                          + (dup > 0 ? $" · 겹친 옛 구간 {dup}개 합침" : ""));
             // ★[검토 0909 · 보통] 저장을 먼저 해야 DoExcav가 구간을 읽는다 — 다시 만들기가 실패하면 그 사실을 말한다(Rebuild).
             Save(doc, recs);
-            Rebuild(doc, recs, ed, rim.Idx);
+            bool built = Rebuild(doc, recs, ed, rim.Idx, label);
+            // ★[v117.17 · 검토 LOW] 끝 줄은 다시 만든 뒤에 — 짓다가 날개 자동으로 물러났으면 «날개 2»라 하지 않는다(경고는 터파기 줄 ⚠)
+            bool fell = built && z.HasWings && ExcavCommand.WingFailedFor(rec.PolyHandle, z);   // ★[2차 검토 MED] 제 구간이 물러났을 때만
+            // ★[v117.17 · 설치 전 검토 LOW] 터파기선이 바뀌어 구간이 통째로 버려졌으면(위 ⚠) «수직 · 날개 2»라 하지 않는다
+            if (built && ExcavCommand.ZonesDroppedFor(rec.PolyHandle))
+                ed.WriteMessage($"\n[{label}] 구조물 {rim.Idx + 1} · 구간 안 들어감 — 터파기선 바뀜(위 ⚠) → [가시설 변환] 다시");
+            else
+                ed.WriteMessage($"\n[{label}] 구조물 {rim.Idx + 1} · {pick.Span:0.#}m 수직" + (z.HasWings ? (fell ? " · 날개 자동(위 ⚠)" : " · 날개 2") : pick.Whole ? "" : " · 날개 자동")
+                              + (dup > 0 ? $" · 겹친 옛 구간 {dup}개 합침" : ""));
         }
         catch (System.Exception ex)
         {
-            ed.WriteMessage($"\n[{label}] 실패 — " + ex.Message);
-            try { DiagLog.Append($"\n■ 가시설 변환 예외 — {ex.GetType().Name}: {ex.Message}\n"); } catch { }
+            // ★[v117.17 · JACK 1116 «남은 것 모두»] 화면은 단답 · 예외 글은 로그로
+            ed.WriteMessage($"\n[{label}] 계산 실패(프로그램 문제) → 다시 · 계속되면 로그 전달");
+            try { DiagLog.Append($"\n■ 가시설 변환 예외 — {ex.GetType().Name}: {ex.Message}\n{ex.StackTrace}\n"); } catch { }
         }
         finally { PickSession.End(); }
+    }
+
+    /// <summary>★[v117.17 · JACK 1116 «남은 것 모두» · 검토 LOW] 날개 찍기용 홈 없는 윗선 — 셈은 Core(<see cref="ExcavWing.GrooveFree"/> · 하네스 S290 G가 잰다).
+    /// 여기서는 짓기(PlanWings)와 같은 규칙으로 옛 자(터파기선이 옮겨짐 — 그 날개는 이미 날개 자동이라 홈 없음) 구간만 미리 뺀다.</summary>
+    private static System.Collections.Generic.List<Point3> GrooveFree(ExcavBundle rec, out string note)
+    {
+        note = "";
+        var ring = rec.FinalRing!;
+        if (rec.WallZones == null) return ring;
+        var zs = new System.Collections.Generic.List<(System.Collections.Generic.IReadOnlyList<Point3> Ruler, double T0, double T1, (double X, double Y) W0, (double X, double Y) W1)>();
+        int stale = 0;
+        foreach (var z in rec.WallZones)
+        {
+            if (z == null || !z.HasWings) continue;
+            if (z.Ref != null && !ExcavCommand.SameRing(z.Ref, rec.Bottom, 0.01)) { stale++; continue; }
+            zs.Add((z.Ref ?? rec.Bottom, z.T0, z.T1, z.WingT0!.Value, z.WingT1!.Value));
+        }
+        if (zs.Count == 0) { if (stale > 0) note = $"날개 홈 메움 없음 · 옛 자 구간 {stale}곳 건너뜀"; return ring; }
+        var keep = ExcavWing.GrooveFree(ring, rec.Bottom, zs, rec.MinSlope, out note);
+        if (stale > 0) note += $" · 옛 자 구간 {stale}곳 건너뜀";
+        return keep;
     }
 
     /// <summary>[사면 변환] — 가시설 구간에 커서 → 그 구간 빨강 → 클릭 → 그 구간만 다시 사면.</summary>
@@ -370,11 +407,11 @@ public sealed class ExcavWallCommand
             if (rec0.WallZones.Count == 0) rec0.WallZones = null;
             ed.WriteMessage($"\n[{label}] 구조물 {got.Value.Rec + 1} · 가시설 {got.Value.Span:0.#}m → 사면");
             Save(doc, recs);
-            Rebuild(doc, recs, ed, got.Value.Rec);
+            Rebuild(doc, recs, ed, got.Value.Rec, label);
         }
         catch (System.Exception ex)
         {
-            ed.WriteMessage($"\n[{label}] 실패 — " + ex.Message);
+            ed.WriteMessage($"\n[{label}] 계산 실패(프로그램 문제) → 다시 · 계속되면 로그 전달");   // ★[v117.17] 단답형 · 예외 글은 로그로
             try { DiagLog.Append($"\n■ 사면 변환(가시설) 예외 — {ex.GetType().Name}: {ex.Message}\n"); } catch { }
         }
         finally { PickSession.End(); }
@@ -400,8 +437,9 @@ public sealed class ExcavWallCommand
         using var tr = doc.Database.TransactionManager.StartTransaction();
         var recs = ExcavBundleStore.TryLoadAll(doc.Database, tr, out string w, out bool tooNew);
         tr.Commit();
-        if (tooNew) { why = w + " — 애드인을 최신으로 올린 뒤 다시 하세요."; return null; }
-        if (recs == null || recs.Count == 0) { why = "터파기 기록이 없습니다 — [구조물 터파기]를 먼저 하세요."; return null; }
+        // ★[v117.17 · JACK 1116 «남은 것 모두»] 단답형 — 판 번호 같은 기술 글은 로그로
+        if (tooNew) { why = "터파기 기록 못 읽음 — 더 새 애드인이 만든 기록 → 애드인 업데이트 뒤 다시"; try { DiagLog.Append($"\n■ 가시설 — {w}\n"); } catch { } return null; }
+        if (recs == null || recs.Count == 0) { why = "터파기 기록 없음 → [구조물 터파기] 먼저"; return null; }
         return recs;
     }
 
@@ -413,7 +451,9 @@ public sealed class ExcavWallCommand
     }
 
     /// <summary>구간을 바꿨으면 <b>다시 만들어야</b> 보인다 — 기록만 고치면 도면은 그대로다.</summary>
-    private static void Rebuild(AcDoc doc, System.Collections.Generic.List<ExcavBundle> recs, Editor ed, int idx = 0)
+    /// <param name="label">★[v117.17 · JACK 1116 «남은 것 모두»] 명령줄 머리(부른 명령 이름) — 글은 단답형.</param>
+    /// <returns>★[v117.17] 터파기를 실제로 다시 만들었나.</returns>
+    private static bool Rebuild(AcDoc doc, System.Collections.Generic.List<ExcavBundle> recs, Editor ed, int idx = 0, string label = "가시설")
     {
         ObjectId groundId = ObjectId.Null;
         try
@@ -426,9 +466,8 @@ public sealed class ExcavWallCommand
         catch { }
         if (groundId.IsNull)
         {
-            ed.WriteMessage("\n[가시설] 원지반을 못 찾아 다시 만들지 못했습니다 —"
-                          + " [구조물 터파기]를 한 번 돌리면 반영됩니다.");
-            return;
+            ed.WriteMessage($"\n[{label}] 구간만 저장 — 원지반 못 찾음 → [구조물 터파기] 한 번 실행");
+            return false;
         }
         // ★★[2차 검토 0909] <b>고친 그 구조물</b>의 폴리선을 준다.
         //   <c>DoExcav</c>는 기록된 전부를 다시 굽지만, <b>넘긴 폴리선의 기록만</b>
@@ -438,8 +477,8 @@ public sealed class ExcavWallCommand
         ObjectId anyPoly = NoriCommand.FindByHandle(doc.Database, recs[idx].PolyHandle);
         if (anyPoly.IsNull)
         {
-            ed.WriteMessage("\n[가시설] 구조물 폴리선을 못 찾아 다시 만들지 못했습니다.");
-            return;
+            ed.WriteMessage($"\n[{label}] 구간만 저장 — 구조물 폴리선 없음 → [구조물 터파기] 다시");
+            return false;
         }
         try
         {
@@ -455,18 +494,23 @@ public sealed class ExcavWallCommand
             //   직전 실행이 만든 <c>터파기면_DH</c>가 그대로 남아 <b>언제나 참</b>이었다 —
             //   막겠다던 바로 그 상태를 못 잡는 처방이었다.
             //   → 이제 <c>DoExcav</c>가 <b>자기가 구웠는지</b>를 직접 답한다.
-            if (ok) ExcavPalette.Say("가시설 구간을 바꿔 터파기를 다시 만들었습니다.");
+            // ★[v117.17 · 화면 없는 Civil 시험] 창 형을 건드리면 화면 없는 Civil이 죽는다 — 정지 창과 같은 가드
+            if (ok) { if (!SelfCheckLog.Headless) ExcavPalette.Say("가시설 구간 반영 — 터파기 다시 만듦"); }
             else
             {
-                ed.WriteMessage("\n[가시설] 구간은 저장했지만 지표면을 다시 만들지 못했습니다 —"
-                              + " 창의 [터파기 지표면 생성]을 눌러 주세요(누르기 전 종단은 옛 형상입니다).");
-                ExcavPalette.Say("구간은 저장했습니다 — [터파기 지표면 생성]을 눌러야 도면에 반영됩니다.");
+                ed.WriteMessage($"\n[{label}] 구간만 저장 — 터파기 지표면 못 만듦 → 창의 [터파기 지표면 생성] 클릭(그 전 종단은 옛 모양)");
+                if (!SelfCheckLog.Headless) ExcavPalette.Say("구간만 저장 → [터파기 지표면 생성] 클릭");
             }
+            return ok;
         }
         catch (System.Exception ex)
         {
-            ed.WriteMessage("\n[가시설] 다시 만들기 실패 — " + ex.Message);
+            // ★[v117.17 · 검토 LOW~MED] 터파기가 일부러 던진 글(System.Exception 그대로 — 무엇을 고칠지 담김)만 첫 줄을 보이고 · 그 밖(Civil · .NET 예외)은 단답
+            string msg = ex.GetType() == typeof(System.Exception) ? ex.Message.Split('\n')[0].Trim() : "계산 실패(프로그램 문제) → 다시 · 계속되면 로그 전달";
+            ed.WriteMessage($"\n[{label}] 구간만 저장 — 터파기 못 만듦: " + msg);
+            try { DiagLog.Append($"\n■ 가시설 다시 만들기 예외 — {ex.GetType().Name}: {ex.Message}\n{ex.StackTrace}\n"); } catch { }
             try { ViewSurfaceCommand.ShowAll(); } catch { }
+            return false;
         }
     }
 

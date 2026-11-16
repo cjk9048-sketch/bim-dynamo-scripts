@@ -62,6 +62,9 @@ public static partial class RoadRing
             double maxDist = 0;
             for (int k = 0; k < f.P.Length; k++) if (f.Keep[k] && f.P[k].Kind != 1) maxDist = Math.Max(maxDist, f.P[k].DNear);
             ls = BuildLines(ev, maxDist + 1.0);
+            // ★[v117.17 · JACK 1116] 끊김선이 데이라잇 현을 지나는 자리 = 선 위 Φ = 0 점을 사면 자리 둘레에(정확한 데이라잇일 때)
+            //   [검토 L-5] 둘레가 바뀌면 그릴 데이라잇도 새 둘레로(그린 선 ↔ 세모 둘레 5 cm 안 어긋남 없게)
+            if (ExactDaylight) { S = DaylightOnLines(ev, S, ls, tags, out int nDl); b.Count.DlOnLines = nDl; if (nDl > 0) b.Daylight = DaylightRuns(ev, S, onB); }
             tLines = sw.ElapsedMilliseconds;
             var slope = TriangulateSlope(ev, S, onB, ls, out var benchPieces, out splits, out tnote);
             tTri = sw.ElapsedMilliseconds;
@@ -73,7 +76,7 @@ public static partial class RoadRing
         tris.AddRange(SplitDeck(deck, splits));
         // Civil 맞춤
         var gf = new GeometryFactory();
-        void Dbg(string s0) { if (DebugRing != null) { var (a0, b0, c0) = RoadGrade.Health(tris); DebugRing($"{s0}: 바늘 {a0} · 쌍 {b0} · 셋 {c0} · 세모 {tris.Count}"); } }
+        void Dbg(string s0) { if (DebugRing != null) { var (a0, b0, c0) = RoadGrade.Health(tris); DebugRing($"{s0}: 바늘 {a0} · 쌍 {b0} · 셋 {c0} · 세모 {tris.Count}"); ProbeTris(s0, tris.Select(t => (t.A, t.B, t.C, false, false, false)), ev); } }
         Dbg("처음");
         int tj = SplitTJunctions(tris); Dbg("T자");
         int holes = FillTriHoles(tris) + RoadGrade.FillSmallHoles(tris, 1.0, gf); Dbg("구멍");
@@ -379,6 +382,32 @@ public static partial class RoadRing
 
     /// <summary>[하네스 전용 계측] Civil 맞춤 단계마다 바늘 · 쌍 · 세 세모 변 수 — null이면 아무것도 안 함(출하 DLL 밖에서 못 건드리게 internal).</summary>
     internal static Action<string>? DebugRing;
+    /// <summary>★[v117.17 · JACK 1116 «남은 것 모두»] [하네스 전용 계측] 이 자리(절대 좌표)를 덮는 세모를 단계마다 찍음(<see cref="DebugRing"/>와 함께) — 실오라기가 어느 단계에서 생기나.</summary>
+    internal static (double X, double Y)? DebugProbe;
+    /// <summary>★[v117.17] [하네스 전용 계측] 세모 무게중심 셈 차 &gt; 2 cm 인 세모 수 · 최대 — 단계마다(<see cref="DebugRing"/>가 있을 때만).</summary>
+    static void ProbeTris(string stage, IEnumerable<(Point3 A, Point3 B, Point3 C, bool AB, bool BC, bool CA)> tris, Evaluator ev)
+    {
+        if (DebugRing == null) return;
+        int bad = 0; double worst = 0; string wAt = "";
+        var ci = System.Globalization.CultureInfo.InvariantCulture;
+        foreach (var (a, b, c, ab, bc, ca) in tris)
+        {
+            double cx = (a.X + b.X + c.X) / 3, cy = (a.Y + b.Y + c.Y) / 3;
+            var pe = ev.Eval(cx, cy); if (pe.Kind is not (2 or 3 or 4) || !double.IsFinite(pe.Z)) continue;
+            double dz = Math.Abs(pe.Z - (a.Z + b.Z + c.Z) / 3);
+            if (dz > 0.02) { bad++; if (dz > worst) { worst = dz; wAt = string.Format(ci, "({0:F2}, {1:F2})", cx % 1000, cy % 1000); } }
+            if (DebugProbe is { } pr)
+            {
+                double d1 = (b.X - a.X) * (pr.Y - a.Y) - (b.Y - a.Y) * (pr.X - a.X), d2 = (c.X - b.X) * (pr.Y - b.Y) - (c.Y - b.Y) * (pr.X - b.X), d3 = (a.X - c.X) * (pr.Y - c.Y) - (a.Y - c.Y) * (pr.X - c.X);
+                if ((d1 >= 0 && d2 >= 0 && d3 >= 0) || (d1 <= 0 && d2 <= 0 && d3 <= 0))
+                {
+                    string V(Point3 p) { var q = ev.Eval(p.X, p.Y); return string.Format(ci, "({0:F3}, {1:F3}) z {2:F3} 셈 {3:F3}", p.X % 1000, p.Y % 1000, p.Z, q.Z); }
+                    DebugRing(string.Format(ci, "[자리 {0}] {1} | {2} | {3} · 면 둘레 변 ab {4} bc {5} ca {6} · 무게중심 차 {7:F1} mm", stage, V(a), V(b), V(c), ab, bc, ca, dz * 1000));
+                }
+            }
+        }
+        DebugRing(string.Format(ci, "[단계 셈 {0}] 무게중심 차 2 cm 넘는 세모 {1} · 최대 {2:F1} mm @{3}", stage, bad, worst * 1000, wAt));
+    }
 
     /// <summary>도로 면 사다리 세모 — 둘레 변 위 점(사면 자리가 도로 둘레에 붙는 점)이 있으면 그 변을 가진 세모를 부채로 나눔(T자 없음) · 반시계.</summary>
     static List<WallDaylight.Tri> SplitDeck(Deck d, Dictionary<(double, double), OnB> onB)
@@ -539,7 +568,10 @@ public static partial class RoadRing
                     foreach (var g in allLines) foreach (var c in g.Coordinates) { double dd = Math.Sqrt(Sq(c.X - end.X) + Sq(c.Y - end.Y)); if (dd > 1e-6 && dd < Math.Min(best, 3.0) && !cs.Any(q => q.Equals2D(c))) { best = dd; hit = c; } }
                 }
                 if (hit == null) { noExt++; continue; }
-                extra.Add(gf.CreateLineString(new[] { new Coordinate(end.X, end.Y), new Coordinate(hit.X, hit.Y) })); ext++;
+                // ★[v117.17 · JACK 1116 «남은 것 모두»] 늘임 선도 0.25 m마다 점(높이 = 셈) — 두 점 늘임(최대 3 m)은 끊김선이라 그 사이를 곧게 이어
+                //   굽은 사면을 가로질렀다(1116 계측: S236 ⑫ 곡률 중심 곁 2.07 m 늘임 · 무게중심 차 161 mm · 가파른 세모 8.35 — 다듬기 · 맞춤 뒤집기는 끊김선 곁이라 못 고침)
+                double el = Math.Sqrt(Sq(hit.X - end.X) + Sq(hit.Y - end.Y)); int en = Math.Max(1, (int)Math.Ceiling(el / 0.25));
+                extra.Add(gf.CreateLineString(Enumerable.Range(0, en + 1).Select(q => new Coordinate(end.X + (hit.X - end.X) * q / en, end.Y + (hit.Y - end.Y) * q / en)).ToArray())); ext++;
             }
         }
         ls.Extended = ext; ls.NoExtend = noExt;
@@ -576,6 +608,36 @@ public static partial class RoadRing
             facesIn.Add((fg, got));
         }
         if (faceFail > 0) { note = $"면 {faceFail}곳 못 가름"; return null; }
+        // ★[v117.17] [하네스 전용 계측] 단계마다 셈 차 큰 세모 · 자리 세모
+        IEnumerable<(Point3, Point3, Point3, bool, bool, bool)> FaceTris()
+        {
+            static ((double, double), (double, double)) Ek(Coordinate a, Coordinate b) { var p = (a.X, a.Y); var q = (b.X, b.Y); return p.CompareTo(q) < 0 ? (p, q) : (q, p); }
+            foreach (var (fg, tl) in facesIn)
+            {
+                var ring = new HashSet<((double, double), (double, double))>(); var cs = fg.Boundary.Coordinates; for (int i = 0; i + 1 < cs.Length; i++) ring.Add(Ek(cs[i], cs[i + 1]));
+                foreach (var t in tl) yield return (new Point3(t[0].X, t[0].Y, Z(t[0].X, t[0].Y)), new Point3(t[1].X, t[1].Y, Z(t[1].X, t[1].Y)), new Point3(t[2].X, t[2].Y, Z(t[2].X, t[2].Y)), ring.Contains(Ek(t[0], t[1])), ring.Contains(Ek(t[1], t[2])), ring.Contains(Ek(t[2], t[0])));
+            }
+        }
+        if (DebugRing != null) ProbeTris("CDT", FaceTris(), ev);
+        if (DebugRing != null && DebugProbe is { } prb0)
+        {
+            // [하네스 전용] 자리 세모의 변이 어느 끊김선 조각인가(소단 · 주름 · 늘임 · 사면 자리 둘레)
+            var pp = gf.CreatePoint(new Coordinate(prb0.X, prb0.Y));
+            foreach (var (fg, tl) in facesIn)
+                foreach (var t in tl)
+                {
+                    var tri = gf.CreatePolygon(new[] { t[0], t[1], t[2], t[0] }); if (!tri.Covers(pp)) continue;
+                    for (int e = 0; e < 3; e++)
+                    {
+                        var a = t[e]; var c = t[(e + 1) % 3]; var mid = gf.CreatePoint(new Coordinate((a.X + c.X) / 2, (a.Y + c.Y) / 2));
+                        var src = new List<string>();
+                        for (int i = 0; i < pieces.Count; i++) if (pieces[i].L.Distance(mid) < 1e-4) { var bl = pieces[i].Src; src.Add($"{(bl.Crease ? "주름" : "소단")} {bl.Role} {(bl.Cut ? "절" : "성")} k{bl.K} 점 {bl.Pts.Count}"); }
+                        foreach (var x in extra) if (x.Distance(mid) < 1e-4) src.Add($"늘임 {x.Length:F2} m");
+                        if (Sb.Distance(mid) < 1e-4) src.Add("사면 자리 둘레");
+                        DebugRing($"[자리 변] ({a.X % 1000:F3}, {a.Y % 1000:F3})–({c.X % 1000:F3}, {c.Y % 1000:F3}) {a.Distance(c):F2} m ← {(src.Count == 0 ? "없음(속 변)" : string.Join(" / ", src))}");
+                    }
+                }
+        }
         // 높이
         double Z(double x, double y)
         {
@@ -586,18 +648,26 @@ public static partial class RoadRing
             var (dn, foot, sg) = ev.NearestFoot(x, y);
             if (sg >= 0 && dn < 1e-6) { int kk = (sg + 1) % m; double l2 = Sq(d.B[kk].X - d.B[sg].X) + Sq(d.B[kk].Y - d.B[sg].Y); double u = l2 < 1e-24 ? 0 : ((x - d.B[sg].X) * (d.B[kk].X - d.B[sg].X) + (y - d.B[sg].Y) * (d.B[kk].Y - d.B[sg].Y)) / l2; double zb = d.B[sg].Z + (d.B[kk].Z - d.B[sg].Z) * Math.Clamp(u, 0, 1); zAt[k] = zb; return zb; }
             // ★[v117.16 · 계획 5단계] 사면 자리 둘레(데이라잇) 위 점(끊김선이 둘레에 닿은 자리) = 원지반 — 셈(E2)은 현 위에서 땅과 몇 mm 어긋남
-            if (ExactDaylight && ev.Ground != null && OnSb(x, y) && ev.Ground.TryGetElevation(k.Item1 / 1e4, k.Item2 / 1e4, out double gb0)) { zAt[k] = gb0; return gb0; }
+            //   ★[v117.17 · 검토 LOW] 도로 둘레 0.15 mm 안 점(0.1 mm 마디 넣기가 둘레에서 비켜 놓은 점)은 원지반 아님 — Fix()가 둘레 위로 되돌려 도로 면 높이를 줌(같은 문턱)
+            if (ExactDaylight && ev.Ground != null && !(sg >= 0 && dn < 1.5e-4) && OnSb(x, y) && ev.Ground.TryGetElevation(k.Item1 / 1e4, k.Item2 / 1e4, out double gb0)) { zAt[k] = gb0; return gb0; }
             double ze = ev.Eval(x, y).Z; zAt[k] = ze; return ze;
         }
         // 다듬기 — 세모 무게중심에서 E2와 보간 차 > 5 mm면 그 점을 면 속에 넣음(둘레 · 선에서 5 cm 넘게 · 3회)
         int inserted = 0; double resid = 0; string residAt = "";
         var refHist = new Dictionary<(int, int), int>();   // [하네스 진단] 다듬기 점 5 m 칸 셈
         var swRef = System.Diagnostics.Stopwatch.StartNew();
+        // ★[v117.17 · JACK 1116 «남은 것 모두» · 짓기 시간] 셈 높이 기억(같은 자리를 다듬기 · 맞춤 뒤집기 · 남은 차가 거듭 셈 — 값은 같음) · 다듬기는 앞 돌림에 바뀐 면만 다시 잼
+        //   (점을 못 넣은 면은 세모 · 높이가 그대로라 다음 돌림 결과도 그대로 — 1116 계측: JACK 도로 다듬기 1.9 s 중 대부분이 안 바뀐 면 다시 재기)
+        var ezMemo = new Dictionary<(double, double), double>();
+        double EZ(double x, double y) { if (!ezMemo.TryGetValue((x, y), out double z)) { z = ev.Eval(x, y).Z; ezMemo[(x, y)] = z; } return z; }
+        var faceDirty = new bool[facesIn.Count]; Array.Fill(faceDirty, true);
         for (int round = 0; round < RefineRounds; round++)   // ★[v116.1 · 범용 개선방향 §3.5 국부 재분할] 6회
         {
             int addRound = 0;
             for (int fi = 0; fi < facesIn.Count; fi++)
             {
+                if (!faceDirty[fi]) continue;
+                faceDirty[fi] = false;
                 var (fg, tl) = facesIn[fi];
                 var add = new List<Coordinate>();
                 var bnd = fg.Boundary;
@@ -605,8 +675,8 @@ public static partial class RoadRing
                 {
                     double cx = (t[0].X + t[1].X + t[2].X) / 3, cy = (t[0].Y + t[1].Y + t[2].Y) / 3;
                     double zi = (Z(t[0].X, t[0].Y) + Z(t[1].X, t[1].Y) + Z(t[2].X, t[2].Y)) / 3;
-                    var pe = ev.Eval(cx, cy); if (!double.IsFinite(pe.Z)) continue;
-                    double dz = Math.Abs(pe.Z - zi);
+                    double ezv = EZ(cx, cy); if (!double.IsFinite(ezv)) continue;
+                    double dz = Math.Abs(ezv - zi);
                     if (dz <= 0.005) continue;
                     if (bnd.Distance(gf.CreatePoint(new Coordinate(cx, cy))) <= RefineEdge) continue;   // 선 · 둘레에서 2 cm(5 cm는 선 곁 차를 못 줄였다 — 1109 계측 130칸)
                     if (t.Any(v => Sq(v.X - cx) + Sq(v.Y - cy) < RefineVert * RefineVert)) continue;
@@ -615,7 +685,7 @@ public static partial class RoadRing
                 }
                 if (add.Count == 0) continue;
                 foreach (var q in add) { zAt[Key(q.X, q.Y)] = ev.Eval(q.X, q.Y).Z; if (DebugRing != null) { var hk = ((int)Math.Floor(q.X / 5), (int)Math.Floor(q.Y / 5)); lock (refHist) refHist[hk] = refHist.GetValueOrDefault(hk) + 1; } }
-                try { facesIn[fi] = (fg, RoadGrade.InsertPoints(tl, add, fg)); inserted += add.Count; addRound += add.Count; } catch { }
+                try { facesIn[fi] = (fg, RoadGrade.InsertPoints(tl, add, fg)); inserted += add.Count; addRound += add.Count; faceDirty[fi] = true; } catch { }
             }
             if (addRound == 0) break;
         }
@@ -623,6 +693,7 @@ public static partial class RoadRing
         //   볼록 네모일 때 뒤집어 보고 두 세모의 셈 차(무게중심 + 안쪽 세 점)가 2 mm 넘게 줄면 뒤집음(5회). 꺾임선이 선으로 없는 자리(굽은 곳 · 겹친 사면)에서
         //   다듬기 점이 꺾임을 비스듬히 건너는 가는 세모를 만들어 면을 세웠다(JACK 도로 굽은 안쪽 소단 가장자리 0.7 m마다 기울기 2.4 — 톱니).
         long msRefine = swRef.ElapsedMilliseconds; swRef.Restart();
+        if (DebugRing != null) ProbeTris("다듬기 점", FaceTris(), ev);
         if (DebugRing != null && refHist.Count > 0) DebugRing("다듬기 점 칸(5 m): " + string.Join(" · ", refHist.OrderByDescending(kv => kv.Value).Take(12).Select(kv => $"({kv.Key.Item1 * 5 % 100000},{kv.Key.Item2 * 5 % 100000}) {kv.Value}")));
         int ddtFlips = 0;
         {
@@ -641,8 +712,8 @@ public static partial class RoadRing
                 foreach (var (wa, wb, wc) in new[] { (1.0 / 3, 1.0 / 3, 1.0 / 3), (2.0 / 3, 1.0 / 6, 1.0 / 6), (1.0 / 6, 2.0 / 3, 1.0 / 6), (1.0 / 6, 1.0 / 6, 2.0 / 3) })
                 {
                     double x = wa * a.X + wb * b.X + wc * c.X, y = wa * a.Y + wb * b.Y + wc * c.Y;
-                    var pe = ev.Eval(x, y); if (!double.IsFinite(pe.Z)) return double.PositiveInfinity;
-                    e = Math.Max(e, Math.Abs(pe.Z - (wa * za + wb * zb + wc * zc)));
+                    double ezv = EZ(x, y); if (!double.IsFinite(ezv)) return double.PositiveInfinity;
+                    e = Math.Max(e, Math.Abs(ezv - (wa * za + wb * zb + wc * zc)));
                 }
                 return e;
             }
@@ -669,7 +740,7 @@ public static partial class RoadRing
                 double CenErr(Coordinate[] t)
                 {
                     double x = (t[0].X + t[1].X + t[2].X) / 3, y = (t[0].Y + t[1].Y + t[2].Y) / 3;
-                    var pe = ev.Eval(x, y); return double.IsFinite(pe.Z) ? Math.Abs(pe.Z - (Z(t[0].X, t[0].Y) + Z(t[1].X, t[1].Y) + Z(t[2].X, t[2].Y)) / 3) : 0;
+                    double ezv = EZ(x, y); return double.IsFinite(ezv) ? Math.Abs(ezv - (Z(t[0].X, t[0].Y) + Z(t[1].X, t[1].Y) + Z(t[2].X, t[2].Y)) / 3) : 0;
                 }
                 bool Bad(Coordinate[] t) => Steep(t[0], t[1], t[2]) > gmax * 1.1 || CenErr(t) > 0.003;
                 // 처음엔 모든 세모 · 그 뒤엔 앞 회에 뒤집은 세모만 다시 잼(빠르게 — 전엔 회마다 전부 4점씩 재어 JACK 반경 30 m 도로 14초)
@@ -720,13 +791,14 @@ public static partial class RoadRing
             }
         }
         long msDdt = swRef.ElapsedMilliseconds;
+        if (DebugRing != null) ProbeTris("맞춤 뒤집기", FaceTris(), ev);
         // 남은 차(로그)
         foreach (var (fg, tl) in facesIn)
             foreach (var t in tl)
             {
                 double cx = (t[0].X + t[1].X + t[2].X) / 3, cy = (t[0].Y + t[1].Y + t[2].Y) / 3;
                 double zi = (Z(t[0].X, t[0].Y) + Z(t[1].X, t[1].Y) + Z(t[2].X, t[2].Y)) / 3;
-                double dz = Math.Abs(ev.Eval(cx, cy).Z - zi);
+                double dz = Math.Abs(EZ(cx, cy) - zi);
                 if (dz > resid) { resid = dz; residAt = $"({cx:F2}, {cy:F2})"; }
             }
         // 도로 둘레 위 점 — 0.1 mm 마디 넣기가 둘레에서 비켜 놓은 점을 둘레 위 정확한 자리로 되돌림(도로 면 세모를 그 점에서 나눠 맞물림)

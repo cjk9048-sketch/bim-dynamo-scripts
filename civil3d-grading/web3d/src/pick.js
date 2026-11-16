@@ -88,7 +88,7 @@ export class Picker {
       if (u.layer === 'terrain') {
         // ★[v117.16] 측구 구멍 지형 — 맞은 조각 → 원래 세모(구분 · 절성토 · 경사 · 표고 = Civil 지표면 그대로)
         const fs = h.object.geometry.userData.faceSrc;
-        if (fs) this._origFace(h, fs[h.faceIndex]);
+        if (fs) this._origFace(h, fs[h.faceIndex], h.object);
         // 숨긴 구분(옹벽 면 · 원지반 보기의 설계 자리)은 건너뛴다 — 광선은 재료가 숨었는지 모른다
         const ci = this._classIndex(h.faceIndex);
         const mat = Array.isArray(h.object.material) ? h.object.material[ci] : h.object.material;
@@ -101,7 +101,7 @@ export class Picker {
   }
 
   // ★[v117.16] 구멍 지형의 맞음 → 원래 세모 f(번호 · 법선 · 그 자리 원래 높이) — 구멍 가장자리 높이 맞춤은 그릴 때만
-  _origFace(h, f) {
+  _origFace(h, f, mesh) {
     const T = this.head.terrain;
     h.faceIndex = f;
     if (!T || !T.pos || !T.idx) return;
@@ -109,7 +109,13 @@ export class Picker {
     const tri = new THREE.Triangle(v(T.idx[f * 3]), v(T.idx[f * 3 + 1]), v(T.idx[f * 3 + 2]));
     const n = tri.getNormal(new THREE.Vector3());
     if (h.face) h.face = { ...h.face, normal: n };
-    if (Math.abs(n.z) > 1e-9) h.point.z = tri.a.z - ((h.point.x - tri.a.x) * n.x + (h.point.y - tri.a.y) * n.y) / n.z;
+    // ★[v117.17 · JACK 1116 «남은 것 모두»] 세모 · 법선 = 메시 안쪽 좌표 → 맞은 점을 안쪽으로 내려 높이를 구하고 다시 올림(메시에 변환이 붙어도 맞음)
+    if (Math.abs(n.z) > 1e-9) {
+      const W = mesh && mesh.matrixWorld, inv = W ? new THREE.Matrix4().copy(W).invert() : null;
+      const q = inv ? h.point.clone().applyMatrix4(inv) : h.point.clone();
+      q.z = tri.a.z - ((q.x - tri.a.x) * n.x + (q.y - tri.a.y) * n.y) / n.z;
+      h.point.copy(W ? q.applyMatrix4(W) : q);
+    }
   }
 
   _classIndex(face) {

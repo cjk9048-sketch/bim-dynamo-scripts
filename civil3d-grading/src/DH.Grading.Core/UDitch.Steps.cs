@@ -788,6 +788,18 @@ public static partial class UDitch
         return x;
     }
 
+    /// <summary>★[v117.17 · JACK 1116 «남은 것 모두»] 선 전체 길이 글 — 집수정 · 관 자리가 있으면 «35.2 m(U 31.0 · 관 4.2 · 집수정 2)»(보고서의 U · 관 길이와 맞춤).</summary>
+    public static string LengthText(Ditch d, Settings s, string fmt = "0.0")
+    {
+        double L = Qty(d).Length;
+        string t = L.ToString(fmt, Ic) + " m";
+        var lay = LayoutOf(d, s);
+        if (!lay.Follow || lay.Error.Length > 0 || lay.Pipes.Count == 0) return t;
+        // ★[v117.17 검토 LOW] U · 관 = 보고서 수량(U 평면 · 관 3D 다리)이라 더해도 전체와 다름 → 나머지 자리(집수정 수)를 같이 보임
+        return t + "(U " + lay.ULength.ToString(fmt, Ic) + " · 관 " + lay.Pipes.Sum(q => q.Length).ToString(fmt, Ic)
+            + (lay.Basins.Count > 0 ? " · 집수정 " + lay.Basins.Count : "") + ")";
+    }
+
     /// <summary>측구 길이(U · 한 경사면 선 길이) 기준 수량 — 지표 따라감이면 집수정 · 관로 자리를 뺀 U 길이.</summary>
     public static (double BodyArea, double FootArea, double Length, double BodyVol, double FootVol) Qty(Ditch d, Settings s)
     {

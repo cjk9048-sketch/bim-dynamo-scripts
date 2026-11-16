@@ -43,6 +43,7 @@ static class RoadRingCheck
     public static void Run(Action<string, bool, string> check0)
     {
         void Check(string n, bool ok, string d) => check0("S236 RR" + n, ok, d);
+        RoadRing.VerifyReflWalk = true;   // ★[v117.17] 앞 · 뒤 첫 오목 꼭짓점 훑기 = 옛 꼭짓점마다 걷기(다르면 예외)
         if (Environment.GetEnvironmentVariable("BLOCKTEST_CORRIDOR") == "0") RoadRing.Corridor = false;   // ★[v117.16] 개발 중 A/B(옛 E2)
         if (Environment.GetEnvironmentVariable("BLOCKTEST_NOEXACT") == "1") RoadRing.NoExact = true;
         // ① 곧은 경사 도로 — 직각 횡단 식
@@ -104,7 +105,13 @@ static class RoadRingCheck
             if (b.Ok) Console.WriteLine($"   {tag} {b.Count.Text}");   // ★[v117.16 · 계획 1단계] 셈 한 줄
             if (Environment.GetEnvironmentVariable("BLOCKTEST_RRNOTE") == "1") Console.WriteLine($"   {tag} 노트 {b.Note}");
             bool diag = Environment.GetEnvironmentVariable("BLOCKTEST_RRDIAG") == "1";
-            if (diag) { RoadRing.DebugRing = s => Console.WriteLine($"   [단계 {tag}] {s}"); b = RoadRing.Build(inp); RoadRing.DebugRing = null; }
+            if (diag)
+            {
+                // ★[v117.17] BLOCKTEST_RRPROBE="x,y"(상대 좌표) — 그 자리를 덮는 세모를 단계마다 찍음
+                var prb = Environment.GetEnvironmentVariable("BLOCKTEST_RRPROBE");
+                if (!string.IsNullOrEmpty(prb)) { var pp = prb.Split(','); var ci0 = System.Globalization.CultureInfo.InvariantCulture; RoadRing.DebugProbe = (double.Parse(pp[0], ci0) + OX, double.Parse(pp[1], ci0) + OY); }
+                RoadRing.DebugRing = s => Console.WriteLine($"   [단계 {tag}] {s}"); b = RoadRing.Build(inp); RoadRing.DebugRing = null; RoadRing.DebugProbe = null;
+            }
             if (diag && !b.Ok && b.Tris.Count > 0)
             {
                 foreach (var t in b.Tris)

@@ -873,7 +873,8 @@ public class RoadCommand
                     // ★[v117.15 · JACK 1112] 알림은 다시 만들기가 받아들여진 뒤(Convert) — 깨진 면이면 기록을 되돌리고 거절 글만
                     done = $"\n[{label}] {what} — {a0:F1} ~ {a1:F1} m({a1 - a0:F1} m) · {line.K + 1}단부터 옹벽 · 소단 {pdr.Value:0.##} m";
                     // ★[v116 · 고리 엔진 §5 · D2] 벽 기록이 생겨 이 도로는 옛 엔진으로 넘어감 — 한 줄
-                    if (ringWas && s.Last != null && s.Pieces.All(p => p.Ring == null)) done += $"\n[{label}] 이 도로는 옹벽이 있어 옛 방식으로 다시 지었습니다";
+                    //   ★[v117.17 · 검토 LOW] 2단부터 [옹벽 변환] 든 도로는 옛 엔진으로 안 감 — 그 글은 1단(가장자리) 옹벽 도로만(고리 면 못 지으면 Convert가 거절 글)
+                    if (ringWas && s.Last != null && s.Pieces.All(p => p.Ring == null) && !s.Pieces.Any(p => RoadSession.RingTier(p.Inp))) done += $"\n[{label}] 옹벽 있음 → 옛 방식으로 다시 지음";
                 }
                 else
                 {
@@ -1387,11 +1388,20 @@ public class RoadCommand
         bool force = false, run = false;
         var log = new System.Text.StringBuilder($"[진입도로] {(ask ? "업데이트" : "다시 만들기")} — {s.Name}\n");
         string why = "", bad = "", surfMsg = "", left = "";
-        bool surfDone = false, sheetDone = false, xsecDone = false, finalDone = false;
+        bool surfDone = false, sheetDone = false, xsecDone = false, finalDone = false, endsFixed = false;
         static string Add(string a, string b) => a.Length > 0 ? a + " · " + b : b;
         try
         {
             try { s.RecomputeCore(); } catch { }
+            // ★[v117.17 · JACK 1116 «남은 것 모두» · 검토 LOW] [옹벽 변환] 중 미리보기가 이미 고리 면 거절(옹벽 변환 든 도로 · 옛 엔진 안 씀)이면 아무것도 안 바꾸고 멈춤
+            //   (끝 맞추기 · 면 · 종단도 · 횡단도 전 — 부르는 쪽 Convert가 기록을 되돌리고 알림)
+            if (s.TierGuard && s.Last != null && s.Last.Error.StartsWith(RoadSession.TierRingWhy))
+            {
+                s.TierGuardWhy = s.Last.Error + " — 미리보기";
+                log.AppendLine("  미리보기 — " + s.Last.Error + " → 멈춤(아무것도 안 바꿈)");
+                try { DiagLog.Append("\n" + log); } catch { }
+                return;
+            }
             pre = s.StaleKey;
             var d0 = s.Design;
             // [업데이트] — 한 번도 안 놓은 종단도 · 횡단도도 할 일(자리를 물음) · ★[v111.7.2 검토 낮음] 기록한 뷰가 하나도 안 남았으면(모두 지움) 처음과 같이
@@ -1412,7 +1422,7 @@ public class RoadCommand
                 using (BusyPopup.Scope("도로 끝을 맞추는 중입니다.")) fx = s.FixEndsNow(false);
                 log.AppendLine("  끝 맞추기 — " + fx);
                 if (fx.StartsWith("⚠")) bad = Add(bad, fx.TrimStart('⚠'));
-                else if (why.Length == 0) why = "도로 끝 맞춤";
+                else { endsFixed = true; if (why.Length == 0) why = "도로 끝 맞춤"; }
                 try { s.RecomputeCore(); } catch { }
             }
             // ★[v111.7.1 · 검토 열린 물음] [PVI 넣기]가 골라 둔 계획 종단(그립)을 먼저 풂 — 아래에서 그 종단뷰를 지우고 새로 그림(그립이 지운 뷰 위에 남지 않게)
@@ -1435,7 +1445,14 @@ public class RoadCommand
                     catch (System.Exception exF)
                     {
                         // ★[v117.15 · JACK 1112] [옹벽 변환] 거절(깨진 옛 엔진 면 — Civil에 안 넣음) — 종단도 · 횡단도도 안 그림(부르는 쪽 Convert가 기록을 되돌리고 알림)
-                        if (s.TierGuardWhy.Length > 0) { log.AppendLine("  지표면 — " + exF.Message + " → 멈춤"); try { DiagLog.Append("\n" + log); } catch { } return; }
+                        //   ★[v117.17 · 검토 LOW] 끝 맞추기(⓪)는 면 짓기 전이라 이미 됨(노선 · 종단 바뀜 — 되돌리지 않음) — 로그 · 거절 까닭에 그대로 적음
+                        if (s.TierGuardWhy.Length > 0)
+                        {
+                            if (endsFixed) s.TierGuardWhy += " · 끝 맞추기(노선 · 종단)는 이미 함";
+                            log.AppendLine("  지표면 — " + exF.Message + " → 멈춤" + (endsFixed ? "(끝 맞추기는 이미 함 — 노선 · 종단 바뀜)" : ""));
+                            try { DiagLog.Append("\n" + log); } catch { }
+                            return;
+                        }
                         bad = Add(bad, "지표면을 못 만들었습니다 — " + exF.Message);
                         log.AppendLine("  지표면 실패 — " + exF);
                     }

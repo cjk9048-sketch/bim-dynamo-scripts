@@ -328,6 +328,168 @@ public static partial class RoadRing
         return R;
     }
 
+    /// <summary>★★[v117.17 · JACK 1116 «남은 것 모두»] 끊김선(소단 · 주름선)이 데이라잇 현(칸 변 점 사이 곧은 변)을 지나는 자리 — 그 선 위 Φ = 0 점을 사면 자리 둘레에 넣음.
+    /// 데이라잇은 설계면 꺾임(소단 아랫선 등)을 지날 때 꺾이는데 현은 그 모서리를 질러 간다 → 선 ∩ 현 점은 땅 높이(경계 Z = 원지반)인데 셈은 땅과 1 ~ 2 cm 달라
+    /// 8 cm 세모가 기울기 1.23(1116 계측: S236 ③ 헤어핀 소단 아랫선 끝 · 셈 61.705 · 땅 61.721). 선 위 이분(0.1 µm)으로 그 점 P를 찾아 둘레가 P를 지나게 함:
+    /// P 발이 지나는 현 속이면 그 현에 끼움 · 현 끝 너머면(③ uu 1.005) 그 끝 점(칸 변 Φ = 0 점)을 P로 바꿈(되접힘 · 가시 없음 — 설치 전 검토 MED-1 · MED-2).
+    /// 넣은 뒤 «선 토막 ∩ 새 둘레 = P 하나»(0.2 m 안)를 확인 · 다각형 무효 · 확인 실패면 그 조각은 그대로 · 합친 결과가 무효면 S 그대로. 돌려줌 = 새 사면 자리 · <paramref name="n"/> = 넣은 · 바꾼 점 수.</summary>
+    static Geometry DaylightOnLines(Evaluator ev, Geometry S, LineSet ls, Dictionary<(long, long), string>? tags, out int n)
+    {
+        n = 0;
+        if (ev.Ground == null) return S;
+        var gf = new GeometryFactory();
+        var polys = new List<Polygon>();
+        for (int gi = 0; gi < S.NumGeometries; gi++) if (S.GetGeometryN(gi) is Polygon pg) polys.Add(pg);
+        // 고리마다 변 색인
+        var rings = new List<Coordinate[]>(); var ringOf = new List<(int P, int H)>();
+        for (int pi = 0; pi < polys.Count; pi++)
+        {
+            rings.Add(polys[pi].ExteriorRing.Coordinates); ringOf.Add((pi, -1));
+            for (int h = 0; h < polys[pi].NumInteriorRings; h++) { rings.Add(polys[pi].GetInteriorRingN(h).Coordinates); ringOf.Add((pi, h)); }
+        }
+        var idx = new NetTopologySuite.Index.Strtree.STRtree<(int R, int K)>();
+        for (int r = 0; r < rings.Count; r++) for (int k = 0; k + 1 < rings[r].Length; k++) { var a = rings[r][k]; var b = rings[r][k + 1]; idx.Insert(new Envelope(a.X, b.X, a.Y, b.Y), (r, k)); }
+        idx.Build();
+        static bool Inside(in Pt p) { double ph = Evaluator.Phi(p); return p.Kind == 1 || (p.Kind is >= 2 and <= 4 && double.IsFinite(ph) && ph > 0); }
+        bool OnRim(double x, double y) { var (dn, _, sg) = ev.NearestFoot(x, y); return sg >= 0 && dn <= 1e-6; }
+        // 현 속에 넣을 점(현 k · 현 위 비율) · 현 끝 바꿀 점(고리 r · 꼭짓점 v) · 넣은 뒤 확인할 (고리 · 선 토막 · P)
+        var add = new Dictionary<(int R, int K), List<(double U, Coordinate C)>>();
+        var repl = new Dictionary<(int R, int V), Coordinate>();
+        var checks = new List<(int R, double X0, double Y0, double X1, double Y1, Coordinate P)>();
+        foreach (var bl in ls.Benches.Concat(ls.Creases))
+            for (int q = 0; q + 1 < bl.Pts.Count; q++)
+            {
+                var p0 = bl.Pts[q]; var p1 = bl.Pts[q + 1];
+                double lx = p1.X - p0.X, ly = p1.Y - p0.Y, ll = Math.Sqrt(lx * lx + ly * ly); if (ll < 1e-9) continue;
+                foreach (var (r, k) in idx.Query(new Envelope(p0.X, p1.X, p0.Y, p1.Y)))
+                {
+                    var a = rings[r][k]; var b = rings[r][k + 1];
+                    double ex = b.X - a.X, ey = b.Y - a.Y, den = lx * ey - ly * ex; if (Math.Abs(den) < 1e-14) continue;
+                    double t = ((a.X - p0.X) * ey - (a.Y - p0.Y) * ex) / den, u = ((a.X - p0.X) * ly - (a.Y - p0.Y) * lx) / den;
+                    bool dbgP = DebugRing != null && DebugProbe is { } pb && Sq(p0.X - pb.X) + Sq(p0.Y - pb.Y) < 0.25;
+                    if (!(t >= 0 && t <= 1 && u > 0 && u < 1)) continue;
+                    // 도로 둘레(데이라잇 아님) 위 변은 뺌
+                    if (OnRim(a.X + ex * u, a.Y + ey * u)) continue;
+                    // 선 위 ±0.1 m 안에서 안 → 밖으로 바뀌는 자리(선 끝이 현 위에서 멈췄으면 그 방향으로 곧게 늘여 봄 — 끝은 매달린 끝 늘임이 둘레까지 이음)
+                    double w = 0.1 / ll, ta = t - w, tb = t + w;
+                    bool ia = Inside(ev.Eval(p0.X + lx * ta, p0.Y + ly * ta)), ib = Inside(ev.Eval(p0.X + lx * tb, p0.Y + ly * tb));
+                    if (ia == ib) continue;
+                    double lo = ia ? ta : tb, hi = ia ? tb : ta;
+                    for (int it = 0; it < 50 && Math.Abs(hi - lo) * ll > 1e-7; it++) { double tm = (lo + hi) / 2; if (Inside(ev.Eval(p0.X + lx * tm, p0.Y + ly * tm))) lo = tm; else hi = tm; }
+                    double tf = (lo + hi) / 2, px = p0.X + lx * tf, py = p0.Y + ly * tf;
+                    // [검토 L-3] 0.1 mm 마디 자리 원지반이 없으면(바탕 끝) 안 넣음 — 경계 Z = 원지반을 못 지킴
+                    if (!ev.Ground.TryGetElevation(Snap4(px), Snap4(py), out _)) continue;
+                    double el2 = ex * ex + ey * ey, uu = ((px - a.X) * ex + (py - a.Y) * ey) / el2, off = Math.Abs((px - a.X) * ey - (py - a.Y) * ex) / Math.Sqrt(el2);
+                    if (dbgP) DebugRing!($"[선 데이라잇 진단] 선 ({p0.X % 1000:F3},{p0.Y % 1000:F3})–({p1.X % 1000:F3},{p1.Y % 1000:F3}) 현 ({a.X % 1000:F3},{a.Y % 1000:F3})–({b.X % 1000:F3},{b.Y % 1000:F3}) X t {t:F4} u {u:F4} · Φ=0 ({px % 1000:F4},{py % 1000:F4}) uu {uu:F4} 현에서 {off * 1000:F1} mm");
+                    // 현에서 5 cm 넘게 떨어지면(다른 자리) 안 넣음 · 현 위면(0.1 µm) 그대로
+                    if (off > 0.05 || off < 1e-7) continue;
+                    // [검토 L-4] 현 끝 0.25 mm 안 = 그 끝 점(칸 변 Φ = 0 점)이 이미 그 자리 — 그대로(0.1 mm 마디 넣기가 합쳐 쌍 · 바늘이 되지 않게)
+                    if (Sq(px - a.X) + Sq(py - a.Y) < 6.25e-8 || Sq(px - b.X) + Sq(py - b.Y) < 6.25e-8) continue;
+                    if (uu > 0 && uu < 1)
+                    {
+                        // [검토 MED-1] 선이 지나는 현 k의 발이 현 속이면 늘 그 현에(이웃 현에 넣으면 X가 그대로 남았다)
+                        var lst = add.TryGetValue((r, k), out var l0) ? l0 : add[(r, k)] = new();
+                        if (lst.Any(v => Sq(v.C.X - px) + Sq(v.C.Y - py) < 1e-12)) continue;   // 선 꺾은 점에서 두 토막이 같은 자리를 찾음
+                        lst.Add((uu, new Coordinate(px, py)));
+                    }
+                    else
+                    {
+                        // [검토 MED-1 · MED-2] P 발이 현 끝 너머 — a → P → b로 되접는 가시 대신 그 끝 꼭짓점(둘 다 Φ = 0 점)을 P로 바꿈 · 도로 둘레 위 끝 · 이미 바꾼 끝 · 5 cm 넘게 먼 끝은 안 바꿈
+                        int nk = rings[r].Length - 1, v = uu >= 1 ? (k + 1) % nk : k;
+                        var cv = rings[r][v];
+                        if (OnRim(cv.X, cv.Y) || repl.ContainsKey((r, v)) || Sq(px - cv.X) + Sq(py - cv.Y) > 0.05 * 0.05) continue;
+                        repl[(r, v)] = new Coordinate(px, py);
+                    }
+                    checks.Add((r, p0.X, p0.Y, p1.X, p1.Y, new Coordinate(px, py)));
+                }
+            }
+        if (add.Count == 0 && repl.Count == 0) return S;
+        Coordinate[] Ring(int r)
+        {
+            var cs = rings[r]; int nk = cs.Length - 1; var o = new List<Coordinate>();
+            for (int k = 0; k < nk; k++)
+            {
+                var c0 = repl.TryGetValue((r, k), out var rc) ? rc : cs[k];
+                if (o.Count == 0 || Sq(o[^1].X - c0.X) + Sq(o[^1].Y - c0.Y) > 1e-12) o.Add(c0);
+                if (add.TryGetValue((r, k), out var l)) foreach (var (_, c) in l.OrderBy(v => v.U)) if (Sq(o[^1].X - c.X) + Sq(o[^1].Y - c.Y) > 1e-12) o.Add(c);
+            }
+            if (Sq(o[^1].X - o[0].X) + Sq(o[^1].Y - o[0].Y) <= 1e-12) o.RemoveAt(o.Count - 1);
+            o.Add(new Coordinate(o[0].X, o[0].Y)); return o.ToArray();
+        }
+        // [검토 MED-1] 넣은 뒤 — 선 토막이 새 둘레와 P 곁 0.2 m 안에서 P 말고는 안 만남(옛 현 위 X가 남지 않음)
+        static bool OnlyP(Coordinate[] ring, (int R, double X0, double Y0, double X1, double Y1, Coordinate P) c)
+        {
+            double lx = c.X1 - c.X0, ly = c.Y1 - c.Y0;
+            for (int k = 0; k + 1 < ring.Length; k++)
+            {
+                var a = ring[k]; var b = ring[k + 1];
+                double ex = b.X - a.X, ey = b.Y - a.Y, den = lx * ey - ly * ex; if (Math.Abs(den) < 1e-18) continue;
+                double t = ((a.X - c.X0) * ey - (a.Y - c.Y0) * ex) / den, u = ((a.X - c.X0) * ly - (a.Y - c.Y0) * lx) / den;
+                if (t < -1e-9 || t > 1 + 1e-9 || u < -1e-9 || u > 1 + 1e-9) continue;
+                double qx = c.X0 + lx * t, qy = c.Y0 + ly * t, d2 = Sq(qx - c.P.X) + Sq(qy - c.P.Y);
+                if (d2 > 1e-12 && d2 <= 0.04) return false;
+            }
+            return true;
+        }
+        var outP = new List<Polygon>();
+        for (int pi = 0; pi < polys.Count; pi++)
+        {
+            var mine = ringOf.Select((v, i) => (v, i)).Where(z => z.v.P == pi).Select(z => z.i).ToList();
+            int got = mine.Sum(r => add.Where(kv => kv.Key.R == r).Sum(kv => kv.Value.Count) + repl.Count(kv => kv.Key.R == r));
+            if (got == 0) { outP.Add(polys[pi]); continue; }
+            Dictionary<int, Coordinate[]> built; Polygon np;
+            try
+            {
+                built = mine.ToDictionary(r => r, Ring);
+                np = gf.CreatePolygon(gf.CreateLinearRing(built[mine.First(r => ringOf[r].H < 0)]), mine.Where(r => ringOf[r].H >= 0).Select(r => gf.CreateLinearRing(built[r])).ToArray());
+            }
+            catch { outP.Add(polys[pi]); continue; }   // 고리가 세 점 아래로 줄어듦 등 — 그 조각 그대로
+            bool ok = np.IsValid && checks.Where(c => built.ContainsKey(c.R)).All(c => OnlyP(built[c.R], c));
+            if (ok)
+            {
+                outP.Add(np); n += got;
+                if (tags != null)
+                    foreach (var r in mine)
+                    {
+                        foreach (var kv in add) if (kv.Key.R == r) foreach (var (_, c) in kv.Value) tags[((long)Math.Round(c.X * 1e4), (long)Math.Round(c.Y * 1e4))] = "선 데이라잇";
+                        foreach (var kv in repl) if (kv.Key.R == r) tags[((long)Math.Round(kv.Value.X * 1e4), (long)Math.Round(kv.Value.Y * 1e4))] = "선 데이라잇";
+                    }
+            }
+            else
+            {
+                if (DebugRing != null) DebugRing($"[선 데이라잇 진단] 조각 {pi} 그대로({got}점) — 유효 {np.IsValid} · {new NetTopologySuite.Operation.Valid.IsValidOp(np).ValidationError?.Message}");
+                outP.Add(polys[pi]);
+            }
+        }
+        Geometry res = outP.Count == 1 ? outP[0] : gf.CreateMultiPolygon(outP.ToArray());
+        // [검토 L-2] 합친 사면 자리가 무효면(조각끼리 겹침) 처음 것 그대로
+        if (!res.IsValid) { n = 0; return S; }
+        return res;
+    }
+
+    /// <summary>★[v117.17 · 검토 L-5] 사면 자리 둘레 → 그릴 데이라잇(도로 둘레 위 점에서 끊음 · Z = 원지반) — <see cref="SlopeRegion"/>와 같은 법(<see cref="DaylightOnLines"/>로 둘레가 바뀐 뒤 다시).</summary>
+    static List<List<Point3>> DaylightRuns(Evaluator ev, Geometry S, Dictionary<(double, double), OnB> onB)
+    {
+        var bVerts = new HashSet<(double, double)>(ev.D.B.Select(q => (q.X, q.Y)));
+        var o = new List<List<Point3>>();
+        for (int gi = 0; gi < S.NumGeometries; gi++)
+        {
+            if (S.GetGeometryN(gi) is not Polygon np || np.IsEmpty) continue;
+            foreach (var ring in new[] { np.ExteriorRing }.Concat(Enumerable.Range(0, np.NumInteriorRings).Select(h => (LineString)np.GetInteriorRingN(h))))
+            {
+                List<Point3>? cur = null;
+                foreach (var c in ring.Coordinates)
+                {
+                    if (onB.ContainsKey((c.X, c.Y)) || bVerts.Contains((c.X, c.Y))) { if (cur != null && cur.Count >= 2) o.Add(cur); cur = null; continue; }
+                    double z = ev.Ground != null && ev.Ground.TryGetElevation(c.X, c.Y, out double gz) ? gz : double.NaN;
+                    (cur ??= new()).Add(new Point3(c.X, c.Y, z));
+                }
+                if (cur != null && cur.Count >= 2) o.Add(cur);
+            }
+        }
+        return o;
+    }
+
     /// <summary>[NTS 버전충돌 방어 — RawTriangleIntersectionFinder와 같은 까닭] OverlayNGRobust(NTS 2.1+) 호출 격리.</summary>
     [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
     static Geometry RobustDifference(Geometry a, Geometry b)

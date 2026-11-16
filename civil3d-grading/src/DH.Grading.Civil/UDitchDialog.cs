@@ -242,8 +242,7 @@ internal sealed class UDitchDialog : Window
         _ditch.Items.Clear();
         foreach (var d in _v.Rec.Ditches)
         {
-            double L = UDitch.Qty(d).Length;
-            _ditch.Items.Add(string.Format(Ic, "{0} · {1:0.0} m", d.Id, L));
+            _ditch.Items.Add(d.Id + " · " + UDitch.LengthText(d, _v.S));   // ★[v117.17 · JACK 1116 «남은 것 모두»] 전체(U · 관)
         }
         if (_v.Sel >= _v.Rec.Ditches.Count) _v.Sel = _v.Rec.Ditches.Count - 1;
         _ditch.SelectedIndex = _v.Sel;
