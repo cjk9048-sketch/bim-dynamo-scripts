@@ -9,6 +9,15 @@ void Check(string name, bool ok, string detail = "")
     Console.WriteLine($"{(ok ? "PASS" : "FAIL")}  {name} {detail}");
     if (!ok) fails++;
 }
+// ★[수량산출서] BLOCKTEST_ONLY=qtyxlsx — 엑셀 토공 수량산출서(S300)만 · 터파기 구분 기본 4.5를 그대로 본다
+if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "qtyxlsx")
+{
+    QtyXlsxCheck.Run(Check);
+    Console.WriteLine(fails == 0 ? "\n== 전부 통과 ==" : $"\n== 실패 {fails}건 ==");
+    return fails == 0 ? 0 : 1;
+}
+// ★[수량산출서] 옛 시험(S72~S98 …)은 터파기 구분 5.0 기준 — 새 기본 4.5는 위 S300이 본다
+XsecQuantity.DeepLimit = 5.0;
 // [v102.0] BLOCKTEST_LEGACY=1 — CivilSafeMesh 옛 길(v101: 여유 띠 쌍 무조건 합침 · 마지막 수단 없음)만 — 새 길과 견줄 때
 if (Environment.GetEnvironmentVariable("BLOCKTEST_LEGACY") == "1") CivilSafeMesh.LegacyOnly = true;
 // ★[v103.1.10 · 속도 P-E] BLOCKTEST_SPEC=0 — 옛 길을 미리 함께 돌리지 않고 종전처럼 차례대로(같은 결과인지 · 시간이 얼마나 줄었는지 견줄 때)
@@ -96,6 +105,15 @@ if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "corr")
     return fails == 0 ? 0 : 1;
 }
 
+// ★[v117.19] BLOCKTEST_ONLY=bendflat — 굽이 평탄화(S290)
+if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "bendflat")
+{
+    BendFlatCheck.Run(Check);
+    Console.WriteLine(fails == 0 ? "\n== 전부 통과 ==" : $"\n== 실패 {fails}건 ==");
+    return fails == 0 ? 0 : 1;
+}
+// ★[v117.18.1] BLOCKTEST_ONLY=rjack — JACK 도로 덤프 소단선 끊김 계측(BLOCKTEST_RRJACK = 덤프 폴더)
+if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "rjack") { RoadRingJack.Run(); return 0; }
 // ★[v116] BLOCKTEST_ONLY=ring — 고리 엔진(S236)만
 if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "ring")
 {
@@ -393,6 +411,14 @@ if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "forest")
     return fails == 0 ? 0 : 1;
 }
 
+// ★[v117.19 · JACK 1116 회사 임상도 API] BLOCKTEST_ONLY=forestapi — 줄 읽기 · WKB · 5186→5179 · 칸 만들기 · 쪽 이어받기 · 못 쓸 때 다음 창고(S236 FA · 가짜 서버)만
+if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "forestapi")
+{
+    ForestApiCheck.Run(Check);
+    Console.WriteLine(fails == 0 ? "\n== 전부 통과 ==" : $"\n== 실패 {fails}건 ==");
+    return fails == 0 ? 0 : 1;
+}
+
 // ★[v109] BLOCKTEST_ONLY=secrets — 비밀값 검사(S177)만
 if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "secrets")
 {
@@ -479,6 +505,7 @@ SecretScanCheck.Run(Check);   // ★[v109] S177 — 비밀값 검사(공개 저�
 RoadCheck.Run(Check);   // ★[v110] S178 — 도로 정지(원뿔 감싸기) · 종단 초안
 ParcelCheck.Run(Check);   // ★[v109.1] S179 — VWorld 지적 · 소유(읽기 · 합치기 · 자르기)
 BuildingCheck.Run(Check);   // ★[v111.7] S184 — [3D 보기] 건물(VWorld 건물정보 읽기 · 높이 · 바닥 · 닿음 · 장면 배열)
+ForestApiCheck.Run(Check);  // ★[v117.19] S236 FA — 회사 임상도 API(가짜 서버)
 ForestCheck.Run(Check);     // ★[v115 · JACK 1105 임상도] S235 FT — [3D 보기] 수목(타일 변환 · 좌표 · 심기 · 빼기 · 한도 · 장면)
 RoadBandCheck.Run(Check);    // ★[v111.3] S182 — 옹벽 변환 끝면 띠(끝면도 단높이마다 소단)
 RoadMeshCheck.Run(Check);    // ★[v111] S181 — 선 기반 진입도로 면(단면 광선 · 띠 세모 · 계단선 · 기록 경계)

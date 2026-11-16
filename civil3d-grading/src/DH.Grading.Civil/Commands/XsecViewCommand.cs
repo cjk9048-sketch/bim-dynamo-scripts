@@ -184,17 +184,7 @@ public sealed partial class XsecViewCommand
         ObjectId alignId = ObjectId.Null; string alignName = "";
         if (t != null) { alignId = t.AlignId; alignName = t.AlignName; }
         else
-        try
-        {
-            using var tr = db.TransactionManager.StartTransaction();
-            foreach (ObjectId aid in cdoc.GetAlignmentIds())
-            {
-                if (tr.GetObject(aid, OpenMode.ForRead) is not CivilDb.Alignment al) continue;
-                if (!al.Name.StartsWith(SectionCommand.AlignBase)) continue;
-                alignId = aid; alignName = al.Name;   // 여럿이면 마지막 것(종단도와 같은 규칙)
-            }
-            tr.Commit();
-        }
+        try { (alignId, alignName) = PickSiteAlign(db, cdoc); }
         catch (System.Exception ex) { log.AppendLine("  선형 찾기 실패 — " + ex.Message); }
 
         if (alignId.IsNull)
@@ -286,8 +276,7 @@ public sealed partial class XsecViewCommand
         //   그림이 그 안에 들어가도록 <b>축척을 사다리에서 골라</b> 도곽을 모형에 그린다.
         //   좌우 폭은 사용자가 정한 대로 <b>온전히</b> 쓴다 — 지형이 잘리면 안 된다.
         //   ★[v111.5 · 검토 M6] 진입도로 = 진입도로 면이 닿는 옆거리 + 여유(RoadXsec — 부지 횡단 폭 설정은 안 읽음)
-        double wl = System.Math.Max(1.0, t != null ? t.Width.L : GradingSettings.XsecLeft);
-        double wr = System.Math.Max(1.0, t != null ? t.Width.R : GradingSettings.XsecRight);
+        var (wl, wr) = t != null ? (System.Math.Max(1.0, t.Width.L), System.Math.Max(1.0, t.Width.R)) : SiteWidth();
         var surfs = surfsA;
         // ★[검토] 지표면 <b>ID → 종류</b> 표를 만들어 넘긴다 — 이름은 사용자가 지은 것이라 못 믿는다.
         var kindOf = new System.Collections.Generic.Dictionary<ObjectId, string>();
@@ -560,7 +549,7 @@ public sealed partial class XsecViewCommand
         //   종전처럼 자리를 다 잡은 뒤에 재면 <b>줄 수를 알기 전에 축척이 정해져</b> 있다.
         //   (계산은 검토선과 지표면만 있으면 되므로 이 자리에서 돌 수 있다.)
         var qty = CollectQty(db, slIds, alignId, wl, wr, surfs, log, t);
-        try { QtyKeeper.Store(db, t != null, slIds.Select(x => (x.Name, x.St)).ToList(), qty.Map, qty.Ledgers); } catch { }   // ★[수량산출서] 마지막 횡단 수량(부지 · 진입도로 따로)
+        try { QtyKeeper.Store(db, t != null, slIds.Select(x => (x.Name, x.St)).ToList(), qty.Map, qty.Ledgers); } catch (System.Exception exQ) { log.AppendLine("  ⚠수량산출서용 횡단 수량 기록 실패 — " + exQ.Message); }   // ★[수량산출서] 마지막 횡단 수량(부지 · 진입도로 따로)
 
         // ★[v115 · JACK 1105 Revit 구조물 · D13] 구조물 바닥까지 넓힌 뷰는 «사용자 지정 범위» — 넓히기 전 크기도 재 둔다(축척 알림)
         var mv0 = MeasureViews(db, viewIds, log);
@@ -4793,6 +4782,81 @@ public sealed partial class XsecViewCommand
         System.Collections.Generic.Dictionary<string, DH.Grading.Core.WallExcav.Xs2D> X2 = null,
         /// <summary>★[v117.4] 불러온 구조물을 성토 · 되메우기 공제에 썼다 — 표 밑 «미포함»에서 구조물 두 마디를 뺀다.</summary>
         bool StructDed = false);
+
+    /// <summary>부지 횡단의 «마지막 DH선형» — 종단도와 같은 규칙(여럿이면 마지막).</summary>
+    private static (ObjectId Id, string Name) PickSiteAlign(Database db, CivilApp.CivilDocument cdoc)
+    {
+        ObjectId alignId = ObjectId.Null; string alignName = "";
+        using var tr = db.TransactionManager.StartTransaction();
+        foreach (ObjectId aid in cdoc.GetAlignmentIds())
+        {
+            if (tr.GetObject(aid, OpenMode.ForRead) is not CivilDb.Alignment al) continue;
+            if (!al.Name.StartsWith(SectionCommand.AlignBase)) continue;
+            alignId = aid; alignName = al.Name;
+        }
+        tr.Commit();
+        return (alignId, alignName);
+    }
+
+    private static (double L, double R) SiteWidth()
+        => (System.Math.Max(1.0, GradingSettings.XsecLeft), System.Math.Max(1.0, GradingSettings.XsecRight));
+
+    /// <summary>★[수량산출서 · JACK 1116 «부지 횡단 없음이라고 떠서 그렸는데도»] 이 세션 스냅이 없을 때(도면을 다시 열었거나 설치 전에 그림) —
+    /// 도면에 이미 있는 <b>부지 횡단 검토선</b>에서 측점별 수량을 <b>그리지 않고</b> 다시 잰다(Build와 같은 선형 · 면 · 폭 · <c>CollectQty</c>).
+    /// 읽기만 한다(검토선 · 임시 면을 안 만든다). 검토선이 없으면 null.</summary>
+    internal static QtyKeeper.Snap? ReadSiteQtyFromDrawing(Autodesk.AutoCAD.ApplicationServices.Document doc, out string why)
+    {
+        why = "";
+        var db = doc.Database; var ed = doc.Editor;
+        try
+        {
+            QtyXlsxInput.ApplyDeepLimit(db);
+            var cdoc = CivilApp.CivilApplication.ActiveDocument;
+            var (alignId, _) = PickSiteAlign(db, cdoc);
+            if (alignId.IsNull) { why = "노선 없음"; return null; }
+            var raw = new List<(ObjectId Id, string Name, double St)>();
+            using (var tr = db.TransactionManager.StartTransaction())
+            {
+                var al = (CivilDb.Alignment)tr.GetObject(alignId, OpenMode.ForRead);
+                ObjectId best = ObjectId.Null; int bestN = 0;
+                foreach (ObjectId gid in al.GetSampleLineGroupIds())
+                {
+                    if (tr.GetObject(gid, OpenMode.ForRead) is not CivilDb.SampleLineGroup g || !IsXsecGroupName(g.Name ?? "")) continue;
+                    int n = g.GetSampleLineIds().Count;
+                    if (n >= bestN) { best = gid; bestN = n; }   // 여럿이면 마지막(같거나 더 많은 것)
+                }
+                if (!best.IsNull)
+                {
+                    var g = (CivilDb.SampleLineGroup)tr.GetObject(best, OpenMode.ForRead);
+                    string pre = (g.Name ?? "") + "_";
+                    foreach (ObjectId sid in g.GetSampleLineIds())
+                        if (tr.GetObject(sid, OpenMode.ForRead) is CivilDb.SampleLine sl)
+                        {
+                            string nm = sl.Name ?? "";
+                            raw.Add((sid, nm.StartsWith(pre, System.StringComparison.Ordinal) ? nm.Substring(pre.Length) : nm, sl.Station));
+                        }
+                }
+                tr.Commit();
+            }
+            if (raw.Count == 0) { why = "검토선 없음"; return null; }
+            var sls = new List<(ObjectId Id, string Name, double St, double Mother, int Ord)>();
+            foreach (var r in raw)
+            {
+                int ord = r.Name.EndsWith("(전)", System.StringComparison.Ordinal) ? 0 : r.Name.EndsWith("(후)", System.StringComparison.Ordinal) ? 2 : 1;
+                string lab = ord == 1 ? r.Name : r.Name.Substring(0, r.Name.Length - 3);
+                sls.Add((r.Id, r.Name, r.St, raw.Where(x => x.Name == lab || x.Name == lab + "(전)" || x.Name == lab + "(후)").Average(x => x.St), ord));
+            }
+            sls.Sort((a, b) => { int c = a.Mother.CompareTo(b.Mother); return c != 0 ? c : a.Ord.CompareTo(b.Ord); });
+            var log = new System.Text.StringBuilder();
+            var surfs = SectionCommand.FindSurfacesForAlignment(db, cdoc, alignId, ed, log, "수량산출서");
+            if (surfs == null) { why = "종단도 다시 필요"; return null; }
+            var (wl, wr) = SiteWidth();
+            var qty = CollectQty(db, sls, alignId, wl, wr, surfs, log, null);
+            try { DiagLog.Append("\n[수량산출서] 도면에서 횡단 수량 읽음 — 측점 " + sls.Count + "개"); } catch { }
+            return new QtyKeeper.Snap(sls.Select(x => (x.Name, x.St)).ToList(), qty.Map, qty.Ledgers, DH.Grading.Core.XsecQuantity.DeepLimit);
+        }
+        catch (System.Exception ex) { why = ex.Message; try { DiagLog.Append("\n[수량산출서] 도면에서 횡단 수량 못 읽음 — " + ex); } catch { } return null; }
+    }
 
     /// <summary>측점 이름 → 그 측점의 수량. 표를 그릴 때 이 표를 찾아 값을 채운다.
     /// <para>★★★[JACK 0831] <b>표 얼개도 여기서 나온다</b> — 어느 한 측점에서라도 나온 조합을

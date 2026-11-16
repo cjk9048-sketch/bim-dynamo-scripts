@@ -42,6 +42,8 @@ public static partial class RoadRing
         public readonly List<Bl> Benches = new();
         public readonly List<Bl> Creases = new();
         public int Snapped, SnapRevert, SnapBig, CreasePts, CreaseChains, Extended, NoExtend, FanLines, CreaseRejected, HelperLines, CreaseFollow, CreaseCut, LineZPts, Projected;
+        /// <summary>★[v117.17.1] 다른 무리 벽 단면 수직면 띠 수 · 띠 점 수(<see cref="WallFaceLines"/>).</summary>
+        public int WallFaces, WallFacePts, WallFacePruned;
     }
 
     /// <summary>둘레 위치 → 측점 · 쪽.</summary>

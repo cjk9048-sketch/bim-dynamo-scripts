@@ -188,7 +188,7 @@ static class RoadWallRingCheck
             double[] Br(RoadRing.Prof p) { var l = new List<double>(); for (int i = 1; i < p.E.Count; i++) l.Add(p.E[i].D); return l.ToArray(); }
             var bc = Br(ev.Pc); var bf = Br(ev.Pf);
             int n = 0, bad = 0; double worst = 0; string at = "";
-            foreach (var l in disp.Where(l => l.Role != RoadGrade.LineRole.Wall && l.K > 0))
+            foreach (var l in disp.Where(l => l.Role != RoadGrade.LineRole.Wall && l.K > 0 && !l.Jog))
                 foreach (var p in l.Pts)
                 {
                     var q = ev.Eval(p.X, p.Y); var w = l.Cut ? q.WHi : q.WLo;

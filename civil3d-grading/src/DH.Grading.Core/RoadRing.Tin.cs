@@ -62,6 +62,8 @@ public static partial class RoadRing
             double maxDist = 0;
             for (int k = 0; k < f.P.Length; k++) if (f.Keep[k] && f.P[k].Kind != 1) maxDist = Math.Max(maxDist, f.P[k].DNear);
             ls = BuildLines(ev, maxDist + 1.0);
+            // ★[v117.17.1] 다른 무리 벽 단면 수직면 — 위 · 아래 끊김선 띠(벽 단면 없는 도로는 시간 0)
+            WallFaceLines(ev, f, ls);
             // ★[v117.17 · JACK 1116] 끊김선이 데이라잇 현을 지나는 자리 = 선 위 Φ = 0 점을 사면 자리 둘레에(정확한 데이라잇일 때)
             //   [검토 L-5] 둘레가 바뀌면 그릴 데이라잇도 새 둘레로(그린 선 ↔ 세모 둘레 5 cm 안 어긋남 없게)
             if (ExactDaylight) { S = DaylightOnLines(ev, S, ls, tags, out int nDl); b.Count.DlOnLines = nDl; if (nDl > 0) b.Daylight = DaylightRuns(ev, S, onB); }
@@ -172,7 +174,7 @@ public static partial class RoadRing
             c.MsAll = sw.ElapsedMilliseconds;
         }
         b.Ok = true;
-        b.Note = $"고리 면 — 세모 {tris.Count:N0} · 넓이 {b.Area:N0} ㎡ · 소단/사면 꺾임선 {b.Lines.Count} · 주름선 {ls?.CreaseChains ?? 0}(점 {ls?.CreasePts ?? 0} · 이어진 바뀜이라 뺀 후보 {ls?.CreaseRejected ?? 0} · 골 따라 끼운 점 {ls?.CreaseFollow ?? 0} · 골 벗어나 끊음 {ls?.CreaseCut ?? 0}) · 선 높이 맞춤 점 {ls?.LineZPts ?? 0} · 부채 경계선 {ls?.FanLines ?? 0} · 보조 고리 선 {ls?.HelperLines ?? 0} · 스냅 {ls?.Snapped ?? 0}(되돌림 {ls?.SnapRevert ?? 0} · 0.5 m 넘음 {ls?.SnapBig ?? 0}) · 꺾임 거리로 옮긴 고리 점 {ls?.Projected ?? 0} · {tnote} · {rnote}"
+        b.Note = $"고리 면 — 세모 {tris.Count:N0} · 넓이 {b.Area:N0} ㎡ · 소단/사면 꺾임선 {b.Lines.Count} · 주름선 {ls?.CreaseChains ?? 0}(점 {ls?.CreasePts ?? 0} · 이어진 바뀜이라 뺀 후보 {ls?.CreaseRejected ?? 0} · 골 따라 끼운 점 {ls?.CreaseFollow ?? 0} · 골 벗어나 끊음 {ls?.CreaseCut ?? 0}) · 선 높이 맞춤 점 {ls?.LineZPts ?? 0} · 부채 경계선 {ls?.FanLines ?? 0} · 보조 고리 선 {ls?.HelperLines ?? 0} · 벽 면 띠 {ls?.WallFaces ?? 0}(점 {ls?.WallFacePts ?? 0} · 띠 곁 주름선 끊음 {ls?.WallFacePruned ?? 0}) · 스냅 {ls?.Snapped ?? 0}(되돌림 {ls?.SnapRevert ?? 0} · 0.5 m 넘음 {ls?.SnapBig ?? 0}) · 꺾임 거리로 옮긴 고리 점 {ls?.Projected ?? 0} · {tnote} · {rnote}"
                  + $" · 다듬기: T자 나눔 {tj} · 구멍 {holes} · 0.1 mm 쌍 {merged} · 바늘 접음 {folded} · 뒤집음 {flipped}"
                  + (b.Conflicts > 0 ? $" · ⚠부딪힘 {b.Conflicts}칸(낮은 쪽 사면을 넣음 · 옹벽 검토)" : "")
                  + (b.ReachHit ? " · ⚠찾는 거리 끝에 닿음" : "")
@@ -388,13 +390,14 @@ public static partial class RoadRing
     static void ProbeTris(string stage, IEnumerable<(Point3 A, Point3 B, Point3 C, bool AB, bool BC, bool CA)> tris, Evaluator ev)
     {
         if (DebugRing == null) return;
-        int bad = 0; double worst = 0; string wAt = "";
+        int bad = 0, bad5 = 0; double worst = 0; string wAt = "";
         var ci = System.Globalization.CultureInfo.InvariantCulture;
         foreach (var (a, b, c, ab, bc, ca) in tris)
         {
             double cx = (a.X + b.X + c.X) / 3, cy = (a.Y + b.Y + c.Y) / 3;
             var pe = ev.Eval(cx, cy); if (pe.Kind is not (2 or 3 or 4) || !double.IsFinite(pe.Z)) continue;
             double dz = Math.Abs(pe.Z - (a.Z + b.Z + c.Z) / 3);
+            if (dz > 0.05) bad5++;
             if (dz > 0.02) { bad++; if (dz > worst) { worst = dz; wAt = string.Format(ci, "({0:F2}, {1:F2})", cx % 1000, cy % 1000); } }
             if (DebugProbe is { } pr)
             {
@@ -406,7 +409,7 @@ public static partial class RoadRing
                 }
             }
         }
-        DebugRing(string.Format(ci, "[단계 셈 {0}] 무게중심 차 2 cm 넘는 세모 {1} · 최대 {2:F1} mm @{3}", stage, bad, worst * 1000, wAt));
+        DebugRing(string.Format(ci, "[단계 셈 {0}] 무게중심 차 2 cm 넘는 세모 {1}(5 cm 넘는 {4}) · 최대 {2:F1} mm @{3}", stage, bad, worst * 1000, wAt, bad5));
     }
 
     /// <summary>도로 면 사다리 세모 — 둘레 변 위 점(사면 자리가 도로 둘레에 붙는 점)이 있으면 그 변을 가진 세모를 부채로 나눔(T자 없음) · 반시계.</summary>

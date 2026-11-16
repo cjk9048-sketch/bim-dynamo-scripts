@@ -18,7 +18,7 @@ internal static class RoadBuilder
     /// <para>★[설치 전 검토 · 중간] 정지면은 종단 · 횡단과 같은 규칙(`정지면_DH` 또는 `정지면_DH_N` · 마지막 것) — 정확히 같은 이름만 보면 `_N`일 때 원지반으로 떨어진다.</para></summary>
     internal static (ObjectId Id, string Name) PickBase(Database db, CivilApp.CivilDocument cdoc)
     {
-        ObjectId pad = ObjectId.Null, ground = ObjectId.Null; string padNm = "", groundNm = "";
+        ObjectId pad = ObjectId.Null, ground = ObjectId.Null, other = ObjectId.Null; string padNm = "", groundNm = "", otherNm = ""; int otherTris = 0;
         using var tr = db.TransactionManager.StartTransaction();
         foreach (ObjectId sid in cdoc.GetSurfaceIds())
         {
@@ -27,11 +27,17 @@ internal static class RoadBuilder
                 if (tr.GetObject(sid, OpenMode.ForRead) is not CivilDb.TinSurface s) continue;
                 if (Commands.SectionCommand.IsBase(s.Name, Commands.SectionCommand.PadSurfaceBase)) { pad = sid; padNm = s.Name; }
                 else if (ground.IsNull && (s.Name == "원지반" || s.Name.StartsWith("원지반", StringComparison.Ordinal))) { ground = sid; groundNm = s.Name; }
+                else if (!s.Name.Contains("_DH") && !s.Name.StartsWith("DH_", StringComparison.Ordinal))
+                {   // ★[v117.18.3 · JACK 1116 «계획부지 없이 진입도로만 — 지표면이 안 만들어져»] 이름이 «원지반»이 아닌 원지반(LandXML · 수치지도 등) — 원지반 고르는 규칙(ImportGisCommand.FindGroundSurface)과 같게: 우리 면(_DH)이 아닌 것 중 세모 제일 많은 것
+                    int n = 0; try { n = s.Triangles.Count; } catch { }
+                    if (n > otherTris) { otherTris = n; other = sid; otherNm = s.Name; }
+                }
             }
             catch { }
         }
         tr.Commit();
-        return !pad.IsNull ? (pad, padNm) : (ground, groundNm);
+        if (!pad.IsNull) return (pad, padNm);
+        return !ground.IsNull ? (ground, groundNm) : (other, otherNm);
     }
 
     /// <summary>폴리선 → 노선. 호(bulge)는 그대로 · 직선끼리 꺾인 곳은 반경 R 곡선(접선이 짧으면 반경을 0.7배씩 줄여 3 m까지 · 그래도 안 되면 꺾인 채 두고 알림).</summary>

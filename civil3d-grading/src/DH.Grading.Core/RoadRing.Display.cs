@@ -10,7 +10,7 @@ namespace DH.Grading.Core;
 /// 짓는 선을 이긴 원천 등치선으로 모두 다시 긋기(1109)는 면이 깨져 되돌림 — 그래서 표시만.</summary>
 public static partial class RoadRing
 {
-    public sealed class DisplayStats { public int Pts, Dropped, Kept, AddedLines, AddedPts, OutlinePts, Snapped; public double AddedLen; public long Ms; }
+    public sealed class DisplayStats { public int Pts, Dropped, Kept, AddedLines, AddedPts, OutlinePts, Snapped, Bridged; public double AddedLen, BridgedLen; public long Ms; public readonly List<string> BridgeNotes = new(); }
 
     public static List<RoadGrade.TierLine> DisplayLines(Built b, IReadOnlyList<RoadGrade.TierLine> lines, out DisplayStats st, double tol = 0.15, bool addBench = true)
     {
@@ -52,7 +52,7 @@ public static partial class RoadRing
         if (!addBench) { st.Ms = sw.ElapsedMilliseconds; return o; }
         // ② 빠진 소단 턱 더하기 — 소단 자리 테두리(0.25 m 칸 계단)를 이긴 원천 거리 = 그 소단 안 · 밖 끝으로 다듬음
         var ba = BenchArea(b);
-        if (ba.Area == null || ba.Area.IsEmpty) { st.Ms = sw.ElapsedMilliseconds; return o; }
+        if (ba.Area == null || ba.Area.IsEmpty) { BridgeCorners(ev, o, st); st.Ms = sw.ElapsedMilliseconds; return o; }
         var gf = NtsSupport.Factory();
         var kept = o.Where(l => l.Role != RoadGrade.LineRole.Wall && l.Pts.Count >= 2).Select(l => (Geometry)gf.CreateLineString(l.Pts.Select(p => new Coordinate(p.X, p.Y)).ToArray())).ToList();
         var keptU = kept.Count == 0 ? null : NetTopologySuite.Operation.Union.UnaryUnionOp.Union(kept);
@@ -127,7 +127,7 @@ public static partial class RoadRing
                 var p0 = pts[run[run.Count / 2]];
                 bool fill = !p0.Cut, slopeEnd = !p0.Out;   // 소단 안 끝 = 사면 끝
                 var role = fill ? (slopeEnd ? RoadGrade.LineRole.Toe : RoadGrade.LineRole.Crest) : (slopeEnd ? RoadGrade.LineRole.Crest : RoadGrade.LineRole.Toe);
-                var nt = new RoadGrade.TierLine { Cut = p0.Cut, Side = ev.SourceSide(p0.Src), K = p0.K, Role = role, DisplayOnly = true };
+                var wp0 = ev.Eval(p0.X, p0.Y); var nt = new RoadGrade.TierLine { Cut = p0.Cut, Side = ev.SourceSide(p0.Src), K = p0.K, Role = role, DisplayOnly = true, Prof = Math.Max(0, p0.Cut ? wp0.WHi.Prof : wp0.WLo.Prof) };
                 foreach (var c in simp.Coordinates)
                 {
                     var q = ev.Eval(c.X, c.Y); var w = p0.Cut ? q.WHi : q.WLo;
@@ -136,7 +136,71 @@ public static partial class RoadRing
                 o.Add(nt); st.AddedLines++; st.AddedPts += nt.Pts.Count; st.AddedLen += simp.Length;
             }
         }
+        BridgeCorners(ev, o, st);
         st.Ms = sw.ElapsedMilliseconds;
         return o;
+    }
+
+    const double BridgeMax = 16.0, BridgeOpen = 0.3, BridgeStep = 0.5;   // 걸음(0.25 m)마다 높이 차 상한 — 면 기울기 1:n(≤ 0.14) · 벽 면 아닌 절벽 거름
+
+    /// <summary>★★[v117.18.1 · JACK 1116 «안쪽 소단선이 끊겨 변환을 못 함» · 옵션 1 «짧은 경사로 다른 다리 소단과 만남»] 안쪽 모퉁이 — 같은 단 · 같은 역할(고를 선 = 성토 Crest · 절토 Toe) 조각의 빈 끝끼리 <see cref="BridgeMax"/> m 안이고 이음 길이 위 셈이 도로 면 안을 안 지나며 걸음마다 높이 차가 <see cref="BridgeStep"/> 아래(절벽 아님)이면 «셈 면을 따라 걷는 선»(0.25 m마다 높이 = 셈)을 더함 · 이은 끝의 그림 전용 조각은 고를 수 있게(DisplayOnly 해제) → 단마다 한 줄 · 모퉁이 꺾임.</summary>
+    static void BridgeCorners(Evaluator ev, List<RoadGrade.TierLine> o, DisplayStats st)
+    {
+        var cand = o.Where(l => l.Role != RoadGrade.LineRole.Wall && !l.Cross && l.WallNo == 0 && l.Side != 0 && l.Pts.Count >= 2).ToList();
+        var add = new List<RoadGrade.TierLine>();
+        foreach (var g in cand.GroupBy(l => (l.Cut, l.Side, l.K, l.Role, l.Prof)))
+        {
+            var L = g.ToList(); int n = L.Count; if (n < 2) continue;
+            (double X, double Y, double Z, double S) End(int e) => (e & 1) == 0 ? L[e >> 1].Pts[0] : L[e >> 1].Pts[^1];
+            (double X, double Y) OutDir(int e)
+            {
+                var pp = L[e >> 1].Pts; var a = End(e);
+                for (int k = 1; k < pp.Count; k++) { var q = (e & 1) == 0 ? pp[k] : pp[pp.Count - 1 - k]; double dx = a.X - q.X, dy = a.Y - q.Y, dl = Math.Sqrt(dx * dx + dy * dy); if (dl > 0.01) return (dx / dl, dy / dl); }
+                return (double.NaN, double.NaN);
+            }
+            bool Open(int e)
+            {
+                var a = End(e);
+                for (int i = 0; i < n; i++)
+                {
+                    if (i == (e >> 1)) continue;
+                    foreach (var q in L[i].Pts) if (Sq(q.X - a.X) + Sq(q.Y - a.Y) < BridgeOpen * BridgeOpen) return false;
+                }
+                return true;
+            }
+            var open = new bool[2 * n]; for (int e = 0; e < 2 * n; e++) open[e] = Open(e);
+            var pairs = new List<(double Gap, int A, int B)>();
+            for (int ea = 0; ea < 2 * n; ea++)
+                for (int eb = ea + 1; eb < 2 * n; eb++)
+                {
+                    if (!open[ea] || !open[eb] || (ea >> 1) == (eb >> 1)) continue;
+                    var a = End(ea); var b = End(eb); double gap = Math.Sqrt(Sq(a.X - b.X) + Sq(a.Y - b.Y));
+                    if (gap <= BridgeOpen || gap > BridgeMax) continue;
+                    double gx = (b.X - a.X) / gap, gy = (b.Y - a.Y) / gap; var ua = OutDir(ea); var ub = OutDir(eb);
+                    if (!double.IsFinite(ua.X) || !double.IsFinite(ub.X) || ua.X * gx + ua.Y * gy < -0.8 || -(ub.X * gx + ub.Y * gy) < -0.8) continue;   // 되돌아가는 이음은 안 함
+                    bool ok = true; int ns = Math.Max(2, (int)Math.Ceiling(gap / 0.25)); double zPrev = a.Z;
+                    for (int i = 1; i < ns && ok; i++)
+                    {
+                        double t = (double)i / ns, x = a.X + (b.X - a.X) * t, y = a.Y + (b.Y - a.Y) * t; var q = ev.Eval(x, y);
+                        ok = q.Kind is 2 or 3 or 4 && double.IsFinite(q.Z) && Math.Abs(q.Z - zPrev) <= BridgeStep; zPrev = q.Z;
+                    }
+                    if (ok) pairs.Add((gap, ea, eb));
+                }
+            var used = new bool[2 * n];
+            foreach (var (gap, ea, eb) in pairs.OrderBy(p => p.Gap))
+            {
+                if (used[ea] || used[eb]) continue;
+                used[ea] = used[eb] = true;
+                var a = End(ea); var b = End(eb); int ns = Math.Max(2, (int)Math.Ceiling(gap / 0.25));
+                var nt = new RoadGrade.TierLine { Cut = L[ea >> 1].Cut, Side = L[ea >> 1].Side, K = L[ea >> 1].K, Role = L[ea >> 1].Role, Prof = L[ea >> 1].Prof, Jog = true };
+                for (int i = 0; i <= ns; i++)
+                {
+                    double t = (double)i / ns; double x = a.X + (b.X - a.X) * t, y = a.Y + (b.Y - a.Y) * t;
+                    nt.Pts.Add(i == 0 ? a : i == ns ? b : (x, y, ev.Eval(x, y).Z, double.IsFinite(a.S) && double.IsFinite(b.S) ? a.S + (b.S - a.S) * t : double.NaN));
+                }
+                add.Add(nt); L[ea >> 1].DisplayOnly = false; L[eb >> 1].DisplayOnly = false; st.Bridged++; st.BridgedLen += gap; st.BridgeNotes.Add($"{(L[ea >> 1].Cut ? "절" : "성")} 쪽{L[ea >> 1].Side} K{L[ea >> 1].K} {L[ea >> 1].Role} ({a.X % 1000:F1},{a.Y % 1000:F1})→({b.X % 1000:F1},{b.Y % 1000:F1}) {gap:F1} m 높이 {a.Z:F2}→{b.Z:F2}");
+            }
+        }
+        o.AddRange(add);
     }
 }

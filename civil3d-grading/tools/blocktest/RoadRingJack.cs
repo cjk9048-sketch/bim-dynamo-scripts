@@ -1,0 +1,230 @@
+// ── S236 RJ ★[v117.18.1 · JACK 1116 «안쪽 소단 끊김»] JACK 도로 덤프(BLOCKTEST_RRJACK = 폴더 · rd_1_1.json + rd_1_1_ground.txt — 현장 값이라 저장소 밖 .omc/repro) 소단선 끊김 계측.
+//   단(절/성 · 쪽 · K)마다 조각 · 길이 · 틈(이웃 조각 끝점 거리 > 1 m) 표 · 소단 자리(면 규칙) 넓이.
+using System.Globalization;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using DH.Grading.Core;
+
+static class RoadRingJack
+{
+    sealed class Gr : IGroundSurface
+    {
+        readonly List<(Point3 A, Point3 B, Point3 C)> T = new(); double _x0, _y0; const double C = 5; int _nx, _ny; List<int>[] _cells = null!;
+        public static Gr Load(string path)
+        {
+            var g = new Gr();
+            foreach (var line in File.ReadLines(path))
+            {
+                var s = line.Split(' ', StringSplitOptions.RemoveEmptyEntries); if (s.Length < 9) continue;
+                var v = s.Select(t => double.Parse(t, CultureInfo.InvariantCulture)).ToArray();
+                g.T.Add((new Point3(v[0], v[1], v[2]), new Point3(v[3], v[4], v[5]), new Point3(v[6], v[7], v[8])));
+            }
+            double ax = g.T.Min(t => Math.Min(t.A.X, Math.Min(t.B.X, t.C.X))), ay = g.T.Min(t => Math.Min(t.A.Y, Math.Min(t.B.Y, t.C.Y)));
+            double bx = g.T.Max(t => Math.Max(t.A.X, Math.Max(t.B.X, t.C.X))), by = g.T.Max(t => Math.Max(t.A.Y, Math.Max(t.B.Y, t.C.Y)));
+            g._x0 = ax; g._y0 = ay; g._nx = (int)((bx - ax) / C) + 1; g._ny = (int)((by - ay) / C) + 1; g._cells = new List<int>[g._nx * g._ny];
+            for (int i = 0; i < g.T.Count; i++)
+            {
+                var q = g.T[i];
+                int i0 = g.Ix(Math.Min(q.A.X, Math.Min(q.B.X, q.C.X))), i1 = g.Ix(Math.Max(q.A.X, Math.Max(q.B.X, q.C.X)));
+                int j0 = g.Iy(Math.Min(q.A.Y, Math.Min(q.B.Y, q.C.Y))), j1 = g.Iy(Math.Max(q.A.Y, Math.Max(q.B.Y, q.C.Y)));
+                for (int a = i0; a <= i1; a++) for (int b = j0; b <= j1; b++) (g._cells[b * g._nx + a] ??= new()).Add(i);
+            }
+            return g;
+        }
+        int Ix(double x) => Math.Clamp((int)((x - _x0) / C), 0, _nx - 1);
+        int Iy(double y) => Math.Clamp((int)((y - _y0) / C), 0, _ny - 1);
+        public bool TryGetElevation(double x, double y, out double z)
+        {
+            z = double.NaN; var l = _cells[Iy(y) * _nx + Ix(x)]; if (l == null) return false;
+            foreach (int i in l)
+            {
+                var (A, B, Cc) = T[i];
+                double d = (B.Y - Cc.Y) * (A.X - Cc.X) + (Cc.X - B.X) * (A.Y - Cc.Y); if (Math.Abs(d) < 1e-14) continue;
+                double w1 = ((B.Y - Cc.Y) * (x - Cc.X) + (Cc.X - B.X) * (y - Cc.Y)) / d, w2 = ((Cc.Y - A.Y) * (x - Cc.X) + (A.X - Cc.X) * (y - Cc.Y)) / d, w3 = 1 - w1 - w2;
+                if (w1 < -1e-9 || w2 < -1e-9 || w3 < -1e-9) continue;
+                z = w1 * A.Z + w2 * B.Z + w3 * Cc.Z; return true;
+            }
+            return false;
+        }
+    }
+
+    /// <summary>삼각형 품질 — 무게중심 높이 차(평가기) 2 · 5 cm 넘는 수 · 최대 · 지문(모서리 mm 반올림 해시) · 바늘(가장 짧은 높이 &lt; 1 cm · 넓이 &gt; 0) · 가파른(기울기 &gt; 5 : 1) 세모.</summary>
+    public static string TriStats(RoadRing.Built b, double bx0 = double.NaN, double by0 = double.NaN, double bx1 = double.NaN, double by1 = double.NaN)
+    {
+        int n = 0, d2 = 0, d5 = 0, needle = 0, steep = 0, nb = 0, nb5 = 0; double worst = 0; long fp = 0;
+        foreach (var t in b.Tris)
+        {
+            n++;
+            var A = t.A; var B = t.B; var C = t.C;
+            double cx = (A.X + B.X + C.X) / 3, cy = (A.Y + B.Y + C.Y) / 3;
+            fp += (long)Math.Round(cx * 1000) * 31 + (long)Math.Round(cy * 1000) * 17 + (long)Math.Round((A.Z + B.Z + C.Z) / 3 * 1000);
+            double dz = 0;
+            foreach (var (w1, w2) in new[] { (1 / 3.0, 1 / 3.0), (0.6, 0.2), (0.2, 0.6), (0.2, 0.2), (0.45, 0.45), (0.1, 0.45), (0.45, 0.1) })
+            {
+                double w3 = 1 - w1 - w2, px = A.X * w1 + B.X * w2 + C.X * w3, py = A.Y * w1 + B.Y * w2 + C.Y * w3, pz = A.Z * w1 + B.Z * w2 + C.Z * w3;
+                var e = b.Ev.Eval(px, py); if (e.Kind is 2 or 3 or 4 && double.IsFinite(e.Z)) dz = Math.Max(dz, Math.Abs(e.Z - pz));
+            }
+            bool inBox = !double.IsNaN(bx0) && cx % 1000 >= bx0 && cx % 1000 <= bx1 && cy % 1000 >= by0 && cy % 1000 <= by1;
+            if (inBox) { nb++; if (dz > 0.05) nb5++; }
+            if (dz > 0.02) d2++; if (dz > 0.05) d5++; worst = Math.Max(worst, dz);
+            double ux = B.X - A.X, uy = B.Y - A.Y, uz = B.Z - A.Z, vx = C.X - A.X, vy = C.Y - A.Y, vz = C.Z - A.Z;
+            double nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx, nl = Math.Sqrt(nx * nx + ny * ny + nz * nz);
+            double ab = Math.Sqrt(ux * ux + uy * uy + uz * uz), bc = Math.Sqrt(Sq(C.X - B.X) + Sq(C.Y - B.Y) + Sq(C.Z - B.Z)), ca = Math.Sqrt(vx * vx + vy * vy + vz * vz);
+            double mx = Math.Max(ab, Math.Max(bc, ca));
+            if (nl > 0 && nl / mx < 0.01) needle++;
+            if (nl > 0 && Math.Sqrt(nx * nx + ny * ny) / nz < 0.2 && Math.Abs(nz) > 0) steep++;
+        }
+        return $"세모 {n} · 표본 차>2cm {d2} · 차>5cm {d5} · 최대 {worst * 1000:F1} mm · 바늘 {needle} · 가파름(1:5 이하) {steep} · 지문 {fp}" + (nb > 0 ? $" · 상자 세모 {nb} 차>5cm {nb5}" : "");
+        static double Sq(double v) => v * v;
+    }
+
+    /// <summary>★[v117.18.2] 고를 선(옹벽 변환) 검사 — 고른 선의 모든 점 높이 = 평가기 높이(1 mm 안) · 같은 단(절/성 · 쪽 · K) 줄 수 · 이음 걸음 수. 돌려줌 = (맞음, 글).</summary>
+    public static (bool Ok, string Text, Dictionary<(bool Cut, int Side, int K), int> Groups) PickCheck(RoadRing.Built b)
+    {
+        var lines = RoadRing.DisplayLines(b, b.Lines, out var st);
+        var pk = RoadGrade.PickLines(lines, true, null, out var pst);
+        double worst = 0; int bad = 0, pts = 0;
+        foreach (var l in pk) foreach (var p in l.Pts.Skip(1).SkipLast(1))   // 줄 끝점은 짓는 선 끝(면 끝 높이 2~5 cm 어긋남 — 이음과 무관)
+        {
+            pts++; var e = b.Ev.Eval(p.X, p.Y);
+            if (e.Kind is not (2 or 3 or 4 or 1) || !double.IsFinite(e.Z)) continue;
+            double dz = Math.Abs(e.Z - p.Z); worst = Math.Max(worst, dz); if (dz > 0.001) bad++;
+        }
+        var g = pk.GroupBy(l => (l.Cut, l.Side, l.K)).ToDictionary(x => x.Key, x => x.Count());
+        return (bad == 0, $"이음 {st.Bridged}({st.BridgedLen:F1} m) · 고른 선 {pk.Count}줄 점 {pts} · 높이 차 최대 {worst * 1000:F2} mm · 1 mm 넘는 점 {bad} · 표시 계산 {st.Ms} ms", g);
+    }
+
+    public static void Run()
+    {
+        var dir = Environment.GetEnvironmentVariable("BLOCKTEST_RRJACK"); if (string.IsNullOrEmpty(dir)) return;
+        var ci = CultureInfo.InvariantCulture;
+        var jo = new JsonSerializerOptions { IncludeFields = true, NumberHandling = JsonNumberHandling.AllowNamedFloatingPointLiterals };
+        var inp = JsonSerializer.Deserialize<RoadGrade.Input>(File.ReadAllText(Path.Combine(dir, "rd_1_1.json")), jo)!;
+        inp.Base = Gr.Load(Path.Combine(dir, "rd_1_1_ground.txt"));
+        // ★[v117.18.2] BLOCKTEST_RRSLOPE="0.01" — 절토 · 성토 사면 경사(1 : n) 바꿔 지어 봄(진입도로 경사 하한 시험 · 따로 도는 묶음)
+        { var sv = Environment.GetEnvironmentVariable("BLOCKTEST_RRSLOPE"); if (!string.IsNullOrEmpty(sv)) { double v = double.Parse(sv, CultureInfo.InvariantCulture); inp.Cut.Slope = v; inp.Fill.Slope = v; Console.WriteLine($"[RJ] 경사 {v} 로 바꿈"); } }
+        var tw = Environment.GetEnvironmentVariable("BLOCKTEST_RRJACKWALL");   // "a0,a1" = [옹벽 변환] 기록(우 · K 1 · 소단 1 m) — rconv 재현
+        if (!string.IsNullOrEmpty(tw)) { var q = tw.Split(','); inp.TierWalls.Add(new RoadGrade.TierWall(double.Parse(q[0], ci), double.Parse(q[1], ci), 1, 1, 1)); }
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var b = RoadRing.Build(inp);
+        Console.WriteLine($"[RJ] 짓기 {sw.ElapsedMilliseconds} ms · ok {b.Ok} · 세모 {b.Tris.Count} · 선 {b.Lines.Count}");
+        Console.WriteLine("  " + b.Note.Substring(0, Math.Min(b.Note.Length, 900)));
+        if (!b.Ok) return;
+        Analyze(inp, b);
+        var (pok, ptxt, pg) = PickCheck(b);
+        bool one = pg.TryGetValue((false, 1, 1), out int n1) && n1 == 1 && pg.TryGetValue((false, 1, 2), out int n2) && n2 == 1;
+        Console.WriteLine($"[RJ] {(pok && one ? "통과" : "실패")} 고를 선 검사: 성 쪽1 K1 · K2 한 줄씩 {one} · {ptxt}");
+        if (!(pok && one)) Environment.ExitCode = 1;
+    }
+
+    /// <summary>소단선 끊김 표 + 굽이 안쪽 이등분선 단면(BLOCKTEST_RRJACK 덤프 · S236 합성 굽이 공용).</summary>
+    public static void Analyze(RoadGrade.Input inp, RoadRing.Built b)
+    {
+        var ci = CultureInfo.InvariantCulture;
+        Console.WriteLine("[RJ] 세모 품질: " + TriStats(b, 236, 112, 275, 135));
+        var lines = RoadRing.DisplayLines(b, b.Lines, out var st);
+        Console.WriteLine($"[RJ] 표시 선 {lines.Count} (거짓 조각 뺌 {st.Dropped} · 턱 더함 {st.AddedLines}줄 {st.AddedLen:F1} m)");
+        {
+            foreach (var l in lines.Where(l => l.K == 1 && l.Side == 1 && !l.Cut && l.Pts.Count >= 2))
+                Console.WriteLine($"    표시 K1 쪽1 {Len(l):F1} m 점 {l.Pts.Count} 표시전용 {l.DisplayOnly} 단면 {l.Prof} 역할 {l.Role} ({l.Pts[0].X % 1000:F1},{l.Pts[0].Y % 1000:F1} z {l.Pts[0].Z:F2} s {l.Pts[0].S:F1})→({l.Pts[^1].X % 1000:F1},{l.Pts[^1].Y % 1000:F1} z {l.Pts[^1].Z:F2} s {l.Pts[^1].S:F1})");
+            var pk = RoadGrade.PickLines(lines, true, null, out var pst);
+            Console.WriteLine($"[RJ] 고를 선(옹벽 변환) {pst.Text}");
+            foreach (var g in pk.GroupBy(l => (l.Cut, l.Side, l.K)).OrderBy(g => g.Key.Cut ? 0 : 1).ThenBy(g => g.Key.Side).ThenBy(g => g.Key.K))
+                Console.WriteLine($"    고름 {(g.Key.Cut ? "절" : "성")} 쪽{g.Key.Side} K{g.Key.K}: {g.Count()}줄 · " + string.Join(" · ", g.Select(l => $"{Len(l):F1} m ({l.Pts[0].X % 1000:F1},{l.Pts[0].Y % 1000:F1})→({l.Pts[^1].X % 1000:F1},{l.Pts[^1].Y % 1000:F1})")));
+        }
+        foreach (var (name, set) in new[] { ("짓는 선", (IReadOnlyList<RoadGrade.TierLine>)b.Lines), ("표시 선", lines) })
+        {
+            Console.WriteLine($"[RJ] {name}");
+            foreach (var g in set.Where(l => l.Role != RoadGrade.LineRole.Wall && l.Pts.Count >= 2 && !l.Cross).GroupBy(l => (l.Cut, l.Side, l.K)).OrderBy(g => g.Key.Cut ? 0 : 1).ThenBy(g => g.Key.Side).ThenBy(g => g.Key.K))
+            {
+                var ps = g.Select(l => (L: l, Len: Len(l), A: l.Pts[0], Z: l.Pts[^1])).ToList();
+                double tot = ps.Sum(p => p.Len);
+                // 틈 — 한 조각 끝점에서 다른 조각 시작점까지 가장 가까운 거리 > 0.3 m 인 끝점(전체 끝점 중 이웃 없는 것)
+                var ends = ps.SelectMany(p => new[] { (X: p.A.X, Y: p.A.Y), (X: p.Z.X, Y: p.Z.Y) }).ToList();
+                var open = new List<string>();
+                for (int i = 0; i < ps.Count; i++)
+                    foreach (var e in new[] { ps[i].A, ps[i].Z })
+                    {
+                        double best = double.PositiveInfinity;
+                        for (int j = 0; j < ps.Count; j++) { if (j == i) continue; foreach (var f in new[] { ps[j].A, ps[j].Z }) best = Math.Min(best, Math.Sqrt(Math.Pow(e.X - f.X, 2) + Math.Pow(e.Y - f.Y, 2))); }
+                        if (best > 0.3) open.Add($"({e.X % 1000:F1},{e.Y % 1000:F1}→{(double.IsInfinity(best) ? -1 : best):F1}m)");
+                    }
+                Console.WriteLine($"    {(g.Key.Cut ? "절" : "성")} {(g.Key.Side > 0 ? "좌" : "우")} K{g.Key.K}: 조각 {ps.Count} · 길이 {tot:F1} m · 열린 끝 {open.Count} {string.Join(" ", open.Take(8))}");
+                foreach (var q in ps.OrderBy(q => St(inp, q.A.X, q.A.Y)))
+                    Console.WriteLine($"        조각 측점 {St(inp, q.A.X, q.A.Y):F0}→{St(inp, q.Z.X, q.Z.Y):F0} · 길이 {q.Len:F1} m · ({q.A.X % 1000:F1},{q.A.Y % 1000:F1})→({q.Z.X % 1000:F1},{q.Z.Y % 1000:F1})");
+            }
+        }
+        // 굽이 안쪽 이등분선 따라 — 곡률 중심에서 안쪽으로 1 m마다(높이 · 종류 · 이긴 원천 거리 · 제 무리 · 섞음)
+        for (int i0 = 3; i0 < inp.X.Length - 3; i0++)
+        {
+            double t0 = Math.Atan2(inp.Y[i0] - inp.Y[i0 - 1], inp.X[i0] - inp.X[i0 - 1]), t1 = Math.Atan2(inp.Y[i0 + 1] - inp.Y[i0], inp.X[i0 + 1] - inp.X[i0]);
+            double tn = (t1 - t0 + Math.PI) % (2 * Math.PI) - Math.PI; if (Math.Abs(tn) < 0.1 || Array.IndexOf(new[] { 34, 75, 119, 179 }, i0) < 0) continue;
+            double R = 1.0 / Math.Abs(tn), sg = Math.Sign(tn), hx = Math.Cos(t1), hy = Math.Sin(t1);
+            double cx = inp.X[i0] - sg * R * hy, cy = inp.Y[i0] + sg * R * hx;   // 곡률 중심(왼쪽으로 꺾이면 왼쪽)
+            double dx = cx - inp.X[i0], dy = cy - inp.Y[i0], dl = Math.Sqrt(dx * dx + dy * dy); dx /= dl; dy /= dl;
+            Console.WriteLine($"[RJ] 굽이 점 {i0} R {R:F1} · 중심 ({cx % 1000:F1},{cy % 1000:F1}) · 안쪽 이등분선(중심에서 바깥쪽 아님 = 안쪽 계속)");
+            for (double d = 0; d <= 45; d += 2.5)
+            {
+                var q = b.Ev.Eval(inp.X[i0] + dx * (R - 3.5 + d + 3.5) * 1.0 - 0, inp.Y[i0] + dy * (R - 3.5 + d + 3.5) * 1.0 - 0);
+                var w = q.Kind == 3 ? q.WLo : q.WHi;
+                Console.WriteLine($"      중심+{d,5:F1} m z {q.Z:F2} 종류 {q.Kind} 도로까지 {q.DNear:F1} · 원천 {w.Src} 거리 {w.Dist:F2} 제 무리 {w.Own} 단면 {w.Prof} 무리 {q.Group} 섞음 {q.Blend:F2}");
+            }
+        }
+        // 틈 표본 — BLOCKTEST_RRGAP="x0,y0,x1,y1"(끝 3자리 좌표 · 1000 나머지) 사이를 0.5 m마다: 이긴 원천 · 거리 · 단면 · 무리 · 제 무리 · 도로까지 거리 · 단면 꺾임(d)
+        var gp = Environment.GetEnvironmentVariable("BLOCKTEST_RRGAP");
+        if (!string.IsNullOrEmpty(gp))
+        {
+            var q = gp.Split(',').Select(t => double.Parse(t, ci)).ToArray(); double bx0 = Math.Floor(inp.X[0] / 1000) * 1000, by0 = Math.Floor(inp.Y[0] / 1000) * 1000;
+            double L = Math.Sqrt(Math.Pow(q[2] - q[0], 2) + Math.Pow(q[3] - q[1], 2));
+            for (double t = 0; t <= L + 1e-9; t += 0.5)
+            {
+                double x = bx0 + q[0] + (q[2] - q[0]) * t / L, y = by0 + q[1] + (q[3] - q[1]) * t / L; var e = b.Ev.Eval(x, y); var w = e.Kind == 3 ? e.WLo : e.WHi;
+                var prof = e.Kind == 3 ? b.Ev.PfA : b.Ev.PcA; string br = w.Prof >= 0 && w.Prof < prof.Length ? string.Join("/", prof[w.Prof].E.Select(v => v.D.ToString("F1", ci))) : "";
+                Console.WriteLine($"      갭 {t,4:F1} m ({x % 1000:F1},{y % 1000:F1}) z {e.Z:F2} 종류 {e.Kind} 도로까지 {e.DNear:F2} · 원천 {w.Src} 거리 {w.Dist:F2} 제 무리 {w.Own} 단면 {w.Prof} 무리 {e.Group} 섞음 {e.Blend:F2} · 꺾임 d {br}");
+            }
+        }
+        // 소단 지도 — BLOCKTEST_RRMAP="x0,y0,x1,y1"(1000 나머지 좌표) 0.5 m 격자: 숫자 = 이긴 원천 단면의 k번째 소단(평평한 토막) 안 · 대문자 = 제 무리 · 소문자(a b c) = 다른 무리 · . = 사면 · R = 도로 · - = 땅
+        var mp = Environment.GetEnvironmentVariable("BLOCKTEST_RRMAP");
+        if (!string.IsNullOrEmpty(mp))
+        {
+            var q = mp.Split(',').Select(t => double.Parse(t, ci)).ToArray(); double bx0 = Math.Floor(inp.X[0] / 1000) * 1000, by0 = Math.Floor(inp.Y[0] / 1000) * 1000;
+            for (double y = q[3]; y >= q[1]; y -= 0.5)
+            {
+                var sbm = new System.Text.StringBuilder($"{y,6:F1} ");
+                for (double x = q[0]; x <= q[2]; x += 0.5)
+                {
+                    var e = b.Ev.Eval(bx0 + x, by0 + y); char c;
+                    if (e.Kind == 1) c = 'R'; else if (e.Kind is not (2 or 3 or 4)) c = '-';
+                    else
+                    {
+                        var w = e.Kind == 3 ? e.WLo : e.WHi; var pr = (e.Kind == 3 ? b.Ev.PfA : b.Ev.PcA)[Math.Clamp(w.Prof, 0, b.Ev.PfA.Length - 1)]; int k = 0; c = '.';
+                        if (w.Src >= 0) for (int i = 1; i < pr.E.Count; i++) if (Math.Abs(pr.E[i].R - pr.E[i - 1].R) < 1e-9 && pr.E[i].D > pr.E[i - 1].D + 1e-9) { k++; if (w.Dist >= pr.E[i - 1].D - 1e-6 && w.Dist <= pr.E[i].D + 1e-6) { c = (char)((w.Own ? '0' : 'a' - 1) + k); break; } }
+                    }
+                    sbm.Append(c);
+                }
+                Console.WriteLine("      지도 " + sbm);
+            }
+        }
+        // 소단 높이표 — BLOCKTEST_RRBTAB="x0,y0,x1,y1,쪽" 0.25 m 격자: 이긴 원천 단면의 k번째 소단(평평한 토막) 셀을 이긴 원천 측점 1 m 칸으로 묶어 높이 · 도로까지 거리
+        var bt = Environment.GetEnvironmentVariable("BLOCKTEST_RRBTAB");
+        if (!string.IsNullOrEmpty(bt))
+        {
+            var q = bt.Split(',').Select(t => double.Parse(t, ci)).ToArray(); double bx0 = Math.Floor(inp.X[0] / 1000) * 1000, by0 = Math.Floor(inp.Y[0] / 1000) * 1000; int wantSide = (int)q[4];
+            var bins = new SortedDictionary<(int K, int S), List<(double Z, double D, double X, double Y)>>();
+            for (double y = q[1]; y <= q[3]; y += 0.25)
+                for (double x = q[0]; x <= q[2]; x += 0.25)
+                {
+                    var e = b.Ev.Eval(bx0 + x, by0 + y); if (e.Kind != 3) continue; var w = e.WLo; if (w.Src < 0 || w.Src >= 2 * b.Ev.D.B.Count) continue; if (b.Ev.SourceSide(w.Src) != wantSide) continue;
+                    var pr = b.Ev.PfA[Math.Clamp(w.Prof, 0, b.Ev.PfA.Length - 1)]; int k = 0;
+                    for (int i = 1; i < pr.E.Count; i++) if (Math.Abs(pr.E[i].R - pr.E[i - 1].R) < 1e-9 && pr.E[i].D > pr.E[i - 1].D + 1e-9) { k++; if (w.Dist >= pr.E[i - 1].D && w.Dist <= pr.E[i].D) { double sS = St(inp, bx0 + x, by0 + y); if (!bins.TryGetValue((k, (int)Math.Round(sS)), out var l)) bins[(k, (int)Math.Round(sS))] = l = new(); l.Add((e.Z, e.DNear, x, y)); break; } }
+                }
+            foreach (var kv in bins.Where(kv => kv.Value.Count >= 4))
+                Console.WriteLine($"      소단높이 K{kv.Key.K} 측점 {kv.Key.S,4} · 셀 {kv.Value.Count,3} · z {kv.Value.Average(v => v.Z):F2} ({kv.Value.Min(v => v.Z):F2}~{kv.Value.Max(v => v.Z):F2}) · 도로까지 {kv.Value.Average(v => v.D):F1} · 자리 ({kv.Value.Average(v => v.X):F1},{kv.Value.Average(v => v.Y):F1})");
+        }
+        RoadRingCheck.BenchSections("JACK", inp, b);
+        var ba = RoadRing.BenchArea(b);
+        Console.WriteLine($"[RJ] 소단 자리(면 규칙) {ba.M2:F1} ㎡ · {ba.Cells} 칸");
+    }
+    static double St(RoadGrade.Input inp, double x, double y) { double best = 1e18, bs = 0, c = 0; for (int i = 0; i < inp.X.Length; i++) { if (i > 0) c += Math.Sqrt(Math.Pow(inp.X[i] - inp.X[i - 1], 2) + Math.Pow(inp.Y[i] - inp.Y[i - 1], 2)); double d = Math.Pow(inp.X[i] - x, 2) + Math.Pow(inp.Y[i] - y, 2); if (d < best) { best = d; bs = c; } } return bs; }
+    static double Len(RoadGrade.TierLine l) { double s = 0; for (int i = 1; i < l.Pts.Count; i++) s += Math.Sqrt(Math.Pow(l.Pts[i].X - l.Pts[i - 1].X, 2) + Math.Pow(l.Pts[i].Y - l.Pts[i - 1].Y, 2)); return s; }
+}

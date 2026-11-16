@@ -92,15 +92,31 @@ internal sealed class SectionPanel : UserControl
         sec1.Children.Add(row1);
         if (road)
         {
-            Add(row1, demo, "종단도", "DHROADSHEET", "pfProfile", false, "지금 종단으로 종단도를 지우고 새로 · 자리 클릭 (Enter = 지난 자리)");
+            // ★[v117.18.4 · JACK 1116 «진입도로 종단수정을 이 창에 계획지표면처럼»] 종단도 생성 → 종단도 수정(값 둘 · PVI · 자동 다시 · 시점↔종점)
+            AddRoad(row1, demo, "종단도 생성", "DHROADSHEET", "pfProfile", "지금 종단으로 종단도를 지우고 새로 · 자리 클릭 (Enter = 지난 자리)", primary: true);
+            sec1.Children.Add(SubHead("종단도 수정"));
+            var vals = new WrapPanel { Margin = new Thickness(2, 0, 0, 4) };
+            sec1.Children.Add(vals);
+            RoadField(vals, demo, "최대 경사 %", d => d.MaxGrade, (d, v) => d.MaxGrade = v, 100, 0.5, 30);
+            RoadField(vals, demo, "PVI 간격", d => d.MinPviLen, (d, v) => d.MinPviLen = v, 1, 1, 500);
+            var row1r = new WrapPanel { Margin = new Thickness(0, 0, 0, 6) };
+            sec1.Children.Add(row1r);
+            AddRoad(row1r, demo, "PVI 넣기", "DHROADPVIADD", "roadProfile", "종단도에서 찍은 측점에 PVI 넣기 · 모양은 그대로 · 넣은 뒤 끌어 높이 변경 (Enter 끝)");
+            AddRoad(row1r, demo, "PVI 지우기", "DHROADPVIDEL", "roadProfile", "종단도에서 찍은 자리 가까운 PVI 지우기 · 처음 · 끝은 못 지움 (Enter 끝)");
+            AddRoad(row1r, demo, "종단 자동으로 다시", "DHROADREDRAFT", "roadProfile", "PVI를 모두 지우고 지금 땅 따라 최대 경사 · PVI 간격으로 다시 · 손으로 옮긴 PVI 사라짐 (한 번 물음)");
+            AddRoad(row1r, demo, "시점↔종점", "DHROADREV", "pfRev", "방향 뒤집기 · 모양 · 높이 그대로 · 옹벽 · 측구 · 측점도 같이 · 다시 누르면 처음 · 그 뒤 [업데이트]");
         }
         else
         {
-            Add(row1, demo, "종단도", "DHPROFILE", "pfProfile", true, "노선을 그림 · 점 클릭 · Enter 끝 · U 취소");
-            Add(row1, demo, "측점 추가", "DHSTATION", "pfAdd", true, "노선 위 클릭 → 측점 추가");
-            Add(row1, demo, "측점 전후", "DHSTATIONFB", "pfFb", true, "노선 위 클릭 → 횡단만 (전)(후) 두 장");
-            Add(row1, demo, "측점 지우기", "DHSTATIONDEL", "pfDel", true, "측점 근처 클릭 → 수동 측점 삭제 · 횡단도 같이");
-            Add(row1, demo, "시점↔종점", "DHPROFILEREV", "pfRev", false, "종단 방향 뒤집기 · 다시 누르면 처음");
+            // ★[v117.18.3 · JACK 1116 «종단도를 종단도 생성이라고 초록색 버튼 · 그 아래 소제목 종단도 수정 · 측점 기능 네 개»]
+            Add(row1, demo, "종단도 생성", "DHPROFILE", "pfProfile", true, "노선을 그림 · 점 클릭 · Enter 끝 · U 취소", primary: true);
+            sec1.Children.Add(SubHead("종단도 수정"));
+            var row1b = new WrapPanel { Margin = new Thickness(0, 0, 0, 6) };
+            sec1.Children.Add(row1b);
+            Add(row1b, demo, "측점 추가", "DHSTATION", "pfAdd", true, "노선 위 클릭 → 측점 추가");
+            Add(row1b, demo, "측점 전후", "DHSTATIONFB", "pfFb", true, "노선 위 클릭 → 횡단만 (전)(후) 두 장");
+            Add(row1b, demo, "측점 지우기", "DHSTATIONDEL", "pfDel", true, "측점 근처 클릭 → 수동 측점 삭제 · 횡단도 같이");
+            Add(row1b, demo, "시점↔종점", "DHPROFILEREV", "pfRev", false, "종단 방향 뒤집기 · 다시 누르면 처음");
         }
 
         // ── 2. 횡단도 ──
@@ -108,8 +124,23 @@ internal sealed class SectionPanel : UserControl
         Hook(HeadOf(badge2), "xsView");
         var row2 = new WrapPanel { Margin = new Thickness(0, 0, 0, 6) };
         sec2.Children.Add(row2);
-        if (road) Add(row2, demo, "횡단도 그리기", "DHROADXSEC", "xsView", false, "측점마다 횡단면도 · 자리 클릭 (Enter = 지난 자리) · 종단도 먼저");
-        else Add(row2, demo, "횡단도 그리기", "DHXVIEW", "xsView", true, "종단도 측점대로 횡단면도 · 자리 클릭 · 종단도 먼저");
+        if (road)
+        {
+            AddRoad(row2, demo, "횡단도 생성", "DHROADXSEC", "xsView", "측점마다 횡단면도 · 자리 클릭 (Enter = 지난 자리) · 종단도 먼저", primary: true);
+            sec2.Children.Add(SubHead("횡단도 수정"));
+            var row2r = new WrapPanel { Margin = new Thickness(0, 0, 0, 6) };
+            sec2.Children.Add(row2r);
+            AddRoad(row2r, demo, "횡단뷰 수정", "DHSHEETSET", "xsView", "도면 설정 — 횡단도 축척 · 측점 간격 · 배치");
+        }
+        else
+        {
+            // ★[v117.18.3 · JACK 1116 «횡단도 생성 초록색 버튼 · 그 아래 소제목 횡단도 수정 · 횡단뷰 수정 단추 → 도면설정 팝업»]
+            Add(row2, demo, "횡단도 생성", "DHXVIEW", "xsView", true, "종단도 측점대로 횡단면도 · 자리 클릭 · 종단도 먼저", primary: true);
+            sec2.Children.Add(SubHead("횡단도 수정"));
+            var row2b = new WrapPanel { Margin = new Thickness(0, 0, 0, 6) };
+            sec2.Children.Add(row2b);
+            Add(row2b, demo, "횡단뷰 수정", "DHSHEETSET", "xsView", false, "도면 설정 — 횡단도 축척 · 측점 간격 · 배치");
+        }
 
         // ── 배치 — 예시는 맨 위 고정 ──
         var deck = new DockPanel { LastChildFill = true };
@@ -128,17 +159,134 @@ internal sealed class SectionPanel : UserControl
         Content = deck;
 
         void Wire() { try { PickSession.Changed -= OnPick; PickSession.Changed += OnPick; } catch { } }
-        Loaded += (_, __) => { Wire(); Refresh(null); };
-        Unloaded += (_, __) => { try { PickSession.Changed -= OnPick; } catch { } };
+        Loaded += (_, __) => { Wire(); Refresh(null); WireRoad(); };
+        Unloaded += (_, __) => { try { PickSession.Changed -= OnPick; RoadSession.Changed -= OnRoad; } catch { } };
         Wire();
+    }
+
+    // ── 진입도로 — 열린 도로 값 칸 · 단추(RoadPalette와 같은 저장 · 다시 계산 길) ──
+    private readonly List<UIElement> _needRoad = new();
+    private readonly List<(TextBox Box, Func<RoadDesign, double> Get, Action<RoadDesign, double> Set, double Scale, double Lo, double Hi)> _fields = new();
+    private readonly Dictionary<TextBox, string> _shown = new();
+    private RoadSession? _rs;
+    private bool _loading;
+
+    private void WireRoad()
+    {
+        if (!_road) return;
+        try { RoadSession.Changed -= OnRoad; RoadSession.Changed += OnRoad; } catch { }
+        ShowRoadSession(RoadSession.Of(AcadApp.DocumentManager.MdiActiveDocument));
+    }
+
+    private void OnRoad(RoadSession? s)
+    {
+        try { Dispatcher.Invoke(() => ShowRoadSession(s ?? RoadSession.Of(AcadApp.DocumentManager.MdiActiveDocument))); } catch { }
+    }
+
+    private void ShowRoadSession(RoadSession? s)
+    {
+        bool same = ReferenceEquals(s, _rs);
+        _rs = s;
+        _loading = true;
+        try
+        {
+            foreach (var el in _needRoad) el.IsEnabled = s != null;
+            foreach (var (box, get, _, scale, _, _) in _fields)
+            {
+                box.IsEnabled = s != null;
+                if (same && box.IsKeyboardFocusWithin) continue;
+                box.Text = s != null ? (get(s.Design) * scale).ToString("0.###", System.Globalization.CultureInfo.InvariantCulture) : "";
+                _shown[box] = box.Text;
+            }
+        }
+        finally { _loading = false; }
+    }
+
+    private void RoadField(Panel wp, FixDemoView demo, string label, Func<RoadDesign, double> get, Action<RoadDesign, double> set, double scale, double lo, double hi)
+    {
+        var cell = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 10, 4), Background = Brushes.Transparent };
+        cell.Children.Add(new TextBlock { Text = label, FontSize = 11, Foreground = DhBrand.Sub, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 4, 0) });
+        var tb = new TextBox
+        {
+            Width = 44, Height = 26, Padding = new Thickness(2, 0, 2, 0), IsEnabled = false,
+            VerticalContentAlignment = VerticalAlignment.Center, HorizontalContentAlignment = HorizontalAlignment.Center,
+            ToolTip = $"{lo:0.###} ~ {hi:0.###}",
+        };
+        tb.KeyDown += (_, e) => { if (e.Key == System.Windows.Input.Key.Enter) CommitRoad(); };
+        tb.LostFocus += (_, __) => CommitRoad();
+        tb.LostKeyboardFocus += (_, __) => CommitRoad();
+        cell.Children.Add(tb);
+        cell.MouseEnter += (_, __) => demo.Play("roadProfile");
+        cell.MouseLeave += (_, __) => demo.Idle();
+        wp.Children.Add(cell);
+        _fields.Add((tb, get, set, scale, lo, hi));
+    }
+
+    private void AddRoad(Panel row, FixDemoView demo, string text, string cmd, string demoKey, string tip, bool primary = false)
+    {
+        var b = new Button { Content = text, MinWidth = 96, Height = 30, Margin = new Thickness(0, 0, 6, 6), ToolTip = tip, IsEnabled = false };
+        if (primary) { b.MinWidth = 120; try { if (DhBrand.Skin != null) b.Style = (Style)DhBrand.Skin["DhPrimary"]; } catch { } }
+        b.Click += (_, __) => PickSession.Send(AcadApp.DocumentManager.MdiActiveDocument, cmd);
+        var hit = new Border { Background = Brushes.Transparent, Child = b };
+        hit.MouseEnter += (_, __) => demo.Play(demoKey);
+        hit.MouseLeave += (_, __) => demo.Idle();
+        row.Children.Add(hit);
+        _needRoad.Add(b);
+    }
+
+    /// <summary>값 확정 — RoadPalette.CommitCore와 같은 길(남은 바뀜 셈 → Fresh → 바뀐 칸만 쓰기 → SaveDesign → Recompute).</summary>
+    private void CommitRoad()
+    {
+        if (_loading || _rs == null) return;
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+        try
+        {
+            bool busy = false;
+            try { busy = !string.IsNullOrEmpty(_rs.Doc.CommandInProgress); } catch { }
+            if (busy)
+            {
+                foreach (var (box, get, _, scale, _, _) in _fields) { box.Text = (get(_rs.Design) * scale).ToString("0.###", inv); _shown[box] = box.Text; }
+                return;
+            }
+            var typed = _fields.Where(f => !(_shown.TryGetValue(f.Box, out var w0) && f.Box.Text.Trim() == w0)).Select(f => (f.Box, f.Box.Text)).ToList();
+            try { _rs.RecomputeIfDirty(); } catch { }
+            if (_rs == null) return;
+            foreach (var (tb, t) in typed) tb.Text = t;
+            _rs.Fresh();
+            bool changed = false;
+            foreach (var (box, get, set, scale, lo, hi) in _fields)
+            {
+                if (_shown.TryGetValue(box, out var was) && box.Text.Trim() == was) continue;
+                if (!double.TryParse(box.Text.Trim(), System.Globalization.NumberStyles.Float, inv, out double v) || !double.IsFinite(v) || v < lo - 1e-9 || v > hi + 1e-9)
+                {
+                    box.Text = (get(_rs.Design) * scale).ToString("0.###", inv);
+                    _shown[box] = box.Text;
+                    continue;
+                }
+                double nv = v / scale;
+                if (System.Math.Abs(get(_rs.Design) - nv) > 1e-9) { set(_rs.Design, nv); changed = true; }
+                _shown[box] = box.Text.Trim();
+            }
+            if (!changed) return;
+            _rs.SaveDesign();
+            _rs.Recompute();
+        }
+        catch (System.Exception ex) { try { AcadApp.DocumentManager.MdiActiveDocument?.Editor?.WriteMessage("\n[진입도로] 저장 실패 — " + ex.Message); } catch { } }
     }
 
     private void OnPick() => Refresh(null);
 
     /// <summary>단추 하나 — 꺼진 단추는 마우스 일을 안 받으므로 감싼 테두리가 예시를 돌린다.</summary>
-    private void Add(Panel row, FixDemoView demo, string text, string cmd, string demoKey, bool needPlan, string tip)
+    /// <summary>★[v117.18.3] 칸 안 소제목(«종단도 수정» · «횡단도 수정»).</summary>
+    private static TextBlock SubHead(string text) => new()
+    {
+        Text = text, FontSize = 12, FontWeight = FontWeights.SemiBold, Foreground = DhBrand.Ink, Margin = new Thickness(0, 4, 0, 4),
+    };
+
+    private void Add(Panel row, FixDemoView demo, string text, string cmd, string demoKey, bool needPlan, string tip, bool primary = false)
     {
         var b = new Button { Content = text, MinWidth = 96, Height = 30, Margin = new Thickness(0, 0, 6, 6), ToolTip = tip };
+        if (primary) { b.MinWidth = 120; try { if (DhBrand.Skin != null) b.Style = (Style)DhBrand.Skin["DhPrimary"]; } catch { } }   // ★[v117.18.3] 도화 초록 단추
         b.Click += (_, __) => PickSession.Send(AcadApp.DocumentManager.MdiActiveDocument, cmd);
         var hit = new Border { Background = Brushes.Transparent, Child = b };
         hit.MouseEnter += (_, __) => demo.Play(demoKey);

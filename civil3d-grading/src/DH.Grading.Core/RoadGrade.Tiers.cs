@@ -20,6 +20,8 @@ public static partial class RoadGrade
         public int WallNo;
         /// <summary>★[v116.9 · 4-1] 그림 전용 소단 턱 선(<see cref="RoadRing.DisplayLines"/>가 더함) — [사면→옹벽] 고르기 · 면 짓기에는 안 씀.</summary>
         public bool DisplayOnly;
+        /// <summary>★[v117.18.2] 굽이 안쪽 모퉁이 이음선(<see cref="RoadRing.DisplayLines"/> — 면을 따라 걷는 선 · 꺾임 거리 위 점 아님).</summary>
+        public bool Jog;
         public List<(double X, double Y, double Z, double S)> Pts = new();
     }
 

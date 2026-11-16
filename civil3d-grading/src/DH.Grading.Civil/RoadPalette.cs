@@ -98,7 +98,6 @@ internal sealed class RoadPanel : UserControl
 
         // ── ■ 도로 설정 — 작은 칸 셋(한 번에 하나 펼침 · 창을 만들 때마다 «노선»이 열린 채로) ──
         // ★★[v111.7 · JACK 1102 «도킹창 묶음 정리»] 작은 칸 «종단» · «옹벽 제안»은 새 큰 칸 ■ 종단 · ■ 옹벽으로 옮김 — 여기는 값만(노선 · 횡단 · 사면)
-        const string GT = "도로:큰칸";   // ★[v117.12 · JACK 1112] 큰 칸(설정 · 종단 · 옹벽 · 측구)은 한 번에 하나만 펼침 — ■ 결과는 묶음 밖(늘 펼침)
         // ★★[v113.3 · JACK 1105 «진입도로 생성을 누르면 진입도로 창이 뜨고, 창에 도로 그리기랑 폴리선 선택 · 별도 팝업은 만들지 말고»] 창 맨 위 — 새 도로 만들기(늘 켜짐 · 아래 ■ 도로 설정 값으로)
         var mk = new WrapPanel { Margin = new Thickness(0, 2, 0, 6) };
         Button MakeBtn(string text, string cmd, string tip, bool primary, string? demoKey)
@@ -169,30 +168,15 @@ internal sealed class RoadPanel : UserControl
         Row(("절토 1:", d => d.CutSlope, (d, v) => d.CutSlope = v, 1, 0.1, 10), ("단높이", d => d.CutBenchH, (d, v) => d.CutBenchH = v, 1, 0.5, 50), ("소단", d => d.CutBenchW, (d, v) => d.CutBenchW = v, 1, 0, 10));
         Row(("성토 1:", d => d.FillSlope, (d, v) => d.FillSlope = v, 1, 0.1, 10), ("단높이", d => d.FillBenchH, (d, v) => d.FillBenchH = v, 1, 0.5, 50), ("소단", d => d.FillBenchW, (d, v) => d.FillBenchW = v, 1, 0, 10));
 
-        // ── ■ 종단 ──
-        // ★★[v111.7 · JACK 1102 «도킹창 묶음 정리»] 값(최대 경사 · PVI 간격) → [PVI 넣기] [PVI 지우기](옛 ■ 진입도로 수정에서 옮김) → [종단 자동으로 다시](옛 [종단 초안 다시] — 명령에서 한 번 물음)
         // ★[v117.18 · JACK 1116] [도로 경로 그리기] [폴리선 선택]은 ■ 도로 설정 바로 아래 · ■ 종단 → «종단수정»
         _root.Children.Add(mk);
-        _host = GradingDialog.AddCollapsible(_root, "■ 종단수정", out var profBadge, "최대 종단경사 · PVI 간격 · PVI 넣기 · 지우기", open: false, key: "도로:종단", group: GT);
-        HookBig(profBadge, _host, "roadProfile");
-        Row(("최대 경사 %", d => d.MaxGrade, (d, v) => d.MaxGrade = v, 100, 0.5, 30), ("PVI 간격", d => d.MinPviLen, (d, v) => d.MinPviLen = v, 1, 1, 500));
-        _bendFlat = new CheckBox { Content = "굽이 평탄화", FontSize = 11, Margin = new Thickness(2, 2, 0, 6), ToolTip = "급한 굽이(반경 < 안쪽 소단 거리) 구간 종단을 0 %로 → 안쪽 소단이 이어짐 · 끄면 펴기 전 · 면은 [업데이트]" };
-        _bendFlat.Click += (_, __) => BendFlatChanged();
-        _host.Children.Add(_bendFlat); _needRoad.Add(_bendFlat);
-        // ★[v111.2 · JACK 1030 «PVI 수정 기능 — 넣기 · 삭제»] 종단도에서 찍기(Enter까지 여러 번)
-        Buttons(("PVI 넣기", "DHROADPVIADD", "종단도를 찍은 측점에 PVI를 넣습니다 — 지금 계획선 위라 모양은 그대로, 넣은 뒤 잡아끌어 높이를 바꿉니다(Enter 끝)", false),
-                ("PVI 지우기", "DHROADPVIDEL", "종단도에서 찍은 자리 가까운 PVI를 지웁니다 — 처음 · 끝은 못 지움(Enter 끝)", false));
-        // ★★[v113.1 · JACK 1104 «종단 방향 변경»] 시점 ↔ 종점(모양 · 높이 그대로 · 측점 0이 반대쪽 끝 · 다시 누르면 처음)
-        Buttons(("시점↔종점 바꾸기", "DHROADREV",
-                 "노선 방향을 뒤집습니다 — 모양 · 높이 그대로, 측점 0이 반대쪽 끝에서 시작합니다. 옹벽 · 측구 · 측점 기록도 같은 자리로 옮깁니다. 다시 누르면 처음으로 · 그 뒤 [업데이트]", false));
-        Buttons(("종단 자동으로 다시", "DHROADREDRAFT",
-                 "계획 종단 PVI를 모두 지우고 지금 땅(정지면_DH 또는 원지반)을 따라 최대 경사 · PVI 간격으로 처음부터 다시 잡습니다 — 손으로 옮긴 PVI는 사라집니다(누르면 한 번 묻습니다)", false));
-
         // ── ■ 옹벽 ──
         // ★★[v111.7 · JACK 1102] [옹벽 변환] [사면 변환](옛 ■ 진입도로 수정에서 옮김 — 전체 해제는 명령 안 C · 부지와 같음) → 옹벽 제안 한 줄(제안 높이 · [사업 경계]) · 풍선 글은 쉬운 말로
-        _host = GradingDialog.AddCollapsible(_root, "■ 옹벽", out var wallBadge, "옹벽 변환 · 사면 변환 · 옹벽 추가 · 삭제", open: false, key: "도로:옹벽", group: GT);
+        // ★[v117.18.4 · JACK 1116 «진입도로 수정 열림펼침 제목 안에 옹벽 · 측구»] 한 접는 칸 + 소제목 둘
+        var editBody = GradingDialog.AddCollapsible(_root, "■ 진입도로 수정", out var editBadge, "옹벽 · 측구", open: false, key: "도로:수정");
+        HookBig(editBadge, editBody, "roadWall");
+        _host = Plain(editBody, "옹벽", "옹벽 변환 · 사면 변환 · 옹벽 추가 · 삭제", true, "roadWall", first: true);
         var wallBody = _host;
-        HookBig(wallBadge, _host, "roadWall");
         // ★★[v113.0 · JACK 1104 «옹벽 변환은 소단선 변형 · 폴리선 옹벽 추가는 별도 단추»] [사면→옹벽] · [옹벽→사면] · [옹벽 추가](풍선 글 짧게)
         // ★[v117.12 · JACK 1112] 부지 창과 같은 자리 — 왼쪽 단추(1줄 사면→옹벽 · 옹벽→사면 / 2줄 옹벽 추가 · 옹벽 삭제) · 오른쪽 예시 칸(FixDemoView). 단추 그대로 Buttons와 같이 Act로 명령을 보내고 _needRoad로 켜짐을 맞춘다
         {
@@ -228,8 +212,7 @@ internal sealed class RoadPanel : UserControl
         // ★[v116.4 · JACK 1109 «옹벽 제안 기능은 필요 없으니 없앨 것»] 옹벽 제안 한 줄(제안 높이 · [사업 경계]) 없앰 — 옛 기록 칸(SuggestH · LimitHandle)은 읽기만 하고 안 씀
 
         // ── ■ 측구 ★★[도로 마무리 ② · 계획 6.3 · JACK 1102 «드롭박스 · 대표단면 + 치수»] 형식 → 그 형식 치수(mm) → [구간 지정](두 점 · 쪽 = 첫 점) ──
-        _host = GradingDialog.AddCollapsible(_root, "■ 측구", out var ditchBadge, "측구 단면 · 구간 지정", open: false, key: "도로:측구", group: GT);
-        HookBig(ditchBadge, _host, "roadDitch");
+        _host = Plain(editBody, "측구", "측구 단면 · 구간 지정", true, "roadDitch");
         // ★[v117.12 · JACK 1112] 형식 · 치수 · 그레이팅 · 경고는 «측구 단면» 팝업으로 — 칸은 여기서 만들고(저장 · 켜짐 규칙 그대로) 창이 열릴 때만 그 안에 붙인다
         var ditchDock = _host;
         _ditchBody = new StackPanel();
@@ -277,15 +260,13 @@ internal sealed class RoadPanel : UserControl
         _host.Children.Add(ditchRow);
 
         // ── ■ 결과 ──
-        _host = GradingDialog.AddCollapsible(_root, "■ 결과", out var resBadge, "토공량 · 높이 · 경사 · 옹벽", open: true, key: "도로:결과");
-        HookBig(resBadge, _host, "roadResult");
+        _host = Plain(_root, "■ 결과", "토공량 · 높이 · 경사 · 옹벽", false, "roadResult");   // ★[v117.18.4 · JACK 1116 «결과쪽은 항상 열려 있어야 해»] 접는 칸 아님
         var resCard = Card(_result);
-        resCard.ToolTip = $"최대 종단경사가 {ProfileSheetRules.WarnGrade * 100:0} %(경고 문턱 — 고정)를 넘으면 빨간 글로 알립니다 · ■ 종단 «최대 경사 %»는 자동 초안 한도(그 사이는 경고 없음)";
+        resCard.ToolTip = $"최대 종단경사가 {ProfileSheetRules.WarnGrade * 100:0} %(경고 문턱 — 고정)를 넘으면 빨간 글로 알립니다 · 종횡단도 창 «최대 경사 %»는 자동 초안 한도(그 사이는 경고 없음)";
         _host.Children.Add(resCard); _needRoad.Add(resCard);
         // ★★★[v111.7.2 · JACK 1102 «측점(PVI) 움직일 때마다 모든 게 재작성되니 오래 걸린다 · 마지막에 팝업창 단추를 누르면 한꺼번에 업데이트»]
         //   저절로 다시 만들기 · [다시 시도] 없앰 → [업데이트] 하나(늘 보임 · 고친 것이 있으면 깜박 + 상태 줄) · 한 명령 · 실행 취소 한 번
         //   ■ 도면([종단도] [횡단도] + 상태 줄)도 없앰(JACK — 리본에 이미 있음 · 처음 놓기 · 옮겨 다시 = 리본 [종단도] [횡단도] 또는 [업데이트])
-        _updateBtn = Buttons(("업데이트", "DHROADUPDATE", "지표면 · 종단도 · 횡단도를 한꺼번에 다시 만듭니다", true))[0];
         _autoState = StateLine();
         // ★★[도로 마무리 ① · 계획 5.3 · 비평 M6] 이 판 앞 도로 — 끝 맞춤 제안 한 줄 + [끝 맞추기](한 번 누르면 그 뒤 [업데이트]가 늘 맞춤)
         _endsLine = new TextBlock { FontSize = 11, Foreground = DhBrand.Ink, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(2, 0, 0, 2), Visibility = Visibility.Collapsed };
@@ -305,6 +286,11 @@ internal sealed class RoadPanel : UserControl
             catch (System.Exception ex) { _note.Text = "진입도로 초기화 실패 — " + ex.Message; }
         };
         _root.Children.Add(_resetBtn);
+        // ★[v117.18.4 · JACK 1116 «업데이트 버튼은 맨 아래 독립적으로 · 위에서 무엇을 고치든 반짝»] 칸 밖 맨 끝 · 깜박임은 StateText(바뀜 열쇠)가 정함 — 모든 고침이 Recompute를 거치므로 한 길
+        var updHost = new StackPanel { Margin = new Thickness(0, 10, 0, 0) };
+        _root.Children.Add(updHost);
+        _host = updHost;
+        _updateBtn = Buttons(("업데이트", "DHROADUPDATE", "지표면 · 종단도 · 횡단도를 한꺼번에 다시 만듭니다", true))[0];
         Show(null);
     }
 
@@ -391,15 +377,6 @@ internal sealed class RoadPanel : UserControl
         d.DitchKind = k;
         try { _s.SaveDesign(); } catch (System.Exception ex) { _note.Text = "저장 실패 — " + ex.Message; }
         DitchWarn(_s.Design);
-    }
-    CheckBox _bendFlat = null!;
-    void BendFlatChanged()
-    {
-        if (_loading || _s == null) return;
-        if (Busy(_s.Doc)) { _bendFlat.IsChecked = _s.Design.BendFlat; return; }
-        _s.Fresh().BendFlat = _bendFlat.IsChecked == true;
-        try { _s.SaveDesign(); } catch (System.Exception ex) { _note.Text = "저장 실패 — " + ex.Message; return; }
-        Act("굽이 평탄화", "DHROADBENDFLAT");
     }
     void DitchLidChanged()
     {
@@ -756,7 +733,6 @@ internal sealed class RoadPanel : UserControl
                 _ditchU.Visibility = s.Design.DitchKind == 1 ? Visibility.Visible : Visibility.Collapsed;
                 _ditchL.Visibility = s.Design.DitchKind == 2 ? Visibility.Visible : Visibility.Collapsed;
                 _ditchLid.IsChecked = s.Design.DitchU.Length > 8 && s.Design.DitchU[8] > 0.5;
-                _bendFlat.IsChecked = s.Design.BendFlat;
                 DitchWarn(s.Design);
             }
             // ★[도로 마무리 ① · 계획 5.3] 끝 맞춤 제안(끝 맞춤 꺼진 옛 도로만) + [끝 맞추기]

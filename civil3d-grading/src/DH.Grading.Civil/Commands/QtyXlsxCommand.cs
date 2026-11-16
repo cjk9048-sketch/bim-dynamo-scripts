@@ -26,7 +26,9 @@ public sealed class QtyXlsxCommand
 
         var inp = QtyXlsxInput.Read(db);
         var siteSnap = QtyKeeper.Of(db, false); var roadSnap = QtyKeeper.Of(db, true);
-        string status = (siteSnap == null ? "부지 횡단 없음 → [횡단도] 먼저\n" : $"부지 횡단 {siteSnap.Stations.Count}개 · 터파기 구분 H={siteSnap.Limit:0.0#}m\n")
+        bool fromDwg = false;
+        if (siteSnap == null) { siteSnap = XsecViewCommand.ReadSiteQtyFromDrawing(doc, out _); fromDwg = siteSnap != null; }   // 이 세션에 안 그렸어도 도면의 검토선에서 읽음
+        string status = (siteSnap == null ? "부지 횡단 없음 → [횡단도] 먼저\n" : $"부지 횡단 {siteSnap.Stations.Count}개{(fromDwg ? " (도면에서 읽음)" : "")} · 터파기 구분 H={siteSnap.Limit:0.0#}m\n")
                       + (roadSnap == null ? "진입도로 횡단 없음 → 칸 빈칸\n" : $"진입도로 횡단 {roadSnap.Stations.Count}개\n");
         var win = new QtyXlsxWindow(inp, status.TrimEnd());
         if (AcadApp.ShowModalWindow(win) != true) return;

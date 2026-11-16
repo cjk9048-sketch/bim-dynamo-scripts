@@ -16,6 +16,7 @@ static class RoadRingCheck
         public bool TryGetElevation(double x, double y, out double z) { z = _f(x - OX, y - OY); return double.IsFinite(z); }
     }
 
+    static RoadGrade.Input WithTier(RoadGrade.Input i, RoadGrade.TierWall w) { i.TierWalls.Add(w); return i; }
     static RoadGrade.Input Road(List<(double X, double Y)> pts, double z0, double grade, Func<double, double, double> ground, double reach)
     {
         var X = new double[pts.Count]; var Y = new double[pts.Count]; var Z = new double[pts.Count]; double s = 0;
@@ -39,6 +40,36 @@ static class RoadRingCheck
         return o;
     }
     static List<(double X, double Y)> Join(params List<(double X, double Y)>[] ps) { var o = new List<(double X, double Y)>(); foreach (var p in ps) foreach (var q in p) if (o.Count == 0 || Math.Abs(o[^1].X - q.X) + Math.Abs(o[^1].Y - q.Y) > 1e-9) o.Add(q); return o; }
+
+
+    /// <summary>★[v117.18.1 · JACK 1116 «안쪽 소단 없음»] 계측 — 굽이 안쪽 · 바깥 · 곧은 구간의 직각 횡단에서 평평한 토막(소단) 수 · 폭(BLOCKTEST_RRBENCH=1).</summary>
+    internal static void BenchSections(string tag, RoadGrade.Input inp, RoadRing.Built b)
+    {
+        var ci = System.Globalization.CultureInfo.InvariantCulture; int n = inp.X.Length; double edge = inp.Sec.HalfR + inp.Sec.ShoulderR;
+        var sb = new System.Text.StringBuilder();
+        for (int i = 2; i < n - 2; i += 2)
+        {
+            double tx = inp.X[i + 1] - inp.X[i - 1], ty = inp.Y[i + 1] - inp.Y[i - 1], tl = Math.Sqrt(tx * tx + ty * ty); tx /= tl; ty /= tl;
+            double ax = inp.X[i] - inp.X[i - 2], ay = inp.Y[i] - inp.Y[i - 2], bx = inp.X[i + 2] - inp.X[i], by = inp.Y[i + 2] - inp.Y[i];
+            double turn = Math.Atan2(ax * by - ay * bx, ax * bx + ay * by);
+            foreach (int sd in new[] { -1, 1 })   // -1 = 오른쪽
+            {
+                double nx = -ty * sd, ny = tx * sd; var zs = new List<double>(); var ks = new List<int>();
+                for (double d = edge; d <= edge + 60; d += 0.05) { var q = b.Ev.Eval(inp.X[i] + nx * d, inp.Y[i] + ny * d); zs.Add(q.Z); ks.Add(q.Kind); }
+                // 평평한 토막 — 기울기 0.15 아래가 0.5 m 넘게 이어짐(끝 = 땅에 닿은 뒤 제외: 마지막 사면 끝 이후)
+                int runs = 0; double wsum = 0, run = 0; var ws = new List<string>(); int lastSlope = -1;
+                for (int j = 1; j < zs.Count; j++) { if (!double.IsFinite(zs[j]) || !double.IsFinite(zs[j - 1])) continue; if (Math.Abs(zs[j] - zs[j - 1]) / 0.05 > 0.5) lastSlope = j; }
+                for (int j = 1; j <= Math.Max(1, lastSlope); j++)
+                {
+                    bool fl = double.IsFinite(zs[j]) && double.IsFinite(zs[j - 1]) && Math.Abs(zs[j] - zs[j - 1]) / 0.05 < 0.15;
+                    if (fl) run += 0.05; else { if (run >= 0.5) { runs++; wsum += run; ws.Add(run.ToString("F2", ci)); } run = 0; }
+                }
+                string where = Math.Abs(turn) > 0.02 ? ((turn > 0) == (sd > 0) ? "안쪽" : "바깥") : "곧음";   // 왼쪽으로 꺾이면(turn > 0) 왼쪽(sd = +1)이 안쪽
+                sb.Append($"\n      s{i,3} {(sd > 0 ? "좌" : "우")} {where} 꺾임 {turn * 180 / Math.PI,5:F1}° · 소단 {runs}개 [{string.Join(" ", ws)}] · 사면 끝 {lastSlope * 0.05:F1} m");
+            }
+        }
+        Console.WriteLine($"   [소단 단면 {tag}]" + sb);
+    }
 
     public static void Run(Action<string, bool, string> check0)
     {
@@ -94,11 +125,16 @@ static class RoadRingCheck
             ("⑮ 90° R30 성토 우세", Road(Walk((45, 0, 0), (0, 90, 30), (45, 0, 0)), 70, 0.15, (x, y) => 60 - 0.20 * y - 0.10 * x, 60)),
             ("⑯ 90° R15 오른쪽 굽이 절토", Road(Walk((45, 0, 0), (0, -90, 15), (45, 0, 0)), 70, 0.15, (x, y) => 64 - 0.25 * y - 0.06 * x, 60)),
             ("⑰ 120° R30 산비탈", Road(Walk((45, 0, 0), (0, 120, 30), (40, 0, 0)), 70, 0.15, (x, y) => 66 + 0.25 * y - 0.06 * x, 60)),
+            // ★[v117.18.1] 다른 무리 벽 단면 수직면 끊김선 — 굽이 안쪽 [옹벽 변환] 기록(K = 1 · 소단 1 m)이 있어도 남은 차가 작아야 함
+            // ★[v117.18.1] 굽이 안쪽 높은 성토 — 안쪽 소단(2~4단)이 굽이에서 이어지는가(BLOCKTEST_RRONLY=⑲ · RRJ=1 계측)
+            ("⑲ 90° R7.4 안쪽 높은 성토", Road(Walk((45, 0, 0), (0, 90, 7.4), (45, 0, 0)), 70, 0.10, (x, y) => 48 + 0.45 * Math.Sqrt(Math.Pow(x - 45, 2) + Math.Pow(y - 7.4, 2)), 80)),
+            ("⑱ 90° R15 안쪽 옹벽 변환", WithTier(Road(Walk((62, 0, 0), (0, -90, 15), (40, 0, 0)), 70, 0.15, (x, y) => 64 - 0.25 * y - 0.06 * x, 60), new RoadGrade.TierWall(51, 91, 1, 1, 1))),
         };
         var only = Environment.GetEnvironmentVariable("BLOCKTEST_RRONLY");   // 개발 중 한 경우만(태그 앞 글자 — 예 «⑫»)
         foreach (var (tag, inp) in cases)
         {
             if (!string.IsNullOrEmpty(only) && !only.Split(',').Any(o => tag.StartsWith(o))) continue;
+            if (string.IsNullOrEmpty(only) && (tag.StartsWith("⑱") || tag.StartsWith("⑲"))) continue;   // 진짜 수직 벽 면이 있어 «턱 · 가파른 세모» 관문이 원리상 못 넘음 — 남은 차 계측용(BLOCKTEST_RRONLY=⑱ · RRDIAG=1)
             var b = RoadRing.Build(inp);
             for (int w = 0; w < 2 && b.ReachHit; w++) { inp.Reach *= 1.6; b = RoadRing.Build(inp); }   // Civil RingRun과 같은 찾는 거리 넓힘
             Check($" {tag} 지어짐", b.Ok, b.Note.Length > 400 ? b.Note[..400] : b.Note);
@@ -124,6 +160,9 @@ static class RoadRingCheck
                 }
             }
             if (!b.Ok) continue;
+            if (Environment.GetEnvironmentVariable("BLOCKTEST_RRBENCH") == "1") BenchSections(tag, inp, b);
+            if (Environment.GetEnvironmentVariable("BLOCKTEST_RRJ") == "1") RoadRingJack.Analyze(inp, b);
+            { var (pok, ptxt, pgr) = RoadRingJack.PickCheck(b); Check($" {tag} 옹벽 변환 고를 선 — 점 높이 = 면 높이(1 mm 안)", pok, ptxt + " · 단별 줄 수 " + string.Join(" ", pgr.Where(x => x.Value > 1).Select(x => $"{(x.Key.Cut ? "절" : "성")}{x.Key.Side}K{x.Key.K}={x.Value}"))); }
             var (thin, gap, nm) = RoadGrade.Health(b.Tris);
             Check($" {tag} Civil 관문 흉내(바늘 0 · 0.1 mm 쌍 0 · 세 세모 변 0 · 작은 구멍 0)", thin + gap + nm == 0 && RoadGrade.CountSmallHoles(b.Tris, 1.0) == 0, $"바늘 {thin} · 쌍 {gap} · 세 세모 변 {nm}");
             // 겹침 — 0.5 m 격자 마디가 둘 이상 세모 속에
