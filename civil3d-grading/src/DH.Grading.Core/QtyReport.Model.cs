@@ -17,6 +17,8 @@ public sealed class QtyStation
     public double Clear = double.NaN, Strip = double.NaN;
     /// <summary>★[JACK 1116] 층따기 단면적(㎡) — 2D 산출서 AK(면적) · AL(입적 = 평균단면법). NaN = 안 켬 · 못 잼.</summary>
     public double Bench = double.NaN;
+    /// <summary>★[JACK 1116] 식생공법(초류종자 살포) 가로 길이(m · 성토부 + 절토부) — 2D 산출서 «종자살포» 길이(진입도로 시트 Y). NaN = 안 켬 · 못 잼.</summary>
+    public double Seed = double.NaN;
 }
 
 /// <summary>U형 측구 규격 하나의 묶음(같은 규격 전부 합).</summary>

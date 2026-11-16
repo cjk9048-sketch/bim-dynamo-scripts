@@ -114,20 +114,11 @@ internal static class RoadXsec
     /// <summary>★[v112.1] 횡단도 열쇠의 본 도로 몫(없으면 빈 글).</summary>
     internal static string MainsKey(IEnumerable<ObjectId> surfs) { var l = surfs.Select(x => x.Handle.ToString()).ToList(); return l.Count == 0 ? "" : "+" + string.Join(",", l); }
 
-    /// <summary>★★[계획 3] 진입도로 횡단도 짓기 — 부르는 쪽(<see cref="RoadSession.MakeXsec"/>)이 문서 잠금 · 바뀜 표시 막음을 건다. 돌려줌 = 결과 한 줄(자세한 것은 <paramref name="log"/> · 진단 로그).</summary>
-    internal static string Build(RoadSession s, Point3d at, System.Text.StringBuilder log)
+    /// <summary>★[수량산출서] 진입도로 횡단의 «대상» 짓기(측점 · 면 · 폭) — <see cref="Build"/>와 도면에서 수량을 다시 읽는 <see cref="ReadQtyFromDrawing"/>이 같이 쓴다(그리지 않음 · 도면 안 바꿈).
+    /// 못 만들면 InvalidOperationException(까닭 글).</summary>
+    internal static XsecTarget Setup(Database db, CivilApp.CivilDocument cdoc, ObjectId aid, string an, RoadDesign d, ObjectId baseSurfId, RoadGrade.Result? last, System.Text.StringBuilder log)
     {
-        var doc = s.Doc; var db = doc.Database;
-        var cdoc = CivilApp.CivilDocument.GetCivilDocument(db);
-        GradingSettings.SyncToDocument(doc);                                   // 배치(열 × 행)는 부지와 같은 도면설정
-        var d = s.Design;
-        ObjectId aid = s.AlignId;
-        string an = s.Name, me = aid.Handle.ToString();
-        double pin = RoadDrawingSettings.Read(db).Xsec;
-        // ★★[v117.7.1 · JACK 1104 · 1111] 자동이라도 한 번 그린 횡단도는 그린 축척 그대로(계획부지 다시 생성 → 1:150이 1:500으로 바뀌던 것) — 이 도로 설정(축척 칸 · 배치)이 바뀌었을 때만 다시 고름
-        double kept = RoadXsecRules.KeptScale(pin, d.XsecPin, d.XsecScale, d.XsecViews.Count, d.XsecLayout, GradingSettings.XsecLayoutRoad);
-        log.AppendLine($"[진입도로 횡단도] {an} — 축척 {(pin > 0 ? $"고정 1:{pin:0}" : kept > 0 ? $"자동 · 그린 축척 1:{kept:0} 그대로" : "자동")}");
-
+        string me = aid.Handle.ToString();
         // ① 측점 · 면 · 폭
         List<(double St, string Label)> stations; string gname;
         ObjectId roadSurf = ObjectId.Null; string roadName = "";
@@ -163,7 +154,7 @@ internal static class RoadXsec
         bool baseIsPad = false; string baseName = "";
         using (var tr = db.TransactionManager.StartTransaction())
         {
-            try { baseName = ((CivilDb.TinSurface)tr.GetObject(s.BaseSurfId, OpenMode.ForRead)).Name ?? ""; } catch { }
+            try { baseName = ((CivilDb.TinSurface)tr.GetObject(baseSurfId, OpenMode.ForRead)).Name ?? ""; } catch { }
             baseIsPad = SectionCommand.IsBase(baseName, SectionCommand.PadSurfaceBase);
             ObjectId pureW = ObjectId.Null, pure = ObjectId.Null, full = ObjectId.Null; string nW = "", nP = "", nF = "";
             foreach (ObjectId sid in cdoc.GetSurfaceIds())
@@ -177,7 +168,7 @@ internal static class RoadXsec
                 catch { }
             if (!pureW.IsNull) { pad = pureW; padName = nW; }
             else if (!pure.IsNull) { pad = pure; padName = nP; }
-            else if (baseIsPad) { pad = s.BaseSurfId; padName = baseName; }
+            else if (baseIsPad) { pad = baseSurfId; padName = baseName; }
             else if (!full.IsNull) { pad = full; padName = nF; }
             tr.Commit();
         }
@@ -215,21 +206,39 @@ internal static class RoadXsec
         if (reach.N == 0)
         {
             var sec = d.Section(); double sl = 0, sr = 0;
-            if (s.Last != null && s.Last.Error.Length == 0)
-                foreach (var q in s.Last.Slopes) { if (q.Side < 0) sl = Math.Max(sl, q.Width); else if (q.Side > 0) sr = Math.Max(sr, q.Width); }
+            if (last != null && last.Error.Length == 0)
+                foreach (var q in last.Slopes) { if (q.Side < 0) sl = Math.Max(sl, q.Width); else if (q.Side > 0) sr = Math.Max(sr, q.Width); }
             w = ProfileSheetRules.RoadWidth(sec.OuterL, sec.OuterR, sl, sr);
             log.AppendLine($"  ⚠진입도로 면 옆거리를 못 재 표준횡단 + 사면으로 폭을 잡음 — 좌 {w.L:0.#} / 우 {w.R:0.#} m");
         }
         else log.AppendLine($"  횡단 폭 좌 {w.L:0.#} / 우 {w.R:0.#} m(진입도로 면 옆거리 {reach.L:0.##} / {reach.R:0.##} m + 5 · 경계 꼭짓점 {reach.N})");
         log.AppendLine($"  측점 {stations.Count}개(«{gname}») · 면 {string.Join(" · ", surfs.Select(x => $"{x.Label}={x.SurfName}"))} · 바탕면 '{baseName}'");
-
-        // ② 짓기(같은 Build) — 옛것 지우기 · 표식은 그 안
-        var t = new XsecTarget
+        return new XsecTarget
         {
             AlignId = aid, AlignName = an, RoadHandle = me, Stations = stations, Surfs = surfs,
-            RoadSurfId = roadSurf, BaseSurfId = s.BaseSurfId, BaseIsPad = baseIsPad, MainSurfIds = mainIds, Width = (w.L, w.R),
-            GroupBase = an + "-횡단", Pin = pin > 0 ? pin : kept, Kept = kept > 0, OldGroup = d.XsecGroup, OldViews = new List<string>(d.XsecViews), OwnAlign = ours,
+            RoadSurfId = roadSurf, BaseSurfId = baseSurfId, BaseIsPad = baseIsPad, MainSurfIds = mainIds, Width = (w.L, w.R),
+            GroupBase = an + "-횡단", OwnAlign = ours,
         };
+    }
+
+    /// <summary>★★[계획 3] 진입도로 횡단도 짓기 — 부르는 쪽(<see cref="RoadSession.MakeXsec"/>)이 문서 잠금 · 바뀜 표시 막음을 건다. 돌려줌 = 결과 한 줄(자세한 것은 <paramref name="log"/> · 진단 로그).</summary>
+    internal static string Build(RoadSession s, Point3d at, System.Text.StringBuilder log)
+    {
+        var doc = s.Doc; var db = doc.Database;
+        var cdoc = CivilApp.CivilDocument.GetCivilDocument(db);
+        GradingSettings.SyncToDocument(doc);                                   // 배치(열 × 행)는 부지와 같은 도면설정
+        var d = s.Design;
+        ObjectId aid = s.AlignId;
+        string an = s.Name, me = aid.Handle.ToString();
+        double pin = RoadDrawingSettings.Read(db).Xsec;
+        // ★★[v117.7.1 · JACK 1104 · 1111] 자동이라도 한 번 그린 횡단도는 그린 축척 그대로(계획부지 다시 생성 → 1:150이 1:500으로 바뀌던 것) — 이 도로 설정(축척 칸 · 배치)이 바뀌었을 때만 다시 고름
+        double kept = RoadXsecRules.KeptScale(pin, d.XsecPin, d.XsecScale, d.XsecViews.Count, d.XsecLayout, GradingSettings.XsecLayoutRoad);
+        log.AppendLine($"[진입도로 횡단도] {an} — 축척 {(pin > 0 ? $"고정 1:{pin:0}" : kept > 0 ? $"자동 · 그린 축척 1:{kept:0} 그대로" : "자동")}");
+
+        // ② 짓기(같은 Build) — 옛것 지우기 · 표식은 그 안
+        var t = Setup(db, cdoc, aid, an, d, s.BaseSurfId, s.Last, log);
+        t.Pin = pin > 0 ? pin : kept; t.Kept = kept > 0; t.OldGroup = d.XsecGroup; t.OldViews = new List<string>(d.XsecViews);
+        var stations = t.Stations; var roadSurf = t.RoadSurfId; var mainIds = t.MainSurfIds;
         bool ok = false;
         try { ok = XsecViewCommand.BuildRoad(doc, t, at); }
         finally

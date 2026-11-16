@@ -370,6 +370,18 @@ internal sealed class RoadSession
         return ObjectId.Null;
     }
 
+    /// <summary>★[수량산출서] 세션 없이 설계 기록만으로 바탕면 ID(<see cref="ResolveBase"/>와 같은 차례 · 기록은 안 고침) — 못 찾으면 Null.</summary>
+    internal static ObjectId BaseOf(Database db, RoadDesign d)
+    {
+        var cdoc = Autodesk.Civil.ApplicationServices.CivilDocument.GetCivilDocument(db);
+        if (!string.IsNullOrEmpty(d.GroundHandle) && !Commands.SectionCommand.IsBase(d.BaseSurface ?? "", Commands.SectionCommand.PadSurfaceBase))
+            return GroundSet.Resolve(db, d.GroundHandle);
+        var id = FindSurface(db, cdoc, d.BaseSurface);
+        if (!id.IsNull) return id;
+        var (pid, _) = RoadBuilder.PickBase(db, cdoc, d.GroundHandle, out bool needPick);
+        return needPick ? ObjectId.Null : pid;
+    }
+
     static ObjectId FindSurface(Database db, Autodesk.Civil.ApplicationServices.CivilDocument cdoc, string name)
     {
         using var tr = db.TransactionManager.StartTransaction();

@@ -47,6 +47,58 @@ public sealed partial class XsecViewCommand
         return ok;
     }
 
+    /// <summary>★[수량산출서 · 진입도로 횡단 수량을 도면에서] 이 세션 스냅이 없을 때(도면을 다시 열었음) — 도면에 이미 있는 <b>진입도로 횡단 검토선</b>(설계 기록 «XsecGroup»)에서
+    /// 측점별 수량을 <b>그리지 않고</b> 다시 잰다(Build와 같은 <see cref="RoadXsec.Setup"/> 면 · 폭 · <c>CollectQty</c> — 부지 <see cref="ReadSiteQtyFromDrawing"/>과 같은 길).
+    /// 읽기만 한다(임시 면 · 검토선을 안 만듦 · 기록 안 고침). 도로가 여럿이면 횡단 검토선이 가장 많은 도로(같으면 나중). 없으면 null.</summary>
+    internal static QtyKeeper.Snap? ReadRoadQtyFromDrawing(Autodesk.AutoCAD.ApplicationServices.Document doc, out string why)
+    {
+        why = "";
+        var db = doc.Database;
+        try
+        {
+            QtyXlsxInput.ApplyDeepLimit(db);
+            var cdoc = CivilApp.CivilDocument.GetCivilDocument(db);
+            ObjectId aid = ObjectId.Null; RoadDesign? d = null; string an = "", pre = "";
+            var raw = new List<(ObjectId Id, string Name, double St)>();
+            using (var tr = db.TransactionManager.StartTransaction())
+            {
+                int bestN = 0;
+                foreach (ObjectId a in cdoc.GetAlignmentIds())
+                {
+                    try
+                    {
+                        var dd = RoadDesign.Read(tr, a);
+                        if (dd == null || dd.XsecGroup.Length == 0 || !db.TryGetObjectId(new Handle(System.Convert.ToInt64(dd.XsecGroup, 16)), out var gid) || gid.IsErased) continue;
+                        if (tr.GetObject(gid, OpenMode.ForRead) is not CivilDb.SampleLineGroup g) continue;
+                        int n = g.GetSampleLineIds().Count;
+                        if (n == 0 || n < bestN) continue;
+                        bestN = n; aid = a; d = dd; pre = (g.Name ?? "") + "_";
+                        an = ((CivilDb.Alignment)tr.GetObject(a, OpenMode.ForRead)).Name ?? "";
+                        raw.Clear();
+                        foreach (ObjectId sid in g.GetSampleLineIds())
+                            if (tr.GetObject(sid, OpenMode.ForRead) is CivilDb.SampleLine sl)
+                            {
+                                string nm = sl.Name ?? "";
+                                raw.Add((sid, nm.StartsWith(pre, System.StringComparison.Ordinal) ? nm.Substring(pre.Length) : nm, sl.Station));
+                            }
+                    }
+                    catch { }
+                }
+                tr.Commit();
+            }
+            if (aid.IsNull || d == null || raw.Count == 0) { why = "진입도로 횡단 없음"; return null; }
+            var baseId = RoadSession.BaseOf(db, d);
+            if (baseId.IsNull) { why = "바탕면 없음"; return null; }
+            var log = new System.Text.StringBuilder();
+            var t = RoadXsec.Setup(db, cdoc, aid, an, d, baseId, null, log);
+            var sls = raw.OrderBy(x => x.St).Select(x => (x.Id, x.Name, x.St, Mother: x.St, Ord: 1)).ToList();
+            var qty = CollectQty(db, sls, aid, System.Math.Max(1.0, t.Width.L), System.Math.Max(1.0, t.Width.R), t.Surfs, log, t);
+            try { DiagLog.Append("\n[수량산출서] 도면에서 진입도로 횡단 수량 읽음 — 측점 " + sls.Count + "개 · " + an); } catch { }
+            return new QtyKeeper.Snap(sls.Select(x => (x.Name, x.St)).ToList(), qty.Map, qty.Ledgers, DH.Grading.Core.XsecQuantity.DeepLimit);
+        }
+        catch (System.Exception ex) { why = ex.Message; try { DiagLog.Append("\n[수량산출서] 도면에서 진입도로 횡단 수량 못 읽음 — " + ex); } catch { } return null; }
+    }
+
     /// <summary>★★[도로 마무리 ② · 계획 6.5] 진입도로 횡단 — 그 측점이 측구 구간(나중 기록이 이김 · 도로 구간 안)이면 <see cref="DitchSection"/> 꼴을 뷰에(옵셋 · 높이 → 그림 = <see cref="WallSectionDraw.Affine"/>)
     /// + 형식 글자 지시선(«U형 측구 B300×H300» · «L형 측구 W750» — 옹벽 단면 인출과 같은 꼴 · CALS 구조물 레이어). 표식은 <see cref="BuildRoad"/>가 그린 것 모두에(«XSEC» — 다시 그릴 때 · 초기화가 지움).
     /// 측구 윗면 = 길어깨 끝 높이(지표면은 파지 않음 — 계획 1장).</summary>

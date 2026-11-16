@@ -24,7 +24,7 @@ static class QtyXlsxCheck
         for (int i = 0; i < 4; i++)
             m.Site.Add(new QtyStation { Name = "S" + i, Sta = sta[i], Fill = fill[i], Cut = cut[i], ExcSoilLe = eLe[i], ExcSoilGt = eGt[i], Backfill = bk[i], FillW = 10, CutW = 6 });
         m.SiteKnown = true;
-        m.Road.Add(new QtyStation { Sta = 0, Fill = 2, Cut = 1 }); m.Road.Add(new QtyStation { Sta = 20, Fill = 4, Cut = 1 }); m.RoadKnown = true;
+        m.Road.Add(new QtyStation { Sta = 0, Fill = 2, Cut = 1, Bench = 3, ExcSoilLe = 1, Backfill = 0.5, FillW = 4, CutW = 2, Clear = 8, Strip = 8, Seed = 6 }); m.Road.Add(new QtyStation { Sta = 20, Fill = 4, Cut = 1, Bench = 5, ExcSoilLe = 2, Backfill = 1.5, FillW = 6, CutW = 2, Clear = 10, Strip = 10, Seed = 8 }); m.RoadKnown = true;
         m.Clearing = 12345.678;
         m.Ditches.Add(new QtyDitch { Label = "400×400", B = 0.4, H = 0.4, Tw = 0.1, Tb = 0.1, Tf = 0.1, Pf = 0.1, Length = 100, Count = 3 });
         m.Ditches.Add(new QtyDitch { Label = "600×600", B = 0.6, H = 0.6, Tw = 0.12, Tb = 0.12, Tf = 0, Pf = 0, Length = 50, Count = 2 });
@@ -37,7 +37,7 @@ static class QtyXlsxCheck
             QtyReportXlsx.Write(m, path);
             using var wb = new XLWorkbook(path);
             var names = wb.Worksheets.Select(w => w.Name).ToList();
-            check("S300 QX② 시트 다섯 — 이름 · 차례", names.SequenceEqual(new[] { "토공집계표", "1)테스트시설", "수로관산근", "임목폐기물수량집계", "임목폐기물산근" }), string.Join(",", names));
+            check("S300 QX② 시트 여섯(진입도로 횡단 있을 때) — 이름 · 차례", names.SequenceEqual(new[] { "토공집계표", "1)테스트시설", "2)진입도로", "수로관산근", "임목폐기물수량집계", "임목폐기물산근" }), string.Join(",", names));
             var site = wb.Worksheet("1)테스트시설"); var sum = wb.Worksheet("토공집계표");
             double D(IXLCell c) { var v = c.Value; return v.IsNumber ? v.GetNumber() : double.NaN; }
             // 식
@@ -62,6 +62,41 @@ static class QtyXlsxCheck
                   && sum.Cell("A13").GetString() == "터파기 H=4.5m이하" && sum.Cell("A14").GetString() == "터파기 H=4.5m초과", sum.Cell("H4").FormulaA1);
             check("S300 QX⑤ 집계표 값 — 성토 합계 = 부지 712.5 + 도로 60", Near(D(sum.Cell("H4")), expFill) && Near(D(sum.Cell("I4")), 60) && Near(D(sum.Cell("G4")), expFill + 60), $"{D(sum.Cell("G4"))}");
             // 수로관
+            // 2)진입도로 — 템플릿 열(G~Z) · 식 · 계 · 집계표 I칸 연결
+            var rdw = wb.Worksheet("2)진입도로");
+            check("S300 QX⑤ 진입도로 시트 — 템플릿 열 머리글(성토 · 절토 · 층따기 · 굴착 · 되메우기 · 면고르기 · 벌개 · 표토 · 종자살포)",
+                  rdw.Cell("G2").GetString() == "성토" && rdw.Cell("I2").GetString() == "절토" && rdw.Cell("K2").GetString() == "층따기" && rdw.Cell("M2").GetString() == "굴   착" && rdw.Cell("O2").GetString() == "되메우기"
+                  && rdw.Cell("Q2").GetString() == "성토면고르기" && rdw.Cell("S2").GetString() == "절토면고르기" && rdw.Cell("U2").GetString() == "벌개제근" && rdw.Cell("W2").GetString() == "표토제거" && rdw.Cell("Y2").GetString() == "종자살포"
+                  && rdw.Cell("Q5").GetString() == "길 이" && rdw.Cell("R5").GetString() == "면 적" && rdw.Cell("K5").GetString() == "면 적" && rdw.Cell("L5").GetString() == "입 적", rdw.Cell("M2").GetString());
+            check("S300 QX⑤ 진입도로 식 — 입적 · 면적 = ROUND((앞+이)/2×거리,2) · 계 SUM",
+                  rdw.Cell("H8").FormulaA1 == "ROUND((G7+G8)/2*$F8,2)" && rdw.Cell("V8").FormulaA1 == "ROUND((U7+U8)/2*$F8,2)" && rdw.Cell("Z8").FormulaA1 == "ROUND((Y7+Y8)/2*$F8,2)" && rdw.Cell("L9").FormulaA1 == "SUM(L7:L8)" && rdw.Cell("Z9").FormulaA1 == "SUM(Z7:Z8)");
+            check("S300 QX⑤ 진입도로 계 값 — 성토 60 · 절토 20 · 층따기 80 · 굴착 30 · 되메우기 20 · 성토면고르기 100 · 절토면고르기 40 · 벌개 180 · 표토 180 · 종자 140",
+                  Near(D(rdw.Cell("H9")), 60) && Near(D(rdw.Cell("J9")), 20) && Near(D(rdw.Cell("L9")), 80) && Near(D(rdw.Cell("N9")), 30) && Near(D(rdw.Cell("P9")), 20) && Near(D(rdw.Cell("R9")), 100)
+                  && Near(D(rdw.Cell("T9")), 40) && Near(D(rdw.Cell("V9")), 180) && Near(D(rdw.Cell("X9")), 180) && Near(D(rdw.Cell("Z9")), 140),
+                  string.Join(" ", new[] { "H9", "J9", "L9", "N9", "P9", "R9", "T9", "V9", "X9", "Z9" }.Select(a => D(rdw.Cell(a)).ToString("0.##"))));
+            check("S300 QX⑤ 집계표 진입도로 열 I — 템플릿 연결(I4=H · I6=J · I8=L층따기 · I13=N · I15=P · I19=V · I20=X · I22=R · I23=T · I25=Z · I26=I25) · I29 비움",
+                  sum.Cell("I4").FormulaA1 == "'2)진입도로'!H9" && sum.Cell("I6").FormulaA1 == "'2)진입도로'!J9" && sum.Cell("I8").FormulaA1 == "'2)진입도로'!L9" && sum.Cell("I13").FormulaA1 == "'2)진입도로'!N9"
+                  && sum.Cell("I15").FormulaA1 == "'2)진입도로'!P9" && sum.Cell("I19").FormulaA1 == "'2)진입도로'!V9" && sum.Cell("I20").FormulaA1 == "'2)진입도로'!X9" && sum.Cell("I22").FormulaA1 == "'2)진입도로'!R9"
+                  && sum.Cell("I23").FormulaA1 == "'2)진입도로'!T9" && sum.Cell("I25").FormulaA1 == "'2)진입도로'!Z9" && sum.Cell("I26").FormulaA1 == "I25" && sum.Cell("I29").IsEmpty(),
+                  sum.Cell("I8").FormulaA1 + " | " + sum.Cell("I29").GetString());
+            check("S300 QX⑤ 집계표 진입도로 값 — 층따기 80(I8) · 종자 140(I25 = I26) · 합계 G8 · G25",
+                  Near(D(sum.Cell("I8")), 80) && Near(D(sum.Cell("I25")), 140) && Near(D(sum.Cell("I26")), 140) && Near(D(sum.Cell("G8")), 80) && Near(D(sum.Cell("G25")), 140) && Near(D(sum.Cell("I19")), 180),
+                  $"{D(sum.Cell("I8"))} {D(sum.Cell("I25"))} {D(sum.Cell("G8"))}");
+            // 부지 시트 회귀 — 진입도로를 빼도 «1)시설» 셀 · 식이 한 칸도 안 다르다
+            {
+                var mNo = new QtyReportModel { Facility = m.Facility, DeepLimit = m.DeepLimit }; mNo.Site.AddRange(m.Site); mNo.SiteKnown = true; mNo.Clearing = m.Clearing;
+                string pNo = Path.Combine(Path.GetTempPath(), "dh_qty3_" + Guid.NewGuid().ToString("N") + ".xlsx");
+                try
+                {
+                    QtyReportXlsx.Write(mNo, pNo);
+                    using var wNo = new XLWorkbook(pNo);
+                    var sNo = wNo.Worksheet("1)테스트시설");
+                    int diff = 0, cells = 0;
+                    foreach (var c in site.CellsUsed(XLCellsUsedOptions.All)) { cells++; var o = sNo.Cell(c.Address); if (c.HasFormula ? o.FormulaA1 != c.FormulaA1 : c.GetString() != o.GetString()) diff++; }
+                    check("S300 QX⑤ 시설 시트 회귀 — 진입도로 있든 없든 같다", diff == 0 && cells > 100, $"다른 칸 {diff} / {cells}");
+                }
+                finally { try { File.Delete(pNo); } catch { } }
+            }
             var dit = wb.Worksheet("수로관산근");
             double Dp1 = 0.1 + 0.1 + 0.4, Bt1 = 0.8 + 0.4, Tp1 = Bt1 + 2 * 0.3 * Dp1;
             double exc1 = Math.Round((Tp1 + Bt1) / 2 * Dp1 * 100, 2), occ1 = Math.Round((0.6 * 0.5 + 0.8 * 0.1) * 100, 2);
@@ -94,7 +129,7 @@ static class QtyXlsxCheck
                 {
                     nf++;
                     string fx = c.FormulaA1;
-                    if (fx.Contains('[') || fx.Contains("2)진입도로") || fx.Contains("3)가압장") || fx.Contains("6)우수")) ext++;
+                    if (fx.Contains('[') || fx.Contains("3)가압장") || fx.Contains("6)우수")) ext++;
                     foreach (System.Text.RegularExpressions.Match mm in System.Text.RegularExpressions.Regex.Matches(fx, @"'([^']+)'!|(\p{L}[\p{L}\p{N}]*)!"))
                     {
                         string sn = mm.Groups[1].Success ? mm.Groups[1].Value : mm.Groups[2].Value;

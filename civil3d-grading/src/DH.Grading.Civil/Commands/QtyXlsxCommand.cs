@@ -23,10 +23,11 @@ public sealed class QtyXlsxCommand
     {
         var db = doc.Database;
         var siteSnap = QtyKeeper.Of(db, false); var roadSnap = QtyKeeper.Of(db, true);
-        bool fromDwg = false;
+        bool fromDwg = false, roadFromDwg = false;
         if (siteSnap == null && scanDwg) { siteSnap = XsecViewCommand.ReadSiteQtyFromDrawing(doc, out _); fromDwg = siteSnap != null; }   // 이 세션에 안 그렸어도 도면의 검토선에서 읽음
+        if (roadSnap == null && scanDwg) { roadSnap = XsecViewCommand.ReadRoadQtyFromDrawing(doc, out _); roadFromDwg = roadSnap != null; }
         return ((siteSnap == null ? (scanDwg ? "부지 횡단 없음 → [횡단도] 먼저\n" : "부지 횡단: 수량산출서 단추로 확인\n") : $"부지 횡단 {siteSnap.Stations.Count}개{(fromDwg ? " (도면에서 읽음)" : "")} · 터파기 구분 H={siteSnap.Limit:0.0#}m\n")
-              + (roadSnap == null ? "진입도로 횡단 없음 → 칸 빈칸\n" : $"진입도로 횡단 {roadSnap.Stations.Count}개\n")).TrimEnd();
+              + (roadSnap == null ? "진입도로 횡단 없음 → 칸 빈칸\n" : $"진입도로 횡단 {roadSnap.Stations.Count}개{(roadFromDwg ? " (도면에서 읽음)" : "")}\n")).TrimEnd();
     }
 
     [CommandMethod("DHQTYXLSX", CommandFlags.Modal)]
@@ -56,6 +57,7 @@ public sealed class QtyXlsxCommand
 
         var siteSnap = QtyKeeper.Of(db, false); var roadSnap = QtyKeeper.Of(db, true);
         if (siteSnap == null) siteSnap = XsecViewCommand.ReadSiteQtyFromDrawing(doc, out _);   // 이 세션에 안 그렸어도 도면의 검토선에서 읽음
+        if (roadSnap == null) roadSnap = XsecViewCommand.ReadRoadQtyFromDrawing(doc, out _);   // 진입도로도 같은 길(설계 기록의 횡단 검토선 그룹)
         XsecQuantity.DeepLimit = inp.DeepLimit;
         try { using (doc.LockDocument()) inp.Write(db); } catch (System.Exception ex) { ed.WriteMessage("\n[수량산출서] 값을 도면에 못 적음 — " + ex.Message); }
 

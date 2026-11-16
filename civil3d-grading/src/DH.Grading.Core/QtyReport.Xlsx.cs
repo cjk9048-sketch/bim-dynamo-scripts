@@ -3,10 +3,10 @@ using ClosedXML.Excel;
 namespace DH.Grading.Core;
 
 /// <summary>★[수량산출서] 모델 → 엑셀(ClosedXML). ClosedXML을 만지는 곳은 이 파일 하나 — 못 불러오면 부른 쪽이 짧은 말만 낸다.
-/// 시트 5장: 토공집계표 · 1)시설 · 수로관산근 · 임목폐기물수량집계 · 임목폐기물산근. 식은 템플릿(2.0 토공) 그대로 · 없는 시설 시트(2)진입도로 …)는 안 잇는다.</summary>
+/// 시트: 토공집계표 · 1)시설 · (진입도로 횡단이 있으면) 2)진입도로 · 수로관산근 · 임목폐기물수량집계 · 임목폐기물산근. 식은 템플릿(2.0 토공) 그대로 · 그 밖의 시설 시트(3)가압장 …)는 안 잇는다.</summary>
 public static class QtyReportXlsx
 {
-    public const string SumSheet = "토공집계표", DitchSheet = "수로관산근", ForestSheet = "임목폐기물수량집계", CalcSheet = "임목폐기물산근";
+    public const string SumSheet = "토공집계표", RoadSheet = "2)진입도로", DitchSheet = "수로관산근", ForestSheet = "임목폐기물수량집계", CalcSheet = "임목폐기물산근";
     const string Fmt = "0.00_);[Red]\\(0.00\\)";
     const string Font = "맑은 고딕";
 
@@ -29,15 +29,17 @@ public static class QtyReportXlsx
         var sum = wb.Worksheets.Add(SumSheet);
         string siteName = SiteSheetName(m.Facility);
         var site = wb.Worksheets.Add(siteName);
+        var road = m.RoadKnown ? wb.Worksheets.Add(RoadSheet) : null;   // 템플릿 «2)진입도로» — 횡단이 있을 때만
         var dit = wb.Worksheets.Add(DitchSheet);
         var fst = wb.Worksheets.Add(ForestSheet);
         var cal = wb.Worksheets.Add(CalcSheet);
 
         var siteTot = BuildSite(site, m);                      // 열 글자 → 계 셀 주소
-        var ditRef = BuildDitch(dit, m);                       // (터파기 셀, 되메우기 셀, 깊이) 목록
+        var roadTot = road != null ? BuildRoad(road, m) : new Dictionary<string, string>();
+        var ditRef = BuildDitch(dit, m);                      // (터파기 셀, 되메우기 셀, 깊이) 목록
         BuildForestCalc(cal, m);
         string forestTonCell = BuildForest(fst, m);
-        BuildSummary(sum, m, siteName, siteTot, ditRef, forestTonCell);
+        BuildSummary(sum, m, siteName, siteTot, roadTot, ditRef, forestTonCell);
 
         wb.FullCalculationOnLoad = true;                       // 엑셀이 열 때 다시 셈 — 숫자가 바로 보임
         wb.SaveAs(path);
@@ -162,6 +164,98 @@ public static class QtyReportXlsx
         ps.PrintAreas.Add($"B1:AO{tot}");
         string spaced = string.Join(" ", m.Facility.Where(c => c != ' '));
         ps.Header.Center.AddText(spaced + " 토 적 표");
+        return totals;
+    }
+
+    // ═════════════════════════ 2)진입도로 토적표 ═════════════════════════
+    /// <summary>템플릿 «2)진입도로» 그대로 — 열 G~Z(성토 · 절토 · 층따기 · 굴착 · 되메우기 · 성토면고르기 · 절토면고르기 · 벌개제근 · 표토제거 · 종자살포) · 비고 AA.
+    /// 면적 · 입적 쌍 식 = ROUND((앞+이)/2×거리,2) · 길이 쌍도 같은 식(면적 = 길이 평균 × 거리). 돌려줌 = 열 글자 → 계 셀 주소.</summary>
+    static Dictionary<string, string> BuildRoad(IXLWorksheet ws, QtyReportModel m)
+    {
+        ws.Style.Font.FontSize = 9;
+        var st = m.Road.OrderBy(s => s.Sta).ToList();
+        var pairs = new List<Pair>
+        {
+            new("G","H", s=>s.Fill,"성토","토사","면 적","입 적"),
+            new("I","J", s=>s.Cut,"절토","토사","면 적","입 적"),
+            new("K","L", s=>s.Bench,"층따기","토사","면 적","입 적"),
+            new("M","N", s=>s.ExcSoilLe,"굴   착","토사","면 적","입 적"),
+            new("O","P", s=>s.Backfill,"되메우기","토  사","면 적","입 적"),
+            new("Q","R", s=>s.FillW,"성토면고르기","토   사","길 이","면 적"),
+            new("S","T", s=>s.CutW,"절토면고르기","토사","길 이","면 적"),
+            new("U","V", s=>s.Clear,"벌개제근","","길 이","면 적"),
+            new("W","X", s=>s.Strip,"표토제거","","길 이","면 적"),
+            new("Y","Z", s=>s.Seed,"종자살포","","길 이","면 적"),
+        };
+        ws.Cell("B1").Value = "2) 진입도로 토공";
+        ws.Cell("B1").Style.Font.Bold = true; ws.Cell("B1").Style.Font.FontSize = 12;
+        void Hd(string a, string b, int r1, int r2, string t) { var rg = ws.Range($"{a}{r1}:{b}{r2}"); rg.Merge(); rg.FirstCell().Value = t; }
+        Hd("B", "E", 2, 5, "측  점"); Hd("F", "F", 2, 5, "거  리"); Hd("AA", "AA", 2, 5, "비  고");
+        foreach (var p in pairs)
+        {
+            bool noSub = p.Sub.Length == 0;   // 벌개제근 · 표토제거 · 종자살포는 윗칸 4줄(구분 줄 없음)
+            Hd(p.A, p.V, 2, noSub ? 4 : 3, p.Top);
+            if (!noSub) Hd(p.A, p.V, 4, 4, p.Sub);
+            ws.Cell($"{p.A}5").Value = p.H1; ws.Cell($"{p.V}5").Value = p.H2;
+        }
+        var hdr = ws.Range("B2:AA5");
+        hdr.Style.Alignment.Horizontal = XLAlignmentHorizontalValues.Center; hdr.Style.Alignment.Vertical = XLAlignmentVerticalValues.Center;
+        hdr.Style.Alignment.WrapText = true; hdr.Style.Font.Bold = true; hdr.Style.Fill.BackgroundColor = XLColor.FromHtml("#EDF3F3");
+
+        Hd("B", "F", 6, 6, "진입도로");
+        int first = 7, n = st.Count, last = 6 + n, tot = last + 1;
+        for (int i = 0; i < n; i++)
+        {
+            int r = first + i;
+            var s = st[i];
+            var (no, plus) = QtyReportCalc.Split(s.Sta);
+            ws.Cell($"B{r}").Value = "NO.";
+            ws.Cell($"C{r}").Value = no; ws.Cell($"C{r}").Style.NumberFormat.Format = "0";
+            ws.Cell($"D{r}").Value = plus; ws.Cell($"D{r}").Style.NumberFormat.Format = "\"+\"0.00";
+            if (i == 0) ws.Cell($"F{r}").Value = 0;
+            else
+            {
+                ws.Cell($"F{r}").FormulaA1 = $"((C{r}*20)+D{r})-((C{r - 1}*20)+D{r - 1})";
+                ws.Cell($"E{r}").FormulaA1 = $"IF(F{r + 1}=0,\"(전)\",IF(F{r}=0,\"(후)\",\"\"))";
+            }
+            ws.Cell($"F{r}").Style.NumberFormat.Format = Fmt;
+            foreach (var p in pairs)
+            {
+                if (p.Sel == null || !QtyReportCalc.Has(st, p.Sel)) continue;
+                double v = p.Sel(s);
+                var ca = ws.Cell($"{p.A}{r}");
+                if (double.IsFinite(v)) ca.Value = QtyReportCalc.R2(v);
+                ca.Style.NumberFormat.Format = Fmt;
+                var cv = ws.Cell($"{p.V}{r}");
+                cv.FormulaA1 = $"ROUND(({p.A}{r - 1}+{p.A}{r})/2*$F{r},2)";
+                cv.Style.NumberFormat.Format = Fmt;
+            }
+            if (!double.IsFinite(s.Fill) && !double.IsFinite(s.Cut)) ws.Cell($"AA{r}").Value = "횡단 값 없음";
+        }
+        var totals = new Dictionary<string, string>();
+        Hd("B", "E", tot, tot, "계");
+        ws.Cell($"F{tot}").FormulaA1 = $"SUM(F{first}:F{last})"; ws.Cell($"F{tot}").Style.NumberFormat.Format = Fmt;
+        foreach (var p in pairs)
+            if (p.Sel != null && QtyReportCalc.Has(st, p.Sel))
+            {
+                var c = ws.Cell($"{p.V}{tot}"); c.FormulaA1 = $"SUM({p.V}{first}:{p.V}{last})"; c.Style.NumberFormat.Format = Fmt;
+                totals[p.V] = $"{Q(ws.Name)}!{p.V}{tot}";
+            }
+        var all = ws.Range($"B2:AA{tot}");
+        all.Style.Border.OutsideBorder = XLBorderStyleValues.Thin; all.Style.Border.InsideBorder = XLBorderStyleValues.Hair;
+        ws.Range($"B{tot}:AA{tot}").Style.Font.Bold = true;
+        ws.Range($"B{tot}:AA{tot}").Style.Border.TopBorder = XLBorderStyleValues.Medium;
+        ws.Range($"B7:E{last}").Style.Alignment.Horizontal = XLAlignmentHorizontalValues.Center;
+        ws.Column("A").Width = 2.4; ws.Column("B").Width = 3.2; ws.Column("C").Width = 2.7; ws.Column("D").Width = 6.8; ws.Column("E").Width = 3.2; ws.Column("F").Width = 5.8;
+        for (int c = ColN("G"); c <= ColN("Z"); c++) ws.Column(c).Width = 6.8;
+        ws.Column("AA").Width = 14;
+        ws.Row(5).Height = 16;
+        ws.SheetView.FreezeRows(5); ws.SheetView.FreezeColumns(6);
+        var ps = ws.PageSetup;
+        ps.PageOrientation = XLPageOrientation.Landscape; ps.PaperSize = XLPaperSize.A4Paper; ps.Scale = 75;
+        ps.SetRowsToRepeatAtTop(2, 5);
+        ps.PrintAreas.Add($"B1:AA{tot}");
+        ps.Header.Center.AddText("진 입 도 로 토 적 표");
         return totals;
     }
 
@@ -370,7 +464,7 @@ public static class QtyReportXlsx
     }
 
     // ═════════════════════════ 토공집계표 ═════════════════════════
-    static void BuildSummary(IXLWorksheet ws, QtyReportModel m, string siteName, Dictionary<string, string> siteTot, List<DitchRef> ditch, string forestTon)
+    static void BuildSummary(IXLWorksheet ws, QtyReportModel m, string siteName, Dictionary<string, string> siteTot, Dictionary<string, string> roadTot, List<DitchRef> ditch, string forestTon)
     {
         ws.Style.Font.FontSize = 10;
         string le = "H=" + m.DeepLimit.ToString("0.0#") + "m";
@@ -419,12 +513,17 @@ public static class QtyReportXlsx
         Put(4, "H", S("H")); Put(6, "H", S("L")); Put(7, "H", S("N")); Put(10, "H", S("R")); Put(11, "H", S("T")); Put(12, "H", S("V"));
         Put(13, "H", S("P")); Put(14, "H", S("AO")); Put(15, "H", S("X"));
         Put(19, "H", S("AF")); Put(20, "H", S("AH")); Put(22, "H", S("AB")); Put(23, "H", S("AD")); Put(29, "H", S("AL"));
-        // 진입도로 열 I — 횡단 수량(계산값 · 시트 없음)
+        // 진입도로 열 I — 템플릿 «2)진입도로» 계 줄을 잇는다(집계표 I4=H · I6=J · I8=L(층따기) · I13=N · I15=P · I19=V · I20=X · I22=R · I23=T · I25=Z · I26=I25)
+        string? Rd(string col) => roadTot.TryGetValue(col, out var a) ? a : null;
+        Put(4, "I", Rd("H")); Put(6, "I", Rd("J")); Put(8, "I", Rd("L")); Put(13, "I", Rd("N")); Put(15, "I", Rd("P"));
+        Put(19, "I", Rd("V")); Put(20, "I", Rd("X")); Put(22, "I", Rd("R")); Put(23, "I", Rd("T")); Put(25, "I", Rd("Z"));
+        if (Rd("Z") != null) Put(26, "I", "I25");   // 거적덮기 = 초류종자 살포(템플릿 I26 = I25)
         if (m.RoadKnown)
         {
+            // 풍화암 절토 · 터파기 H초과는 도로 시트에 칸이 없다(템플릿도 «굴착» 하나) → 값으로만
             var rd = m.Road.OrderBy(s => s.Sta).ToList();
             void RV(int r, Func<QtyStation, double> sel) { if (QtyReportCalc.Has(rd, sel)) { var c = ws.Cell($"I{r}"); c.Value = QtyReportCalc.R2(QtyReportCalc.AvgEndSum(rd, sel)); c.Style.NumberFormat.Format = "#,##0.00"; } }
-            RV(4, s => s.Fill); RV(6, s => s.Cut); RV(7, s => s.CutWeathered); RV(13, s => s.ExcSoilLe); RV(14, s => s.ExcSoilGt); RV(15, s => s.Backfill); RV(22, s => s.FillW); RV(23, s => s.CutW); RV(29, s => s.Bench);
+            RV(7, s => s.CutWeathered); RV(14, s => s.ExcSoilGt);
         }
         // 수로관 열 J — 산근 시트의 터파기 · 되메우기
         string Join(IEnumerable<string> xs) => string.Join("+", xs);
@@ -447,7 +546,7 @@ public static class QtyReportXlsx
         Rm(5, "도면참조"); Rm(7, m.Site.Any(s => double.IsFinite(s.CutWeathered)) ? "" : "지층 없음"); Rm(8, "도면참조");
         Rm(10, m.Site.Any(s => double.IsFinite(s.ExcSoilWater)) ? "" : "지층 없음"); Rm(11, m.Site.Any(s => double.IsFinite(s.ExcWeathered)) ? "" : "지층 없음"); Rm(12, m.Site.Any(s => double.IsFinite(s.ExcWeatheredWater)) ? "" : "지층 없음");
         Rm(19, "임상도 입목지"); Rm(20, "벌개제근 면적과 같게");
-        Rm(21, "도면참조"); Rm(24, "도면참조"); Rm(25, "도면참조"); Rm(26, "도면참조");
+        Rm(21, "도면참조"); Rm(24, "도면참조"); Rm(25, roadTot.ContainsKey("Z") ? "진입도로 = 횡단 식생 길이" : "도면참조"); Rm(26, "도면참조");
         Rm(28, "도면참조 · ㎥ 두께 필요"); Rm(29, "도면참조");
         var box = ws.Range("A2:O29"); box.Style.Border.OutsideBorder = XLBorderStyleValues.Thin; box.Style.Border.InsideBorder = XLBorderStyleValues.Hair;
         box.Style.Alignment.Vertical = XLAlignmentVerticalValues.Center; ws.Range("F4:F29").Style.Alignment.Horizontal = XLAlignmentHorizontalValues.Center;
