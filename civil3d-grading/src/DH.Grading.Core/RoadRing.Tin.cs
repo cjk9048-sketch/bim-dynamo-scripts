@@ -531,6 +531,26 @@ public static partial class RoadRing
         return cr >= 0 ? t : new WallDaylight.Tri(t.A, t.C, t.B);
     }
 
+    /// <summary>★[v117.18.11 · JACK 1116 «꺾임 단차 정리»] 급한 굽이(<see cref="Deck.Sharp"/>) 둘레 끊김선의 코앞 점(2 cm 안)을 합침 — 굽이 안쪽 보조선 · 주름선은 점 사이가 5~9 mm인 토막이 생겨
+    /// (고리점 옆에 꺾임점이 붙음) 0.5~1 m 떨어진 꼭짓점과 부채를 이루어 바늘 세모(높이/변 &lt; 0.01)가 됐다(1116 JACK 굽이 69~80 바늘 94 → 55). 마디 넣기가 교점은 다시 만들므로 이음은 안 끊김.
+    /// 2 cm = 굽이 안에서만 쓰는 허용치(밝힘 · 5 · 10 cm는 퇴화 세모가 생겨 버림).</summary>
+    const double ThinTol = 0.02;
+    static bool InSharpZone(Evaluator ev, Coordinate c)
+    {
+        var (dn, _, sg) = ev.NearestFoot(c.X, c.Y); if (sg < 0) return false;
+        return ev.D.SharpZone(ev.D.BS[sg], 1) >= 0;
+    }
+    static List<Coordinate> ThinNear(List<Coordinate> p, double tol, Func<Coordinate, bool> gate)
+    {
+        var o = new List<Coordinate> { p[0] };
+        for (int i = 1; i < p.Count; i++)
+        {
+            double dd = Math.Sqrt(Sq(p[i].X - o[^1].X) + Sq(p[i].Y - o[^1].Y));
+            if (dd >= tol || !(gate(p[i]) && gate(o[^1]))) { o.Add(p[i]); continue; }
+            if (i == p.Count - 1) { if (o.Count >= 2) o[^1] = p[i]; else o.Add(p[i]); }   // 끝점은 지킴(앞 점을 끝점으로 바꿈)
+        }
+        return o;
+    }
     /// <summary>성토 1단 윗선(K = 0 · 윗선) — 도로 둘레 점 바깥 5 cm가 성토인 이어진 줄(옛 TierLines 가장자리 줄과 같은 뜻 · 노리선 짝).</summary>
     static List<RoadGrade.TierLine> EdgeCrest(Evaluator ev)
     {
@@ -597,10 +617,26 @@ public static partial class RoadRing
         }
         // 끊김선을 S로 자름
         var pieces = new List<(LineString L, Bl Src)>();
+        // ★[v117.18.11 · 검토 M] 점 합침이 지우면 안 되는 점 — 선 끝점(다른 선이 T자로 닿는 자리)과 두 줄 이상이 함께 쓰는 꼭짓점(0.1 mm 키)
+        var thinKeep = new HashSet<(long, long)>();
+        if (ev.D.Sharp.Count > 0)
+        {
+            var seen = new Dictionary<(long, long), int>();
+            foreach (var bl in ls.Benches.Concat(ls.Creases))
+            {
+                if (bl.Pts.Count == 0) continue;
+                thinKeep.Add(Key(bl.Pts[0].X, bl.Pts[0].Y)); thinKeep.Add(Key(bl.Pts[^1].X, bl.Pts[^1].Y));
+                foreach (var k in bl.Pts.Select(p => Key(p.X, p.Y)).Distinct()) seen[k] = seen.TryGetValue(k, out int n) ? n + 1 : 1;
+            }
+            foreach (var kv in seen) if (kv.Value > 1) thinKeep.Add(kv.Key);
+        }
         void Clip(Bl bl)
         {
             if (bl.Pts.Count < 2) return;
-            var ln = gf.CreateLineString(bl.Pts.Select(p => new Coordinate(p.X, p.Y)).ToArray());
+            var cp = bl.Pts.Select(p => new Coordinate(p.X, p.Y)).ToList();
+            if (ev.D.Sharp.Count > 0) cp = ThinNear(cp, ThinTol, c => !thinKeep.Contains(Key(c.X, c.Y)) && InSharpZone(ev, c));
+            if (cp.Count < 2) return;
+            var ln = gf.CreateLineString(cp.ToArray());
             Geometry cut;
             try { cut = S.Intersection(ln); } catch { return; }
             for (int i = 0; i < cut.NumGeometries; i++)

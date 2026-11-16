@@ -79,19 +79,34 @@ static class RoadRingJack
     }
 
     /// <summary>★[v117.18.2] 고를 선(옹벽 변환) 검사 — 고른 선의 모든 점 높이 = 평가기 높이(1 mm 안) · 같은 단(절/성 · 쪽 · K) 줄 수 · 이음 걸음 수. 돌려줌 = (맞음, 글).</summary>
+    static double TinZ(RoadRing.Built b, double x, double y)
+    {
+        foreach (var t in b.Tris)
+        {
+            if (x < Math.Min(t.A.X, Math.Min(t.B.X, t.C.X)) - 1e-6 || x > Math.Max(t.A.X, Math.Max(t.B.X, t.C.X)) + 1e-6 || y < Math.Min(t.A.Y, Math.Min(t.B.Y, t.C.Y)) - 1e-6 || y > Math.Max(t.A.Y, Math.Max(t.B.Y, t.C.Y)) + 1e-6) continue;
+            double det = (t.B.Y - t.C.Y) * (t.A.X - t.C.X) + (t.C.X - t.B.X) * (t.A.Y - t.C.Y); if (Math.Abs(det) < 1e-18) continue;
+            double w1 = ((t.B.Y - t.C.Y) * (x - t.C.X) + (t.C.X - t.B.X) * (y - t.C.Y)) / det, w2 = ((t.C.Y - t.A.Y) * (x - t.C.X) + (t.A.X - t.C.X) * (y - t.C.Y)) / det, w3 = 1 - w1 - w2;
+            if (w1 < -1e-7 || w2 < -1e-7 || w3 < -1e-7) continue;
+            return w1 * t.A.Z + w2 * t.B.Z + w3 * t.C.Z;
+        }
+        return double.NaN;
+    }
     public static (bool Ok, string Text, Dictionary<(bool Cut, int Side, int K), int> Groups) PickCheck(RoadRing.Built b)
     {
         var lines = RoadRing.DisplayLines(b, b.Lines, out var st);
         var pk = RoadGrade.PickLines(lines, true, null, out var pst);
-        double worst = 0; int bad = 0, pts = 0;
+        double worst = 0, worstT = 0; int bad = 0, badT = 0, pts = 0;
         foreach (var l in pk) foreach (var p in l.Pts.Skip(1).SkipLast(1))   // 줄 끝점은 짓는 선 끝(면 끝 높이 2~5 cm 어긋남 — 이음과 무관)
         {
             pts++; var e = b.Ev.Eval(p.X, p.Y);
             if (e.Kind is not (2 or 3 or 4 or 1) || !double.IsFinite(e.Z)) continue;
-            double dz = Math.Abs(e.Z - p.Z); worst = Math.Max(worst, dz); if (dz > 0.001) bad++;
+            double dE = Math.Abs(e.Z - p.Z);
+            // 기준 = 평가기(옛 기준 그대로) · TIN 높이 차는 참고만(TIN이 평가기와 어긋나는 데이라잇 현 · 다듬기 허용 안 자리가 더 많아 기준으론 못 씀 — 1116 계측)
+            double zt = TinZ(b, p.X, p.Y); if (!double.IsNaN(zt)) { worstT = Math.Max(worstT, Math.Abs(zt - p.Z)); if (Math.Abs(zt - p.Z) > 0.001) badT++; }
+            worst = Math.Max(worst, dE); if (dE > 0.001) bad++;
         }
         var g = pk.GroupBy(l => (l.Cut, l.Side, l.K)).ToDictionary(x => x.Key, x => x.Count());
-        return (bad == 0, $"이음 {st.Bridged}({st.BridgedLen:F1} m) · 고른 선 {pk.Count}줄 점 {pts} · 높이 차 최대 {worst * 1000:F2} mm · 1 mm 넘는 점 {bad} · 표시 계산 {st.Ms} ms", g);
+        return (bad == 0, $"이음 {st.Bridged}({st.BridgedLen:F1} m) · 고른 선 {pk.Count}줄 점 {pts} · 높이 차 최대 {worst * 1000:F2} mm · 1 mm 넘는 점 {bad} · (참고 TIN 기준 최대 {worstT * 1000:F2} mm · {badT}점) · 표시 계산 {st.Ms} ms", g);
     }
 
     public static void Run()
@@ -106,7 +121,9 @@ static class RoadRingJack
         var tw = Environment.GetEnvironmentVariable("BLOCKTEST_RRJACKWALL");   // "a0,a1" = [옹벽 변환] 기록(우 · K 1 · 소단 1 m) — rconv 재현
         if (!string.IsNullOrEmpty(tw)) { var q = tw.Split(','); inp.TierWalls.Add(new RoadGrade.TierWall(double.Parse(q[0], ci), double.Parse(q[1], ci), 1, 1, 1)); }
         var sw = System.Diagnostics.Stopwatch.StartNew();
-        var b = RoadRing.Build(inp);
+        var prbE = Environment.GetEnvironmentVariable("BLOCKTEST_RRPROBE");   // "x,y" (1000 m 격자 안 좌표) — 그 점 세모 · 변 출처 로그
+        if (!string.IsNullOrEmpty(prbE)) { var pq = prbE.Split(','); double bx0_ = Math.Floor(inp.X[0] / 1000) * 1000, by0_ = Math.Floor(inp.Y[0] / 1000) * 1000; RoadRing.DebugProbe = (bx0_ + double.Parse(pq[0], System.Globalization.CultureInfo.InvariantCulture), by0_ + double.Parse(pq[1], System.Globalization.CultureInfo.InvariantCulture)); RoadRing.DebugRing = s => { if (s.Contains("[자리")) Console.WriteLine("   " + s); }; }
+        var b = RoadRing.Build(inp); RoadRing.DebugRing = null; RoadRing.DebugProbe = null;
         Console.WriteLine($"[RJ] 짓기 {sw.ElapsedMilliseconds} ms · ok {b.Ok} · 세모 {b.Tris.Count} · 선 {b.Lines.Count}");
         Console.WriteLine("  " + b.Note.Substring(0, Math.Min(b.Note.Length, 900)));
         if (!b.Ok)

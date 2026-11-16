@@ -152,12 +152,45 @@ static class RoadRingBend
     }
     static string RegexFp(string t) => System.Text.RegularExpressions.Regex.Match(t, @"지문 \d+").Value;
     static double Len2(RoadGrade.TierLine l) { double s = 0; for (int i = 1; i < l.Pts.Count; i++) s += Math.Sqrt(Sq(l.Pts[i].X - l.Pts[i - 1].X) + Sq(l.Pts[i].Y - l.Pts[i - 1].Y)); return s; }
+    /// <summary>★[1116 꺾임 단차] 사면 세모만(도로 면 제외) — 바늘 · 긴 얇은 · 성토면 설계×1.15 초과 · 최대 기울기 · 15°→30° 넘는 모서리(소단 모서리 포함).</summary>
+    public static string SlopeMetrics(RoadGrade.Input inp, RoadRing.Built b, double cx, double cy, double rad)
+    {
+        double gF = 1.0 / inp.Fill.Slope; int n = 0, needle = 0, thin = 0, st15 = 0, st15c = 0; double maxF = 0, maxC = 0; double gC = 1.0 / inp.Cut.Slope;
+        foreach (var t in b.Tris)
+        {
+            var A = t.A; var B = t.B; var C = t.C; double mx = (A.X + B.X + C.X) / 3, my = (A.Y + B.Y + C.Y) / 3;
+            if (Math.Sqrt(Sq(mx - cx) + Sq(my - cy)) > rad) continue;
+            if (b.Ev.OnDeck(mx, my, out _)) continue;
+            var e0 = b.Ev.Eval(mx, my); if (e0.Kind is not (2 or 3 or 4)) continue;
+            n++; bool fill = e0.Kind == 3;
+            double ux = B.X - A.X, uy = B.Y - A.Y, uz = B.Z - A.Z, vx = C.X - A.X, vy = C.Y - A.Y, vz = C.Z - A.Z;
+            double nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx, nl = Math.Sqrt(nx * nx + ny * ny + nz * nz);
+            double ab = Math.Sqrt(ux * ux + uy * uy + uz * uz), bc = Math.Sqrt(Sq(C.X - B.X) + Sq(C.Y - B.Y) + Sq(C.Z - B.Z)), ca = Math.Sqrt(vx * vx + vy * vy + vz * vz), e = Math.Max(ab, Math.Max(bc, ca));
+            if (nl > 0 && nl / e < 0.01) { needle++; if (Environment.GetEnvironmentVariable("BLOCKTEST_RRBNL") != null && needle <= 12) Console.WriteLine($"[RBN] ({A.X % 1000:F3},{A.Y % 1000:F3},{A.Z:F3}) ({B.X % 1000:F3},{B.Y % 1000:F3},{B.Z:F3}) ({C.X % 1000:F3},{C.Y % 1000:F3},{C.Z:F3}) e {e:F3} h {nl / e:F4} kind {e0.Kind}"); }
+            double ex = Math.Max(Math.Sqrt(Sq(C.X - B.X) + Sq(C.Y - B.Y)), Math.Max(Math.Sqrt(Sq(B.X - A.X) + Sq(B.Y - A.Y)), Math.Sqrt(Sq(A.X - C.X) + Sq(A.Y - C.Y)))); double h = ex > 1e-9 ? Math.Abs(nz) / ex : 0;
+            if (ex > 2 && h / ex < 0.1) thin++;
+            if (Math.Abs(nz) > 1e-9) { double g = Math.Sqrt(nx * nx + ny * ny) / Math.Abs(nz); if (fill) { maxF = Math.Max(maxF, g); if (g > gF * 1.15) st15++; } else { maxC = Math.Max(maxC, g); if (g > gC * 1.15) st15c++; } }
+        }
+        return $"사면 세모 {n} · 바늘 {needle} · 긴 얇은 {thin} · 성토 설계×1.15 초과 {st15} 최대 {maxF:F2} (설계 {gF:F3}) · 절토 설계×1.15 초과 {st15c} 최대 {maxC:F2} (설계 {gC:F3})";
+    }
+    /// <summary>세모 목록 SHA1(비트 같음 검사 · 꼭짓점 좌표 그대로).</summary>
+    public static string TriHash(RoadRing.Built b)
+    {
+        using var sh = System.Security.Cryptography.SHA1.Create(); var ms = new System.IO.MemoryStream(); var w = new System.IO.BinaryWriter(ms);
+        foreach (var t in b.Tris) foreach (var p in new[] { t.A, t.B, t.C }) { w.Write(p.X); w.Write(p.Y); w.Write(p.Z); }
+        w.Flush(); return Convert.ToHexString(sh.ComputeHash(ms.ToArray()))[..12];
+    }
     public static void Run(RoadGrade.Input inp, RoadRing.Built b)
     {
         var ci = CultureInfo.InvariantCulture; double bx0 = Math.Floor(inp.X[0] / 1000) * 1000, by0 = Math.Floor(inp.Y[0] / 1000) * 1000;
         double g = 1.0 / inp.Fill.Slope;
         foreach (var (name, x, y) in new[] { ("69-80", 234.0, 123.6), ("34", 233.4, 90.8), ("119", 266.7, 138.9), ("179", 319.3, 124.8) })
-            Console.WriteLine($"[RB] 굽이 {name} " + Metrics(inp, b, bx0 + x, by0 + y, 30, g));
+            { Console.WriteLine($"[RB] 굽이 {name} " + Metrics(inp, b, bx0 + x, by0 + y, 30, g)); Console.WriteLine($"[RBS] 굽이 {name} " + SlopeMetrics(inp, b, bx0 + x, by0 + y, 30)); }
+        if (Environment.GetEnvironmentVariable("BLOCKTEST_RRBEDGE") != null)
+        { var dk = b.Deck!; int m = dk.B.Count; int tot = 0, tiny = 0; double mn = 9;
+          for (int i = 0; i < m; i++) { var a = dk.B[i]; var c = dk.B[(i + 1) % m]; double L = Math.Sqrt(Sq(a.X - c.X) + Sq(a.Y - c.Y)); tot++; if (L < 0.05) { tiny++; if (tiny <= 40) Console.WriteLine($"[RBE] i {i} side {dk.BSide[i]} S {dk.BS[i]:F2} ({a.X % 1000:F3},{a.Y % 1000:F3}) L {L * 1000:F1} mm sharp {dk.SharpAt(dk.BS[i])}"); } mn = Math.Min(mn, L); }
+          Console.WriteLine($"[RBE] 둘레 변 {tot} · 5 cm 미만 {tiny} · 최소 {mn * 1000:F2} mm"); }
+        Console.WriteLine($"[RBH] 세모 {b.Tris.Count} 해시 {TriHash(b)}");
         var bn = Environment.GetEnvironmentVariable("BLOCKTEST_RRBNEEDLE");   // "x0,y0,x1,y1" — 2 m 칸마다 바늘(N) · 긴 얇은(T) · 가파름(S) 세모 수
         if (!string.IsNullOrEmpty(bn))
         {
