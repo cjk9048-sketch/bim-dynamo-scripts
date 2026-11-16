@@ -19,7 +19,7 @@ public static class QuantityTable
 
     /// <summary>★[JACK 0827] 터파기 깊이 구분(m). 표에 적히는 글자와
     /// 계산 쪽(<c>XsecQuantity.DeepLimit</c>)이 <b>같은 값</b>을 써야 어긋나지 않는다.</summary>
-    public const double DeepLimitM = 5.0;
+    public static double DeepLimitM => XsecQuantity.DeepLimit;   // ★[수량산출서] 설정값 한 곳(기본 4.5)
 
     // ★★★[검토 0907 · L-5] <b>참고표(12줄 못 박은 <c>Rows</c> 배열)를 지웠다.</b>
     //

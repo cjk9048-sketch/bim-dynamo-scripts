@@ -15,7 +15,10 @@ internal sealed class RoadDesign
     public double MaxGrade = 0.15, MinPviLen = 20, CurveR = 30;
     /// <summary>★[v111.7.2 검토 중간 1] 최대 경사 기본값 판 — 칸이 없는 옛 기록만 읽을 때 12 % → 15 %(한 번 · 저장하면 1이 써져 다시 안 옮김). 판별은 JSON에 칸이 있는지로(<see cref="LineVer"/>와 같은 법).</summary>
     public int GradeVer = 1;
-    public double SuggestH = 0;                 // 옹벽 제안 높이(0 = 안 봄)
+    /// <summary>★[v117.19 · JACK 1116 «굽이 평탄화»] 급한 굽이 구간 종단을 0 %로 — 켜짐 · 편 뒤 PVI(BendApplied = [S, Z, …]) · 펴기 전 PVI(BendBackup). 끄면 BendApplied와 같을 때만 BendBackup으로 되돌림. 옛 기록 = 꺼짐 · 빈 배열.</summary>
+    public bool BendFlat;
+    public double[] BendBackup = Array.Empty<double>(), BendApplied = Array.Empty<double>();
+    public double SuggestH = 0;                // 옹벽 제안 높이(0 = 안 봄)
     public string LimitHandle = "";             // 사업 경계 폴리선 핸들
     public string PlanProfile = "", BaseProfile = "", BaseSurface = "";
     public string SurfaceHandle = "";           // [도로 면 만들기]로 만든 지표면(다시 만들면 이것을 지우고 같은 이름으로)

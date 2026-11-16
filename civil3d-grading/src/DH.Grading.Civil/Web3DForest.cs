@@ -75,14 +75,6 @@ internal static class Web3DForest
             if (c.Epsg <= 0) { log.AppendLine("  수목: 도면 좌표계 없음"); return Missing("도면 좌표계를 몰라 수목을 못 넣었습니다", false); }
             string? dwgDir = null;
             try { if (System.IO.Path.IsPathRooted(c.DwgKey) && System.IO.File.Exists(c.DwgKey)) dwgDir = System.IO.Path.GetDirectoryName(c.DwgKey); } catch { }
-            var pick = ForestSource.Open(st.Tiles, st.IsDefault, st.Seen, dwgDir);
-            if (pick.Source == null)
-            {
-                log.AppendLine($"  수목: 창고 없음 — {pick.Log} · 설정 {(st.IsDefault ? "기본 경로" : "지정 경로")}{(st.Seen ? " · 전에 찾은 적 있음" : "")}");
-                if (pick.Warn) c.Warn.Add(pick.Missing + " — 3D에 수목 없음([기타 설정] 임상도 타일)");
-                return Missing(pick.Missing, pick.Quiet);
-            }
-            if (!pick.FromCopy && !st.Seen) { st.Seen = true; try { st.Save(); } catch (System.Exception ex) { log.AppendLine("  수목: 설정 저장 못 함 — " + ex.GetType().Name); } }
             int cm = c.BeltCm; double fn = c.BeltFn;
             (double X, double Y) FromDwg(double x, double y) { var ll = KoreaTm.ToLonLat(x, y, cm, fn); return KoreaTm.UtmkFromLonLat(ll.Lon, ll.Lat); }
             (double X, double Y) ToDwg(double x, double y) { var ll = KoreaTm.UtmkToLonLat(x, y); var p = KoreaTm.FromLonLat(ll.Lon, ll.Lat, cm, fn); return (p.E, p.N); }
@@ -111,8 +103,18 @@ internal static class Web3DForest
                 c.Warn.Add($"수목 범위가 너무 넓어 넣지 않았습니다(임상도 칸 {keys0:N0}개 · 한도 {MaxTiles})");
                 return Missing("수목 범위가 너무 넓습니다", false);
             }
+            // ★[v117.19 · JACK 1116] 회사 임상도 API(2025 · 회사망) → 창고 → 도면 폴더 사본 → 없음 — 못 쓰면 조용히 다음으로(로그 한 줄)
+            var pick = ForestSource.OpenWithApi(DhKeys.Installed.GisApi, keys, st.Tiles, st.IsDefault, st.Seen, dwgDir, s => BusyPopup.Text("3D 보기 — " + s), out string apiNote, out int apiPolys);
+            if (apiNote.Length > 0) log.AppendLine("  수목: " + apiNote + " → " + (pick.Source != null ? pick.Log : "창고 없음"));
+            if (pick.Source == null)
+            {
+                log.AppendLine($"  수목: 창고 없음 — {pick.Log} · 설정 {(st.IsDefault ? "기본 경로" : "지정 경로")}{(st.Seen ? " · 전에 찾은 적 있음" : "")}");
+                if (pick.Warn) c.Warn.Add(pick.Missing + " — 3D에 수목 없음([기타 설정] 임상도 타일)");
+                return Missing(pick.Missing, pick.Quiet);
+            }
+            if (!pick.FromCopy && !pick.FromApi && !st.Seen) { st.Seen = true; try { st.Save(); } catch (System.Exception ex) { log.AppendLine("  수목: 설정 저장 못 함 — " + ex.GetType().Name); } }
             // ★[M3] 칸마다 따로 읽음 — 창고에서 못 읽은 칸은 도면 폴더 사본에서 한 번 더
-            IForestTileSource? Fallback() => !pick.FromCopy && ForestSource.OpenCopy(dwgDir, out var cp, out _) ? cp : null;
+            IForestTileSource? Fallback() => !pick.FromCopy && !pick.FromApi && ForestSource.OpenCopy(dwgDir, out var cp, out _) ? cp : null;
             var tiles = ForestSource.Load(pick.Source, keys, Fallback, out var used, out int failed, out int fromCopy);
             if (failed > 0) c.Warn.Add($"임상도 칸 {failed}개 못 읽음 — 그 자리는 수목 없음");
             if (fromCopy > 0) log.AppendLine($"  수목: 창고에서 못 읽은 칸 {fromCopy}개를 도면 폴더 사본에서 읽음");
@@ -161,7 +163,7 @@ internal static class Web3DForest
                 Max = st.Max, Density = st.Density, Margin = margin, MeshZ = mask.ZAt,
             };
             var r = ForestScatter.Run(fi);
-            log.AppendLine("  " + r.Text + $" · 창고 {(pick.FromCopy ? "도면 폴더 사본" : "폴더")} · 칸 파일 {used.Count}/{keys.Count}" + (failed > 0 ? $" · 못 읽은 칸 {failed}" : ""));
+            log.AppendLine("  " + r.Text + $" · 창고 {(pick.FromApi ? ForestApi.Label : pick.FromCopy ? "도면 폴더 사본" : "폴더")} · 칸 파일 {used.Count}/{keys.Count}" + (failed > 0 ? $" · 못 읽은 칸 {failed}" : ""));
             // ★[검토 L8] 자가검증 = 밑동 + 0.3 ↔ 화면에 보이는 지형 메시(세모 보간) — SurfZ(Civil 면 격자)와 메시가 다르면 여기서 드러난다
             log.AppendLine($"  수목 자가검증: 표본 {r.SelfN:N0}그루 «밑동 + {fi.Sink} m ↔ 보이는 지형 메시» 최대 차 {r.SelfDz * 1000:F3} mm" + (r.SelfDz > 1e-3 ? " ⚠" : ""));
             if (r.SelfDz > 1e-3) c.Warn.Add($"수목 자가검증 ⚠ — 밑동 높이가 보이는 지형과 최대 {r.SelfDz * 1000:F1} mm 다름");
@@ -173,10 +175,12 @@ internal static class Web3DForest
             var years = srcs.Count > 0 ? (srcs.Min(s => s.YearMin), srcs.Max(s => s.YearMax)) : (0, 0);
             var head = ForestScatter.Head(sc, r, ox, oy, years);
             // 사본(M5) — 저장된 도면만 · 못 써도 로그 한 줄(수목은 그대로)
+            int wrote = -2;
             if (dwgDir != null && !pick.FromCopy)
-                try { int w = ForestSource.CopyUsed(pick.Source, keys, used, dwgDir); log.AppendLine($"  수목 사본: 도면 폴더 {ForestSource.CopyDir}\\ · 새로 쓴 칸 {w}/{used.Count} · 달라고 한 칸 {keys.Count}"); }
+                try { int w = wrote = ForestSource.CopyUsed(pick.Source, keys, used, dwgDir); log.AppendLine($"  수목 사본: 도면 폴더 {ForestSource.CopyDir}\\ · 새로 쓴 칸 {w}/{used.Count} · 달라고 한 칸 {keys.Count}"); }
                 catch (System.Exception ex) { log.AppendLine("  수목 사본: 못 씀 — " + ex.GetType().Name + " " + ex.Message); }
             else log.AppendLine(dwgDir == null ? "  수목 사본: 저장 안 한 도면 — 안 만듦" : "  수목 사본: 사본에서 읽음 — 안 씀");
+            if (pick.FromApi) log.AppendLine($"  수목: {ForestApi.Label} · 폴리곤 {apiPolys:N0} · 칸 {used.Count}" + (wrote >= 0 ? $" · 사본 저장 {wrote}" : " · 사본 안 만듦(저장 안 한 도면)"));
             return head;
         }
         catch (System.Exception ex)

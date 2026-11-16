@@ -154,6 +154,7 @@ public sealed partial class XsecViewCommand
         Editor ed = doc.Editor;
         Database db = doc.Database;
         SheetPrefs.TryPin(db, "횡단도");   // ★[v112.1] 이 도면을 그린 도면설정 값을 도면에
+        QtyXlsxInput.ApplyDeepLimit(db);   // ★[수량산출서] 터파기 구분 = 도면에 적힌 값(기본 4.5) — 엑셀 수량산출서와 같은 값
         var cdoc = CivilApp.CivilApplication.ActiveDocument;
         var log = new System.Text.StringBuilder();
 
@@ -559,6 +560,7 @@ public sealed partial class XsecViewCommand
         //   종전처럼 자리를 다 잡은 뒤에 재면 <b>줄 수를 알기 전에 축척이 정해져</b> 있다.
         //   (계산은 검토선과 지표면만 있으면 되므로 이 자리에서 돌 수 있다.)
         var qty = CollectQty(db, slIds, alignId, wl, wr, surfs, log, t);
+        try { QtyKeeper.Store(db, t != null, slIds.Select(x => (x.Name, x.St)).ToList(), qty.Map, qty.Ledgers); } catch { }   // ★[수량산출서] 마지막 횡단 수량(부지 · 진입도로 따로)
 
         // ★[v115 · JACK 1105 Revit 구조물 · D13] 구조물 바닥까지 넓힌 뷰는 «사용자 지정 범위» — 넓히기 전 크기도 재 둔다(축척 알림)
         var mv0 = MeasureViews(db, viewIds, log);

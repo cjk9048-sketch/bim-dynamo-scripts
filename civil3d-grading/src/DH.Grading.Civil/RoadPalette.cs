@@ -176,6 +176,9 @@ internal sealed class RoadPanel : UserControl
         _host = GradingDialog.AddCollapsible(_root, "■ 종단수정", out var profBadge, "최대 종단경사 · PVI 간격 · PVI 넣기 · 지우기", open: false, key: "도로:종단", group: GT);
         HookBig(profBadge, _host, "roadProfile");
         Row(("최대 경사 %", d => d.MaxGrade, (d, v) => d.MaxGrade = v, 100, 0.5, 30), ("PVI 간격", d => d.MinPviLen, (d, v) => d.MinPviLen = v, 1, 1, 500));
+        _bendFlat = new CheckBox { Content = "굽이 평탄화", FontSize = 11, Margin = new Thickness(2, 2, 0, 6), ToolTip = "급한 굽이(반경 < 안쪽 소단 거리) 구간 종단을 0 %로 → 안쪽 소단이 이어짐 · 끄면 펴기 전 · 면은 [업데이트]" };
+        _bendFlat.Click += (_, __) => BendFlatChanged();
+        _host.Children.Add(_bendFlat); _needRoad.Add(_bendFlat);
         // ★[v111.2 · JACK 1030 «PVI 수정 기능 — 넣기 · 삭제»] 종단도에서 찍기(Enter까지 여러 번)
         Buttons(("PVI 넣기", "DHROADPVIADD", "종단도를 찍은 측점에 PVI를 넣습니다 — 지금 계획선 위라 모양은 그대로, 넣은 뒤 잡아끌어 높이를 바꿉니다(Enter 끝)", false),
                 ("PVI 지우기", "DHROADPVIDEL", "종단도에서 찍은 자리 가까운 PVI를 지웁니다 — 처음 · 끝은 못 지움(Enter 끝)", false));
@@ -388,6 +391,15 @@ internal sealed class RoadPanel : UserControl
         d.DitchKind = k;
         try { _s.SaveDesign(); } catch (System.Exception ex) { _note.Text = "저장 실패 — " + ex.Message; }
         DitchWarn(_s.Design);
+    }
+    CheckBox _bendFlat = null!;
+    void BendFlatChanged()
+    {
+        if (_loading || _s == null) return;
+        if (Busy(_s.Doc)) { _bendFlat.IsChecked = _s.Design.BendFlat; return; }
+        _s.Fresh().BendFlat = _bendFlat.IsChecked == true;
+        try { _s.SaveDesign(); } catch (System.Exception ex) { _note.Text = "저장 실패 — " + ex.Message; return; }
+        Act("굽이 평탄화", "DHROADBENDFLAT");
     }
     void DitchLidChanged()
     {
@@ -744,6 +756,7 @@ internal sealed class RoadPanel : UserControl
                 _ditchU.Visibility = s.Design.DitchKind == 1 ? Visibility.Visible : Visibility.Collapsed;
                 _ditchL.Visibility = s.Design.DitchKind == 2 ? Visibility.Visible : Visibility.Collapsed;
                 _ditchLid.IsChecked = s.Design.DitchU.Length > 8 && s.Design.DitchU[8] > 0.5;
+                _bendFlat.IsChecked = s.Design.BendFlat;
                 DitchWarn(s.Design);
             }
             // ★[도로 마무리 ① · 계획 5.3] 끝 맞춤 제안(끝 맞춤 꺼진 옛 도로만) + [끝 맞추기]

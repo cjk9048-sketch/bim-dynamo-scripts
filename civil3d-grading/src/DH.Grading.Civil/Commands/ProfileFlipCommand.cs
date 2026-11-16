@@ -26,8 +26,18 @@ public sealed class ProfileFlipCommand
         try { s.RecomputeIfDirty(); } catch { }
         string r;
         using (BusyPopup.Scope("시점 ↔ 종점을 바꾸는 중입니다.")) r = RoadFlip.Run(s);
-        ed.WriteMessage($"\n[진입도로] {s.Name} — {r}" + (r.StartsWith("⚠") ? "" : " — [업데이트]로 지표면 · 종단도 · 횡단도"));
+        bool ok = !r.StartsWith("⚠");
+        // ★[v117.18.2 · JACK 1116 스샷 «시점 종점 바꾸기를 누르니까 그냥 종단선만 바뀌어 — 지표면 업데이트가 안 되는 것 같아»]
+        //   원인: 바꾸기는 미리보기 종단선만 · 지표면 · 종단도(원지반 선) · 횡단도는 [업데이트]를 따로 눌러야 해서 그 사이 종단도가 «옛 원지반 + 뒤집힌 계획선»으로 보임
+        //   → 바꾸기는 한 번에 끝나는 일이라 바로 [업데이트]도 이어서(같은 단추 명령 · 「무거운 재작성은 단추로」는 PVI 끌기처럼 이어지는 고침용) · 화면 없는 Civil은 대본이 따로 부름
+        ed.WriteMessage($"\n[진입도로] {s.Name} — {r}" + (ok ? " → 지표면 · 종단도 · 횡단도 다시 만듦" : ""));
         try { s.Recompute(); } catch { }
+        if (ok && !SelfCheckLog.Headless)
+        {
+            // ★[C# \x 함정] "\x03\x03" + 명령(붙여 쓰면 \x03D가 '='로 먹힘)
+            try { doc.SendStringToExecute("\x03\x03" + "DHROADUPDATE ", true, false, false); }
+            catch (System.Exception ex) { ed.WriteMessage("\n[진입도로] 자동 업데이트 못 함 → [업데이트] 누르기"); try { DiagLog.Append("\n[진입도로] 시점↔종점 뒤 자동 업데이트 실패 — " + ex.Message); } catch { } }
+        }
     }
 
     /// <summary>계획부지 — 리본 [계획지표면] [측점] «시점↔종점». 노선(노란 선) 꼭짓점 차례를 뒤집고 측점 기록을 바꾼 뒤 도면설정 [저장]과 같은 길로 종단도 · 횡단도를 그 자리에 다시.</summary>

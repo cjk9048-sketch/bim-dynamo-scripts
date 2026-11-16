@@ -1153,8 +1153,30 @@ public class RoadCommand
         {
             var dr = s.RedraftNow();
             ed.WriteMessage("\n[진입도로] 종단 자동으로 다시 — " + dr.Text);
+            var dB = s.Fresh();
+            dB.BendApplied = Array.Empty<double>(); dB.BendBackup = Array.Empty<double>();   // 새 종단 = 새 «펴기 전»
+            if (dB.BendFlat) { ed.WriteMessage("\n[진입도로] " + RoadBendFlatCivil.Sync(doc, s, dB)); }
+            s.SaveDesign();
         }
         catch (System.Exception ex) { ed.WriteMessage("\n[진입도로] 종단 자동으로 다시 실패 — " + ex.Message); }
+        try { s.Recompute(); } catch { }
+    }
+
+    /// <summary>★[v117.19 · JACK 1116] ■ 종단수정 [굽이 평탄화] 체크 → 계획 종단에 맞춤(켜면 급한 굽이 0 % · 끄면 펴기 전) · 미리보기만 · 면은 [업데이트].</summary>
+    [CommandMethod("DHROADBENDFLAT")]
+    public void BendFlat()
+    {
+        var doc = AcadApp.DocumentManager.MdiActiveDocument; var ed = doc.Editor;
+        var s = Need(ed); if (s == null) return;
+        bool was = s.Suppress; s.Suppress = true;
+        try
+        {
+            var d = s.Fresh();
+            ed.WriteMessage("\n[진입도로] " + RoadBendFlatCivil.Sync(doc, s, d) + " · 미리보기만 바뀜 → [업데이트]로 지표면 · 종단도 · 횡단도");
+            s.SaveDesign();
+        }
+        catch (System.Exception ex) { ed.WriteMessage("\n[진입도로] 굽이 평탄화 실패 — " + ex.Message); }
+        finally { s.Suppress = was; }
         try { s.Recompute(); } catch { }
     }
 

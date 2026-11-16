@@ -36,7 +36,7 @@ public static class ForestSource
     public const string CopyDir = "DH_임상도";
 
     /// <summary>창고 고르기 결과 — Source가 null이면 Missing(층 회색) · Quiet면 ⚠ 없이 · Warn이면 경고 한 줄.</summary>
-    public sealed record Pick(IForestTileSource? Source, string Missing, bool Quiet, bool Warn, string Log, bool FromCopy);
+    public sealed record Pick(IForestTileSource? Source, string Missing, bool Quiet, bool Warn, string Log, bool FromCopy, bool FromApi = false);
 
     /// <summary>계획 5절 표 — 창고 → (실패) 도면 폴더 사본 → (실패) missing.
     /// <paramref name="isDefault"/> = 설정이 기본 경로 · <paramref name="seen"/> = 이 PC에서 창고를 한 번이라도 찾은 적이 있음(L8 — 처음 쓰는 사람에게 ⚠를 안 띄움).</summary>
@@ -58,6 +58,21 @@ public static class ForestSource
         if (why.StartsWith("웹 주소", StringComparison.Ordinal)) return new Pick(null, "웹 주소 타일은 아직 지원하지 않습니다(폴더만)", false, true, why, false);
         if (isDefault && !seen) return new Pick(null, "임상도 타일 없음", true, false, why, false);
         return new Pick(null, "임상도 타일 폴더가 없습니다", false, true, why, false);
+    }
+
+    /// <summary>★[v117.19 · JACK 1116] 회사 API(2025판 · 회사망에서만) → 창고 → 도면 폴더 사본 → missing. <paramref name="apiBase"/>가 비었거나 못 쓰면 조용히 다음으로 — 까닭 한 줄은 <paramref name="apiNote"/>(주소는 안 적음).
+    /// API에서 받은 칸은 메모리 창고(<see cref="ForestApiSource"/>) — 사본은 부르는 쪽이 <see cref="CopyUsed"/>로 저장.</summary>
+    public static Pick OpenWithApi(string? apiBase, IReadOnlyList<(int Tx, int Ty)> keys, string tiles, bool isDefault, bool seen, string? dwgDir,
+                                   Action<string>? progress, out string apiNote, out int apiPolys, System.Net.Http.HttpMessageHandler? handler = null)
+    {
+        apiNote = ""; apiPolys = 0;
+        if (!string.IsNullOrWhiteSpace(apiBase) && keys.Count > 0)
+        {
+            var r = ForestApiClient.TryFetch(apiBase!.Trim(), keys, progress, handler);
+            if (r.Source != null) { apiPolys = r.Polys; return new Pick(r.Source, "", false, false, ForestApi.Label, false, true); }
+            apiNote = r.Note;
+        }
+        return Open(tiles, isDefault, seen, dwgDir);
     }
 
     /// <summary>읽기 · 풀기에서 «그 파일이 나쁨»으로 보는 예외(그 밖 예외는 위로 — 진단 로그).</summary>

@@ -42,6 +42,8 @@ internal static class PlanSheet
         public List<(string Label, ObjectId Layer)> Legend = new();
         /// <summary>토공량표 줄 — (구분, 절토, 성토) · 면이 없으면 NaN.</summary>
         public List<(string Name, double Cut, double Fill)> Volume = new();
+        /// <summary>★[v117.19] 토공량표 «벌개제근 ㎡» 한 줄 — 임상 · 경급별은 <see cref="ClearingQuantity.LastOf"/>.</summary>
+        public DH.Grading.Core.Forest.ClearingResult? Clearing;
         public string Sig = "";
     }
 
@@ -210,12 +212,13 @@ internal static class PlanSheet
         // ★[v112.5] 평면 꾸미기로 평면 탭만 자주 다시 — 지표면(최종 · 정지면 · 원지반 지문)이 같으면 지난 토공량 그대로(12초 셈 건너뜀)
         //   ★[검토 높음] 열쇠 = 면 머리(점 수 · 높이) + 계획면 세모 지문(꼭짓점 합 — 가운데 바닥만 바꿔도 바뀜) + 도로 면 · 평면 꾸미기 때만 · 다 맞은 셈만 남김
         string vk = useVolCache ? VolKey(db) : "";
-        if (vk.Length > 0 && VolCache.TryGetValue(db, out var vc) && vc.Key == vk) { p.Volume = vc.Rows; log.AppendLine("  토공량 — 지표면 그대로라 지난 셈을 씀"); }
+        if (vk.Length > 0 && VolCache.TryGetValue(db, out var vc) && vc.Key == vk) { p.Volume = vc.Rows; p.Clearing = vc.Cl; log.AppendLine("  토공량 — 지표면 그대로라 지난 셈을 씀"); }
         else
         {
             p.Volume = Volumes(db, log, warns);
+            p.Clearing = ClearingQuantity.Measure(db, log, warns);
             string k2 = vk.Length > 0 ? vk : VolKey(db);
-            if (k2.Length > 0 && p.Volume.Count > 0 && p.Volume.All(v => double.IsFinite(v.Cut) && double.IsFinite(v.Fill))) VolCache.AddOrUpdate(db, new VolEntry(k2, p.Volume));
+            if (k2.Length > 0 && p.Volume.Count > 0 && p.Volume.All(v => double.IsFinite(v.Cut) && double.IsFinite(v.Fill))) VolCache.AddOrUpdate(db, new VolEntry(k2, p.Volume, p.Clearing));
         }
         p.Sig = Sig(e, p.Scale, def, db, inp);
         return p;
@@ -270,7 +273,7 @@ internal static class PlanSheet
         return rows;
     }
 
-    sealed record VolEntry(string Key, List<(string Name, double Cut, double Fill)> Rows);
+    sealed record VolEntry(string Key, List<(string Name, double Cut, double Fill)> Rows, DH.Grading.Core.Forest.ClearingResult? Cl = null);
     static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Database, VolEntry> VolCache = new();
 
     /// <summary>토공량 다시 쓰기 열쇠 — 못 만들면 빈 글(다시 안 씀).</summary>
@@ -678,7 +681,8 @@ internal static class PlanSheet
         // 토공량표 — 구분 | 절토 | 성토 | 순토량(㎥) · 띠 아래에서 위로
         double[] cw = { 30, 32, 32, 40 };
         double tw = cw.Sum(), tx0 = B[0] + (B[2] - B[0] - tw) / 2, rh = 7;
-        int nr = p.Volume.Count + 1;
+        int nr = p.Volume.Count + 1 + (p.Clearing != null ? 1 : 0);
+        int nv = p.Volume.Count + 1;
         double ty0 = B[1] + 6;
         string N(double v) => double.IsNaN(v) ? "-" : Math.Round(v).ToString("N0", CultureInfo.InvariantCulture);
         string Net(double cut, double fill)
@@ -689,21 +693,25 @@ internal static class PlanSheet
         }
         var rowsText = new List<string[]> { new[] { "구분", "절토(㎥)", "성토(㎥)", "순토량(㎥)" } };
         rowsText.AddRange(p.Volume.Select(v => new[] { v.Name, N(v.Cut), N(v.Fill), Net(v.Cut, v.Fill) }));
+        if (p.Clearing != null)   // 벌개제근 ㎡ — 합계 한 줄(못 재면 «-»)
+            rowsText.Add(new[] { "벌개제근(㎡)", p.Clearing.Known ? Math.Round(p.Clearing.Total).ToString("N0", CultureInfo.InvariantCulture) : "-", "", "" });
         Text("토  공  량  표", bx, ty0 + nr * rh + 6, 3.5);
         Rect(tx0, ty0, tx0 + tw, ty0 + nr * rh);
         for (int r = 1; r < nr; r++) Add(new Line(new Point3d(tx0, ty0 + r * rh, 0), new Point3d(tx0 + tw, ty0 + r * rh, 0)));
         double cx = tx0;
-        for (int k = 0; k < cw.Length - 1; k++) { cx += cw[k]; Add(new Line(new Point3d(cx, ty0, 0), new Point3d(cx, ty0 + nr * rh, 0))); }
+        for (int k = 0; k < cw.Length - 1; k++) { cx += cw[k]; Add(new Line(new Point3d(cx, k == 0 || nr == nv ? ty0 : ty0 + rh, 0), new Point3d(cx, ty0 + nr * rh, 0))); }
         for (int r = 0; r < nr; r++)
         {
             double yy = ty0 + (nr - r - 0.5) * rh; cx = tx0;
             for (int k = 0; k < cw.Length; k++)
             {
-                var t = Text(rowsText[r][k], cx + cw[k] / 2, yy, 2.5);
+                if (rowsText[r][k].Length == 0) { cx += cw[k]; continue; }
+                double span = p.Clearing != null && r == nr - 1 && k == 1 ? cw[1] + cw[2] + cw[3] : cw[k];   // 벌개제근 줄 = 값 칸을 오른쪽 셋에 걸쳐 합침
+                var t = Text(rowsText[r][k], cx + span / 2, yy, 2.5);
                 try
                 {
                     var x = t.GeometricExtents; double w = x.MaxPoint.X - x.MinPoint.X;
-                    var (hh, wf) = FitText(w, 2.5, cw[k], rh);
+                    var (hh, wf) = FitText(w, 2.5, span, rh);
                     if (wf < 1 || hh < 2.5) { t.Height = hh; t.WidthFactor = wf; t.AdjustAlignment(db); }
                 }
                 catch { }

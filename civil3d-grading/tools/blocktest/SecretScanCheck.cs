@@ -52,6 +52,7 @@ static class SecretScanCheck
                 using var doc = JsonDocument.Parse(File.ReadAllText(keysPath));
                 void Add(JsonElement e, string k) { if (e.TryGetProperty(k, out var v) && v.ValueKind == JsonValueKind.String && v.GetString() is { Length: >= 6 } s) secrets.Add(s); }
                 Add(doc.RootElement, "vworld");
+                Add(doc.RootElement, "gisapi");   // ★[v117.19] 회사 GIS API 주소 — 소스 · 문서 · 설정에 0곳
                 if (doc.RootElement.TryGetProperty("gisdb", out var g)) { Add(g, "host"); Add(g, "password"); }
             }
             catch (Exception ex) { check("S177 설치 키 파일 읽기", false, "형식 오류 — " + ex.GetType().Name); return; }   // ★[검토 L12] 값은 안 찍음
@@ -88,7 +89,7 @@ static class SecretScanCheck
                 break;
             }
         }
-        check("S177 ② 알려진 비밀값(내장 VWorld 키 · 사내 DB 주소 · 비밀번호)이 우리 프로젝트 추적 파일에 0곳",
+        check("S177 ② 알려진 비밀값(내장 VWorld 키 · 사내 DB 주소 · 비밀번호 · 회사 API 주소)이 우리 프로젝트 추적 파일에 0곳",
             secrets.Count > 0 && hitsOurs.Count == 0,
             secrets.Count == 0 ? "설치 키 파일이 없어 값 검사를 못 함" : $"검사 {scanned}개 파일 · 값 {secrets.Count}개 · 걸림 {hitsOurs.Count}곳{(hitsOurs.Count > 0 ? " — " + string.Join(", ", hitsOurs.Take(8)) : "")}");
         if (hitsOther.Count > 0)

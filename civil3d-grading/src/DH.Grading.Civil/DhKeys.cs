@@ -22,6 +22,7 @@ internal static class DhKeys
     {
         public string VWorld = "";
         public Db GisDb = new();
+        public string GisApi = "";   // ★[v117.19] 회사 GIS 데이터 API 주소(저장소 밖 · 로그 · 화면에 안 적음)
         public string Note = "";   // 파일을 못 읽은 까닭(값은 안 적음)
     }
 
@@ -44,6 +45,7 @@ internal static class DhKeys
             var r = doc.RootElement;
             static string S(JsonElement e, string k) => e.ValueKind == JsonValueKind.Object && e.TryGetProperty(k, out var v) && v.ValueKind == JsonValueKind.String ? (v.GetString() ?? "").Trim() : "";
             b.VWorld = S(r, "vworld");
+            b.GisApi = S(r, "gisapi");
             if (r.TryGetProperty("gisdb", out var g) && g.ValueKind == JsonValueKind.Object)
             {
                 b.GisDb.Host = S(g, "host"); b.GisDb.Database = S(g, "database"); b.GisDb.User = S(g, "user"); b.GisDb.Password = S(g, "password");

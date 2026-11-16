@@ -11,6 +11,8 @@
 
   <ItemGroup>
     <PackageReference Include="NetTopologySuite" Version="2.5.0" />
+    <!-- [수량산출서] 엑셀 쓰기(MIT · 의존: DocumentFormat.OpenXml MIT · ClosedXML.Parser MIT · ExcelNumberFormat MIT · RBush.Signed MIT · SixLabors.Fonts 1.0.0 Apache-2.0 — 2.x는 분할 라이선스라 올리지 않는다) -->
+    <PackageReference Include="ClosedXML" Version="0.105.0" />
   </ItemGroup>
 
   <!-- ★[v102.0 · 코드 검토 낮음 9] 하네스 전용 스위치(DebugSkipNeg · LegacyOnly · DebugLog)는 internal — 하네스만 본다 -->

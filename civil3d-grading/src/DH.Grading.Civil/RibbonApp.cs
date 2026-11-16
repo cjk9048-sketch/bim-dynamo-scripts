@@ -56,6 +56,7 @@ using AcadApp = Autodesk.AutoCAD.ApplicationServices.Application;
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.UDitchCommand))]             // ★[배수지 U형 측구 1단계] DHUDITCH(창) · -DHUDITCH(명령줄)
 [assembly: CommandClass(typeof(DH.Grading.Civil.SectionPalette))]                         // ★[JACK 1112] DHSECPANEL · DHROADSECPANEL(종횡단도 도킹창 — 종단도 · 횡단도 단추를 하나로)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.WallMigrateCommand))]        // ★[v117.9] DHWALLMIGRATE(옛 옹벽 옮기기 — 키트에서 «알 수 없는 명령»으로 찾음)
+[assembly: CommandClass(typeof(DH.Grading.Civil.Commands.QtyXlsxCommand))]                // ★[수량산출서] DHQTYXLSX(토공 수량산출서 엑셀)
 
 namespace DH.Grading.Civil;
 
@@ -991,6 +992,15 @@ public sealed class RibbonApp : IExtensionApplication
                 "· 도곽 바꾸기는 [도면설정] «4. 도곽»", null);
             pExport.Items.Add(Spacer());
             pExport.Items.Add(btnBook);
+            pExport.Items.Add(Spacer());
+            // ★[수량산출서 · JACK 1116] 토공 수량산출서(엑셀) — 도면화 옆
+            var btnQty = MakeButton("수량\n산출서", "DHQTYXLSX ", "토공 수량산출서(엑셀) — 토공집계표 · 시설 토적표 · 수로관 · 임목폐기물", "도면화");
+            btnQty.ToolTip = MakeTip("수량산출서 (DHQTYXLSX)",
+                "마지막 [횡단도] 수량 · U형 측구 · 벌개제근으로 **토공 수량산출서(엑셀)**를 만듭니다.\n\n" +
+                "· 시트 = 토공집계표 · 1)시설 토적표 · 수로관산근 · 임목폐기물 둘\n" +
+                "· 터파기 구분 H(기본 4.5 m)는 횡단 수량표와 같은 값\n" +
+                "· 도면 옆 «도면이름_토공수량산출서.xlsx»", null);
+            pExport.Items.Add(btnQty);
             pExport.Items.Add(Spacer());
             pExport.Items.Add(btnInfra);
             pExport.Items.Add(Spacer());

@@ -252,6 +252,10 @@ public readonly record struct XsecQty(
     public bool MissP { get; init; }
     public bool MissE { get; init; }
 
+    /// <summary>★[수량산출서] 성토면 · 절토면 가로 폭(m) — 면고르기 길이. 못 잰 값 = NaN.</summary>
+    public double FillW { get; init; } = double.NaN;
+    public double CutW { get; init; } = double.NaN;
+
     /// <summary>터파기는 있는데 계획면이 없던 칸 수 — 0이 아니면 그만큼 <b>원지반 기준</b>으로 셌다는 뜻이다.
     /// 기준면이 조용히 바뀌면 터파기가 부풀어 오르므로 호출부가 로그로 알려야 한다.</summary>
     public int NoPlanCells { get; init; }
@@ -271,8 +275,14 @@ public readonly record struct XsecQty(
 /// 꺾임점 사이는 진짜 직선이고, 그래서 사다리꼴 계산이 <b>근사가 아니라 정확값</b>이 된다.</para></summary>
 public static class XsecQuantity
 {
-    /// <summary>터파기를 두 갈래로 가르는 깊이(m). 회사 수량표가 <c>5.0m 이하/이상</c>으로 나눈다.</summary>
-    public const double DeepLimit = 5.0;
+    /// <summary>터파기를 두 갈래로 가르는 깊이(m) — ★[수량산출서] 설정값(기본 4.5 = 토공집계표 템플릿 «H=4.5m 이하/이상»).
+    /// 횡단 수량표 · 엑셀 수량산출서가 <b>이 한 값</b>을 같이 본다(<c>QuantityTable.DeepLimitM</c>도 이것). 도면에는 «수량산출서» 창이 적어 두고 [횡단도]가 읽어 온다.</summary>
+    public static double DeepLimit
+    {
+        get => _deepLimit;
+        set { if (double.IsFinite(value) && value >= 1.0 && value <= 30.0) _deepLimit = value; }
+    }
+    static double _deepLimit = 4.5;
 
     /// <summary>한 측점의 수량. 없는 지표면은 <c>null</c>로 주면 그 항목이 <c>NaN</c>이 된다.</summary>
     /// <param name="gx">원지반 가로 위치(m)와 <paramref name="gy"/> 표고.</param>
@@ -346,8 +356,26 @@ public static class XsecQuantity
             //      터파기만 계획면으로 올리면 <b>그 자리에서 어긋난다</b>. 한 몸으로 묶어 둔다.
             back = shallow + deep;
         }
+        double fw = double.NaN, cw = double.NaN;
+        if (P != null) (fw, cw) = Widths(x, G, P);
         return new XsecQty(cut, fill, shallow, deep, back)
-        { NoPlanCells = noPlan, MissG = G == null, MissP = P == null, MissE = E == null };
+        { NoPlanCells = noPlan, MissG = G == null, MissP = P == null, MissE = E == null, FillW = fw, CutW = cw };
+    }
+
+    /// <summary>원지반 G · 계획면 P 사이 성토면(P&gt;G) · 절토면(P&lt;G) 가로 폭 — 두 선이 엇갈리는 구간은 교점에서 나눈다.</summary>
+    static (double Fill, double Cut) Widths(double[] x, double[] g, double[] p)
+    {
+        double fw = 0, cw = 0;
+        for (int i = 0; i + 1 < x.Length; i++)
+        {
+            double w = x[i + 1] - x[i];
+            double d0 = p[i] - g[i], d1 = p[i + 1] - g[i + 1];
+            if (w <= 0 || double.IsNaN(d0) || double.IsNaN(d1)) continue;
+            if (d0 >= 0 && d1 >= 0) fw += w;
+            else if (d0 <= 0 && d1 <= 0) cw += w;
+            else { double t = d0 / (d0 - d1); double a = t * w, b = w - a; if (d0 > 0) { fw += a; cw += b; } else { cw += a; fw += b; } }
+        }
+        return (fw, cw);
     }
 
     /// <summary>세 가로축의 <b>합집합</b> — 겹치는 값은 하나로 친다(1mm 안이면 같은 자리).</summary>
