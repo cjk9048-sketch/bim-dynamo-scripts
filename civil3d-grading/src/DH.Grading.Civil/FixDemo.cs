@@ -14,7 +14,7 @@ namespace DH.Grading.Civil;
 /// ★[v117.14.1] 옹벽 변환 · 사면 변환 · 옹벽 추가 · 옹벽 삭제 = 공용 평면 바탕(돌아간 부지 · 원지반 등고선 · 단마다 빗금 · 소단 · 들쭉날쭉한 경계) — 변환은 한 변 전체가 끝에서 끝으로 쓸며 바뀜 ·
 /// 옹벽 추가 = 경계 → 사면 띠 → 경계 클릭 → 선 따라 다단 옹벽 / 옹벽 삭제 = 옹벽 클릭 → Enter → 원래 사면 · 산지 대소단 = 단면 · 옹벽 합성 미루기 = 끔/켬 두 줄.
 /// 그림 크기 = 절토 · 성토 예시와 같은 바탕(420 × 300 · Viewbox 줄이기만).</para></summary>
-internal sealed class FixDemoView : Border
+internal sealed partial class FixDemoView : Border
 {
     // ★[v117.14.1 · JACK 1112 «애니메이션 창 지금보다 1.2배» → «모든 설명 애니메이션은 도킹박스 안에서 크기가 같아야 · 좀 키워»] 0.7 → 0.84 → 1.0(논리 420 그대로 · 도킹창이 한 틀로 늘림)
     const double W = 420, H = 300, Scale = 1.0;
@@ -74,6 +74,13 @@ internal sealed class FixDemoView : Border
         ["roadWall"] = (6.2, "옹벽 — 구간 시작 · 끝 클릭 → 그 구간 사면이 옹벽으로"),
         ["roadDitch"] = (6.4, "측구 — 형식 · 치수 고르기 → [구간 지정] 두 점 → 도로 가장자리 측구"),
         ["roadResult"] = (5.8, "결과 — [업데이트] → 토공량 · 경사 · 옹벽 합계 (예시 값)"),
+        // ★[v117.19 · JACK 1116 «도면화도 애니메이션 · 수목은 디테일하게»] 도면화 도킹창 — 표제란 · 배치 탭 · 도곽 · 평면 꾸미기 · 작성하기 · 벌개제근(FixDemoSheet.cs)
+        ["sbTitle"] = (6.0, "표제란 — 공사명 · 도면명 앞말 · 도면번호 · 날짜 → 도곽 표제란에 채움"),
+        ["sbTabs"] = (7.0, "배치 탭 — 모형탭의 종단 · 횡단 장 → 종류마다 탭 하나 + 도곽 · 장은 왼쪽 → 오른쪽"),
+        ["sbFrame"] = (5.0, "도곽 — 목록에서 고르기 → 배치 탭에 그 도곽 · 기본은 수공 도곽"),
+        ["sbPlanDeco"] = (9.0, "평면 꾸미기 — 도면 기울기 · 등고값(계곡선) · 측점 · 등고선 간격"),
+        ["sbMake"] = (6.0, "작성하기 — 고른 종류마다 배치 탭 새로 만듦 · U 한 번에 되돌림"),
+        ["sbClearing"] = (14.0, "벌개제근 — 공사 범위 ∩ 임상도 숲만 → 종류별 ㎡ → 토공량표 한 줄"),
     };
 
     /// <summary>현재 장면 키.</summary>
@@ -178,7 +185,7 @@ internal sealed class FixDemoView : Border
     static readonly Color ChipBgC = Color.FromRgb(0xDC, 0xEF, 0xE9), ChipLineC = Color.FromRgb(0x9C, 0xC8, 0xBE), ChipInkC = Color.FromRgb(0x00, 0x48, 0x4E);
     static readonly Brush ChipBg = Fz(0xDC, 0xEF, 0xE9), ChipLine = Fz(0x9C, 0xC8, 0xBE);
     /// <summary>설명 글 앞에 단추 모양을 붙이는 장면(진짜 단추에서 부르는 것) — 칸 제목 · 라디오 · 체크 장면은 글만.</summary>
-    static readonly HashSet<string> ButtonKeys = new() { "toWall", "toSlope", "add", "delete", "pickPlan", "pickGround", "exPick", "exGround", "exToWall", "exReset", "exToSlope", "exClear", "pfProfile", "pfAdd", "pfFb", "pfDel", "pfRev", "xsView", "roadDraw", "roadPick" };
+    static readonly HashSet<string> ButtonKeys = new() { "toWall", "toSlope", "add", "delete", "pickPlan", "pickGround", "exPick", "exGround", "exToWall", "exReset", "exToSlope", "exClear", "pfProfile", "pfAdd", "pfFb", "pfDel", "pfRev", "xsView", "roadDraw", "roadPick", "sbMake" };
 
     /// <summary>마우스가 나감 — 타이머를 멈추고 마지막 그림(결과)에서 멈춘다.</summary>
     public void Idle()
@@ -290,6 +297,12 @@ internal sealed class FixDemoView : Border
             case "roadWall": RoadWall(t); break;
             case "roadDitch": RoadDitch(t); break;
             case "roadResult": RoadResult(t); break;
+            case "sbTitle": SbTitle(t); break;
+            case "sbTabs": SbTabs(t); break;
+            case "sbFrame": SbFrame(t); break;
+            case "sbPlanDeco": SbPlanDeco(t); break;
+            case "sbMake": SbMake(t); break;
+            case "sbClearing": SbClearing(t); break;
         }
     }
 

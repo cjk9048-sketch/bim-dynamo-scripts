@@ -78,9 +78,19 @@ internal sealed class SheetBookPanel : UserControl
         head.Background = Brushes.Transparent;
         var top = new StackPanel { Margin = new Thickness(10, 10, 10, 0) };
         top.Children.Add(head);
+        // ★[v117.19 · JACK 1116 «도면화도 애니메이션 · 접이식 카테고리»] 맨 위 설명 칸 — 칸 제목 · 항목에 마우스 → 그 장면(한 번 돌고 끝 그림에서 멈춤)
+        var demo = new FixDemoView("칸 제목에 마우스 → 예시", "sbTabs") { Margin = new Thickness(0, 0, 0, 8), HorizontalAlignment = HorizontalAlignment.Left };
+        void Hook(FrameworkElement? fe, string key) { if (fe == null) return; fe.MouseEnter += (_, __) => demo.Play(key); fe.MouseLeave += (_, __) => demo.Idle(); }
+        void HookBtn(FrameworkElement? fe, string key, string back) { if (fe == null) return; fe.MouseEnter += (_, __) => demo.Play(key); fe.MouseLeave += (_, __) => demo.Play(back); }
+        static FrameworkElement? HeadOf(TextBlock b) => (b.Parent as FrameworkElement)?.Parent as FrameworkElement;   // 요약칸 → 머리 줄 → 머리(누르는 자리)
+        top.Children.Add(DemoFrame.Wrap("SheetBook", demo));
         var deck = new DockPanel { LastChildFill = true };
         DockPanel.SetDock(top, Dock.Top);
         deck.Children.Add(top);
+        // [작성하기] + 결과 — 접이식 칸 밖 · 맨 아래에 늘 보임(스크롤 밖)
+        var bottom = new StackPanel { Margin = new Thickness(10, 0, 10, 8) };
+        DockPanel.SetDock(bottom, Dock.Bottom);
+        deck.Children.Add(bottom);
         deck.Children.Add(DhBrand.Watermark(new ScrollViewer
         {
             Content = _root, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
@@ -89,7 +99,7 @@ internal sealed class SheetBookPanel : UserControl
         Content = deck;
 
         // ■ 표제란
-        var s1 = Section("■ 표제란", "도곽 표제란에 들어갈 값 — 이 도면에 저장됩니다", first: true);
+        var s1 = Cat("■ 표제란", "도곽 표제란에 들어갈 값 — 이 도면에 저장됩니다", true, false, out _titleBadge, "sbTitle", Hook, HeadOf);
         Field(s1, "공사명", _project, "비우면 빈 칸");
         Field(s1, "도면명 앞말", _prefix, "도면명 앞에 붙는 말 — 예: «배수지» → «배수지 토공 횡단면도 (1/5)»");
         var no = new StackPanel { Orientation = Orientation.Horizontal };
@@ -106,7 +116,7 @@ internal sealed class SheetBookPanel : UserControl
         Field(s1, "날짜", dt, null);
 
         // ■ 배치 탭
-        var s2 = Section("■ 배치 탭", "모형탭에 그려 둔 종단도 · 횡단도 장 그대로 — 종류마다 탭 하나 · 장은 왼쪽 → 오른쪽", first: false);
+        var s2 = Cat("■ 배치 탭", "모형탭에 그려 둔 종단도 · 횡단도 장 그대로 — 종류마다 탭 하나 · 장은 왼쪽 → 오른쪽", false, true, out _tabsBadge, "sbTabs", Hook, HeadOf);
         var grid = new Grid { Margin = new Thickness(0, 0, 0, 2) };
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(128) });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
@@ -127,6 +137,7 @@ internal sealed class SheetBookPanel : UserControl
             cb.Checked += (_, __) => Changed(); cb.Unchecked += (_, __) => Changed();
             tb.TextChanged += (_, __) => Changed();
             r++;
+            if (k == Kind.Plan) { HookBtn(cb, "sbClearing", "sbTabs"); HookBtn(tb, "sbClearing", "sbTabs"); HookBtn(st, "sbClearing", "sbTabs"); }
             if (k == Kind.Plan)
             {
                 // 평면 축척 — 평면 줄 바로 아래(들여서)
@@ -138,31 +149,34 @@ internal sealed class SheetBookPanel : UserControl
                 _planScale.ToolTip = "자동 = 평면이 뷰포트에 들어가는 가장 큰 축척(1:200 ~ 1:5000)";
                 _planScale.SelectionChanged += (_, __) => Changed();
                 ps.Children.Add(_planScale); ps.Children.Add(_planAuto);
+                HookBtn(ps, "sbPlanDeco", "sbTabs");
                 Grid.SetRow(ps, r); Grid.SetColumn(ps, 0); Grid.SetColumnSpan(ps, 3);
                 grid.Children.Add(ps);
                 r++;
             }
         }
         s2.Children.Add(grid);
-        var fr = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 6, 0, 0) };
-        fr.Children.Add(new TextBlock { Text = "도곽", FontSize = 11, Foreground = DhBrand.Sub, Width = 44, VerticalAlignment = VerticalAlignment.Center });
+        var s3 = Cat("■ 도곽", "배치 탭에 씌울 도곽(기본 = 수공 도곽)", false, false, out _frameBadge, "sbFrame", Hook, HeadOf);
+        var fr = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 2) };
         fr.Children.Add(_frame); fr.Children.Add(_frameWarn);
         _frame.SelectionChanged += (_, __) =>
         {
             if (_loading || _frame.SelectedIndex < 0 || _frame.SelectedIndex >= _frameIds.Count) return;
+            if (_frameIds[_frame.SelectedIndex] != AddId) _frameBadge.Text = _frame.SelectedItem as string ?? "";
             string id = _frameIds[_frame.SelectedIndex];
             if (id == AddId) FrameAddClicked?.Invoke(); else FrameChosen?.Invoke(id);
         };
-        s2.Children.Add(fr);
+        s3.Children.Add(fr);
 
         // [작성하기] + 결과 한 줄
         try { if (DhBrand.Skin != null) _make.Style = (Style)DhBrand.Skin["DhPrimary"]; } catch { }
         _make.Click += (_, __) => MakeClicked?.Invoke();
         ToolTipService.SetShowOnDisabled(_make, true);
-        _root.Children.Add(_make);
+        bottom.Children.Add(_make);
         var res = new StackPanel { Orientation = Orientation.Horizontal };
         res.Children.Add(_result); res.Children.Add(_resultWarn);
-        _root.Children.Add(res);
+        bottom.Children.Add(res);
+        Hook(_make, "sbMake");
 
         // ■ 평면 꾸미기 — ★[v112.5 · JACK 1104 «기울기 · 방위표 · 등고값 · 등고선 간격 · 측점 껐다 켰다 — 작성하기로 수행해야만 활성화»] 평면 탭이 있을 때만 켬 · 바꾸면 평면 탭만 다시
         // ★[v112.6 · JACK 1104 «평면 꾸미기는 도면화 창 말고 전체 계획평면도 배치탭을 누르면 뜨는 별도 창»] 여기는 안 보임(PlanOptsWindow) — 칸은 남겨 둠(값 그릇)
@@ -212,13 +226,13 @@ internal sealed class SheetBookPanel : UserControl
         PlanOptsChanged?.Invoke();
     }
 
-    StackPanel Section(string title, string tip, bool first)
+    readonly TextBlock _titleBadge = new(), _tabsBadge = new(), _frameBadge = new();
+
+    /// <summary>접이식 칸(다른 도킹창과 같은 아코디언) — 접히면 제목 옆에 요약 · 제목과 안쪽에 마우스 → 설명 장면 <paramref name="scene"/>.</summary>
+    StackPanel Cat(string title, string tip, bool first, bool open, out TextBlock badge, string scene, Action<FrameworkElement?, string> hook, Func<TextBlock, FrameworkElement?> headOf)
     {
-        var label = new TextBlock { Text = title, FontSize = 13, FontWeight = FontWeights.Bold, Foreground = DhBrand.Brand, ToolTip = tip };
-        _root.Children.Add(new Border { Child = label, Padding = new Thickness(0, 3, 0, 3), Margin = new Thickness(0, first ? 0 : 14, 0, 5), ToolTip = tip });
-        _root.Children.Add(new Border { Height = 1, Background = DhBrand.Line, Margin = new Thickness(0, 0, 0, 9) });
-        var body = new StackPanel { Margin = new Thickness(12, 0, 0, 0) };
-        _root.Children.Add(body);
+        var body = GradingDialog.AddCollapsible(_root, title, out badge, tip, first, open);
+        hook(headOf(badge), scene); hook(body, scene);
         return body;
     }
 
@@ -277,6 +291,7 @@ internal sealed class SheetBookPanel : UserControl
             foreach (var (_, label) in items) _frame.Items.Add(label);
             _frame.Items.Add("다른 도곽 추가…");
             _frame.SelectedIndex = Math.Max(0, _frameIds.IndexOf(currentId));
+            _frameBadge.Text = _frame.SelectedItem as string ?? "";
         }
         finally { _loading = false; }
     }
@@ -312,6 +327,10 @@ internal sealed class SheetBookPanel : UserControl
         _planOpts.ToolTip = _planOpts.IsEnabled ? null : "[작성하기]로 전체 계획평면도 탭을 먼저 만드세요";
         ToolTipService.SetShowOnDisabled(_planOpts, true);
         _planAuto.Text = _planScale.SelectedIndex == 0 && p != null && p.Scale.Length > 0 ? "→ " + p.Scale : "";
+        _titleBadge.Text = _project.Text.Trim();
+        int nOn = Kinds.Count(k => _rows.TryGetValue(k, out var q) && q.Sheets > 0 && _on[k].IsChecked == true);
+        _tabsBadge.Text = $"{nOn}개 탭";
+        _frameBadge.Text = _frame.SelectedItem as string ?? "";
         _make.IsEnabled = any;
         _make.ToolTip = any ? "고른 탭을 만듭니다(있으면 새로 바꿈 · U 한 번에 되돌림)" : "만들 것이 없습니다 — 모형에 종단도 · 횡단도 · 평면 결과가 없거나 모두 껐습니다";
     }
