@@ -2649,7 +2649,7 @@ public static class GradingBuilder
         }
         foreach (var sid in victims)
         {
-            try { (tr.GetObject(sid, OpenMode.ForWrite) as AcadEntity)?.Erase(); } catch { }
+            try { (tr.GetObject(sid, OpenMode.ForWrite) as AcadEntity)?.Erase(); ErasedSource.Pending = true; } catch { }   // ★[1116 밤] 지운 면을 문 종단 · 횡단 정리가 훑게
         }
     }
 

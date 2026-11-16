@@ -7,15 +7,15 @@ namespace DH.Grading.Civil;
 /// 정지 그림(<see cref="StaticKeys"/>) · 체크가 바뀌면 패널이 <see cref="XqMask"/>를 넣고 <c>Redraw()</c>. 정의는 Core <c>XsecQtyRight</c>.</summary>
 internal sealed partial class FixDemoView
 {
-    /// <summary>켠 항목(<see cref="XsecQtyOptions"/>의 비트 — 벌개 1 · 표토 2 · 면고르기 4 · 식생 8 · 층따기 16).</summary>
+    /// <summary>켠 항목(<see cref="XsecQtyOptions"/>의 비트 — 벌개 1 · 표토 2 · 면고르기 4 · 식생 8).</summary>
     public int XqMask { get; set; } = XsecQtyOptions.Default;
 
-    static readonly Brush XqForest = Fz(0x3E, 0x9A, 0x4F), XqStrip = Fz(0xE0, 0x8A, 0x1E), XqFace = Fz(0x2F, 0x6F, 0xD0), XqSeed = Fz(0x7B, 0xC8, 0x5A), XqBench = Fz(0xD9, 0x34, 0x2B);
+    static readonly Brush XqForest = Fz(0x3E, 0x9A, 0x4F), XqStrip = Fz(0xE0, 0x8A, 0x1E), XqFace = Fz(0x2F, 0x6F, 0xD0), XqSeed = Fz(0x7B, 0xC8, 0x5A);
 
     void XsecQtyScene()
     {
         bool cl = (XqMask & XsecQtyOptions.Clear) != 0, st = (XqMask & XsecQtyOptions.Strip) != 0, sm = (XqMask & XsecQtyOptions.Smooth) != 0,
-             sd = (XqMask & XsecQtyOptions.Seed) != 0, bn = (XqMask & XsecQtyOptions.Bench) != 0;
+             sd = (XqMask & XsecQtyOptions.Seed) != 0;
         // 원지반 · 계획면(공사 범위 = 왼쪽 비탈 아래 ~ 오른쪽 성토 사면 끝)
         var g = new[] { new Point(14, 72), new Point(112, 72), new Point(236, 78), new Point(258, 110), new Point(270, 128), new Point(314, 144), new Point(406, 150) };
         var d = new[] { new Point(112, 72), new Point(150, 110), new Point(258, 110), new Point(314, 144) };
@@ -40,12 +40,6 @@ internal sealed partial class FixDemoView
         // 면고르기 · 식생 — 마감 사면(절토 비탈 · 성토 사면)
         if (sm) { Ln(new Point(112, 72), new Point(150, 110), XqFace, 5); Ln(new Point(258, 110), new Point(314, 144), XqFace, 5); }
         if (sd) { Ln(new Point(112, 72), new Point(150, 110), XqSeed, 2.2, true); Ln(new Point(258, 110), new Point(314, 144), XqSeed, 2.2, true); }
-        // 층따기 — 성토 아래 급한 원지반(계단)
-        if (bn)
-        {
-            var s = new[] { new Point(258, 110), new Point(258, 118), new Point(264, 118), new Point(264, 126), new Point(270, 126), new Point(270, 128) };
-            Pl(s, null, XqBench, 2.6, closed: false);
-        }
         // 이름표
         (string Name, string Tip, Brush Br, bool On)[] rows =
         {
@@ -53,7 +47,6 @@ internal sealed partial class FixDemoView
             ("표토제거", "공사 범위 전체 가로 길이", XqStrip, st),
             ("면고르기", "마감 사면 빗길이", XqFace, sm),
             ("식생공법", "마감 사면 빗길이", XqSeed, sd),
-            ("층따기", "성토 아래 땅 1 : 4보다 급한 곳", XqBench, bn),
         };
         for (int i = 0; i < rows.Length; i++)
         {
@@ -62,6 +55,5 @@ internal sealed partial class FixDemoView
             TxB(48, y, r.Name, 11, r.On ? Txt : Dim, true);
             TxB(126, y + 1, r.On ? r.Tip : "꺼짐 → 표에 –", 10, r.On ? Txt : Dim);
         }
-        TxB(262, 282, "층따기 1 : 4 = 일반 값", 9, Dim);
     }
 }

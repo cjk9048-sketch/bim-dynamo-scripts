@@ -90,12 +90,13 @@ internal static class FinalSurfaceBuilder
         return $"세모 {tin} · 점 {gen} · 정의 {ops}";
     }
 
-    static Inputs Gather(Database db, Transaction tr)
+    static Inputs Gather(Database db, Transaction tr, ObjectId fallbackBase = default)
     {
         var I = new Inputs();
         var cdoc = Autodesk.Civil.ApplicationServices.CivilDocument.GetCivilDocument(db);
         var (ids, nms) = Commands.WallCompositeCommand.Candidates(cdoc, tr, Commands.WallCompositeCommand.PlanName, Commands.SectionCommand.GroundOf(db));
         if (ids.Count == 1) { I.BaseId = ids[0]; I.BaseP = Sig((CivilDb.Surface)tr.GetObject(ids[0], OpenMode.ForRead)); }
+        else if (ids.Count == 0 && !fallbackBase.IsNull) { I.BaseId = fallbackBase; I.BaseP = Sig((CivilDb.Surface)tr.GetObject(fallbackBase, OpenMode.ForRead)); }   // ★[JACK 1116] 계획부지 없이 진입도로 — 바탕 = 원지반
         else I.BaseWhy = ids.Count == 0 ? "정지면_DH 없음" : $"정지면_DH가 여럿({string.Join(",", nms)})";
         foreach (ObjectId aid in cdoc.GetAlignmentIds())
         {
@@ -574,11 +575,11 @@ internal static class FinalSurfaceBuilder
     /// <summary>★[계획 5장] 지형 고르기 — 도로 없음 → <see cref="Pick.HasRoads"/> 거짓(지금 코드 그대로 · 한 줄도 안 달라짐) · 최종면 맞음 → 그 면 · 없음/옛것 → 메모리 합치기(같은 Compose · 도면 안 바꿈).
     /// 합치기 실패면 정지면_DH + ⚠ «진입도로 빠짐». 읽기만 한다(DBMOD 0 → 0).
     /// ★[v117.1 · 계획 9절 M6] <paramref name="meshOnly"/> = 면(세모)만 고르고 포장 · 차로 · 소단 띠는 안 셈(구조물 3D 영역 — 가벼운 문).</summary>
-    internal static Pick PickTerrain(Database db, System.Text.StringBuilder log, List<string> warn, bool meshOnly = false)
+    internal static Pick PickTerrain(Database db, System.Text.StringBuilder log, List<string> warn, bool meshOnly = false, ObjectId fallbackBase = default)
     {
         var P = new Pick();
         using var tr = db.TransactionManager.StartTransaction();
-        var I = Gather(db, tr);
+        var I = Gather(db, tr, fallbackBase);
         if (I.Roads.Count == 0) { tr.Commit(); return P; }
         P.HasRoads = true;   // 토량은 계획부지만 — 지형에 도로를 못 넣어도 «진입도로 제외»
         if (I.BaseId.IsNull) { warn.Add("진입도로 빠짐 — " + I.BaseWhy); log.AppendLine("최종지표면: 진입도로 빠짐 — " + I.BaseWhy); tr.Commit(); return P; }

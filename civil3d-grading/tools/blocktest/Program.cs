@@ -16,6 +16,13 @@ if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "qtyxlsx")
     Console.WriteLine(fails == 0 ? "\n== 전부 통과 ==" : $"\n== 실패 {fails}건 ==");
     return fails == 0 ? 0 : 1;
 }
+// ★[JACK 1116] BLOCKTEST_ONLY=xqty — 횡단 수량표 오른쪽 칸(벌개 · 표토 · 면고르기 · 식생 · 층따기 길이)만
+if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "xqty")
+{
+    XsecQtyCheck.Run(Check);
+    Console.WriteLine(fails == 0 ? "\n== 전부 통과 ==" : $"\n== 실패 {fails}건 ==");
+    return fails == 0 ? 0 : 1;
+}
 // ★[수량산출서] 옛 시험(S72~S98 …)은 터파기 구분 5.0 기준 — 새 기본 4.5는 위 S300이 본다
 XsecQuantity.DeepLimit = 5.0;
 // [v102.0] BLOCKTEST_LEGACY=1 — CivilSafeMesh 옛 길(v101: 여유 띠 쌍 무조건 합침 · 마지막 수단 없음)만 — 새 길과 견줄 때

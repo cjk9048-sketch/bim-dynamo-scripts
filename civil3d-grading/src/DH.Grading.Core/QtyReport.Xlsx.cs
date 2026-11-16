@@ -69,7 +69,7 @@ public static class QtyReportXlsx
             new("AE","AF", s=>s.Clear,"벌개제근","","길 이","면 적"),
             new("AG","AH", s=>s.Strip,"표토제거","","길 이","면 적"),
             new("AI","AJ", null,"잡석부설","","길 이","면 적"),
-            new("AK","AL", null,"층따기","","면 적","입 적"),
+            new("AK","AL", s=>s.Bench,"층따기","","면 적","입 적"),
             new("AN","AO", s=>s.ExcSoilGt,"터파기","토사("+gt+")","면 적","입 적"),
         };
         ws.Cell("B1").Value = "1) " + m.Facility + " 토공";
@@ -418,13 +418,13 @@ public static class QtyReportXlsx
         // 시설(부지) 열 H
         Put(4, "H", S("H")); Put(6, "H", S("L")); Put(7, "H", S("N")); Put(10, "H", S("R")); Put(11, "H", S("T")); Put(12, "H", S("V"));
         Put(13, "H", S("P")); Put(14, "H", S("AO")); Put(15, "H", S("X"));
-        Put(19, "H", S("AF")); Put(20, "H", S("AH")); Put(22, "H", S("AB")); Put(23, "H", S("AD"));
+        Put(19, "H", S("AF")); Put(20, "H", S("AH")); Put(22, "H", S("AB")); Put(23, "H", S("AD")); Put(29, "H", S("AL"));
         // 진입도로 열 I — 횡단 수량(계산값 · 시트 없음)
         if (m.RoadKnown)
         {
             var rd = m.Road.OrderBy(s => s.Sta).ToList();
             void RV(int r, Func<QtyStation, double> sel) { if (QtyReportCalc.Has(rd, sel)) { var c = ws.Cell($"I{r}"); c.Value = QtyReportCalc.R2(QtyReportCalc.AvgEndSum(rd, sel)); c.Style.NumberFormat.Format = "#,##0.00"; } }
-            RV(4, s => s.Fill); RV(6, s => s.Cut); RV(7, s => s.CutWeathered); RV(13, s => s.ExcSoilLe); RV(14, s => s.ExcSoilGt); RV(15, s => s.Backfill); RV(22, s => s.FillW); RV(23, s => s.CutW);
+            RV(4, s => s.Fill); RV(6, s => s.Cut); RV(7, s => s.CutWeathered); RV(13, s => s.ExcSoilLe); RV(14, s => s.ExcSoilGt); RV(15, s => s.Backfill); RV(22, s => s.FillW); RV(23, s => s.CutW); RV(29, s => s.Bench);
         }
         // 수로관 열 J — 산근 시트의 터파기 · 되메우기
         string Join(IEnumerable<string> xs) => string.Join("+", xs);

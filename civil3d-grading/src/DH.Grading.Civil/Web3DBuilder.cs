@@ -34,6 +34,8 @@ internal sealed class Web3DCollect
     /// <summary>지형 원천 이름(로그 · 시험) — «정지면_DH» · «최종지표면_DH» · «메모리 합침».</summary>
     public string TerrainName = "정지면_DH";
     public CachedGroundSurface? Ground;
+    /// <summary>★[JACK 1116] 원지형 자르기 범위(도면 좌표 · 없으면 None) — 수목 범위를 줄일 때 먼저 씀.</summary>
+    public GroundCrop.Box Crop = GroundCrop.Box.None;
     public string GroundName = "", GroundOfName = "";
     public double Cut = double.NaN, Fill = double.NaN, PlanArea = double.NaN;
     /// <summary>DHINFRA와 같은 옹벽 · SHP 자가진단 + 3D 몫.</summary>
@@ -506,6 +508,7 @@ internal static class Web3DBuilder
         object? forestHead = null;
         try
         {
+            try { c.Crop = GroundCropBuilder.ReadBox(db); } catch { }
             var ft = new Web3DForest.Terrain(inp.X, inp.Y, inp.Z, inp.F, tm.TriCls, mnx, mny, mxx, mxy, tm.CMinX, tm.CMinY, tm.CMaxX, tm.CMaxY);
             forestHead = Web3DForest.Build(c, ft, new[] { inp.Plan, inp.Bench, inp.SlopeCut, inp.SlopeFill, inp.WallMask, inp.WallFoot, inp.RoadArea }, bldgItems, SurfZ, ox, oy, sc, log);
         }

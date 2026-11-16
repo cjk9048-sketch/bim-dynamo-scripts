@@ -62,6 +62,30 @@ internal static class Web3DForest
     internal const int MaxTiles = 64;
     internal const double ShrinkMargin = 2000;
 
+    /// <summary>★[JACK 1116] 칸이 한도를 넘을 때 심을 범위 — ① 원지형 자르기 범위 ② 공사 범위(바뀐 자리) + 2 km ③ 지형 가운데 n km(칸 한도에 맞게). 앞에서 한도 안에 드는 첫 것. 글 = 3D 알림.</summary>
+    internal static (double X0, double Y0, double X1, double Y1, string Note)? Narrow(Func<double, double, double, double, int> count, Terrain t, GroundCrop.Box crop)
+    {
+        if (!crop.IsNone)
+        {
+            double x0 = System.Math.Max(t.MinX, crop.X0), y0 = System.Math.Max(t.MinY, crop.Y0), x1 = System.Math.Min(t.MaxX, crop.X1), y1 = System.Math.Min(t.MaxY, crop.Y1);
+            if (x0 < x1 && y0 < y1 && count(x0, y0, x1, y1) <= MaxTiles) return (x0, y0, x1, y1, "수목: 원지형 자르기 범위");
+        }
+        if (double.IsFinite(t.CMinX))
+        {
+            double x0 = System.Math.Max(t.MinX, t.CMinX - ShrinkMargin), y0 = System.Math.Max(t.MinY, t.CMinY - ShrinkMargin);
+            double x1 = System.Math.Min(t.MaxX, t.CMaxX + ShrinkMargin), y1 = System.Math.Min(t.MaxY, t.CMaxY + ShrinkMargin);
+            if (count(x0, y0, x1, y1) <= MaxTiles) return (x0, y0, x1, y1, $"수목: 공사 범위 + {ShrinkMargin / 1000:0} km");
+        }
+        double cx = (t.MinX + t.MaxX) / 2, cy = (t.MinY + t.MaxY) / 2;
+        for (int km = 16; km >= 1; km--)
+        {
+            double h = km * 500.0;
+            double x0 = System.Math.Max(t.MinX, cx - h), y0 = System.Math.Max(t.MinY, cy - h), x1 = System.Math.Min(t.MaxX, cx + h), y1 = System.Math.Min(t.MaxY, cy + h);
+            if (count(x0, y0, x1, y1) <= MaxTiles) return (x0, y0, x1, y1, $"수목: 가운데 {km} km만 (임상도 칸 한도)");
+        }
+        return null;
+    }
+
     static Dictionary<string, object> Missing(string why, bool quiet) => quiet ? new() { ["missing"] = why, ["quiet"] = true } : new() { ["missing"] = why };
 
     /// <summary>null = 층 없음(꺼짐). 그 밖은 H["forest"]에 넣을 머리.</summary>
@@ -85,16 +109,16 @@ internal static class Web3DForest
             var env = ForestScatter.Region5179(rx0, ry0, rx1, ry1, margin, FromDwg);
             var keys = ForestScatter.TilesFor(env).ToList();
             int keys0 = keys.Count;
-            if (keys.Count > MaxTiles && double.IsFinite(t.CMinX))
+            if (keys.Count > MaxTiles)
             {
-                rx0 = System.Math.Max(t.MinX, t.CMinX - ShrinkMargin); ry0 = System.Math.Max(t.MinY, t.CMinY - ShrinkMargin);
-                rx1 = System.Math.Min(t.MaxX, t.CMaxX + ShrinkMargin); ry1 = System.Math.Min(t.MaxY, t.CMaxY + ShrinkMargin);
-                env = ForestScatter.Region5179(rx0, ry0, rx1, ry1, margin, FromDwg);
-                keys = ForestScatter.TilesFor(env).ToList();
-                if (keys.Count <= MaxTiles)
+                var nr = Narrow((x0, y0, x1, y1) => ForestScatter.TilesFor(ForestScatter.Region5179(x0, y0, x1, y1, margin, FromDwg)).Count(), t, c.Crop);
+                if (nr != null)
                 {
-                    c.Warn.Add($"지형이 넓어 수목은 바뀐 자리 + {ShrinkMargin / 1000:0} km 안에만 넣었습니다");
-                    log.AppendLine($"  수목: 지형이 넓음(칸 {keys0}) → 바뀐 자리 + {ShrinkMargin:0} m(칸 {keys.Count})");
+                    env = ForestScatter.Region5179(nr.Value.X0, nr.Value.Y0, nr.Value.X1, nr.Value.Y1, margin, FromDwg);
+                    rx0 = nr.Value.X0; ry0 = nr.Value.Y0; rx1 = nr.Value.X1; ry1 = nr.Value.Y1;   // ★[검토 2] 줄인 범위만 심는다
+                    keys = ForestScatter.TilesFor(env).ToList();
+                    c.Warn.Add(nr.Value.Note);
+                    log.AppendLine($"  {nr.Value.Note} (칸 {keys0} → {keys.Count})");
                 }
             }
             if (keys.Count > MaxTiles)

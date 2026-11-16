@@ -110,6 +110,15 @@ internal static class GroundCropBuilder
 
     // ══════════════════════════════ 기록 ══════════════════════════════
 
+    /// <summary>★[JACK 1116] 도면에 남은 자르기 범위(없으면 None) — [3D 보기] 수목 범위. 읽기만.</summary>
+    internal static Box ReadBox(Database db)
+    {
+        using var tr = db.TransactionManager.StartTransaction();
+        var b = ReadRec(db, tr).Box;
+        tr.Commit();
+        return b;
+    }
+
     static Rec ReadRec(Database db, Transaction tr)
     {
         var r = new Rec();

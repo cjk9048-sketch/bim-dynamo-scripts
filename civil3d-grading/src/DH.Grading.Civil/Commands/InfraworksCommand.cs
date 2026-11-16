@@ -876,14 +876,7 @@ public sealed class InfraworksCommand
             try
             {
                 string xmlPath = System.IO.Path.Combine(folder, GradingSettings.InfraTerrainXml);
-                if (web != null)
-                {
-                    if (fpick.Tris != null) { (web.MeshPts, web.MeshFaces) = LandXmlExport.Weld(fpick.Tris); web.MeshTris = fpick.Tris; }
-                    else web.TerrainId = fpick.Id;
-                    web.TerrainName = fpick.Source;
-                    web.RoadArea = fpick.RoadArea; web.RoadPave = fpick.RoadPave; web.RoadLane = fpick.RoadLane; web.RoadLaneConc = fpick.RoadLaneConc; web.RoadBench = fpick.RoadBench; web.BaseZ = fpick.Base;
-                    web.Lanes.AddRange(fpick.Roads);
-                }
+                if (web != null) ApplyPick(web, fpick);
                 else if (fpick.Tris != null)
                 {
                     // 지표면 이름은 «정지면_DH» 그대로(JACK Q2)
@@ -1014,6 +1007,16 @@ public sealed class InfraworksCommand
         return webPath;
     }
 
+    /// <summary>[3D 보기] 지형 = 고른 최종지표면(맞음 = 그 면 · 메모리 합침 = 점 · 면) + 도로 자리 · 포장 · 차로 · 차선 — 번들 길과 원지반만 길이 같이 쓴다.</summary>
+    static void ApplyPick(Web3DCollect web, FinalSurfaceBuilder.Pick fpick)
+    {
+        if (fpick.Tris != null) { (web.MeshPts, web.MeshFaces) = LandXmlExport.Weld(fpick.Tris); web.MeshTris = fpick.Tris; }
+        else web.TerrainId = fpick.Id;
+        web.TerrainName = fpick.Source;
+        web.RoadArea = fpick.RoadArea; web.RoadPave = fpick.RoadPave; web.RoadLane = fpick.RoadLane; web.RoadLaneConc = fpick.RoadLaneConc; web.RoadBench = fpick.RoadBench; web.BaseZ = fpick.Base;
+        web.Lanes.AddRange(fpick.Roads);
+    }
+
     /// <summary>★[JACK 1116] 정지 번들이 없을 때의 [3D 보기] — 원지반 TIN(여럿이면 부지가 쓴 것 · 없으면 가장 오래된 것) 하나를 지형으로, 수목 · 위성 · 지적 · 측점은 그 범위로. 부지 · 옹벽 · 도로 면은 없다.</summary>
     static string? RunGroundOnly(Document doc, Web3DCollect web, string whyNo, int epsgDwgFallback)
     {
@@ -1039,6 +1042,23 @@ public sealed class InfraworksCommand
             web.Dwg = System.IO.Path.GetFileName(doc.Name); web.DwgKey = doc.Name;
             web.TerrainId = gid; web.TerrainName = gname; web.GroundName = gname;
             log.AppendLine($"3D 보기(원지반만) · 정지 번들 없음({whyNo}) · 좌표계 EPSG:{epsg} · 지형 «{gname}» 세모 {gtris:N0}");
+            // ★[JACK 1116 «진입도로만 있는 도면»] 진입도로가 있으면 바탕 = 원지반으로 최종지표면을 메모리에서 합쳐(도면 안 바꿈) 지형 + 도로로 — 번들 길과 같은 고르기
+            var fpick = (FinalSurfaceBuilder.Pick?)null; var fwarn = new System.Collections.Generic.List<string>();
+            bool roadsHere = FinalSurfaceBuilder.AnyRoads(db);
+            try { fpick = FinalSurfaceBuilder.PickTerrain(db, log, fwarn, fallbackBase: gid); }
+            catch (System.Exception pex) { if (roadsHere) fwarn.Add("진입도로 빠짐 — " + pex.Message); log.AppendLine("최종지표면: 고르기 실패 — " + pex); }
+            web.Warn.AddRange(fwarn);
+            if (roadsHere) web.HasRoads = true;
+            if (fpick != null && fpick.InTerrain) { ApplyPick(web, fpick); log.AppendLine($"  진입도로 {fpick.Roads.Count}개 · 지형 «{fpick.Source}»"); }
+            // ★[검토 4] 도로가 있으면 번들 길(~300)처럼 원지반 샘플러도 건다 — 절성토 색 · 바뀐 자리 · 건물 밑높이 · 줄이기 ②
+            if (roadsHere)
+                try
+                {
+                    using var trG = db.TransactionManager.StartTransaction();
+                    if (trG.GetObject(gid, OpenMode.ForRead) is Autodesk.Civil.DatabaseServices.TinSurface gts) { web.Ground = new CachedGroundSurface(gts); web.GroundName = gname; }
+                    trG.Commit();
+                }
+                catch (System.Exception gex) { log.AppendLine("  원지반 샘플러 못 만듦 — " + gex.Message); }
             int nG = GroundSet.List(db).Count;
             if (nG >= 2) web.Warn.Add($"원지반이 {nG}장 — 3D에는 «{gname}» 하나만 넣었습니다");
             string? path = Web3DBuilder.Build(db, web, log, SelfCheckLog.Headless && SkipSatelliteForTest);

@@ -50,6 +50,9 @@ internal sealed class RoadDesign
     public string? SheetScaleKey;
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     public double? SheetAnno;
+    /// <summary>★[v117.18.8 · 검토 1] 종단 스타일을 어느 쪽 글자 크기로 구웠나 — "sheet" = 배치탭(도면화) 기준(SheetAnno = SheetScale · 배치탭이 있는 동안 KeepLook이 모형용으로 다시 안 굽음) · null(옛 기록) = 모형 기준.</summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string? LookBakedFor;
     public List<string> SheetViews = new();
     public string SheetGroup = "", SheetGround = "", SheetChain = "", SheetStamp = "";
 
@@ -68,6 +71,8 @@ internal sealed class RoadDesign
     /// <summary>★[v111.7 · 재검토 낮음] 다시 그리다 실패해 옛 종단도 · 횡단도가 지워진 채 — 도킹창 알림(미리보기를 껐다 켜도 · 도면을 다시 열어도 남음).
     /// 그 명령을 U로 되돌리면 이 기록도 함께 되돌아가 꺼지고 · 다시 그려지면 끔.</summary>
     public bool SheetLost, XsecLost;
+    /// <summary>★[1116 밤] «못 그림»이 다시 그리기 실패가 아니라 지운 면을 문 채라 우리가 지운 것(<see cref="ErasedSource.Sweep"/>) — 안내가 «U»가 아니라 «[업데이트]»(정지면 바꾼 뒤 UNDO는 죽는 길).</summary>
+    public bool SheetLostSwept, XsecLostSwept;
 
     /// <summary>★★[도로 마무리 ① · 계획_도로마무리.md 5.3 · 비평 M6] 도로 끝 맞춤을 하는 도로인가 — 칸이 없는 옛 기록 = 거짓(말없이 안 바꿈 · ■ 결과 제안 + [끝 맞추기]).
     /// DHROAD · DHROADDRAW로 새로 만든 도로 · [끝 맞추기]를 한 번 누른 도로 = 참([업데이트]가 늘 끝을 맞춤).</summary>

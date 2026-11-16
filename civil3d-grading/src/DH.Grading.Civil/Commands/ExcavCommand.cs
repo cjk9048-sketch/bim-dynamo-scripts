@@ -1198,6 +1198,65 @@ public sealed class ExcavCommand
             { tMin = System.Math.Min(tMin, tz); tMax = System.Math.Max(tMax, tz); }
         if (tMax < tMin) { tMin = bMin; tMax = bMax; }
         double rise = System.Math.Max(1.0, (tMax - bMin) * 1.5 + 5.0);   // 여유 1.5배 + 5m
+        // ★[1117 · 1:2 터파기 «굴착 상단선을 경계로 못 넣음»] 원인: 위 예산은 <b>구덩이 바닥 정점의 목표면 높이</b>만 봐서, 구배가 완만하고(1:2) 바깥 땅이 더 높이 올라가면
+        //   법면이 목표면에 닿기 전에 예산(가상 사면 맨 윗단 = 바닥 + rise)에서 끊긴다 → 상단선(교선)의 일부가 가상 사면 <b>테두리 위</b>(z = 바닥 + rise 그대로 · 키트 exs2: 115.042 = 94.916 + 20.126)를 걸어
+        //   Civil이 경계로 못 받는다(AddBoundaries «Failure» · 1:1은 법면이 일찍 닿아 안 걸림). → 법면이 닿을 수 있는 수평 거리(= 구배 × rise)까지의 목표면 최고 높이로 예산을 다시 잡는다(닿을 때까지 · 몇 번만).
+        //   바깥이 안 높으면 값이 그대로라 종전 결과 그대로다(예산은 위쪽 한도일 뿐 — 법면이 일찍 닿으면 상단선은 안 바뀜).
+        double slReach = System.Math.Max(slope, minSlope);
+        double rise0 = rise;   // 종전 예산 — 성토 쪽(MaxRise)은 이 값 그대로(허공 계단 방지 · Models.MaxRiseCut)
+        if (slReach > 1e-6)
+        {
+            double x0 = double.MaxValue, y0 = double.MaxValue, x1 = double.MinValue, y1 = double.MinValue;
+            foreach (var q in box) { x0 = System.Math.Min(x0, q.X); y0 = System.Math.Min(y0, q.Y); x1 = System.Math.Max(x1, q.X); y1 = System.Math.Max(y1, q.Y); }
+            int nb = box.Count;
+            double DistToBox(double px, double py, out double nx, out double ny)
+            {
+                double best = double.MaxValue; nx = px; ny = py;
+                for (int i = 0; i < nb; i++)
+                {
+                    var a = box[i]; var b = box[(i + 1) % nb];
+                    double dx = b.X - a.X, dy = b.Y - a.Y, l2 = dx * dx + dy * dy;
+                    double t = l2 < 1e-12 ? 0 : System.Math.Clamp(((px - a.X) * dx + (py - a.Y) * dy) / l2, 0, 1);
+                    double qx = a.X + t * dx - px, qy = a.Y + t * dy - py, d2 = qx * qx + qy * qy;
+                    if (d2 < best) { best = d2; nx = a.X + t * dx; ny = a.Y + t * dy; }
+                }
+                return System.Math.Sqrt(best);
+            }
+            bool Inside(double px, double py)
+            {
+                bool c = false;
+                for (int i = 0, j = nb - 1; i < nb; j = i++)
+                    if ((box[i].Y > py) != (box[j].Y > py) && px < (box[j].X - box[i].X) * (py - box[i].Y) / (box[j].Y - box[i].Y) + box[i].X) c = !c;
+                return c;
+            }
+            double cap = rise0 * 3.0;   // 올림 상한 — 처음 예산의 3배(터무니없이 높은 바깥 땅 하나가 예산을 폭주시키지 않게)
+            for (int it = 0; it < 6 && rise < cap - 1e-9; it++)
+            {
+                // 법면이 닿을 수 있는 가장 먼 자리 = 구배 × rise. 그 둘레 띠(reach−step ≤ d ≤ reach · 구덩이 밖)의 각 점마다 구덩이 가장자리에서 그 점까지 직선을 따라
+                // 목표면이 법면보다 <b>끝까지 계속 위</b>(= 그 방향에서는 법면이 목표면에 못 닿음)일 때만 올림 후보로 센다. 어디선가 닿으면 종전 그대로.
+                double reach = slReach * rise;
+                double ex0 = x0 - reach, ey0 = y0 - reach, ex1 = x1 + reach, ey1 = y1 + reach;
+                double step = System.Math.Max(1.0, System.Math.Max(ex1 - ex0, ey1 - ey0) / 60.0);
+                double hi = double.MinValue;
+                for (double x = ex0; x <= ex1 + 1e-9; x += step)
+                    for (double y = ey0; y <= ey1 + 1e-9; y += step)
+                    {
+                        if (Inside(x, y)) continue;
+                        double dd = DistToBox(x, y, out double nx, out double ny);
+                        if (dd < reach - step || dd > reach) continue;
+                        if (!target.TryGetElevation(x, y, out double tz) || tz <= hi || tz <= bMin + rise) continue;
+                        bool never = true;
+                        for (int k = 0; k <= 12 && never; k++)
+                        {
+                            double f = k / 12.0, px = nx + (x - nx) * f, py = ny + (y - ny) * f;
+                            if (!target.TryGetElevation(px, py, out double tk) || tk <= bMin + f * dd / slReach) never = false;
+                        }
+                        if (never) hi = tz;
+                    }
+                if (hi <= bMin + rise) break;
+                rise = System.Math.Min(cap, (hi - bMin) * 1.5 + 5.0);
+            }
+        }
 
         // ★[JACK 0824 "단높이 설정은 필요 없어, 어차피 구배로만"] **단이 하나뿐인 프로파일.**
         //   단높이를 전체 예산으로 두면 첫 단이 끝까지 올라가고, 소단이 0이라 중간에 평탄이 안 낀다
@@ -1212,7 +1271,7 @@ public sealed class ExcavCommand
             CutSlope = sl, FillSlope = sl,
             CellSize = GradingSettings.CellSize,
             MaxBenches = 4,
-            MaxRise = rise,
+            MaxRise = rise0, MaxRiseCut = rise,
             VertexSpacing = GradingSettings.VertexSpacing,
             MinSlope = minSlope,
             WallGateSlope = GradingSettings.WallGateSlope,

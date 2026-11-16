@@ -281,6 +281,7 @@ internal static class RoadSheets
                     var d = RoadDesign.Read(tr, aid);
                     if (d == null || d.SheetViews.Count == 0 || !(d.SheetScale > 0)) continue;
                     // ★[v113.1] 판 2 설정으로 그린 도로 = 축척은 따로(같을 필요 없음) — 그린 뒤 주석 축척이 지금과 다를 때만(밴드 글자 비율이 어긋남)
+                    if (d.LookBakedFor == "sheet") continue;   // ★[검토 1] 배치탭 기준 굽기 = 정상(주석 축척과 안 견줌)
                     if (d.SheetAnno is double an0) { if (Math.Abs(an0 - siteScale) < 1e-6) continue; bad.Add($"{((CivilDb.Alignment)tr.GetObject(aid, OpenMode.ForRead)).Name} 주석 1:{an0:0}"); continue; }
                     if (Math.Abs(d.SheetScale - siteScale) < 1e-6) continue;
                     bad.Add($"{((CivilDb.Alignment)tr.GetObject(aid, OpenMode.ForRead)).Name} 1:{d.SheetScale:0}");
@@ -296,11 +297,17 @@ internal static class RoadSheets
     /// 부지 도곽(<see cref="SheetCommand.Build"/>)이 도면 주석 축척을 건 직후 — 그려 둔 진입도로 종단도마다 «그린 때 주석 축척»(SheetAnno · 옛 기록 = SheetScale)과 지금이 다르면
     /// 이 도로 복사본 스타일에 그 비율을 구워(<see cref="ProfileScaleStyles.Rebake"/>) 보이는 꼴을 그대로 두고 SheetAnno를 지금 값으로 적는다(도로 종단도는 다시 안 그림 — 스타일만).
     /// <para>실측(pvs1 · pvs2 · v117.5.0): 1:500으로 그린 도로 종단뷰가 부지 [종단도](1:100) 뒤 밴드 칸 · 글자 · 축 눈금 글자 1/5 — 도곽 · 표고바는 1:500 그대로.</para></summary>
-    internal static void KeepLook(Database db, System.Text.StringBuilder log)
+    /// <param name="toSheetScale">★[v117.18.6 · JACK 1116 «도면화 진입도로 종단면도 글자 5배»] 참이면 «지금 주석 축척» 대신 이 도로를 그린 H(SheetScale)로 되돌려 굽는다 — 배치탭 뷰포트의 Civil 글자는
+    /// 도면 주석 축척을 안 따르고 스타일 종이 값 그대로 나와서(실측 sbk2: 굽힌 ×5 스타일 → 글자 5배 · 안 구우면 정상 408/408), 도면화가 짓기 직전 부른다(모형 화면은 CANNOSCALE을 따르는 본래 꼴).</param>
+    internal static void KeepLook(Database db, System.Text.StringBuilder log, bool toSheetScale = false)
     {
         double a1 = SheetCommand.CurrentDrawingScale(db);
-        if (!(a1 > 0)) return;
-        var todo = new List<(ObjectId Aid, string Name, RoadDesign D, List<ObjectId> Views, double A0)>();
+        if (!toSheetScale && !(a1 > 0)) return;
+        var todo = new List<(ObjectId Aid, string Name, RoadDesign D, List<ObjectId> Views, double A0, double A1)>();
+        // ★[검토 1] 진입도로 종단 배치탭이 있으면 스타일은 배치탭 기준(H) 그대로 — 모형용으로 다시 안 굽는다
+        bool tabExists = false;
+        if (!toSheetScale) try { tabExists = SheetBookBuilder.OurTabs(db).Any(t => t.Kind == DH.Grading.Core.SheetBookRules.Kind.RProf); } catch { }
+        bool keptNote = false;
         try
         {
             using var tr = db.TransactionManager.StartTransaction();
@@ -311,7 +318,13 @@ internal static class RoadSheets
                     var d = RoadDesign.Read(tr, aid);
                     if (d == null || d.SheetViews.Count == 0 || !(d.SheetScale > 0)) continue;
                     double a0 = d.SheetAnno is double an && an > 0 ? an : d.SheetScale;   // 옛 기록 — 그릴 때 주석 축척 = 그린 H(부지를 따랐거나 도로가 걸었음)
-                    if (Math.Abs(a0 - a1) < 1e-6) continue;
+                    if (!toSheetScale && d.LookBakedFor == "sheet" && tabExists)
+                    {
+                        if (!keptNote) { log.AppendLine("  진입도로 종단 글자 = 배치탭 기준(모형에선 작게 보임)"); keptNote = true; }
+                        continue;
+                    }
+                    double a1r = toSheetScale ? d.SheetScale : a1;
+                    if (Math.Abs(a0 - a1r) < 1e-6 && !(toSheetScale && d.LookBakedFor != "sheet")) continue;   // 마커만 새로 거는 경우는 통과(Rebake는 비율 1이면 그대로)
                     var views = new List<ObjectId>();
                     foreach (var h in d.SheetViews)
                         try
@@ -320,24 +333,27 @@ internal static class RoadSheets
                                 && tr.GetObject(vid, OpenMode.ForRead) is CivilDb.ProfileView pv && pv.AlignmentId == aid) views.Add(vid);
                         }
                         catch { }
-                    if (views.Count > 0) todo.Add((aid, ((CivilDb.Alignment)tr.GetObject(aid, OpenMode.ForRead)).Name, d, views, a0));
+                    if (views.Count > 0) todo.Add((aid, ((CivilDb.Alignment)tr.GetObject(aid, OpenMode.ForRead)).Name, d, views, a0, a1r));
                 }
                 catch { }
             }
             tr.Commit();
         }
         catch (Exception ex) { log.AppendLine("  ⚠진입도로 종단도 꼴 지키기 — 읽기 실패 " + ex.Message); return; }
-        foreach (var (aid, name, d, views, a0) in todo)
+        foreach (var (aid, name, d, views, a0, aTo) in todo)
         {
             try
             {
                 double h = d.SheetScale, v = d.SheetScaleV is double sv && sv > 0 ? sv : h;
-                string msg = ProfileScaleStyles.Rebake(db, views, h, v, a0, a1, aid.Handle.ToString(), log);
-                d.SheetAnno = a1;
-                XsecScaleStyles.RetagFrames(db, aid.Handle.ToString(), SheetFrameTag.KindProf, a0, a1);   // ★[v117.6.1] 도면화 뷰포트가 거는 주석 축척도 지금 값으로(스타일을 a1 기준으로 구웠으므로)
-                using (var tr = db.TransactionManager.StartTransaction()) { d.Write(tr, aid); tr.Commit(); }
+                string msg = ProfileScaleStyles.Rebake(db, views, h, v, a0, aTo, aid.Handle.ToString(), log);
+                d.SheetAnno = aTo;
+                d.LookBakedFor = toSheetScale ? "sheet" : null;
+                // ★[검토 1 낮음] 기록이 실패하면 방금 구운 것을 되돌려 다음 시도가 이중으로 굽지 않게
+                try { using var trW = db.TransactionManager.StartTransaction(); d.Write(trW, aid); trW.Commit(); }
+                catch { try { ProfileScaleStyles.Rebake(db, views, h, v, aTo, a0, aid.Handle.ToString(), log); } catch { } throw; }
+                XsecScaleStyles.RetagFrames(db, aid.Handle.ToString(), SheetFrameTag.KindProf, a0, aTo);   // ★[v117.6.1] 도면화 뷰포트가 거는 주석 축척도 지금 값으로(스타일을 aTo 기준으로 구웠으므로)
                 // 열린 진입도로(도킹창)의 기억도 — 다음 SaveDesign이 옛 값을 다시 쓰지 않게
-                try { if (Autodesk.AutoCAD.ApplicationServices.Core.Application.DocumentManager.GetDocument(db) is { } doc && RoadSession.Of(doc) is RoadSession s && s.AlignId == aid) s.Design.SheetAnno = a1; } catch { }
+                try { if (Autodesk.AutoCAD.ApplicationServices.Core.Application.DocumentManager.GetDocument(db) is { } doc && RoadSession.Of(doc) is RoadSession s && s.AlignId == aid) { s.Design.SheetAnno = aTo; s.Design.LookBakedFor = d.LookBakedFor; } } catch { }
                 log.AppendLine($"  진입도로 종단도 꼴 그대로 — {name} 1:{h:0} · {msg}");
             }
             catch (Exception ex) { log.AppendLine($"  ⚠진입도로 종단도 꼴 지키기 실패 — {name}: {ex.Message}(SheetAnno 그대로 → 진입도로 창 «축척이 바뀌었습니다»)"); }
@@ -636,9 +652,10 @@ internal static class RoadSheets
         // ★[v117.5.1] 옛 설정도 그린 뒤 주석 축척을 적는다(DH 규약일 때) — 부지가 주석 축척을 바꾸면 KeepLook이 이 값 ÷ 새 값으로 굽는다
         double annoDone = SheetCommand.CurrentDrawingScale(db);
         d.SheetAnno = v2 ? annoDone : annoDone > 0 ? annoDone : null;
+        d.LookBakedFor = null;   // ★[검토 1] 새로 그린 종단 = 모형 기준(배치탭 기준은 [도면생성]이 다시 건다)
         d.SheetViews = r.PvIds.Select(v => v.Handle.ToString()).ToList();
         d.SheetViewAt = RoadSession.ViewAt(db, r.PvIds);   // ★[v111.7] 첫 · 끝 뷰 자리(옮겼나 — 저절로 다시 그리기)
-        d.SheetLost = false;                               // ★[v111.7] 그려졌으면 «못 그림» 알림 끔
+        d.SheetLost = false; d.SheetLostSwept = false;                               // ★[v111.7] 그려졌으면 «못 그림» 알림 끔
         d.SheetGroup = grp.IsNull ? "" : grp.Handle.ToString();
         d.SheetGround = groundLine.IsNull || groundLine == baseProf ? "" : groundLine.Handle.ToString();
         d.SheetChain = t.ChainId.IsNull ? "" : t.ChainId.Handle.ToString();

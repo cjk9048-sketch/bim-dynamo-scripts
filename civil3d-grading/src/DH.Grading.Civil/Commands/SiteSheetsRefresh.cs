@@ -19,8 +19,12 @@ internal static class SiteSheetsRefresh
         if (doc == null) return;
         // ★[JACK 1112 «노리선은 첫생성이나 업데이트 때마다 저절로»] 도로 면을 여러 번 다시 지어도 노리선은 끝에서 한 번만(도면 설정 «노리선 그리기» 꺼져 있으면 안 함)
         NoriCommand.AutoHold++;
+        ErasedSource.NoSweep.Clear(); ErasedSource.InBatch = true;   // ★[1116 밤] 도로 하나의 정리가 다른 도로(차례가 안 온)의 같은 자리 다시 그리기를 지우지 않게
         try { RunCore(doc, who); }
-        finally { NoriCommand.AutoHold--; }
+        finally { NoriCommand.AutoHold--; ErasedSource.InBatch = false; }
+        // ★[1116 밤] 다시 그리지 못한 부지 · 진입도로 종단 · 횡단이 지워진 면(정지면_DH · 정지순수_DH)을 원천으로 문 채 남지 않게 — 지운다(Civil이 읽다 죽는 길)
+        try { ErasedSource.Sweep(doc, who); } catch { }
+        ErasedSource.NoSweep.Clear();
         string nori = NoriCommand.AutoDraw(doc);
         if (nori.Length > 0) { try { DiagLog.Append($"\n■ 노리선 저절로 — {who} 뒤 · {nori}\n"); } catch { } }
     }
@@ -44,12 +48,14 @@ internal static class SiteSheetsRefresh
                 string why = $"부지 종단 노선이 {nAlign}개라 저절로 다시 그리지 않았습니다(다시 그리면 마지막 노선만 남음) — 계획지표면 [종단도]로 노선마다 다시 그리세요.";
                 try { ed.WriteMessage("\n[종단 갱신] " + why); } catch { }
                 log.AppendLine("  " + why);
+                KeepDead(doc, log);
                 Flush(log); PureWithWallsBuilder.NotifyStale(doc);
                 return;
             }
             if (!ProfileCommand.ReadExistingRoute(db, out var pts, out _, out _))
             {
                 log.AppendLine("  다시 그릴 노선 기록 없음 → 알림만");
+                KeepDead(doc, log);
                 Flush(log); PureWithWallsBuilder.NotifyStale(doc); return;
             }
             bool hasX = SheetSettingsCommand.HasSiteXsec(db);
@@ -60,6 +66,7 @@ internal static class SiteSheetsRefresh
                 const string why = "⚠부지 횡단도를 놓은 자리가 도면에 없어(이 판 전에 그린 횡단도) 종단 · 횡단을 저절로 다시 그리지 않았습니다 — 계획지표면 [종단도] · [횡단도]를 한 번 다시 그리면 그 뒤로는 부지를 고칠 때마다 저절로 따라옵니다.";
                 try { ed.WriteMessage("\n[종단 갱신] " + why); } catch { }
                 log.AppendLine("  " + why);
+                KeepDead(doc, log);
                 Flush(log); PureWithWallsBuilder.NotifyStale(doc);
                 try { SelfCheckLog.Line("종단 갱신", false, "횡단도 자리 기록 없음 — 안 다시 그림", doc.Name); } catch { }
                 return;
@@ -95,6 +102,16 @@ internal static class SiteSheetsRefresh
         }
     }
 
+    /// <summary>★[1116 밤 · JACK 부재 중 결정] 알림만 하고 안 다시 그리는 부지 노선이 지운 옛 면을 물고 있으면 — 사람이 그린 것을 말없이 지우지 않고(<see cref="ErasedSource.NoSweep"/>) 노선 이름과 함께 강하게 알린다.</summary>
+    static void KeepDead(Document doc, System.Text.StringBuilder log)
+    {
+        var names = ErasedSource.Protect(doc);
+        if (names.Count == 0) return;
+        string m = $"부지 종단 · 횡단이 지운 옛 면 기준 → [종단도] · [횡단도] 다시 (노선 {string.Join(", ", names)})";
+        try { doc.Editor.WriteMessage("\n[종단 갱신] ⚠" + m); } catch { }
+        log.AppendLine("  ⚠" + m);
+    }
+
     static void Flush(System.Text.StringBuilder log) { try { DiagLog.Append(log.ToString()); } catch { } }
 
     /// <summary>★★[v116.12] 부지가 바뀐 뒤 진입도로 다시 — 지표면이 살아 있는 우리 진입도로마다(본 도로 먼저 · 가지 뒤 — <see cref="BranchBase.LayerRanks"/>)
@@ -108,6 +125,7 @@ internal static class SiteSheetsRefresh
         //   (사면↔옹벽 변환은 DoGrade 뒤 «노리선이 있으면 DHNORI»를 보는데, 여기서 지워져 안 걸렸다 — 쓰던 사람은 계속 맞게 · JACK 0902)
         bool hadNori = false; try { hadNori = ZoneEditCommon.HasNoriLines(db); } catch { }
         var roads = new System.Collections.Generic.List<Autodesk.AutoCAD.DatabaseServices.ObjectId>();
+        var noSurf = new System.Collections.Generic.List<Autodesk.AutoCAD.DatabaseServices.ObjectId>();   // 지표면이 없어 안 다시 그리는 도로 — 종단 · 횡단은 지우지 않고 알림만
         System.Collections.Generic.Dictionary<long, int> ranks;
         using (var tr = db.TransactionManager.StartTransaction())
         {
@@ -116,13 +134,23 @@ internal static class SiteSheetsRefresh
                 try
                 {
                     var d = RoadDesign.Read(tr, aid);
-                    if (d == null || d.SurfaceHandle.Length == 0) continue;
+                    if (d == null) continue;
+                    if (d.SurfaceHandle.Length == 0) { noSurf.Add(aid); continue; }
                     if (db.TryGetObjectId(new Autodesk.AutoCAD.DatabaseServices.Handle(System.Convert.ToInt64(d.SurfaceHandle, 16)), out var sid) && !sid.IsErased) roads.Add(aid);
+                    else noSurf.Add(aid);
                 }
                 catch { }
             }
             ranks = roads.Count > 1 ? BranchBase.LayerRanks(tr, db) : new();
             tr.Commit();
+        }
+        foreach (var nid in noSurf)
+        {
+            var nm = ErasedSource.Protect(doc, nid);
+            if (nm.Count == 0) continue;
+            string m = $"진입도로 {string.Join(", ", nm)}의 종단 · 횡단이 지운 옛 면 기준 → 진입도로 [지표면 업데이트] 뒤 [종단도] · [횡단도] 다시(지표면이 없어 안 다시 그림)";
+            try { ed.WriteMessage("\n[진입도로 갱신] ⚠" + m); } catch { }
+            try { DiagLog.Append("\n■ 진입도로 갱신 — " + who + " 뒤 ⚠" + m + "\n"); } catch { }
         }
         if (roads.Count == 0) return;
         var prev = RoadSession.Of(doc);

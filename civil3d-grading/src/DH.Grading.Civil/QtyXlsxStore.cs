@@ -153,6 +153,7 @@ internal static class QtyKeeper
                 if (!double.IsNaN(sF) || !double.IsNaN(sC)) { r.FillW = N(sF, 0); r.CutW = N(sC, 0); }
                 r.Clear = Add(led.Get(QtyKey.OfRight(QtyKeyKind.Clear, false)), led.Get(QtyKey.OfRight(QtyKeyKind.Clear, true)));
                 r.Strip = Add(led.Get(QtyKey.OfRight(QtyKeyKind.Strip, false)), led.Get(QtyKey.OfRight(QtyKeyKind.Strip, true)));
+                r.Bench = led.Get(QtyKey.OfRight(QtyKeyKind.Bench, false));   // ★[JACK 1116] 층따기 단면적
             }
             res.Add(r);
         }

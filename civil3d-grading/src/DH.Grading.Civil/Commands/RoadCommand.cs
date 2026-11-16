@@ -1613,6 +1613,7 @@ public class RoadCommand
                 tr.Commit();
             }
             bool needSheet = s.SheetStale.Length > 0 || firstSheet;
+            bool baseErased = false;   // ★[1116 밤] 자리를 정한 뒤(겹침 · 묻기 · Esc 지나고) 지운다 — 안 그릴 거면 뷰를 말없이 없애지 않게
             string sheetHit = needSheet && sheetAt is Point3d at0 ? s.SheetOverlap(at0) : "";
             if (needSheet && sheetAt is Point3d at && sheetHit.Length == 0)
             {
@@ -1621,6 +1622,8 @@ public class RoadCommand
                 {
                     string msg;
                     ProfileCommand.Quiet = true;
+                    // «-바탕»이 지워진 면을 물고 있으면(부지를 다시 지음) 읽기 전에 지워 새 면으로 다시 만들게 한다
+                    baseErased = ErasedSource.EraseDeadBase(db, s.AlignId, s, log);
                     using (BusyPopup.Scope("종단도를 같은 자리에 다시 그리는 중입니다.")) msg = s.MakeSheets(at, log);
                     sheetDone = true; if (why.Length == 0) why = w;
                     log.AppendLine("  종단도 — " + msg);
@@ -1640,6 +1643,7 @@ public class RoadCommand
                 }
                 catch (System.Exception exS)
                 {
+                    if (baseErased && s.SheetLost.Length == 0) s.MarkSheetGone();   // 옛 «-바탕» · 뷰를 지웠는데 못 그림 — 남은 도곽 · 장식도 지우고 알림
                     bad = Add(bad, s.SheetLost.Length > 0 ? s.SheetLost : "종단도를 못 그렸습니다 — " + exS.Message);
                     log.AppendLine("  종단도 실패 — " + exS);
                 }
@@ -1704,6 +1708,8 @@ public class RoadCommand
                 log.AppendLine($"  끝 — 지표면 {surfDone} · 최종지표면만 {finalDone} · 종단도 {sheetDone} · 횡단도 {xsecDone}" + (post.Length > 0 ? " · 남음(" + (bad.Length > 0 ? "실패" : left.Length > 0 ? left : "다시 해도 남음") + ")" : " · 모두 최신"));
             }
         }
+        // ★[1116 밤] 다시 그리지 못해 남은 종단도 · 횡단도가 지워진 면(옛 정지면 · 옛 진입도로 면)을 문 채면 지운다 — 설계 기록에 «다시 그리지 못함»(도킹창 상태 줄 · 깜박)
+        if (run) { try { if (ErasedSource.Sweep(doc, "진입도로 업데이트", s.AlignId).Any) s.RecomputeCore(); } catch { } }
         if (surfDone || finalDone) { try { ed.Regen(); } catch { } }
         try
         {

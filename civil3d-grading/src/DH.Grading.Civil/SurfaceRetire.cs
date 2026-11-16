@@ -184,8 +184,16 @@ internal static class SurfaceRetire
             if (!SourcesOf(tr, sid, src)) { foreach (var v in V) Use(v, nm + "(못 읽음)"); continue; }
             foreach (var x in src) if (V.Contains(x)) Use(x, nm);
         }
-        var q = new Queue<ObjectId>(users.Keys);
         foreach (var kv in users) P[kv.Key] = string.Join(" · ", kv.Value);
+        Close(tr, V, P);
+        return P;
+    }
+
+    /// <summary>★[1117] 물러날 면 <paramref name="P"/>(씨앗)의 소스를 따라가 지울 면 <paramref name="V"/> 안의 것을 모두 P에 더한다(닫힌 묶음) — 못 읽으면 V 전부.
+    /// 부르는 쪽이 씨앗을 더 보탠 뒤(터파기 초기화의 사람 종단)에도 다시 부른다.</summary>
+    internal static void Close(Transaction tr, ICollection<ObjectId> V, Dictionary<ObjectId, string> P)
+    {
+        var q = new Queue<ObjectId>(P.Keys);
         while (q.Count > 0)
         {
             var u = q.Dequeue();
@@ -199,7 +207,6 @@ internal static class SurfaceRetire
                 q.Enqueue(x);
             }
         }
-        return P;
     }
 
     /// <summary>한 번 치운 결과.</summary>

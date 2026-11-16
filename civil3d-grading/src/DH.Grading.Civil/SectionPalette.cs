@@ -294,7 +294,7 @@ internal sealed class SectionPanel : UserControl
     private static readonly (string Name, int Bit)[] XqItems =
     {
         ("벌개재근", XsecQtyOptions.Clear), ("표토제거", XsecQtyOptions.Strip), ("면고르기", XsecQtyOptions.Smooth),
-        ("식생공법", XsecQtyOptions.Seed), ("층따기", XsecQtyOptions.Bench),
+        ("식생공법", XsecQtyOptions.Seed),   // 층따기 = 도면 설정 창(DHSHEETSET)
     };
 
     private int XqMaskNow() { int m = 0; for (int i = 0; i < _xq.Count; i++) if (_xq[i].IsChecked == true) m |= XqItems[i].Bit; return m; }
@@ -309,7 +309,7 @@ internal sealed class SectionPanel : UserControl
             cb.Click += (_, __) => SaveXq(demo);
             _xq.Add(cb); box.Children.Add(cb);
         }
-        box.ToolTip = "횡단 수량표 오른쪽 칸 · 끄면 안 재고 표에 – · 다음 횡단도 생성부터 · 층따기 1 : 4는 일반 값(근거 없음)";
+        box.ToolTip = "횡단 수량표 오른쪽 칸 · 끄면 안 재고 표에 – · 다음 횡단도 생성부터 · 층따기는 도면 설정에서";
         box.MouseEnter += (_, __) => { demo.XqMask = XqMaskNow(); demo.Play("xqty"); };
         box.MouseLeave += (_, __) => demo.Idle();
         sec.Children.Add(box);

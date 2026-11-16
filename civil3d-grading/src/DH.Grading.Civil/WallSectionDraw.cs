@@ -455,6 +455,25 @@ internal static class WallSectionDraw
         return made;
     }
 
+    internal const string LayBench2D = "DH-횡단층따기";
+
+    /// <summary>★[JACK 1116 «층따기»] 횡단 층따기 계단 — 빨간 꺾은선(<see cref="LayBench2D"/> · 색 1) 구간마다 하나. 점 = (횡단 가로 위치, 높이). KDS 44 30 00 (JACK 1116 제공). 그린 개체 수.</summary>
+    internal static int DrawBench(Database db, Transaction tr, BlockTableRecord ms, IEnumerable<(double X, double Z)[]> lines, System.Func<double, double, Point2d> map, string kind, string view)
+    {
+        int made = 0;
+        var lay = Commands.SectionCommand.EnsureLayer(db, tr, LayBench2D, 1);
+        foreach (var ln in lines)
+        {
+            if (ln.Length < 2) continue;
+            var pl = new Polyline();
+            for (int i = 0; i < ln.Length; i++) pl.AddVertexAt(i, map(ln[i].X, ln[i].Z), 0, 0, 0);
+            pl.SetDatabaseDefaults(db);
+            pl.LayerId = lay;
+            Add(db, tr, ms, pl, kind, view); made++;
+        }
+        return made;
+    }
+
     static void Add(Database db, Transaction tr, BlockTableRecord ms, Entity e, string kind, string view)
     {
         GradingBuilder.EnsureRegApp(db, tr, App);

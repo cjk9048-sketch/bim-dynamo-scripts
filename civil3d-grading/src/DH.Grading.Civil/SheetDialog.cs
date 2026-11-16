@@ -63,12 +63,19 @@ public sealed class SheetDialog : Window
     /// <summary>★[JACK 1112] «노리선 그리기» — 도면에 저장(부르는 쪽이 <see cref="Commands.NoriSetting.Write"/>) · 열 때 값 = 그 도면 값(기본 켜짐).</summary>
     internal bool NoriDraw { get; private set; }
     private readonly CheckBox _noriDraw;
+    /// <summary>★[JACK 1116 «층따기»] 횡단 수량표 «층따기» 켬/끔 · 값(도면에 저장 — 부르는 쪽이 <see cref="XsecQtyOptions.WriteBench"/>). KDS 44 30 00 (JACK 1116 제공).</summary>
+    internal bool BenchOn { get; private set; }
+    internal DH.Grading.Core.BenchSpec Bench { get; private set; }
+    private readonly CheckBox _benchOn;
+    private readonly TextBox _benchH, _benchW, _benchN, _benchDrain;
 
     public SheetDialog(string okText = "저장", double roadProfileScale = 0, double roadXsecScale = 0,
                        double contourMinor = ContourInterval.DefaultMinor, double contourMajor = ContourInterval.DefaultMajor,
-                       double roadH = 0, double roadV = 0, bool noriDraw = true)
+                       double roadH = 0, double roadV = 0, bool noriDraw = true,
+                       bool benchOn = true, DH.Grading.Core.BenchSpec? bench = null)
     {
         NoriDraw = noriDraw;
+        BenchOn = benchOn; Bench = bench ?? DH.Grading.Core.BenchSpec.Soil;
         RoadProfileScale = roadProfileScale; RoadXsecScale = roadXsecScale;
         RoadH = roadH; RoadV = roadV;
         ContourMinor = contourMinor; ContourMajor = contourMajor;
@@ -204,6 +211,21 @@ public sealed class SheetDialog : Window
             ToolTip = "계획부지 · 진입도로 지표면을 만들거나 업데이트할 때 노리선을 같이 그림",
         };
         root.Children.Add(_noriDraw);
+        // ★[JACK 1116 «횡단 그리기 단계의 팝업창에서 체크표시로 기능 유무»] 층따기 — 성토 아래 원지반이 기준 경사보다 급하면 계단 파기(횡단도 빨간 계단 · 수량표 «층 따 기» ㎡)
+        _benchOn = new CheckBox
+        {
+            Content = "층따기",
+            IsChecked = benchOn,
+            Margin = new Thickness(0, 0, 0, 8),
+            ToolTip = "성토 아래 원지반이 기준 경사보다 급한 곳에 계단을 파고 그 단면적을 수량표에 넣음 · 횡단도 생성부터 반영",
+        };
+        root.Children.Add(_benchOn);
+        _benchH = GradingDialog.AddRow(root, "  높이 최소 (m)", Bench.HMin, "토사 · 암반은 0.4");
+        _benchW = GradingDialog.AddRow(root, "  폭 최소 (m)", Bench.WMin, "장비 작업 3.0");
+        _benchN = GradingDialog.AddRow(root, "  기준 경사 1 :", 1.0 / Bench.Grade, "이보다 급하면 층따기");
+        _benchDrain = GradingDialog.AddRow(root, "  배수 경사 (%)", Bench.Drain * 100, "3~5 · 바깥으로 내림");
+        foreach (var tb in new[] { _benchH, _benchW, _benchN, _benchDrain })
+            tb.SetBinding(IsEnabledProperty, new System.Windows.Data.Binding("IsChecked") { Source = _benchOn });
         _contourMinor = GradingDialog.AddRow(root, "등고선 간격 (m)", contourMinor, "");
         _contourMajor = GradingDialog.AddRow(root, "계곡선 간격 (m)", contourMajor, "", out _contourMsg);
         _contourMinor.ToolTip = contourTip;
@@ -344,6 +366,24 @@ public sealed class SheetDialog : Window
             return;
         }
 
+        // ★[JACK 1116] 층따기 값
+        // ★[검토 6] ☐층따기 = 칸이 잠겨 있다 — 검증 건너뜀(저장된 값 그대로)
+        double bh = Bench.HMin, bw = Bench.WMin, bn = 1.0 / Bench.Grade, bd = Bench.Drain * 100;
+        bool benchChk = _benchOn.IsChecked == true;
+        if (benchChk &&
+            (!GradingDialog.TryParseCore(this, _benchH, "층따기 높이 최소", out bh, positive: true) ||
+             !GradingDialog.TryParseCore(this, _benchW, "층따기 폭 최소", out bw, positive: true) ||
+             !GradingDialog.TryParseCore(this, _benchN, "층따기 기준 경사", out bn, positive: true) ||
+             !GradingDialog.TryParseCore(this, _benchDrain, "층따기 배수 경사", out bd, positive: false)))
+            return;
+        string? bBad = !benchChk ? null : bh < 0.1 || bh > 2 ? "층따기 높이 최소는 0.1 ~ 2 m" : bw < 0.3 || bw > 10 ? "층따기 폭 최소는 0.3 ~ 10 m"
+                     : bn < 0.5 || bn > 20 ? "층따기 기준 경사는 1 : 0.5 ~ 1 : 20" : bd < 0 || bd > 20 || bd / 100 >= 1.0 / bn ? "층따기 배수 경사는 0 ~ 20 % (기준 경사보다 완만하게)" : null;
+        if (bBad != null)
+        {
+            MessageBox.Show(this, bBad, "입력 오류", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
         // 좌우 폭이 둘 다 0이면 횡단을 그릴 수 없다(정지옵션에 있던 검증을 그대로 옮겼다).
         if (xl + xr < 0.5)
         {
@@ -394,6 +434,8 @@ public sealed class SheetDialog : Window
             System.Math.Clamp(_basemapRes.SelectedIndex, 0, GradingSettings.BasemapResValues.Length - 1)];
         ContourMinor = cmi; ContourMajor = cma;
         NoriDraw = _noriDraw.IsChecked == true;
+        BenchOn = _benchOn.IsChecked == true;
+        Bench = new DH.Grading.Core.BenchSpec(1.0 / bn, bh, bw, bd / 100);
 
         DialogResult = true;
         Close();

@@ -894,6 +894,8 @@ internal static class SheetBookBuilder
         var lm = LayoutManager.Current;
         var sw = System.Diagnostics.Stopwatch.StartNew();
         log.AppendLine($"■ 도면화(DHSHEETMAKE) {GradingSettings.Version} · {DateTime.Now:HH:mm:ss}");
+        // ★[v117.18.6 · JACK 1116] 진입도로 종단뷰 스타일의 «부지 주석 축척 비율 굽기»(×H÷주석)를 되돌림 — 뷰포트 글자가 5배로 나옴(RoadSheets.KeepLook 설명). 장 표식 주석도 H로 → 아래 장 찾기가 읽음
+        if (only == null || only.Contains(Kind.RProf)) try { RoadSheets.KeepLook(db, log, toSheetScale: true); } catch (System.Exception exU) { R.Warns.Add("진입도로 종단 글자 크기 맞춤 실패 — " + exU.Message); }
         c.Scan = SheetBookScan.Read(db);
         R.Warns.AddRange(c.Scan.Warns);
         log.AppendLine($"  모형 장 {c.Scan.Sheets.Count}(" + string.Join(" · ", Kinds.Where(k => k != Kind.Plan).Select(k => $"{ShortName(k)} {c.Scan.Of(k).Count()}")) + $") · 평면 {(c.Scan.PlanExt != null ? "있음" : "없음")} · 찾기 {c.Scan.Ms} ms" + (c.Scan.Ms > 1000 ? " ⚠1초 넘음" : ""));

@@ -650,15 +650,16 @@ internal sealed class RoadSession
                         double want = wantSheet = pl.PinH;
                         stampNow = RoadSheets.StampOf(tr, AlignId, PlanId);
                         if (stampNow != Design.SheetStamp) sheetNote = "종단이 수정되었습니다";
+                        else if (ErasedSource.RoadSheetDead(tr, db, Design)) sheetNote = "바탕면이 바뀌었습니다";   // ★[1116 밤] «-바탕» · 검토선이 지워진 면(옛 정지면)을 물고 있음 → [업데이트]가 같은 자리에 다시
                         else if (v2 || Design.SheetScaleKey != null)
                         {
                             if (!v2 || key != Design.SheetScaleKey) sheetNote = "축척이 바뀌었습니다";
                             // ★[설치 전 검토 열린 질문 a] 지금 주석 축척을 못 읽으면(배치탭 1:1 등 DH 규약 아님 — 0) 견주지 않음
-                            else if (Design.SheetAnno is double an0 && Commands.SheetCommand.CurrentDrawingScale(db) is double anNow && anNow > 0 && Math.Abs(an0 - anNow) > 1e-6) sheetNote = "축척이 바뀌었습니다";
+                            else if (Design.LookBakedFor != "sheet" && Design.SheetAnno is double an0 && Commands.SheetCommand.CurrentDrawingScale(db) is double anNow && anNow > 0 && Math.Abs(an0 - anNow) > 1e-6) sheetNote = "축척이 바뀌었습니다";
                         }
                         else if (want > 0 && Math.Abs(want - Design.SheetScale) > 1e-6) sheetNote = "축척이 바뀌었습니다";
                         // ★[설치 전 검토 4] 옛 설정 — 그린 뒤 주석 축척(SheetAnno)이 지금과 다르면(부지 주석 축척 변경 뒤 KeepLook 굽기 실패) 판 2와 같은 알림
-                        else if (Design.SheetAnno is double an1 && Commands.SheetCommand.CurrentDrawingScale(db) is double anNow1 && anNow1 > 0 && Math.Abs(an1 - anNow1) > 1e-6) sheetNote = "축척이 바뀌었습니다";
+                        else if (Design.LookBakedFor != "sheet" && Design.SheetAnno is double an1 && Commands.SheetCommand.CurrentDrawingScale(db) is double anNow1 && anNow1 > 0 && Math.Abs(an1 - anNow1) > 1e-6) sheetNote = "축척이 바뀌었습니다";
                     }
                 }
                 catch { }
@@ -1136,6 +1137,7 @@ internal sealed class RoadSession
     {
         inputs = "";
         if (Design.XsecViews.Count == 0) return "";
+        if (ErasedSource.RoadXsecDead(tr, db, Design)) { inputs = "원천 면 지워짐"; return "지표면이 다시 만들어졌습니다"; }   // ★[1116 밤] 횡단 묶음이 지워진 면을 물고 있음 → 다시 그림
         string surfNow = HasSurface() ? Design.SurfaceHandle : "", stations = RoadXsec.StationsKeyIn(tr, db, Design, AlignId);
         // ★[v112.1 검토 M2] 가지 도로 = 본 도로 면 핸들도(RoadXsec 열쇠와 같은 차례) · 끝 판정을 아직 못 했으면 그린 때 것 그대로로 봄
         if (surfNow.Length > 0 && Design.EndsOn)
@@ -1281,7 +1283,7 @@ internal sealed class RoadSession
             bool live = AnyLive(tr, db, before);
             tr.Commit();
             if (live) return;
-            if (sheet) Design.SheetLost = true; else Design.XsecLost = true;
+            if (sheet) { Design.SheetLost = true; Design.SheetLostSwept = false; } else { Design.XsecLost = true; Design.XsecLostSwept = false; }
             SaveDesign();
         }
         catch { }
@@ -1301,8 +1303,24 @@ internal sealed class RoadSession
     }
 
     /// <summary>★[v111.7 · 설치 전 검토 M3] 다시 그리다 실패해 옛 종단도 · 횡단도가 지워진 채(빈 글 = 아님 · 설계 기록 <see cref="RoadDesign.SheetLost"/>) — [종단도] · [횡단도] 아래 한 줄 + 깜박.</summary>
-    internal string SheetLost => Design.SheetLost ? LostSheet : "";
-    internal string XsecLost => Design.XsecLost ? LostXsec : "";
+    internal string SheetLost => Design.SheetLost ? (Design.SheetLostSwept ? LostSheetSwept : LostSheet) : "";
+    internal string XsecLost => Design.XsecLost ? (Design.XsecLostSwept ? LostXsecSwept : LostXsec) : "";
+    // ★[1116 밤] 지운 면을 문 채라 우리가 지운 경우 — 정지면 바꾼 뒤 UNDO는 죽는 길이라 U를 권하지 않는다
+    internal const string LostSheetSwept = "종단도가 지운 옛 면 기준이라 지웠습니다 — [업데이트]로 다시 그리기";
+    internal const string LostXsecSwept = "횡단도가 지운 옛 면 기준이라 지웠습니다 — [업데이트]로 다시 그리기";
+
+    /// <summary>★[1116 밤] [업데이트]가 지워진 면을 문 «-바탕»(과 종단뷰)을 지운 뒤 종단도를 못 그렸을 때 — 남은 도곽 · 장식도 지우고 «못 그림»(지운 쪽 글)을 적는다.</summary>
+    internal void MarkSheetGone()
+    {
+        try
+        {
+            var db = _doc.Database;
+            using (var tr = db.TransactionManager.StartTransaction()) { Commands.SheetTag.EraseRoad(db, tr, AlignId.Handle.ToString()); tr.Commit(); }
+            Design.SheetLost = true; Design.SheetLostSwept = true;
+            SaveDesign();
+        }
+        catch { }
+    }
     internal const string LostSheet = "종단도를 다시 그리지 못했습니다 — U로 되돌리면 옛 종단도가 돌아옵니다";
     internal const string LostXsec = "횡단도를 다시 그리지 못했습니다 — U로 되돌리면 옛 횡단도가 돌아옵니다";
 
@@ -1913,6 +1931,7 @@ internal sealed class RoadSession
                 {
                     name = oldTin.Name;
                     tr.GetObject(old, OpenMode.ForWrite, false, true).Erase();      // ★[낮음 5] 잠긴 레이어여도
+                    ErasedSource.Pending = true;                                    // ★[1116 밤] 지운 면을 문 종단 · 횡단 정리가 훑게
                 }
                 if (name.Length == 0) name = UniqueSurfaceName(db, tr, SurfBase);
                 cTin.Name = name;

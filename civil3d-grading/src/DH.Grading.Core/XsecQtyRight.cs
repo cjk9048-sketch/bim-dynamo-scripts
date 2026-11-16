@@ -8,7 +8,7 @@ namespace DH.Grading.Core;
 /// <item><b>벌개재근</b> = 공사 범위 ∩ 임상도 입목지의 가로 길이.</item>
 /// <item><b>표토제거</b> = 공사 범위 전체의 가로 길이(2D 산출서는 표토제거 = 벌개제근 길이 — 거기선 벌개가 전폭이라서다 · 여기 벌개는 입목지만이라 전폭을 쓴다).</item>
 /// <item><b>면고르기 · 식생공법</b> = 마감 사면의 <b>빗길이</b>(계획면 기울기 1:<see cref="FaceMinRun"/>보다 급하고 수직 옹벽면이 아닌 칸 · 같은 성토/절토 덩어리에서 같은 쪽으로 이어진 두 사면 사이 소단 포함 · 골 바닥은 뺀다). 2D 산출서는 종자살포 = 성토면고르기 + 절토면고르기 길이다.</item>
-/// <item><b>층따기</b> = 성토 아래 원지반 중 기울기가 <c>BenchSlope</c>(기본 1:4)보다 급한 곳의 빗길이. ★근거 없음 — 참고 자료에 기준값이 없어 일반 실무 값을 쓴다(JACK 확인 필요).</item>
+/// <item><b>층따기</b> = 성토 아래 원지반이 1:4보다 급한 구간을 계단으로 파낸 <b>단면적(㎡)</b> — <see cref="BenchCut"/> · KDS 44 30 00 (JACK 1116 제공).</item>
 /// </list></summary>
 public static class XsecQtyRight
 {
@@ -18,10 +18,10 @@ public static class XsecQtyRight
     public const double FaceMinRun = 10.0;
     /// <summary>이보다 급하면(세로/가로) 수직 옹벽면으로 보고 면고르기에서 뺀다.</summary>
     public const double WallGrade = 3.0;
-    /// <summary>층따기 기본 기준 — 원지반 세로/가로 = 1/4. ★근거 없음(일반 실무 값).</summary>
+    /// <summary>층따기 기준 경사 — 원지반 세로/가로 = 1/4 (KDS 44 30 00 · JACK 1116 제공).</summary>
     public const double DefaultBenchGrade = 0.25;
 
-    public readonly record struct Opts(bool Clear, bool Strip, bool Smooth, bool Seed, bool Bench, double BenchGrade);
+    public readonly record struct Opts(bool Clear, bool Strip, bool Smooth, bool Seed, bool Bench, double BenchGrade, BenchSpec? Spec = null);
 
     /// <summary>못 잰 것 = NaN(0이 아님).</summary>
     public sealed class Result
@@ -30,14 +30,18 @@ public static class XsecQtyRight
         public double StripFill = double.NaN, StripCut = double.NaN;
         public double SmoothFill = double.NaN, SmoothCut = double.NaN;
         public double SeedFill = double.NaN, SeedCut = double.NaN;
+        /// <summary>층따기 단면적(㎡).</summary>
         public double Bench = double.NaN;
+        /// <summary>층따기 계단 꺾은선(가로 위치, 높이) — 구간마다 하나.</summary>
+        public List<(double X, double Z)[]> BenchLines = new();
     }
 
     /// <param name="xs">횡단 가로 위치(m · 오름차순)</param>
     /// <param name="gy">원지반 높이(없으면 NaN)</param>
     /// <param name="py">계획면 높이(없으면 NaN)</param>
+    /// <param name="rockAt">층따기 — 그 가로 위치 원지반이 암반인가(null = 토사)</param>
     /// <param name="forest">입목지 구간 (x0, x1) 목록 · null = 임상도를 못 읽음(벌개 NaN)</param>
-    public static Result Measure(double[] xs, double[] gy, double[] py, IReadOnlyList<(double A, double B)>? forest, Opts o)
+    public static Result Measure(double[] xs, double[] gy, double[] py, IReadOnlyList<(double A, double B)>? forest, Opts o, System.Func<double, bool>? rockAt = null)
     {
         var r = new Result();
         int n = xs.Length;
@@ -97,9 +101,15 @@ public static class XsecQtyRight
                 if (sg[i] > 0) cf += ov; else cc += ov;
             }
             if (face[i]) { double s = Sl(i); if (sg[i] > 0) mf += s; else mc += s; }
-            // 층따기 — 성토 아래(계획이 원지반보다 높은 칸) 원지반이 급한 곳
-            if (d[i] > Tol && System.Math.Abs(gy[i + 1] - gy[i]) / w > o.BenchGrade)
-                bn += System.Math.Sqrt(w * w + System.Math.Pow(gy[i + 1] - gy[i], 2));
+        }
+        // 층따기 — 성토 아래(계획이 원지반보다 높은 칸) 원지반이 급한 구간을 계단으로
+        if (o.Bench && lo >= 0)
+        {
+            var fillCell = new bool[n - 1];
+            for (int i = 0; i + 1 < n; i++) fillCell[i] = d[i] > Tol;
+            var spec = o.Spec ?? (BenchSpec.Soil with { Grade = o.BenchGrade });
+            var bc = BenchCut.Cut(xs, gy, fillCell, spec, rockAt);
+            bn = bc.Area; r.BenchLines = bc.Lines;
         }
         if (lo < 0) { sf = sc = mf = mc = cf = cc = bn = 0; }   // 공사 범위 없음 = 재서 0
         if (o.Clear && forest != null) { r.ClearFill = cf; r.ClearCut = cc; }

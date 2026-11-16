@@ -32,13 +32,28 @@ public sealed class SheetSettingsCommand
         var rs = RoadSheets.Setting(doc.Database, "", drawnH);
         double rh0 = rs.Plan.PinH, rv0 = rs.V2 ? rs.Plan.PinV : DH.Grading.Core.ProfileScaleFit.SameAsH;
         bool nori0 = NoriSetting.IsOn(doc.Database);
-        var dlg = new SheetDialog("저장", rp0, rx0, cm0, cM0, rh0, rv0, nori0);
+        var (xqMask0, _, bench0) = XsecQtyOptions.Read(doc.Database);
+        bool benchOn0 = (xqMask0 & XsecQtyOptions.Bench) != 0;
+        var dlg = new SheetDialog("저장", rp0, rx0, cm0, cM0, rh0, rv0, nori0, benchOn0, bench0);
         AcadApp.ShowModalWindow(dlg);
         if (dlg.DialogResult != true) return;
         SavedNori(doc, nori0, dlg.NoriDraw);
+        SavedBench(doc, benchOn0, bench0, dlg.BenchOn, dlg.Bench);
         SavedContour(doc, cm0, cM0, dlg.ContourMinor, dlg.ContourMajor);
         SavedRoadVH(doc, rs.V2, rh0, rv0, dlg.RoadH, dlg.RoadV);
         Saved(doc, rp0, rx0, dlg.RoadProfileScale, dlg.RoadXsecScale, lay0, layR0);
+    }
+
+    /// <summary>★[JACK 1116 «층따기»] [저장] 뒤 — 바뀌었을 때만 도면에 적는다(다음 [횡단도 생성]부터 반영). 창 없이 시험이 같은 길을 부른다.</summary>
+    internal static void SavedBench(Document doc, bool onBefore, DH.Grading.Core.BenchSpec before, bool onAfter, DH.Grading.Core.BenchSpec after)
+    {
+        if (onBefore == onAfter && before == after) return;
+        try
+        {
+            using (doc.LockDocument()) XsecQtyOptions.WriteBench(doc.Database, onAfter, after);
+            doc.Editor.WriteMessage("\n[도면 설정] 층따기 " + (onAfter ? "켬" : "끔") + " — 다음 [횡단도 생성]부터 반영");
+        }
+        catch (System.Exception ex) { doc.Editor.WriteMessage("\n[도면 설정] 층따기 저장 실패 — " + ex.Message); }
     }
 
     /// <summary>★[JACK 1112] «노리선 그리기» [저장] 뒤 — 바뀌었을 때만: 끄면 그려 둔 노리선(부지 · 진입도로)을 지우고, 켜면 지금 그린다(면이 있으면). 창 없이 시험이 같은 길을 부른다.</summary>

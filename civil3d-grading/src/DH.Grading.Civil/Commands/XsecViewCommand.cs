@@ -885,6 +885,7 @@ public sealed partial class XsecViewCommand
         X9("옹벽 단면");
         // ★[v111.5 · 계획 2 · 검토 M2] 진입도로 = 옹벽 단면 · 터파기선을 안 그림(도로 옹벽은 지표면 선의 수직면으로만 — 부지 옹벽 기록은 부지 노선 것)
         string wsec = t == null ? DrawWallSections(db, viewIds, alignId, wl, wr, scale, log, qty.X2) : DrawDitchSections(db, viewIds, alignId, wl, wr, scale, log);
+        DrawBenchLines(db, viewIds, alignId, wl, wr, qty.Bench, log);   // ★[JACK 1116 층따기] 빨간 계단
         if (t != null) { string psec = DrawPaveSections(db, viewIds, alignId, wl, wr, scale, log); if (psec.Length > 0) wsec = wsec.Length > 0 ? wsec + " · " + psec : psec; }   // ★[v116.8 · JACK 1110] 진입도로 = 포장 층   // ★★★[v104.1 · JACK 1022] 옹벽 단면 넣기 · ★[v105.3] 2D 터파기선 · 배면 · ★[도로 마무리 ②] 진입도로 = 측구 단면
         // ★[v115 · JACK 1105 Revit 구조물] 자른 면(진입도로는 BuildRoad 표식이 붙는다) · 부지 축척은 [다시 반영]용으로 적어 둠
         int nStr9 = StructDraw.IntoSections(db, viewIds.Select(v => v.Id), scale, log);
@@ -4754,7 +4755,36 @@ public sealed partial class XsecViewCommand
             try
             {
                 var fi = xq.Forest?.Intervals(lx, ly, rx, ry, -wl, wl + wr);
-                var xr = DH.Grading.Core.XsecQtyRight.Measure(xs, gy, py2, fi, xq.O);
+                // 층따기 땅 종류 — 지층면 중 «두께가 있는 맨 위 층»이 연암 이상이면 암반(지층이 없으면 토사)
+                System.Func<double, bool> rockAt = null;
+                if (xq.O.Bench && strata != null && strata.Count > 0)
+                {
+                    var tops = new System.Collections.Generic.List<(DH.Grading.Core.RockClass Rock, double[] Z)>();
+                    foreach (var (rk, cs3) in strata) { var z3 = Read(cs3); if (z3 != null) tops.Add((rk, z3)); }
+                    if (tops.Count > 0)
+                        rockAt = a =>
+                        {
+                            // ★[검토 3] xs는 경계점이 끼어 고르지 않다 — 이분 탐색으로 가장 가까운 칸
+                            int ix = System.Array.BinarySearch(xs, a);
+                            if (ix < 0)
+                            {
+                                int hi = ~ix;
+                                ix = hi <= 0 ? 0 : hi >= xs.Length ? xs.Length - 1 : (a - xs[hi - 1] <= xs[hi] - a ? hi - 1 : hi);
+                            }
+                            double g0 = gy[ix];
+                            for (int k = 0; k < tops.Count; k++)
+                            {
+                                double zk = tops[k].Z[ix];
+                                if (double.IsNaN(g0) || double.IsNaN(zk) || zk > g0 + 0.01) continue;
+                                double zn = k + 1 < tops.Count ? tops[k + 1].Z[ix] : double.NaN;
+                                if (!double.IsNaN(zn) && zn >= zk - 0.01) continue;   // 두께 0 — 아래 층이 드러난 것
+                                return tops[k].Rock != DH.Grading.Core.RockClass.Soil && tops[k].Rock != DH.Grading.Core.RockClass.Weathered;
+                            }
+                            return false;
+                        };
+                }
+                var xr = DH.Grading.Core.XsecQtyRight.Measure(xs, gy, py2, fi, xq.O, rockAt);
+                xq.BenchSink?.Invoke(xr.BenchLines);
                 DH.Grading.Core.XsecQtyRight.Put(led, xr);
                 dbg?.Append($" | 공종 길이 벌개 {xr.ClearFill:F2}/{xr.ClearCut:F2} 표토 {xr.StripFill:F2}/{xr.StripCut:F2} 면고르기 {xr.SmoothFill:F2}/{xr.SmoothCut:F2} 층따기 {xr.Bench:F2}");
             }
@@ -4767,6 +4797,8 @@ public sealed partial class XsecViewCommand
     {
         public DH.Grading.Core.XsecQtyRight.Opts O;
         public DH.Grading.Core.Forest.ForestSection Forest;
+        /// <summary>★[JACK 1116 «층따기»] 측점 하나의 층따기 계단 꺾은선을 받는다(그림용).</summary>
+        public System.Action<System.Collections.Generic.List<(double X, double Z)[]>> BenchSink;
     }
 
     /// <summary>노선을 연다 — 못 열면 <c>null</c>.</summary>
@@ -4805,7 +4837,41 @@ public sealed partial class XsecViewCommand
         /// <summary>★[v105.3] 측점 이름 → 그 측점 2D 터파기 · 배면(수량이 지은 그 객체 — 그림이 그대로 쓴다). 2D가 아니면 null.</summary>
         System.Collections.Generic.Dictionary<string, DH.Grading.Core.WallExcav.Xs2D> X2 = null,
         /// <summary>★[v117.4] 불러온 구조물을 성토 · 되메우기 공제에 썼다 — 표 밑 «미포함»에서 구조물 두 마디를 뺀다.</summary>
-        bool StructDed = false);
+        bool StructDed = false,
+        /// <summary>★[JACK 1116 «층따기»] 측점 이름 → 층따기 계단 꺾은선(가로 위치, 높이) — 그림이 그대로 쓴다. 없으면 null.</summary>
+        System.Collections.Generic.Dictionary<string, System.Collections.Generic.List<(double X, double Z)[]>> Bench = null);
+
+    /// <summary>★[JACK 1116 «층따기»] 뷰마다 층따기 계단(빨간 꺾은선)을 그린다 — 켜져 있고 해당되는 측점만. 그린 개체 수. 실패는 로그만(횡단도는 그대로).</summary>
+    private static int DrawBenchLines(Database db, System.Collections.Generic.List<(ObjectId Id, double St, string Name)> views,
+                                      ObjectId alignId, double wl, double wr,
+                                      System.Collections.Generic.Dictionary<string, System.Collections.Generic.List<(double X, double Z)[]>> bench,
+                                      System.Text.StringBuilder log)
+    {
+        if (bench == null || bench.Count == 0 || views == null) return 0;
+        int n = 0;
+        try
+        {
+            using var tr = db.TransactionManager.StartTransaction();
+            var ms = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForWrite);
+            foreach (var (vid, _, vName) in views)
+            {
+                if (!bench.TryGetValue(vName, out var lines)) continue;
+                try
+                {
+                    if (tr.GetObject(vid, OpenMode.ForRead) is not CivilDb.SectionView sv) continue;
+                    var map = WallSectionDraw.Affine(-wl, wr, sv.ElevationMin, sv.ElevationMax,
+                        (o, z) => { double x = 0, y = 0; return sv.FindXYAtOffsetAndElevation(o, z, ref x, ref y) ? new Point2d(x, y) : (Point2d?)null; });
+                    if (map == null) continue;
+                    n += WallSectionDraw.DrawBench(db, tr, ms, lines, map, WallSectionDraw.KindXsec, vid.Handle.ToString());
+                }
+                catch (System.Exception exV) { log?.AppendLine("  층따기 — 뷰 하나 실패: " + exV.Message); }
+            }
+            tr.Commit();
+        }
+        catch (System.Exception ex) { log?.AppendLine("  층따기 계단 실패 — " + ex.Message); }
+        if (n > 0) log?.AppendLine($"  층따기 계단 {n}개(빨강 · {WallSectionDraw.LayBench2D})");
+        return n;
+    }
 
     /// <summary>부지 횡단의 «마지막 DH선형» — 종단도와 같은 규칙(여럿이면 마지막).</summary>
     private static (ObjectId Id, string Name) PickSiteAlign(Database db, CivilApp.CivilDocument cdoc)
@@ -4907,6 +4973,7 @@ public sealed partial class XsecViewCommand
         string wallFoot = "";     // ★[v104] 보강토체 등 — 표 아래 한 줄
         bool structOn = false;    // ★[v117.4] 불러온 구조물을 공제에 썼다(표 밑 «미포함» 두 마디를 뺀다)
         var x2map = new System.Collections.Generic.Dictionary<string, DH.Grading.Core.WallExcav.Xs2D>();   // ★[v105.3]
+        var benchMap = new System.Collections.Generic.Dictionary<string, System.Collections.Generic.List<(double X, double Z)[]>>();   // ★[JACK 1116 층따기]
         var padHit = new System.Collections.Generic.HashSet<string>();   // ★[v111.5] 진입도로 — 부지 정지면 위 측점
         int nRoadEdge = 0; string firstRoadEdge = null;                   // ★[v111.5] 진입도로가 횡단 폭 끝에 닿은 측점
         double uncutLen = 0; int uncutSegs = 0;
@@ -4949,7 +5016,7 @@ public sealed partial class XsecViewCommand
             if (uncutLen > 1.0)
                 warn.Append($"\n  ⚠이 노선 횡단과 거의 나란해(15° 안) 횡단 · 수량에서 빠진 옹벽 앞면 {uncutLen:F0} m(변 {uncutSegs}개)"
                           + " — 그 벽은 그 벽을 가로지르는 노선으로 따로 세세요(2D 실무 방식).");
-            return new QtyResult(map, ledgers, spec, warn.ToString(), qtyBasis, wallFoot, x2map.Count > 0 ? x2map : null, structOn);
+            return new QtyResult(map, ledgers, spec, warn.ToString(), qtyBasis, wallFoot, x2map.Count > 0 ? x2map : null, structOn, benchMap.Count > 0 ? benchMap : null);
         }
         if (sl == null || sl.Count == 0) return Done();
         int nOk = 0, nNo = 0, nThrow = 0; string firstThrow = null;
@@ -5183,6 +5250,7 @@ public sealed partial class XsecViewCommand
                     var secOut = new double[4] { double.NaN, 0, 0, 0 };
                     var backOut = new double[2] { double.NaN, 0 };
                     var stOut = new double[4] { double.NaN, double.NaN, 0, 0 };   // ★[v117.4] 구조물 공제(성토 · 되메우기 · 잘림 어긋남 · 터파기 바닥 아래)
+                    if (xqCtx != null) { string bnm = s.Name; xqCtx.BenchSink = ln => { if (ln.Count > 0) benchMap[bnm] = ln; }; }
                     var q = QtyAt(tr, al0, s.St, wl, wr, csG, planQ, csE, dbg,
                                   strata, csW, led, DH.Grading.Core.QuantityTable.DeepLimitM,
                                   qtyBasis, csWx, secRec, secOut, backRec, backOut,
