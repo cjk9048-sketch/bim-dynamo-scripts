@@ -97,7 +97,7 @@ public static partial class RoadRing
         // 위 · 아래 끝 — 옮긴 자리에서 기울기 쪽 줄(−2 mm ~ 면 폭 + 1 cm)을 따라 높이가 벽처럼 바뀌는(기울기 > 벽 기울기 1/MinSlope의 절반) 첫 토막(높이 1 cm 넘게)의 시작 · 끝.
         //   원천(어느 원뿔 · 변이 이겼나)으로 가르면 굽이 꼭짓점이 촘촘한 자리에서 꼭대기가 같은 이웃 원뿔 · 변이 µm 토막으로 번갈아 이겨 면 시작 · 끝을 잘못 잡았다
         //   (1117 계측 현장 덤프 A + 옹벽 51–91: 아래 줄이 면 꼭대기에 남아 80 mm · 현장 덤프 B: 4 cm 아래에서 끊겨 0.39 m). 높이만 보면 원천과 상관없음.
-        ((double X, double Y) U, (double X, double Y) L, double W) Ends(double px, double py, double gx, double gy, int want, int p, double A, double B)
+        ((double X, double Y) U, (double X, double Y) L, double W, bool Day, bool Own) Ends(double px, double py, double gx, double gy, int want, int p, double A, double B)
         {
             double W = B - A, thr = 0.5 / Math.Clamp(ev.D.MinSlope, 0.001, 0.2);
             // [검토 LOW7] 0.5 mm 걸음 훑기는 짝마다 옛 이분보다 셈이 많지만 면 짓기 전체 셈의 1 % 아래(1117 계측 현장 덤프 A + 옹벽: 2 mm 걸음(+ 5 mm 턱 판정) + 이분으로 바꿔도 전체 셈 −0.6 % · 선 단계 −4 %) —
@@ -149,9 +149,13 @@ public static partial class RoadRing
                 }
                 if (Math.Abs(zt - Zs(sl)) < WfMinH) sl = firstEnd;
             }
+            // ★[JACK 1117 · 평평한 땅 옹벽 변환 바늘 계측] 첫 토막 끝 바로 너머(훑기 한 칸)가 바뀌지 않은 땅(쪽 0)이면 벽 면이 데이라잇에서 끊긴 것 — 그 아래 끝 = 데이라잇(사면 자리 둘레가 이미 그 선) ·
+            //   그 토막 가운데에서 이긴 원천이 제 무리인가(씨앗이 아니라 이 걸음 자리 — 다른 다리가 이긴 씨앗에서 걸어 제 무리 벽 면으로 들어온 걸음)
+            bool day = !double.IsNaN(su) && SideOf(ev.Eval(px + gx * (firstEnd + h), py + gy * (firstEnd + h))) == 0;
+            bool ownRun = day && WinOf(ev.Eval(px + gx * (su + firstEnd) / 2, py + gy * (su + firstEnd) / 2), want).Own;
             if (double.IsNaN(su)) { su = 0; sl = 0; firstEnd = 0; }   // 벽 면 없음 → 높이 0 → 짝 안 됨
             sl = Math.Max(su + WfMinW, sl);   // 띠 폭 최소 2 mm(종전 값 · 0.1 mm 마디 넣기 · Civil 바늘 0.125 mm에서 멀게 — 그 사이 셈은 다음 원천 면 그대로 · [검토 LOW7] 0.5 mm와 남은 차 같음 1117 계측)
-            return ((px + gx * su, py + gy * su), (px + gx * sl, py + gy * sl), Math.Max(WfMinW, firstEnd - su));   // 폭 = 첫 토막(제 무리 벽 면이 통째로 이겼나 견줌)
+            return ((px + gx * su, py + gy * su), (px + gx * sl, py + gy * sl), Math.Max(WfMinW, firstEnd - su), day, ownRun);   // 폭 = 첫 토막(제 무리 벽 면이 통째로 이겼나 견줌)
         }
         int chains = 0, pts = 0, chainNo = 0;
         var strips = new List<Bl>();
@@ -174,10 +178,14 @@ public static partial class RoadRing
                 var fwd = new List<((double X, double Y) U, (double X, double Y) L)>(); var bwd = new List<((double X, double Y) U, (double X, double Y) L)>();
                 bool Pair(double ux, double uy, double ugx, double ugy, List<((double, double), (double, double))> o)
                 {
-                    var (up, lp, wd) = Ends(ux, uy, ugx, ugy, want, p, A, B);
+                    var (up, lp, wd, day, ownRun) = Ends(ux, uy, ugx, ugy, want, p, A, B);
                     double zu = ev.Eval(up.X, up.Y).Z, zl = ev.Eval(lp.X, lp.Y).Z;
                     if (!double.IsFinite(zu) || !double.IsFinite(zl) || Math.Abs(zu - zl) < WfMinH) return false;   // 벽 면이 안 보임(높이 1 cm 아래)
                     if (ownFace && wd > B - A - 1e-3) return false;   // 제 무리 벽 면이 통째로 이김 = 고리 선이 이미 둘 다 있음
+                    // ★[JACK 1117 · 평평한 땅 옹벽 변환 바늘 계측] 제 무리 벽 면이 데이라잇에서 끊김 = 위 끝은 고리 선 · 아래 끝은 사면 자리 둘레(데이라잇)가 이미 있음 —
+                    //   띠를 그으면 아래 줄이 데이라잇 위(0.3 mm 안)를 따라가 잘린 조각이 둘레에 붙고 둘레 점과 바늘 세모(높이 < 0.125 mm)가 됐다(평평한 땅 1단 쪽 전체 변환 · 계측) ·
+                    //   씨앗이 다른 다리(다리 포락 — 제 무리 아님)여도 걸음 자리 벽 면이 제 무리면 같음(그 띠 위 줄은 제 고리 선과 1 mm 안 · 평평한 땅 2단 242 m 변환 계측)
+                    if ((ownFace || ownRun) && day) return false;
                     o.Add((up, lp)); Mark(want, p, fi, ux, uy, pass); return true;
                 }
                 if (!Pair(px, py, gx, gy, fwd)) continue;
