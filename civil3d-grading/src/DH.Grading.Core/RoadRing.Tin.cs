@@ -52,6 +52,7 @@ public static partial class RoadRing
         var tags = new Dictionary<(long, long), string>();
         var S = SlopeRegion(ev, f, out var daylight, out var onB, out string rnote, tags);
         b.Daylight = daylight;
+        if (ev.Isles != null) Volumes(b);   // ★[JACK 1117 «섬 현상»] 섬을 고른 격자 마디까지 토량에(섬 없으면 안 부름 · 비트 같음)
         long tRegion = sw.ElapsedMilliseconds, tLines = tRegion, tTri = tRegion;
         var tris = new List<WallDaylight.Tri>();
         string tnote = "";
@@ -200,6 +201,9 @@ public static partial class RoadRing
                  + $" · 다듬기: T자 나눔 {tj} · 구멍 {holes} · 0.1 mm 쌍 {merged} · 바늘 접음 {folded} · 뒤집음 {flipped}"
                  + (lastFold + lastNudge > 0 ? $" · ⚠급한 굽이 바늘 마지막 고침: 5 cm 접음 {lastFold} · 꼭짓점 0.4 mm 옮김 {lastNudge}" : "")
                  + (zoneFail.Length > 0 ? $" · ⚠첫 구역 맞춤 못 함({zoneFail}) — 마무리로 넘김" : "")
+                 + (ev.Corners.Count > 0 ? " · 급한 굽이 안쪽 모퉁이 " + string.Join(" · ", ev.Corners.Select(cz => $"꺾임 {cz.No + 1}" + (cz.Tiers.Any(t => t.Rounded) ? "(자연 반경 " + CornerRmin.ToString("0.#") + " m 아래 단 — 두 다리 높이 차 0.5 m 아래 자리만 둥글게: " + string.Join(", ", cz.Tiers.Where(t => t.Rounded).Select(t => $"{(t.Cut ? "절" : "성")}{t.K}단 {t.Rnat:F1} m")) + ")" : "(둥글게 한 단 없음)"))) + $" · 모퉁이 셈 {ev.CornerUses:N0}점(둥근 거리 수치 {ev.CornerRound:N0})" : "")
+                 + (deck.RecWiden.Count > 0 ? $" · 급한 굽이 모퉁이까지 늘린 옹벽 기록 끝 {deck.RecWiden.Count}곳(" + string.Join(", ", deck.RecWiden.Select(r => $"{r.From:F1}→{r.To:F1}")) + ")" : "")
+                 + (deck.CapWalls > 0 ? $" · 도로 끝 마구리 옹벽 단면 변 {deck.CapWalls}" : "")
                  + (deck.RecSnaps.Count > 0 ? $" · ⚠급한 굽이 옹벽 기록 끝 {deck.RecSnaps.Count}곳을 가까운 마디로 붙임(최대 {deck.RecSnaps.Max(r => Math.Abs(r.To - r.From)):F2} m)" : "")
                  + (b.Conflicts > 0 ? $" · ⚠부딪힘 {b.Conflicts}칸(낮은 쪽 사면을 넣음 · 옹벽 검토)" : "")
                  + (b.ReachHit ? " · ⚠찾는 거리 끝에 닿음" : "")

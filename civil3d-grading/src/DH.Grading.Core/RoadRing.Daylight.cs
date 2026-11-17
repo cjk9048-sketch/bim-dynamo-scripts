@@ -13,6 +13,8 @@ public static partial class RoadRing
         public Pt[] P = Array.Empty<Pt>();
         public bool[] Keep = Array.Empty<bool>();
         public int Islands;
+        /// <summary>★[JACK 1117 «섬 현상»] 사면에 갇힌 땅 섬을 고른 높이로 바꾼 격자 마디 수.</summary>
+        public int IsleNodes;
         /// <summary>바뀐 자리가 격자 둘레(찾는 거리 끝)에 닿음 — 부르는 쪽이 찾는 거리를 늘려 다시.</summary>
         public bool EdgeHit;
         public double X(int i) => X0 + i * Cell;
@@ -70,6 +72,9 @@ public static partial class RoadRing
     public readonly record struct OnB(int Seg, double U);
 
     /// <summary>★[JACK 1117 «진입도로 1:0.01»] 거의 수직 사면 — 그 쪽 사면 꼬리 기울기 1/n이 이 값 넘음(n &lt; 0.1 · 전엔 못 넣던 값) · 데이라잇을 꺾임에서 떼는 거리 상한 · 발을 도로 둘레 점으로 넣는 띠 · 발 사이 최소 간격(m).</summary>
+    /// <summary>★[JACK 1117 «섬 현상»] 사면 속 땅 섬(크기와 상관없이) 고르기 — [하네스] 끄면 옛 결과(섬 구멍 그대로)와 견줌.</summary>
+    internal static bool IsleFill = true;
+
     const double NearVertTail = 10, PushOff = 0.005, FootBand = 0.05, FootGap = 0.01;
 
     /// <summary>사면 자리 S(도로 면 밖 · 바뀐 자리 · 도로 면에 이어진 것) — 마칭 스퀘어(안 = Keep 마디 전부 = 도로 면 + 절 · 성 · 부딪힘) → 도로 면 다각형을 정확히 뺌(★v116.2 — 칸보다 가는 사면 띠도 잡음).
@@ -84,7 +89,7 @@ public static partial class RoadRing
         //   전: 안 = 사면 마디만 → 사면 폭이 칸(0.25 m)보다 좁은 자리(도로 시작 · 끝 — 땅과 높이가 비슷한 곳)는 사면 마디가 하나도 없어 띠를 통째로 놓침
         //   (1109 JACK 도로 실측 — 도로 둘레 바로 밖이 사면인데 세모 없음 12자리 · 최대 14 cm → 최종면에서 «사면이 땅에 못 닿음»).
         bool In(int i, int j) => i >= 0 && j >= 0 && i < W && j < H && f.Keep[j * W + i];
-        static bool Inside(in Pt p) { double ph = Evaluator.Phi(p); return p.Kind == 1 || (p.Kind is >= 2 and <= 4 && double.IsFinite(ph) && ph > 0); }
+        static bool Inside(in Pt p) { double ph = Evaluator.Phi(p); return p.Kind == 1 || (p.Kind is >= 2 and <= 4 && double.IsFinite(ph) && ph > 0) || (p.Isle && p.Kind != 255); }
         var edgePt = new Dictionary<long, Coordinate>();
         void Tag(Coordinate c0, string t) { if (tags != null) tags[((long)Math.Round(c0.X * 1e4), (long)Math.Round(c0.Y * 1e4))] = t; }
         var onBLocal = new Dictionary<(double, double), OnB>();
@@ -296,25 +301,60 @@ public static partial class RoadRing
             return o2;
         }
         var rPolys = new List<Polygon>();
+        var isleRings = new List<Coordinate[]>();
         for (int gi = 0; gi < Sg.NumGeometries; gi++)
         {
             if (Sg.GetGeometryN(gi) is not Polygon pg) continue;
             var sh = Rebuild(pg.ExteriorRing.Coordinates);
             if (sh.Count < 4) continue;   // ★[검토 L4] 올림으로 세 점 아래가 된 고리(넓이 0) — 버림
             var holes = new List<LinearRing>();
-            for (int h = 0; h < pg.NumInteriorRings; h++) { var hr = Rebuild(pg.GetInteriorRingN(h).Coordinates); if (hr.Count >= 4) holes.Add(gf.CreateLinearRing(hr.ToArray())); }
+            for (int h = 0; h < pg.NumInteriorRings; h++)
+            {
+                // ★[JACK 1117 «진입도로 지표면 안 섬 — 있으면 안 됨»] 도로 면 ∪ 사면 속 구멍(사면에 갇힌 땅 · 1 ㎡ 이상)은 구멍으로 두지 않고 둘레 사면 면으로 고름(섬 걷기 — 부지 정지의 «갇힌 고리 = 정지 구역 안» 과 같은 뜻)
+                //   도로 면을 빼기 전(도로 둘레에 닿은 섬도 여기서는 속 구멍)에 · 1 ㎡ 아래는 옛대로(뒤에서 땅 높이로 메움 · 지문 같음)
+                var hc = pg.GetInteriorRingN(h).Coordinates;
+                if (IsleFill) { isleRings.Add(hc); continue; }   // ★[검토 9 · JACK «섬은 있으면 안 됨»] 크기와 상관없이(1 ㎡ 아래도)
+                var hr = Rebuild(hc); if (hr.Count >= 4) holes.Add(gf.CreateLinearRing(hr.ToArray()));
+            }
             var np = gf.CreatePolygon(gf.CreateLinearRing(sh.ToArray()), holes.ToArray());
             if (!np.IsValid && gridPts != null && !noThin)
             {
                 // 칸 변 점 합침이 고리를 무효로 만들면(자기 교차 등) 이 조각은 합치지 않고 다시
                 noThin = true;
                 var sh2 = Rebuild(pg.ExteriorRing.Coordinates); var holes2 = new List<LinearRing>();
-                for (int h = 0; h < pg.NumInteriorRings; h++) { var hr = Rebuild(pg.GetInteriorRingN(h).Coordinates); if (hr.Count >= 4) holes2.Add(gf.CreateLinearRing(hr.ToArray())); }
+                for (int h = 0; h < pg.NumInteriorRings; h++) { var hc2 = pg.GetInteriorRingN(h).Coordinates; if (IsleFill) continue; var hr = Rebuild(hc2); if (hr.Count >= 4) holes2.Add(gf.CreateLinearRing(hr.ToArray())); }
                 noThin = false; nGridThinUndo++;
                 if (sh2.Count >= 4) np = gf.CreatePolygon(gf.CreateLinearRing(sh2.ToArray()), holes2.ToArray());
             }
             if (!np.IsValid) note = $"도로 면 ∪ 사면 다각형 무효({new NetTopologySuite.Operation.Valid.IsValidOp(np).ValidationError?.Message})";
             rPolys.Add(np);
+        }
+        if (isleRings.Count > 0)
+        {
+            // 섬마다 둘레 쪽 — 둘레 점에서 성토 면(lo)과 땅이 가까우면 성토 둘레 · 아니면 절토 · 많은 쪽(섞인 섬도 한 면 — 다른 쪽 둘레 몫은 끝 Note에 밝힘)
+            var isl = new List<(Coordinate[], Envelope, bool[])>(); int mixed = 0; double area = 0;
+            foreach (var hc in isleRings)
+            {
+                // 둘레 변마다(가운데 점) 성토 둘레인가 — 성토 면과 땅이 가까우면 성토(그 둘레에서 lo = 땅)
+                var fl = new bool[Math.Max(0, hc.Length - 1)]; int nl = 0, nh = 0;
+                for (int k = 0; k + 1 < hc.Length; k++)
+                {
+                    var pe = ev.Eval((hc[k].X + hc[k + 1].X) / 2, (hc[k].Y + hc[k + 1].Y) / 2);
+                    fl[k] = !double.IsFinite(pe.G) || !double.IsFinite(pe.Hi) || (double.IsFinite(pe.Lo) && Math.Abs(pe.Lo - pe.G) <= Math.Abs(pe.G - pe.Hi));
+                    if (fl[k]) nl++; else nh++;
+                }
+                if (nl > 0 && nh > 0) mixed++;
+                var hp = gf.CreatePolygon(hc); area += hp.Area;
+                isl.Add((hc, hp.EnvelopeInternal, fl));
+            }
+            ev.Isles = isl; ev.IsleArea = area; ev.IsleMixed = mixed;
+            // 격자도 고른 높이로(토량 · 사면 자리 이어짐)
+            foreach (var (ig, env, _) in isl)
+            {
+                int i0 = Math.Max(0, (int)Math.Floor((env.MinX - f.X0) / f.Cell)), i1 = Math.Min(W - 1, (int)Math.Ceiling((env.MaxX - f.X0) / f.Cell));
+                int j0 = Math.Max(0, (int)Math.Floor((env.MinY - f.Y0) / f.Cell)), j1 = Math.Min(H - 1, (int)Math.Ceiling((env.MaxY - f.Y0) / f.Cell));
+                for (int j = j0; j <= j1; j++) for (int i = i0; i <= i1; i++) { int k = j * W + i; if (f.Keep[k]) continue; var pe = ev.Eval(f.X(i), f.Y(j)); if (!pe.Isle) continue; f.P[k] = pe; f.Keep[k] = true; f.IsleNodes++; }
+            }
         }
         // 도로 면 빼기 — 둘레 위 점(5 mm 안 올림)을 도로 면 둘레에도 끼워 겹치는 변이 좌표까지 같게(빼기 뒤 실오라기 없음)
         Geometry DeckAug()
@@ -404,7 +444,7 @@ public static partial class RoadRing
         foreach (var kv in onBLocal) onB[kv.Key] = kv.Value;
         Geometry R = outPolys.Count == 1 ? outPolys[0] : gf.CreateMultiPolygon(outPolys.ToArray());
         note = (note.Length > 0 ? "⚠" + note + " · " : "") + $"사면 자리 {outPolys.Count}개 · 넓이 {R.Area:F0} ㎡ · 둘레 점 {R.NumPoints} · 도로 둘레 위 점 {onBLocal.Count}(5 mm 안 올림 {nSnapB} · 빼기 교점 {nCross}) · 끼운 둘레 꼭짓점 {nBv} · 바탕 건넘점 {nBreak}"
-            + $" · 원지반 변 위 Φ=0 {nCurve}(현 {nChord}) · 둘레 올림 안 함 {nSnapKeep}" + (nPush + nFoot > 0 ? $" · 수직 사면 꺾임에서 뗌 {nPush} · 도로 둘레 발 {nFoot}" + (nFootDrop > 0 ? $"(곁 점과 1 cm 안이라 뺌 {nFootDrop})" : "") : "") + (nIsle > 0 ? $" · 1 ㎡ 아래 땅 섬 메움 {nIsle}" : "") + (nGridThin > 0 ? $" · 급한 굽이 칸 변 데이라잇 2 cm 점 합침 {nGridThin}" + (nGridThinUndo > 0 ? $"(무효라 되돌린 조각 {nGridThinUndo})" : "") : "") + (nTiny > 0 ? $" · ⚠1 cm² 아래 조각 {nTiny}" : "") + (gb == null ? " · ⚠바탕이 꺾임을 못 물음" : "");
+            + $" · 원지반 변 위 Φ=0 {nCurve}(현 {nChord}) · 둘레 올림 안 함 {nSnapKeep}" + (nPush + nFoot > 0 ? $" · 수직 사면 꺾임에서 뗌 {nPush} · 도로 둘레 발 {nFoot}" + (nFootDrop > 0 ? $"(곁 점과 1 cm 안이라 뺌 {nFootDrop})" : "") : "") + (nIsle > 0 ? $" · 1 ㎡ 아래 땅 섬 메움 {nIsle}" : "") + (isleRings.Count > 0 ? $" · ⚠사면 속 땅 섬 {isleRings.Count}곳({ev.IsleArea:F1} ㎡ · 격자 {f.IsleNodes}) 둘레 사면 면으로 고름" + (ev.IsleMixed > 0 ? $"(성토 · 절토 둘레 섞인 섬 {ev.IsleMixed} — 두 둘레까지 거리로 이어 섞음)" : "") : "") + (nGridThin > 0 ? $" · 급한 굽이 칸 변 데이라잇 2 cm 점 합침 {nGridThin}" + (nGridThinUndo > 0 ? $"(무효라 되돌린 조각 {nGridThinUndo})" : "") : "") + (nTiny > 0 ? $" · ⚠1 cm² 아래 조각 {nTiny}" : "") + (gb == null ? " · ⚠바탕이 꺾임을 못 물음" : "");
         return R;
     }
 
@@ -480,7 +520,7 @@ public static partial class RoadRing
         var idx = new NetTopologySuite.Index.Strtree.STRtree<(int R, int K)>();
         for (int r = 0; r < rings.Count; r++) for (int k = 0; k + 1 < rings[r].Length; k++) { var a = rings[r][k]; var b = rings[r][k + 1]; idx.Insert(new Envelope(a.X, b.X, a.Y, b.Y), (r, k)); }
         idx.Build();
-        static bool Inside(in Pt p) { double ph = Evaluator.Phi(p); return p.Kind == 1 || (p.Kind is >= 2 and <= 4 && double.IsFinite(ph) && ph > 0); }
+        static bool Inside(in Pt p) { double ph = Evaluator.Phi(p); return p.Kind == 1 || (p.Kind is >= 2 and <= 4 && double.IsFinite(ph) && ph > 0) || (p.Isle && p.Kind != 255); }
         bool OnRim(double x, double y) { var (dn, _, sg) = ev.NearestFoot(x, y); return sg >= 0 && dn <= 1e-6; }
         // 현 속에 넣을 점(현 k · 현 위 비율) · 현 끝 바꿀 점(고리 r · 꼭짓점 v) · 넣은 뒤 확인할 (고리 · 선 토막 · P)
         //   ★[검토 MED1 · MED2] 넣는 점마다 번호(Id) — 다각형이 무효 · 확인 실패면 그 점만 빼고(나머지는 그대로) · 선 점 옮김(moves)은 받은 점만 · 맨 끝에

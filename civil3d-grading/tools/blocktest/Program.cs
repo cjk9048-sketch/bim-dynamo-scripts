@@ -9,6 +9,7 @@ void Check(string name, bool ok, string detail = "")
     Console.WriteLine($"{(ok ? "PASS" : "FAIL")}  {name} {detail}");
     if (!ok) fails++;
 }
+if (Environment.GetEnvironmentVariable("BLOCKTEST_RRNOISLE") != null) DH.Grading.Core.RoadRing.IsleFill = false;   // [JACK 1117 섬] 견줌용
 // ★[수량산출서] BLOCKTEST_ONLY=qtyxlsx — 엑셀 토공 수량산출서(S300)만 · 터파기 구분 기본 4.5를 그대로 본다
 if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "qtyxlsx")
 {

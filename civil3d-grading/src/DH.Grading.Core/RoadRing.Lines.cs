@@ -260,6 +260,25 @@ public static partial class RoadRing
                                     var pq = ev.Eval(qx, qy); var wq = want > 0 ? pq.WLo : pq.WHi;
                                     if (wq.Own && SideOf(pq) == want && Math.Abs(wq.Dist - dist) < 1e-4) { px = qx; py = qy; pp = pq; ls.Projected++; }
                                 }
+                                // ★[JACK 1117 «송곳 → 둥글게»] 급한 굽이 안쪽 모퉁이 — 면은 둥근 거리 D_r로 지음 → 고리 점(참 거리 = d_k)을 D_r = d_k 자리로 옮김(D_r 기울기 · 뉴턴 · 걸음마다 다시 잼)
+                                {
+                                    double dr = ev.CornerDistAt(px, py);
+                                    if (double.IsFinite(dr) && Math.Abs(dr - dist) > 1e-6)
+                                    {
+                                        double qx = px, qy = py, dq = dr; bool okq = false;
+                                        for (int it = 0; it < 12; it++)
+                                        {
+                                            const double h = 0.01;
+                                            double ax = ev.CornerDistAt(qx + h, qy), bx = ev.CornerDistAt(qx - h, qy), ay = ev.CornerDistAt(qx, qy + h), by = ev.CornerDistAt(qx, qy - h);
+                                            if (!double.IsFinite(ax + bx + ay + by)) break;
+                                            double gx2 = (ax - bx) / (2 * h), gy2 = (ay - by) / (2 * h), g2 = gx2 * gx2 + gy2 * gy2; if (g2 < 1e-6) break;
+                                            double stp = (dist - dq) / g2; stp = Math.Clamp(stp, -2 * CornerRmin, 2 * CornerRmin);
+                                            qx += gx2 * stp; qy += gy2 * stp; dq = ev.CornerDistAt(qx, qy); if (!double.IsFinite(dq)) break;
+                                            if (Math.Abs(dq - dist) < 1e-6) { okq = true; break; }
+                                        }
+                                        if (okq) { var pq = ev.Eval(qx, qy); if (SideOf(pq) == want) { px = qx; py = qy; pp = pq; ls.Projected++; } }
+                                    }
+                                }
                                 Push(px, py, pp.Z, SigOf(pp, want), e);
                             }
                             else

@@ -111,13 +111,29 @@ internal static class QtyKeeper
 
     static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Database, Snap> Site = new(), Road = new();
 
-    internal static void Store(Database db, bool road, List<(string Name, double St)> st, Dictionary<string, XsecQty> map, Dictionary<string, QtyLedger> led)
+    // ★[v117.18.19] 스냅은 문서(Document.UserData)에 — Database 감싸개는 GC로 새로 생길 수 있어 약한 표(ConditionalWeakTable)만으로는
+    //   횡단 직후에도 스냅이 사라졌다(키트 rvert «QTYROAD snapshot entries 0»). 문서가 닫히면 함께 사라짐. 문서 없는 Database만 옛 표로.
+    static string Key(bool road) => road ? "DH.QtySnap.Road" : "DH.QtySnap.Site";
+    static Autodesk.AutoCAD.ApplicationServices.Document? DocOf(Database db)
     {
-        var t = road ? Road : Site;
-        t.Remove(db); t.Add(db, new Snap(st, map, led, XsecQuantity.DeepLimit));
+        try { return Autodesk.AutoCAD.ApplicationServices.Application.DocumentManager.GetDocument(db); } catch { return null; }
     }
 
-    internal static Snap? Of(Database db, bool road) => (road ? Road : Site).TryGetValue(db, out var s) ? s : null;
+    internal static void Store(Database db, bool road, List<(string Name, double St)> st, Dictionary<string, XsecQty> map, Dictionary<string, QtyLedger> led)
+    {
+        var snap = new Snap(st, map, led, XsecQuantity.DeepLimit);
+        var doc = DocOf(db);
+        if (doc != null) doc.UserData[Key(road)] = snap;
+        var t = road ? Road : Site;
+        t.Remove(db); t.Add(db, snap);
+    }
+
+    internal static Snap? Of(Database db, bool road)
+    {
+        var doc = DocOf(db);
+        if (doc != null && doc.UserData[Key(road)] is Snap ds) return ds;
+        return (road ? Road : Site).TryGetValue(db, out var s) ? s : null;
+    }
 
     /// <summary>스냅 → 모델 측점. 원장(지층별)이 있으면 그 값 · 없으면 XsecQty.</summary>
     internal static List<QtyStation> Stations(Snap s, List<string> notes)

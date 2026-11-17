@@ -37,6 +37,8 @@ public static partial class RoadRing
         public double DNear, SigNear; public int SegNear;
         /// <summary>★[v117.16] 제 무리 열쇠(쪽 + 1 + 3·단면 · −1 = 없음) · 섞은 측점 s* · 둘째 발 섞임 무게 합(0 = 안 섞음).</summary>
         public int Group; public double SStar, Blend;
+        /// <summary>★[JACK 1117 «섬 현상»] 사면 속에 갇힌 땅 자리(섬)를 둘레 사면 높이로 고른 점(Φ ≤ 0이어도 바뀐 자리).</summary>
+        public bool Isle;
     }
 
     public sealed partial class Evaluator
@@ -262,6 +264,7 @@ public static partial class RoadRing
             _deckIx = new TriGrid(d.Tris, 2.0);
             BuildRelays();
             InitTrans();   // ★[v117.18.12 · JACK 1116 «꺾임 소단 전이»] 전이 켠 도로 · 급한 굽이 있을 때만(아니면 아무것도 안 함 — 비트 같음)
+            InitCorners();   // ★[JACK 1117] 급한 굽이 안쪽 모퉁이 — 급한 굽이 없는 도로 · 전이 켠 도로는 아무것도 안 함(비트 같음)
         }
 
         /// <summary>★[v117.16] 가지치기용 — 모든 단면 중 가장 작은 F(성토 · 절토). 단면이 하나면 기본 그대로(옛 셈과 비트 같음).</summary>
@@ -529,6 +532,7 @@ public static partial class RoadRing
         {
             LoHi0(x, y, ref pt);
             if (_tr != null) ApplyTrans(x, y, ref pt);
+            if (_cn != null) ApplyCorner(x, y, ref pt);   // ★[JACK 1117 «안쪽 뭉개짐 · 송곳 둥글게»] 급한 굽이 안쪽 모퉁이(전이 끈 도로만 — 전이와 함께 켜지지 않음)
         }
 
         void LoHi0(double x, double y, ref Pt pt)
@@ -708,10 +712,46 @@ public static partial class RoadRing
             double z = Math.Min(pt.Hi, Math.Max(pt.Lo, g));
             pt.Z = z;
             pt.Kind = pt.Lo > pt.Hi ? (byte)4 : z > g ? (byte)3 : z < g ? (byte)2 : (byte)0;
+            // ★[JACK 1117 «진입도로 지표면 안 섬 — 이렇게 시공하지 않음»] 사면 자리에 갇힌 땅(원지반이 성토 사면보다 높거나 절토 사면보다 낮아 그대로 남던 자리)은 둘레 사면 면으로 고름
+            //   (성토로 둘러싸이면 성토 면 lo · 절토면 hi — 둘레 데이라잇에서 Φ = 0이라 이어짐) · 섬이 없으면 Isles = null(비트 같음)
+            //   섬 구멍 안은 Φ와 상관없이(도로 면에 안 이어진 바뀐 점 — 땅이 절토 면보다도 높은 둔덕 꼭대기 — 도 구멍 안이라 같이 고름 · 둔덕 시험 계측 7.9 m 턱)
+            if (Isles != null && pt.Kind != 4 && pt.Kind != 1)
+                foreach (var (ig, env, fill) in Isles)
+                {
+                    if (!env.Contains(x, y) || !InRing(ig, x, y)) continue;
+                    // 둘레 변마다 성토 둘레(lo = 땅) · 절토 둘레(hi = 땅) — 한쪽뿐이면 그 면 · 섞이면 두 둘레까지 거리로 이어 섞음(둘레에서 Φ = 0 그대로 · 턱 없음)
+                    double dF = double.PositiveInfinity, dC = double.PositiveInfinity;
+                    for (int k = 0; k + 1 < ig.Length; k++)
+                    {
+                        double ex = ig[k + 1].X - ig[k].X, ey = ig[k + 1].Y - ig[k].Y, l2 = ex * ex + ey * ey;
+                        double t = l2 < 1e-24 ? 0 : Math.Clamp(((x - ig[k].X) * ex + (y - ig[k].Y) * ey) / l2, 0, 1);
+                        double dd = Math.Sqrt(Sq(x - ig[k].X - t * ex) + Sq(y - ig[k].Y - t * ey));
+                        if (fill[k]) dF = Math.Min(dF, dd); else dC = Math.Min(dC, dd);
+                    }
+                    double wC = double.IsPositiveInfinity(dC) ? 0 : double.IsPositiveInfinity(dF) ? 1 : dF / Math.Max(dF + dC, 1e-12);
+                    // ★[검토 7] 찾는 거리 밖(후보 없음 — lo = −∞ / hi = +∞)이면 있는 쪽 면으로(땅 높이로 떨어지는 절벽 없게) · 둘 다 없으면 땅 그대로
+                    double lo0 = double.IsFinite(pt.Lo) ? pt.Lo : pt.Hi, hi0 = double.IsFinite(pt.Hi) ? pt.Hi : pt.Lo;
+                    double zt = wC <= 0 ? lo0 : wC >= 1 ? hi0 : (1 - wC) * lo0 + wC * hi0; if (!double.IsFinite(zt)) break;
+                    pt.Z = zt; pt.Kind = zt > g ? (byte)3 : zt < g ? (byte)2 : (byte)0; pt.Isle = true; break;
+                }
             return pt;
         }
 
         /// <summary>Φ = max(lo − G, G − hi) — 양수 = 바뀐 자리(도로가 땅을 바꿈) · 0 = 데이라잇.</summary>
+        /// <summary>★[JACK 1117 «섬 현상»] 사면 속 땅 섬(넓이 ≥ 1 ㎡ — 그보다 작은 것은 옛대로 땅 높이로 메움) — 고른 면(성토 lo / 절토 hi). <see cref="SlopeRegion"/>이 채움.</summary>
+        internal List<(NetTopologySuite.Geometries.Coordinate[] G, NetTopologySuite.Geometries.Envelope Env, bool[] Fill)>? Isles;
+        public int IsleCount => Isles?.Count ?? 0;
+        public double IsleArea; public int IsleMixed;
+
+        /// <summary>점이 닫힌 고리 안인가(짝홀 · 병렬 셈에서 안전 — 공유 상태 없음).</summary>
+        static bool InRing(NetTopologySuite.Geometries.Coordinate[] r, double x, double y)
+        {
+            bool c = false;
+            for (int i = 0, j = r.Length - 1; i < r.Length; j = i++)
+                if ((r[i].Y > y) != (r[j].Y > y) && x < (r[j].X - r[i].X) * (y - r[i].Y) / (r[j].Y - r[i].Y) + r[i].X) c = !c;
+            return c;
+        }
+
         public static double Phi(in Pt p) => p.Kind == 1 ? 1e9 : double.IsNaN(p.G) ? double.NaN : Math.Max(p.Lo - p.G, p.G - p.Hi);
     }
 }

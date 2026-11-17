@@ -137,6 +137,14 @@ static class RoadRingBend
             int hit = 0; foreach (var w in wk) { var (a, c) = RoadGrade.RangeOnLine(w, null, null); if (RoadGrade.CutWallRecords(inp.TierWalls.Select(t => new[] { t.S0, t.S1, (double)t.Side, t.Tier, t.BenchL }).ToList(), w.Side, a, c, true) > 0) hit++; }
             double cov = 0, tot = recs.Sum(r => r.C - r.A);
             foreach (var r in recs) { var rs = wk.Where(w => w.Side == r.L.Side).Select(w => RoadGrade.RangeOnLine(w, null, null)).Where(q => q.S1 > r.A && q.S0 < r.C).OrderBy(q => q.S0).ToList(); double e = double.NaN; foreach (var q in rs) { double s0 = Math.Max(q.S0, r.A), s1 = Math.Min(q.S1, r.C); if (double.IsNaN(e)) { cov += s1 - s0; e = s1; } else if (s1 > e) { cov += s1 - Math.Max(s0, e); e = s1; } } }
+            if (Environment.GetEnvironmentVariable("BLOCKTEST_RRTRWALLS") != null)
+            {
+                foreach (var r in recs) Console.WriteLine($"[TR]     기록 쪽{r.L.Side} K{r.L.K} S{r.A:F1}~{r.C:F1} · 고른 선 점 측점: " + string.Join(" ", r.L.Pts.Where((p, i) => i % 12 == 0 || i == r.L.Pts.Count - 1).Select(p => $"{p.S:F1}@({p.X % 1000:F1},{p.Y % 1000:F1})")));
+                foreach (var w in wk) { var (a, c) = RoadGrade.RangeOnLine(w, null, null); Console.WriteLine($"[TR]     옹벽선 쪽{w.Side} K{w.K} S{a:F1}~{c:F1} 점 {w.Pts.Count} ({w.Pts[0].X % 1000:F1},{w.Pts[0].Y % 1000:F1})→({w.Pts[^1].X % 1000:F1},{w.Pts[^1].Y % 1000:F1})"); }
+                foreach (var l in l1.Where(l => sel.Any(q => q.Side == l.Side && q.Cut == l.Cut && q.K == l.K) && l.Role != RoadGrade.LineRole.Wall && !l.Cross && l.Pts.Count >= 2)) { var (a, c) = RoadGrade.RangeOnLine(l, null, null); Console.WriteLine($"[TR]     남은 같은 단 선 {l.Role} 쪽{l.Side} K{l.K} 면{l.Prof} S{a:F1}~{c:F1} ({l.Pts[0].X % 1000:F1},{l.Pts[0].Y % 1000:F1})→({l.Pts[^1].X % 1000:F1},{l.Pts[^1].Y % 1000:F1})"); }
+                var dmp = Environment.GetEnvironmentVariable("BLOCKTEST_RRTRDUMP");
+                if (!string.IsNullOrEmpty(dmp)) { Directory.CreateDirectory(dmp); using var w2 = new StreamWriter(Path.Combine(dmp, "tris.txt")); foreach (var t in b1.Tris) w2.WriteLine(string.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:R} {1:R} {2:R} {3:R} {4:R} {5:R} {6:R} {7:R} {8:R} 0", t.A.X, t.A.Y, t.A.Z, t.B.X, t.B.Y, t.B.Z, t.C.X, t.C.Y, t.C.Z)); }
+            }
             inp.TierWalls.Clear(); inp.TierWalls.AddRange(save);
             var b2 = RoadRing.Build(inp); string f2 = b2.Ok ? RegexFp(RoadRingJack.TriStats(b2)) : "(못 지음)";
             bool ok = f2 == fp0 && wk.Count > 0 && hit == wk.Count;

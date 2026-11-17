@@ -19,6 +19,7 @@ public static partial class RoadRing
         Volumes(b);
         var S = SlopeRegion(ev, f, out var daylight, out _, out string rnote);
         b.Daylight = daylight;
+        if (ev.Isles != null) Volumes(b);   // ★[JACK 1117 «섬 현상»]
         if (S != null && S.Area > 1e-6)
         {
             double maxDist = 0;

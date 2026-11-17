@@ -74,6 +74,8 @@ public static partial class RoadRing
         public readonly List<(double S0, double S1, double Rin)> Sharp = new();
         /// <summary>굽이 마디에 붙인 옹벽 기록 끝(측점 · 밀린 거리) — 한계 ≤ 0.13 m.</summary>
         public readonly List<(double From, double To)> RecSnaps = new();
+        /// <summary>★[JACK 1117] 급한 굽이 안쪽 모퉁이 범위 끝까지 늘린 옹벽 기록 끝(측점 → 늘린 측점) · 기록 단면을 받은 끝 마구리 변 수.</summary>
+        public readonly List<(double From, double To)> RecWiden = new(); public int CapWalls;
         public bool SharpAt(double s) { foreach (var w in Sharp) if (s >= w.S0 - 1e-9 && s <= w.S1 + 1e-9) return true; return false; }
         /// <summary>단 하나(첫 단 소단까지) 거리 — 급한 굽이가 k단 소단선에 미치는 측점 범위 = 구간 ± k × 이 값(소단선은 가장자리에서 k단 몫 떨어져 굽이 둘레를 쓸고 감).</summary>
         public double BendReach;
@@ -134,6 +136,11 @@ public static partial class RoadRing
         }
         return (x.ToArray(), y.ToArray(), s.ToArray(), z.ToArray());
     }
+
+    /// <summary>★[JACK 1117] 옹벽 기록이 도로 끝에 닿으면 마구리도 그 단면 — [하네스] 끄면 옛 결과와 견줌.</summary>
+    internal static bool CapWalls = true;
+    /// <summary>★[검토 9] 기록 끝을 도로 끝으로 붙이는 거리(m) — 고를 선 끝 · 선 자르기 오차(수 cm)보다 넉넉히.</summary>
+    const double RecEndSnap = 0.5;
 
     const double BendMargin = 1.0, BendWin = 1.0, BendSnapSeg = 0.26;
 
@@ -245,6 +252,56 @@ public static partial class RoadRing
         }
         // ★[v117.18.8 · JACK 1116 «변환이 이상하게» · 검토 H2] 급한 굽이 안의 0.25 m 호 마디(R 7)에 끼운 점은 바깥 둘레를 스스로 겹치게 함(안쪽 가장자리가 반경 ≈ 반폭) — 그 안(급한 굽이 구간 · 마디 ≤ 0.26 m)에서는
         //   옹벽 기록 끝을 가까운 마디로 붙임(한계 ≤ 0.13 m · 끝마다 독립 — 차례 무관) · 기록 S0 · S1 자체를 고쳐 쓰므로 둘레 · 결과 · 수량이 같은 값을 봄 · 두 끝이 한 마디로 모이면 기록이 사라지므로 못 지음(말없이 안 버림)
+        // ★[JACK 1117 «소단선이 여기밖에 안 잡혀 이쪽만 옹벽 변환됨» · «변환했는데도 사면이 남아 있음»] 옹벽 기록 끝이 급한 굽이 안쪽 모퉁이 범위(구간 ± 단 × 단 하나 거리 — 그 단 소단선이 굽이를 도는 범위)에 있으면
+        //   그 범위 끝까지 늘림(두 다리 모두 · 모퉁이를 돌아) — 모퉁이 면은 두 다리 단면을 하나로 셈(<see cref="Evaluator.ApplyCorner"/>) · 기록 자체(도면 저장 값)는 그대로(이 짓기 안에서만)
+        var widen = new List<(double From, double To)>();
+        //   ★[JACK 1117 «변환했는데도 사면이 남아 있음» · 검토 9] 기록 끝이 도로 끝에서 RecEndSnap 안이면 도로 끝으로(선 자르기 · 고르기 오차로 1 cm 모자라 마구리가 사면으로 남던 것)
+        for (int i = 0; i < recs.Count; i++)
+        {
+            if (recProf[i] < 0) continue;
+            double a = recs[i].S0, c = recs[i].S1;
+            if (c < S[^1] && c >= S[^1] - RecEndSnap) { widen.Add((c, S[^1])); c = S[^1]; }
+            if (a > S[0] && a <= S[0] + RecEndSnap) { widen.Add((a, S[0])); a = S[0]; }
+            if (a != recs[i].S0 || c != recs[i].S1) recs[i] = recs[i] with { S0 = a, S1 = c };
+        }
+        //   급한 굽이 모퉁이 늘림 — 모퉁이 셈을 쓰는 도로(전이 끔 · 코리더식 · 모퉁이 셈 켬)만 · 기록 끝마다 그 끝이 든 굽이 하나만(이웃 굽이로 이어 늘리지 않음)
+        if (recs.Count > 0 && sharp.Count > 0 && !inp.BendTrans && CornerRule && Corridor)
+        {
+            double br = Math.Max(inp.Cut.BenchH * inp.Cut.Slope + inp.Cut.BenchW, inp.Fill.BenchH * inp.Fill.Slope + inp.Fill.BenchW);
+            var orig = recs.ToList();
+            for (int i = 0; i < recs.Count; i++)
+            {
+                if (recProf[i] < 0) continue;   // 가장자리 옹벽(고리 엔진 밖)
+                double a = orig[i].S0, c = orig[i].S1; int k = Math.Max(1, orig[i].Tier);
+                // 같은 쪽 다른 기록 자리는 넘지 않음(나중 기록이 이기므로 늘린 끝이 다른 단 기록을 덮으면 그 옹벽이 사라짐 — 합친 변환 계측) · 겹친 기록이 있으면 안 늘림
+                double lim1 = S[^1], lim0 = S[0]; bool overlap = false;
+                for (int j = 0; j < orig.Count; j++)
+                {
+                    if (j == i || orig[j].Side != orig[i].Side) continue;
+                    if (orig[j].S0 < c && orig[j].S1 > a) overlap = true;
+                    else if (orig[j].S0 >= c - 1e-6) lim1 = Math.Min(lim1, orig[j].S0);
+                    else if (orig[j].S1 <= a + 1e-6) lim0 = Math.Max(lim0, orig[j].S1);
+                }
+                if (overlap) continue;
+                double na = a, nc = c;
+                foreach (bool hiEnd in new[] { true, false })
+                {
+                    double s0 = hiEnd ? c : a; int bj = -1; double bd = double.MaxValue;
+                    for (int w = 0; w < sharp.Count; w++)
+                    {
+                        if (InnerSideXY(X, Y, S, sharp[w].S0, sharp[w].S1) != orig[i].Side) continue;
+                        double z0 = Math.Max(S[0], sharp[w].S0 - k * br), z1 = Math.Min(S[^1], sharp[w].S1 + k * br);
+                        if (!(s0 > z0 + 1e-6 && s0 < z1 - 1e-6)) continue;
+                        double dd = s0 < sharp[w].S0 ? sharp[w].S0 - s0 : s0 > sharp[w].S1 ? s0 - sharp[w].S1 : 0;
+                        if (dd < bd) { bd = dd; bj = w; }
+                    }
+                    if (bj < 0) continue;
+                    if (hiEnd) { double t = Math.Min(Math.Min(S[^1], sharp[bj].S1 + k * br), lim1); if (t > c + 1e-6 && sharp[bj].S1 + k * br > c) { widen.Add((c, t)); nc = t; } }
+                    else { double t = Math.Max(Math.Max(S[0], sharp[bj].S0 - k * br), lim0); if (t < a - 1e-6 && sharp[bj].S0 - k * br < a) { widen.Add((a, t)); na = t; } }
+                }
+                if (na != recs[i].S0 || nc != recs[i].S1) recs[i] = recs[i] with { S0 = na, S1 = nc };
+            }
+        }
         var snaps = new List<(double, double)>();
         if (recs.Count > 0 && sharp.Count > 0)
         {
@@ -268,7 +325,7 @@ public static partial class RoadRing
         if (recs.Count > 0) (X, Y, S, Z) = InsertStations(X, Y, S, Z, recs.SelectMany(r => new[] { r.S0, r.S1 }).ToList());
         int n = X.Length;
         var d = new Deck { X = X, Y = Y, S = S, Z = Z, Length = S[^1], MinSlope = inp.MinSlope };
-        d.Sharp.AddRange(sharp); d.RecSnaps.AddRange(snaps); d.Trans = inp.BendTrans; d.BendReach = Math.Max(inp.Cut.BenchH * inp.Cut.Slope + inp.Cut.BenchW, inp.Fill.BenchH * inp.Fill.Slope + inp.Fill.BenchW);
+        d.Sharp.AddRange(sharp); d.RecSnaps.AddRange(snaps); d.RecWiden.AddRange(widen); d.Trans = inp.BendTrans; d.BendReach = Math.Max(inp.Cut.BenchH * inp.Cut.Slope + inp.Cut.BenchW, inp.Fill.BenchH * inp.Fill.Slope + inp.Fill.BenchW);
         d.Recs.AddRange(recs); d.RecProf = recProf.ToArray(); d.ProfKeys.Clear(); d.ProfKeys.AddRange(profKeys);
         var sec = inp.Sec;
         // 측점마다 가로 점(왼쪽 바깥 → 오른쪽 바깥) — 옵셋(좌 −) · 높이 차
@@ -356,6 +413,23 @@ public static partial class RoadRing
             int k = (j + 1) % m;
             d.SegSide[j] = d.BSide[j] == d.BSide[k] ? d.BSide[j] : (sbyte)0;
             d.SegProf[j] = d.SegSide[j] == 0 || d.Recs.Count == 0 ? 0 : d.ProfAt(d.SegSide[j], (d.BS[j] + d.BS[k]) / 2);
+            // ★[JACK 1117 «변환했는데도 사면이 남아 있음»] 끝 마구리 — 옹벽 기록이 도로 끝(시작 · 끝 측점)까지 닿으면 마구리 변도 그 기록 단면(전엔 늘 기본 단면이라 마구리 너머 사면이 남음).
+            //   두 쪽 기록이 다 닿으면 옹벽이 더한(옹벽 시작 단이 작은) 쪽 · 기록 끝이 도로 중간이면 마구리 그대로(날개)
+            if (CapWalls && d.SegSide[j] == 0 && d.Recs.Count > 0 && Math.Abs(d.BS[j] - d.BS[k]) < 1e-9 && (Math.Abs(d.BS[j] - S[0]) < 1e-9 || Math.Abs(d.BS[j] - S[^1]) < 1e-9))
+            {
+                // ★[검토 3] 마구리 변의 쪽 = 변 가운데의 옆 거리 부호(왼쪽 −1 · 오른쪽 +1) — 그 쪽 기록만(한쪽만 옹벽이면 마구리 반쪽 + 그 모서리만)
+                int ie = Math.Abs(d.BS[j] - S[0]) < 1e-9 ? 0 : n - 1;
+                double mxc = (d.B[j].X + d.B[k].X) / 2 - X[ie], myc = (d.B[j].Y + d.B[k].Y) / 2 - Y[ie], offc = -(mxc * nx[ie] + myc * ny[ie]);
+                int capSide = offc < 0 ? -1 : 1;
+                double se = d.BS[j]; int best = 0;
+                for (int r = 0; r < d.Recs.Count; r++)
+                {
+                    int pr = d.RecProf[r]; if (pr <= 0 || d.Recs[r].Side != capSide) continue;
+                    if (d.Recs[r].S0 > se + 1e-3 || d.Recs[r].S1 < se - 1e-3) continue;
+                    if (best == 0 || d.ProfKeys[pr].Tier < d.ProfKeys[best].Tier) best = pr;
+                }
+                if (best > 0) { d.SegProf[j] = best; d.CapWalls++; }
+            }
         }
         int Rank(int p) => p <= 0 || p >= d.ProfKeys.Count ? int.MaxValue : d.ProfKeys[p].Tier;
         for (int j = 0; j < m; j++)
@@ -373,6 +447,15 @@ public static partial class RoadRing
             return null;
         }
         return d;
+    }
+
+    /// <summary>굽이 안쪽 쪽(−1 좌 · +1 우) — 구간 앞 · 뒤 1 m 중심선 방향 차(왼쪽으로 꺾이면 왼쪽 · <see cref="Evaluator"/> 전이와 같은 셈).</summary>
+    static int InnerSideXY(double[] X, double[] Y, double[] S, double s0, double s1)
+    {
+        int Ix(double s) { int i = Array.BinarySearch(S, s); if (i < 0) i = ~i; return Math.Clamp(i, 1, S.Length - 1); }
+        int a = Ix(s0 - 1), b = Ix(s1 + 1);
+        double h0 = Math.Atan2(Y[a] - Y[a - 1], X[a] - X[a - 1]), h1 = Math.Atan2(Y[b] - Y[b - 1], X[b] - X[b - 1]);
+        return Ang(h1 - h0) > 0 ? -1 : 1;
     }
 
     static double Sq(double v) => v * v;
