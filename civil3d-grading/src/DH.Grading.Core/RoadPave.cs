@@ -55,10 +55,15 @@ public static class RoadPave
 
     /// <summary>층마다 닫힌 고리(오프셋 O · 중심 높이 기준 높이 차 Z) — 꼭짓점 = 왼 끝 −HalfL · 크라운 0 · 오른 끝 +HalfR.
     /// 윗선 = <see cref="RoadGrade.Section.Drop"/> − 위 층 두께 합 · 밑선 = 윗선 − T · 양 끝 세로(두께는 연직). 반시계(위에서 보아 왼 위 → 오른 위가 아니라 단면 평면 O–Z에서 반시계).</summary>
-    public static List<List<(double O, double Z)>> Rings(RoadGrade.Section sec, IReadOnlyList<Layer> layers)
+    /// <param name="shoulder">★[JACK 1117 «횡단에서 길어깨가 안 나와»] 길어깨까지(−OuterL ~ +OuterR · 길어깨 꺾임점 포함 · 차로와 같은 층 — 길어깨 층 따로 정한 값이 없어 차로 층 그대로) · false = 차로만(종전)</param>
+    public static List<List<(double O, double Z)>> Rings(RoadGrade.Section sec, IReadOnlyList<Layer> layers, bool shoulder = false)
     {
         var o = new List<List<(double O, double Z)>>();
-        double[] xs = { -sec.HalfL, 0, sec.HalfR };
+        var xl = new List<double>();
+        if (shoulder && sec.ShoulderL > 1e-6) xl.Add(-sec.OuterL);
+        xl.Add(-sec.HalfL); xl.Add(0); xl.Add(sec.HalfR);
+        if (shoulder && sec.ShoulderR > 1e-6) xl.Add(sec.OuterR);
+        var xs = xl.ToArray();
         double acc = 0;
         foreach (var l in layers)
         {

@@ -628,7 +628,9 @@ internal sealed class GradingPanel : UserControl
             HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
             Background = Brushes.Transparent,   // ★바탕이 칠해지면 로고가 통째로 가려진다
         }));
-        Content = deck;
+        // ★[튜토리얼 · JACK 1117] 덮개(Adorner) 자리 — 창 전체를 어둡게 덮고 누를 단추만 뚫는다(<see cref="Tutorial.TutSpot"/>)
+        _spotRoot = deck;
+        Content = new System.Windows.Documents.AdornerDecorator { Child = deck };
 
 
         // ★[검토 0909] <c>Changed</c>는 <b>정적 이벤트</b>다 — 창이 사라질 때 반드시 해지한다.
@@ -1448,9 +1450,19 @@ internal sealed class GradingPanel : UserControl
             Grid.SetColumn(tabs[i], i); grid.Children.Add(tabs[i]);
         }
         Paint();
+        _showMake = Paint;
         return grid;
     }
     private bool _tabFix;
+
+    // ★[튜토리얼 · JACK 1117] 튜토리얼이 비추는 단추 · 덮개 자리 · «계획부지 생성» 탭으로 돌리기
+    private FrameworkElement? _spotRoot;
+    private System.Action? _showMake;
+    internal FrameworkElement? SpotRoot => _spotRoot;
+    internal Button PickPlanButton => _pickPlan;
+    internal Button PickGroundButton => _pickGround;
+    internal Button BuildButton => _build;
+    internal void ShowMakeTab() { if (!_tabFix) return; _tabFix = false; _showMake?.Invoke(); }
 
     // ── ★[JACK 1112] 맨 위 설명 칸 ──────────────────────────────────────
     /// <summary>맨 위 칸에 하나만 보인다 — "demo" · "cut" · "fill" · "excav".</summary>

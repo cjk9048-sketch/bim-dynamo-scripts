@@ -836,6 +836,7 @@ public sealed partial class XsecViewCommand
         // ★[검토] 이름은 <b>옮긴 뒤</b>에 그린다 — 생 DBText라 뷰를 따라오지 않는다.
         //   자리는 뷰의 실제 아래쪽에서 잡는다(칸 모서리가 아니라).
         nameAt.Clear();
+        var nameBand = new List<(ObjectId Id, string Name, double X, double Y)>();   // ★[JACK 1117] 측점 밴드 칸에 쓸 뷰 — 밴드 글이 실패하면 노란 이름으로 되돌림
         try
         {
             using var trN2 = db.TransactionManager.StartTransaction();
@@ -844,7 +845,9 @@ public sealed partial class XsecViewCommand
                 try
                 {
                     if (trN2.GetObject(vid, OpenMode.ForRead) is not Entity ev) continue;
+                    // ★[JACK 1117 «노란 측점과 흰 측점이 겹쳐»] 측점 밴드 칸이 있는 뷰는 이름을 그 칸에만(DrawStationBand · 흰색) — 뷰 아래 노란 이름은 칸이 없을 때만
                     var ex2 = ev.GeometricExtents;
+                    if (ev is CivilDb.SectionView svN && StationBandIndex(trN2, svN) >= 0) { nameBand.Add((vid, vn, (ex2.MinPoint.X + ex2.MaxPoint.X) / 2.0, ex2.MinPoint.Y)); continue; }
                     nameAt.Add((vn, (ex2.MinPoint.X + ex2.MaxPoint.X) / 2.0, ex2.MinPoint.Y));
                 }
                 catch { }
@@ -894,7 +897,11 @@ public sealed partial class XsecViewCommand
         X9("밴드 묶기");
         BindBandSections(db, viewIds, kindOf, scale, annoScale, log, t != null ? RoadKind : "정지면");   // ★[v111.5 · 검토 M1] 진입도로 FGL = 진입도로 단면
         X9("측점 밴드");
-        DrawStationBand(db, viewIds, scale, annoScale, log);   // ★[JACK 0827] 측점 칸에 우리 이름
+        var bandDone = new HashSet<ObjectId>();
+        DrawStationBand(db, viewIds, scale, annoScale, log, bandDone);   // ★[JACK 0827] 측점 칸에 우리 이름
+        // ★[JACK 1117 · 검토 LOW] 밴드 칸에 못 쓴 뷰는 이름을 잃지 않게 뷰 아래 노란 이름으로
+        var lost = nameBand.Where(v => !bandDone.Contains(v.Id)).Select(v => (v.Name, v.X, v.Y)).ToList();
+        if (lost.Count > 0) { int nLost = DrawViewNames(db, lost, NameTextMm * sc, log); nTxt += nLost; log.AppendLine($"  ⚠측점 밴드 글을 못 쓴 뷰 {lost.Count}개 — 뷰 아래 이름으로 대신 씀 {nLost}개"); }
         X9("검토선 숨기기");
         HideSampleLines(db, cdoc, slIds, groupId, log, t != null ? RoadXsecHiddenLayer : ProfileCommand.XsecHiddenLayer);   // ★뷰를 다 만든 뒤에 숨긴다 · ★[v111.5] 진입도로 = «DH도로-» 숨김 레이어(부지 «DH-» 지우기에 안 걸림)
 
@@ -3648,11 +3655,13 @@ public sealed partial class XsecViewCommand
     /// <para><b>칸이 없으면 조용히 건너뛴다.</b> 템플릿에 측점 밴드를 넣기 전에도 안전하다.</para></summary>
     private static int DrawStationBand(Database db,
                                        List<(ObjectId Id, double St, string Name)> views,
-                                       double scale, double annoScale, System.Text.StringBuilder log)
+                                       double scale, double annoScale, System.Text.StringBuilder log, HashSet<ObjectId> done = null)
     {
         if (views == null || views.Count == 0) return 0;
         int n = 0, noSlot = 0, nGapRead = 0;
+        var wrote = new List<ObjectId>();
         double firstGapM = 0.0;
+        string bandProbe = "";
         double h = PaperToStyle(BandTextMm, scale, annoScale) * (annoScale > 1e-9 ? annoScale : 1.0);
         try
         {
@@ -3684,6 +3693,9 @@ public sealed partial class XsecViewCommand
                     //   <c>idx</c>번째 칸의 <b>가운데</b> 높이를 잡는다.
                     var ext = ((Entity)sv).GeometricExtents;
                     double cx = (ext.MinPoint.X + ext.MaxPoint.X) / 2.0;
+                    // ★[JACK 1117 «GL · FGL과 정렬이 안 돼»] 가로 자리 = 노선 중심(옵셋 0) — Civil 밴드 GL · FGL 값은 중심선에 찍힌다(좌우 폭이 다르면 뷰 가운데 ≠ 중심선)
+                    try { double ox = 0, oy = 0; if (sv.FindXYAtOffsetAndElevation(0, (sv.ElevationMin + sv.ElevationMax) / 2, ref ox, ref oy)) cx = ox; } catch { }
+                    if (n == 0) bandProbe = BandLabelProbe(tr, sv);
                     double bandM = BandHeightMm / 1000.0 * scale;
                     // ★★★[JACK 0828 · 검토] <b>틈을 주면 칸이 통째로 내려간다 — 글씨도 따라가야 한다.</b>
                     //   그래프 바닥과 첫 칸 사이에 <see cref="BandGapMm"/>만큼 틈을 넣었는데,
@@ -3725,10 +3737,12 @@ public sealed partial class XsecViewCommand
                     ms.AppendEntity(t);
                     tr.AddNewlyCreatedDBObject(t, true);
                     n++;
+                    wrote.Add(vid);
                 }
                 catch { }
             }
             tr.Commit();
+            if (done != null) foreach (var w in wrote) done.Add(w);   // 커밋한 뒤에만 «썼다»
         }
         catch (System.Exception ex) { log?.AppendLine("  측점 밴드 글씨 실패 — " + ex.Message); return 0; }
 
@@ -3772,6 +3786,7 @@ public sealed partial class XsecViewCommand
                       + (nGapRead > 0
                          ? $" · 자리 = 그래프바닥 − 틈 {firstGapM:F3}m − 칸 {bandMLog:F3}m×(순번+0.5)"
                          : " · ※틈을 한 번도 못 읽었다"));
+        if (bandProbe.Length > 0) log?.AppendLine("    밴드 라벨 자리(첫 뷰) — " + bandProbe);
         log?.AppendLine($"    단위 확인(원시값 그대로) — 틈 {gapRawLog:0.######} ÷ 칸높이 {hRawLog:0.######} = "
                       + (double.IsNaN(ratio) ? "<b>못 잼</b>" : $"{ratio:0.####}")
                       + $"  (같은 단위면 {BandGapMm / BandHeightMm:0.####}이어야 한다"
@@ -3780,6 +3795,44 @@ public sealed partial class XsecViewCommand
                             ? " — <b>맞다</b>)"
                             : $" — ⚠<b>어긋난다. 이 비만큼 단위가 다르다</b>)"));
         return n;
+    }
+
+    /// <summary>★[JACK 1117] 밴드 칸마다 값 라벨의 글자 붙임 · 띄움(GL · FGL이 칸 어디에 찍히나 — 측점 글을 같은 법으로 놓으려고). 진단 한 줄.</summary>
+    private static string BandLabelProbe(Transaction tr, CivilDb.SectionView sv)
+    {
+        var sb = new System.Text.StringBuilder();
+        try
+        {
+            using var bi = sv.Bands.GetBottomBandItems();
+            for (int b = 0; b < bi.Count; b++)
+            {
+                var bs = tr.GetObject(bi[b].BandStyleId, OpenMode.ForRead);
+                sb.Append($" [{b}] {(bs as CivilDb.Styles.StyleBase)?.Name} 틈 {bi[b].Gap:0.####}");
+                foreach (var pi in bs.GetType().GetProperties())
+                {
+                    if (!pi.Name.EndsWith("LabelStyleId") || pi.PropertyType != typeof(ObjectId)) continue;
+                    ObjectId lid; try { lid = (ObjectId)pi.GetValue(bs); } catch { continue; }
+                    if (lid.IsNull || tr.GetObject(lid, OpenMode.ForRead) is not CivilDb.Styles.LabelStyle ls) continue;
+                    foreach (ObjectId cid in ls.GetComponents(CivilDb.Styles.LabelStyleComponentType.Text))
+                    {
+                        if (tr.GetObject(cid, OpenMode.ForRead) is not CivilDb.Styles.LabelStyleTextComponent tc) continue;
+                        if (!tc.General.Visible.Value) continue;
+                        string at = "?", ap = "?", xo = "?", yo = "?", ht = "?";
+                        using (var mt = tc.Text)
+                        {
+                            try { using var v = mt.Attachment; at = v.Value.ToString(); } catch { }
+                            try { using var v = mt.XOffset; xo = v.Value.ToString("0.####"); } catch { }
+                            try { using var v = mt.YOffset; yo = v.Value.ToString("0.####"); } catch { }
+                            try { using var v = mt.Height; ht = v.Value.ToString("0.####"); } catch { }
+                        }
+                        using (var g = tc.General) { try { using var v = g.AnchorPoint; ap = v.Value.ToString(); } catch { } }
+                        sb.Append($" · {pi.Name.Replace("LabelStyleId", "")} 붙임 {at} 띄움 {xo}/{yo} 기준 {ap} 글 {ht}");
+                    }
+                }
+            }
+        }
+        catch (System.Exception ex) { sb.Append(" 실패 " + ex.Message); }
+        return sb.ToString();
     }
 
     /// <summary>★★★[JACK 0827] <b>측점 칸을 가리는 자 — 한 곳에서만 판단한다.</b>
@@ -4324,7 +4377,7 @@ public sealed partial class XsecViewCommand
 
     private static DH.Grading.Core.XsecQty QtyAt(Transaction tr, CivilDb.Alignment al, double station,
         double wl, double wr,
-        CachedGroundSurface csG, DH.Grading.Core.IGroundSurface csP, CachedGroundSurface csE,
+        DH.Grading.Core.IGroundSurface csG, DH.Grading.Core.IGroundSurface csP, CachedGroundSurface csE,
         System.Text.StringBuilder dbg,
         System.Collections.Generic.IReadOnlyList<(DH.Grading.Core.RockClass Rock, CachedGroundSurface Cs)> strata = null,
         CachedGroundSurface csW = null,
@@ -4342,8 +4395,11 @@ public sealed partial class XsecViewCommand
         System.Collections.Generic.IReadOnlyList<DH.Grading.Core.IGroundSurface> extraEdges = null,
         System.Collections.Generic.IReadOnlyList<DH.Grading.Core.StructModel> structs = null,
         double[] stOut = null,
-        XqCtx xq = null)
+        XqCtx xq = null,
+        DH.Grading.Core.IGroundSurface natG = null,
+        DH.Grading.Core.IGroundSurface mainG = null)
     {
+        // ★[JACK 1117] natG = 진입도로 횡단만 — 원지반(csG = 도로 전 땅 = FirstOf(바탕면, 원지반)) · 층따기는 csG가 원지반과 같은(자연 땅) 칸만
         // ★[v111.5 · 검토 M1] csP = 계획면(부지 = 정지면 캐시 · 진입도로 = FirstOf(진입도로, 바탕면)) · extraEdges = 가장자리를 따로 다듬을 면(진입도로 · 바탕 — 합친 면의 경계 계단)
         // 절단선의 좌우 끝을 구한다 — 종단도·횡단도가 쓰는 것과 <b>같은 함수</b>다.
         if (!SectionCommand.TryCut(al, station, wl, wr, out var cut))
@@ -4415,6 +4471,8 @@ public sealed partial class XsecViewCommand
         var edgeSurfs = new System.Collections.Generic.List<DH.Grading.Core.IGroundSurface> { csG, csP, csE, csW, x2 == null ? csWx : null };   // ★[v103.3 · 재검토 중간 8] 옹벽 터파기 가장자리도 · ★[v105.3] 2D면 그 꺾임점(아래)
         if (strata != null) foreach (var (_, cs2) in strata) edgeSurfs.Add(cs2);
         if (extraEdges != null) edgeSurfs.AddRange(extraEdges);   // ★[v111.5] 진입도로 · 바탕을 따로 — 합친 면은 경계가 이어져 계단 자리를 못 찾는다
+        if (natG != null) edgeSurfs.Add(natG);                     // ★[JACK 1117] 원지반 가장자리도(도로 전 땅이 합친 면이라)
+        if (mainG != null) edgeSurfs.Add(mainG);                   // ★[검토 MED2] 본 도로 면 가장자리(자연 땅 판정 칸 경계)
         foreach (var cs in edgeSurfs)
         {
             if (cs == null) continue;
@@ -4783,10 +4841,48 @@ public sealed partial class XsecViewCommand
                             return false;
                         };
                 }
-                var xr = DH.Grading.Core.XsecQtyRight.Measure(xs, gy, py2, fi, xq.O, rockAt);
+                // ★[JACK 1117 · 검토 MED1 · MED2] 진입도로 — 자연 땅 칸만(도로 전 땅 = 원지반 · 1 cm · 가지 도로면 본 도로 면 밖) 층따기 · 표토제거 · 벌개재근 —
+                //   부지 정지면 위 · 본 도로 위는 부지 · 본 도로 표가 이미 셈
+                bool[] natOk = null;
+                if (natG != null)
+                {
+                    double[] ny = Read(natG), mk = mainG == null ? null : Read(mainG);
+                    natOk = new bool[n - 1];
+                    int nOff = 0, nOffFill = 0;
+                    if (ny == null) dbg?.Append(" ⚠[자연 땅 판정 — 원지반을 못 읽어 층따기 · 표토 · 벌개를 안 셈]");
+                    else
+                        for (int i = 0; i + 1 < n; i++)
+                        {
+                            natOk[i] = System.Math.Abs(gy[i] - ny[i]) <= DH.Grading.Core.XsecQtyRight.Tol && System.Math.Abs(gy[i + 1] - ny[i + 1]) <= DH.Grading.Core.XsecQtyRight.Tol
+                                    && (mk == null || (double.IsNaN(mk[i]) && double.IsNaN(mk[i + 1])));
+                            if (natOk[i] || double.IsNaN(gy[i]) || double.IsNaN(gy[i + 1]) || double.IsNaN(py2[i]) || double.IsNaN(py2[i + 1])) continue;
+                            double dd = (py2[i] - gy[i] + py2[i + 1] - gy[i + 1]) / 2;
+                            if (System.Math.Abs(dd) > DH.Grading.Core.XsecQtyRight.Tol) { nOff++; if (dd > 0) nOffFill++; }
+                        }
+                    if (nOff > 0) dbg?.Append($" [자연 땅 아닌 공사 칸 {nOff}(성토 {nOffFill}) — 층따기 · 표토 · 벌개 안 셈]");
+                }
+                bool[] benchOk = natOk == null || !xq.O.Bench ? null : (bool[])natOk.Clone();
+                // ★[JACK 1117 «층따기가 도로 길어깨 부분까지»] 진입도로 면(차로 + 길어깨) 아래는 안 함 — 사면 아래만
+                if (xq.O.Bench && !double.IsNaN(xq.RoadEdgeL))
+                {
+                    // 자가검증 — 막기 전이면 도로 면 아래에 계단이 생겼을 줄 수(JACK 1117 스샷의 길어깨 아래 계단)
+                    var pre = DH.Grading.Core.XsecQtyRight.Measure(xs, gy, py2, null, xq.O with { Clear = false }, rockAt, benchOk);
+                    int nUnder = pre.BenchLines.Count(l => l.Any(p => p.X > -xq.RoadEdgeL + 1e-6 && p.X < xq.RoadEdgeR - 1e-6));
+                    if (nUnder > 0) dbg?.Append($" [층따기 — 도로 면(좌 {xq.RoadEdgeL:F2} · 우 {xq.RoadEdgeR:F2} m) 아래 계단 {nUnder}줄 막음]");
+                    benchOk ??= System.Linq.Enumerable.Repeat(true, n - 1).ToArray();
+                    for (int i = 0; i + 1 < n; i++)
+                        if (xs[i + 1] > -xq.RoadEdgeL && xs[i] < xq.RoadEdgeR) benchOk[i] = false;
+                }
+                var xr = DH.Grading.Core.XsecQtyRight.Measure(xs, gy, py2, fi, xq.O, rockAt, benchOk, natOk);
                 xq.BenchSink?.Invoke(xr.BenchLines);
                 DH.Grading.Core.XsecQtyRight.Put(led, xr);
                 dbg?.Append($" | 공종 길이 벌개 {xr.ClearFill:F2}/{xr.ClearCut:F2} 표토 {xr.StripFill:F2}/{xr.StripCut:F2} 면고르기 {xr.SmoothFill:F2}/{xr.SmoothCut:F2} 층따기 {xr.Bench:F2}");
+                if (xr.BenchLines.Count > 0)
+                {
+                    // ★[JACK 1117 «층따기 폐합 안 됨»] 자가검증 — 디딤 끝이 땅에 닿았나(안 닿으면 계단이 땅과 닫히지 않음)
+                    var bk = DH.Grading.Core.BenchCut.Check(xs, gy, xr.BenchLines);
+                    dbg?.Append($" [층따기 계단 {xr.BenchLines.Count}줄 · 디딤 {bk.Treads} · 땅에 안 닿은 끝 {bk.Open}(최대 {bk.GapMax:F2} m)]");
+                }
             }
             catch (System.Exception exQ) { dbg?.Append(" | ⚠공종 길이 실패 — " + exQ.Message); }
         return qq;
@@ -4799,6 +4895,8 @@ public sealed partial class XsecViewCommand
         public DH.Grading.Core.Forest.ForestSection Forest;
         /// <summary>★[JACK 1116 «층따기»] 측점 하나의 층따기 계단 꺾은선을 받는다(그림용).</summary>
         public System.Action<System.Collections.Generic.List<(double X, double Z)[]>> BenchSink;
+        /// <summary>★[JACK 1117] 진입도로 횡단 — 이 측점 도로 면 가장자리 옆거리(좌 · 우 m · 차로 + 길어깨) · 그 안은 층따기 안 함. NaN = 없음(부지).</summary>
+        public double RoadEdgeL = double.NaN, RoadEdgeR = double.NaN;
     }
 
     /// <summary>노선을 연다 — 못 열면 <c>null</c>.</summary>
@@ -4960,7 +5058,7 @@ public sealed partial class XsecViewCommand
                    XsecTarget xt = null)
     {
         // ★★[v111.5 · 계획 3 · 검토 M1 · M5] xt = 진입도로 — 계획면 = FirstOf(진입도로, 바탕면) · 가장자리 다듬기에 둘 따로 · 터파기 기준면 안 읽음(도로 횡단엔 터파기 없음) ·
-        //   표 꼬리에 «부지 정지면 위 측점»(부지 토량과 겹침) · 진입도로가 횡단 폭 끝에 닿으면 알림
+        //   ★[JACK 1117] 토량 기준 = 도로 전 땅(정지면_DH → 원지반) · 표 꼬리에 «부지 정지면 위 측점 … 정지면부터 셈» · 진입도로가 횡단 폭 끝에 닿으면 알림
         var map = new System.Collections.Generic.Dictionary<string, DH.Grading.Core.XsecQty>();
         var ledgers = new System.Collections.Generic.Dictionary<string, DH.Grading.Core.QtyLedger>();
         // ★경고 계수기는 <c>Done()</c>보다 <b>먼저</b> 선언한다 — 지역 함수가 이것들을 읽는다.
@@ -5194,6 +5292,9 @@ public sealed partial class XsecViewCommand
             // ★★[v111.5 · 계획 3 · 검토 M1] 진입도로 계획면 = FirstOf(진입도로, 도로 바탕면) — 도로 · 사면 자리는 진입도로, 그 밖은 바탕면(정지면_DH 또는 원지반).
             //   부지와 같은 셈(QtyAt)에 계획면 하나만 바꿔 넣는다 · 가장자리 다듬기에는 둘을 따로(합친 면은 경계가 이어져 도로 끝 계단을 못 찾음)
             DH.Grading.Core.IGroundSurface planQ = csP;
+            // ★★[JACK 1117 «부지 부분은 부지 횡단에서 뽑았으니 진입도로에서는 빠져야»] 진입도로 토량 기준 = 도로 전 땅 = FirstOf(바탕면 정지면_DH, 원지반) —
+            //   부지 정지면만 있는 자리는 계획면 = 기준이라 0 · 도로가 깎고 쌓은 몫(정지면을 고친 것 포함)만 센다 · 바탕이 원지반이면 종전 그대로
+            DH.Grading.Core.IGroundSurface groundQ = csG, natQ = null, mainQ = null;
             System.Collections.Generic.List<DH.Grading.Core.IGroundSurface> roadEdges = null;
             CachedGroundSurface csBaseR = null;
             if (xt != null)
@@ -5208,6 +5309,16 @@ public sealed partial class XsecViewCommand
                 planList.Add(csBaseR);
                 planQ = new DH.Grading.Core.FirstOfSurfaces(planList.ToArray());
                 roadEdges = planList;
+                // ★[검토 MED2] 가지 도로 = 본 도로 면(가까운 것 먼저 — BranchBase와 같은 사슬) → 바탕면 → 원지반 · 본 도로 몫은 본 도로 표가 셈
+                if (csG != null)
+                {
+                    var gl = new System.Collections.Generic.List<DH.Grading.Core.IGroundSurface>();
+                    gl.AddRange(planList.Skip(1).Take(nMain));
+                    if (xt.BaseIsPad && csBaseR != null) gl.Add(csBaseR);
+                    if (gl.Count > 0) { gl.Add(csG); groundQ = new DH.Grading.Core.FirstOfSurfaces(gl.ToArray()); natQ = csG; }
+                    if (nMain > 0) mainQ = new DH.Grading.Core.FirstOfSurfaces(planList.Skip(1).Take(nMain).ToArray());
+                }
+                log?.AppendLine($"  ★진입도로 토량 기준 = {(natQ != null ? $"도로 전 땅({(nMain > 0 ? $"본 도로 면 {nMain}개 → " : "")}{(xt.BaseIsPad && csBaseR != null ? "정지면_DH → " : "")}원지반) · 부지 정지면{(nMain > 0 ? " · 본 도로" : "")}만 있는 자리는 0 · 층따기 · 표토 · 벌개는 자연 땅만" : "원지반")}");
                 if (xt.MainSurfIds.Count > 0)
                     log?.AppendLine($"  ★가지 도로 — 본 도로 면 {nMain}/{xt.MainSurfIds.Count}개를 계획면에(가지 다음 · 바탕면 앞)");
                 log?.AppendLine($"  ★진입도로 계획면 = 진입도로{(csRoad == null ? "(⚠면 없음)" : "")} → 바탕면 {(xt.BaseIsPad ? "정지면_DH" : "원지반")}{(csBaseR == null ? "(⚠면 없음)" : "")}(앞 면에 표고가 있으면 그것)"
@@ -5236,10 +5347,21 @@ public sealed partial class XsecViewCommand
                     }
                 }
             }
+            // ★[JACK 1117 «층따기가 도로 길어깨 부분까지»] 진입도로 면(차로 + 길어깨) 옆거리 — 그 안은 층따기 안 함(사면 아래 자연 땅만)
+            RoadDesign rdQ = null; DH.Grading.Core.RoadGrade.Section rsQ = null; System.Collections.Generic.List<(double A, double B)> rgQ = null;
+            if (xt != null && xqCtx != null && xo.Bench)
+                try { rdQ = RoadDesign.Read(tr, alignId); if (rdQ != null) { rsQ = rdQ.Section(); rgQ = RoadRanges.Of(tr, alignId, rdQ); } }
+                catch (System.Exception exR) { log?.AppendLine("  ⚠층따기 — 도로 폭을 못 읽어 도로 면 아래도 셈: " + exR.Message); rdQ = null; }
             foreach (var s in sl)
             {
                 try
                 {
+                    if (rdQ != null)
+                    {
+                        bool inRoad = rgQ.Count == 0 || RoadRanges.Inside(rgQ, s.St);
+                        xqCtx.RoadEdgeL = inRoad ? rsQ.OuterL : double.NaN;   // 차로 + 길어깨(측구는 JACK 1117 «나중에 다시 설계» — 손대지 않음)
+                        xqCtx.RoadEdgeR = inRoad ? rsQ.OuterR : double.NaN;
+                    }
                     // ★[JACK 0826] 처음 세 개만 찍으면 하필 <b>부지 밖 측점</b>이 걸려
                     //   값이 나온 측점을 못 본다. <b>값이 나온 것</b>도 세 개까지 따로 남긴다.
                     // ★[JACK 0827] <b>모든 측점을 남긴다.</b> 셋만 찍으니 하필 부지 밖 측점이 걸려
@@ -5251,10 +5373,10 @@ public sealed partial class XsecViewCommand
                     var backOut = new double[2] { double.NaN, 0 };
                     var stOut = new double[4] { double.NaN, double.NaN, 0, 0 };   // ★[v117.4] 구조물 공제(성토 · 되메우기 · 잘림 어긋남 · 터파기 바닥 아래)
                     if (xqCtx != null) { string bnm = s.Name; xqCtx.BenchSink = ln => { if (ln.Count > 0) benchMap[bnm] = ln; }; }
-                    var q = QtyAt(tr, al0, s.St, wl, wr, csG, planQ, csE, dbg,
+                    var q = QtyAt(tr, al0, s.St, wl, wr, groundQ, planQ, csE, dbg,
                                   strata, csW, led, DH.Grading.Core.QuantityTable.DeepLimitM,
                                   qtyBasis, csWx, secRec, secOut, backRec, backOut,
-                                  x2ctx, x2ctx == null ? null : x => x2map[s.Name] = x, roadEdges, structs, stOut, xqCtx);
+                                  x2ctx, x2ctx == null ? null : x => x2map[s.Name] = x, roadEdges, structs, stOut, xqCtx, natQ, mainQ);
                     if (stOut[2] > 0) sdirty.Add(s.Name);
                     if (stOut[3] > 0.1) sbelow.Add(s.Name);
                     if (!double.IsNaN(stOut[0]))
@@ -5263,17 +5385,19 @@ public sealed partial class XsecViewCommand
                         led.Add(DH.Grading.Core.QtyKey.OfStructFill(), stOut[0]);
                         led.Add(DH.Grading.Core.QtyKey.OfStructBackfill(), stOut[1]);
                     }
-                    // ★[v111.5 · 검토 M5 · M6] 진입도로 — 부지 정지면이 원지반과 다른 자리를 지나는 측점(부지 토량과 겹침) · 진입도로가 횡단 폭 끝에 닿는 측점
+                    // ★[v111.5 · 검토 M5 · M6] 진입도로 — 도로 면이 부지 정지면(≠ 원지반)을 고친 측점 · 진입도로가 횡단 폭 끝에 닿는 측점
                     if (xt != null && SectionCommand.TryCut(al0, s.St, wl, wr, out var cutR))
                     {
                         double ax = cutR.Left.X, ay = cutR.Left.Y, bx = cutR.Right.X, by = cutR.Right.Y;
-                        if (xt.BaseIsPad && csPadR != null && csG != null)
+                        // ★[JACK 1117] 진입도로(또는 본 도로) 면이 부지 정지면(≠ 원지반)을 고친 측점 — 기준이 정지면이라 겹침은 없다 · 표 꼬리에 짧게
+                        if (natQ != null && planQ is DH.Grading.Core.FirstOfSurfaces fq)
                         {
                             int nk = (int)System.Math.Max(2, System.Math.Ceiling((wl + wr) / 0.5) + 1);
                             for (int k = 0; k < nk; k++)
                             {
                                 double tk = (double)k / (nk - 1), px = ax + (bx - ax) * tk, py = ay + (by - ay) * tk;
-                                if (csPadR.TryGetElevation(px, py, out double zp) && csG.TryGetElevation(px, py, out double zg) && System.Math.Abs(zp - zg) > 0.01)
+                                int si = fq.SourceAt(px, py);
+                                if (si >= 0 && si < roadEdges.Count - 1 && csBaseR != null && csBaseR.TryGetElevation(px, py, out double zp) && csG.TryGetElevation(px, py, out double zg) && System.Math.Abs(zp - zg) > 0.01)
                                 { padHit.Add(s.Name); break; }
                             }
                         }
@@ -5419,14 +5543,14 @@ public sealed partial class XsecViewCommand
             if (sbelow.Count > 0) log?.AppendLine($"  ⚠구조물 공제 — 터파기 바닥 아래 구조물이 있는 측점 {sbelow.Count}개({string.Join(", ", sbelow.Take(8))}{(sbelow.Count > 8 ? " …" : "")}) — 터파기 면이 구조물을 못 감쌌습니다([구조물 터파기]를 확인)");
             structOn = sdirty.Count == 0;
         }
-        // ★★[v111.5 · 계획 3 · 검토 M5] 진입도로가 부지 정지면(정지면_DH) 위에 놓인 측점 — 그 자리 토량은 부지 토량과 겹친다(계획면이 정지면_DH를 따라가 부지 절성토가 함께 셈) · 표 꼬리 한 줄
+        // ★★[v111.5 · 계획 3 · 검토 M5] 진입도로가 부지 정지면(정지면_DH)을 고친 측점 — ★[JACK 1117] 기준이 정지면이라 겹침 없음 · 표 꼬리 한 줄
         if (xt != null && padHit.Count > 0)
         {
             var order = new System.Collections.Generic.List<string>();
             foreach (var s in sl) order.Add(s.Name);
             string rg = DH.Grading.Core.RoadXsecRules.Ranges(order, padHit);
-            wallFoot = (wallFoot.Length > 0 ? wallFoot + " · " : "") + $"부지 정지면 위 측점 {rg}(부지 토량과 겹침)";
-            log?.AppendLine($"  진입도로 — 부지 정지면(정지면_DH ≠ 원지반) 위 측점 {padHit.Count}개: {rg} — 그 몫은 부지 토량과 겹친다(표 꼬리에 적음)");
+            wallFoot = (wallFoot.Length > 0 ? wallFoot + " · " : "") + $"부지 정지면 위 측점 {rg}은 정지면부터 셈(부지 토량과 안 겹침)";
+            log?.AppendLine($"  진입도로 — 부지 정지면(정지면_DH ≠ 원지반)을 고친 측점 {padHit.Count}개: {rg} — 기준이 정지면이라 도로 몫만 셈(표 꼬리에 적음)");
         }
         // ★[v111.5 · 검토 M6] 진입도로 면이 횡단 폭 끝까지 가면 수량이 잘린다 — 알림(폭 = 진입도로 면 옆거리 + 여유라 보통 안 생김)
         if (xt != null && nRoadEdge > 0)

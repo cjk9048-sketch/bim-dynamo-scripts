@@ -2814,8 +2814,12 @@ public sealed class ProfileCommand
                 plId = pl.ObjectId;
             }
             else pl = (Polyline)tr.GetObject(plId, OpenMode.ForWrite);
-            while (pl.NumberOfVertices > 0) pl.RemoveVertexAt(pl.NumberOfVertices - 1);
-            for (int i = 0; i < pts.Count; i++) pl.AddVertexAt(i, new Point2d(pts[i].X, pts[i].Y), 0, 0, 0);
+            // ★[JACK 1117 «노선 그리기 중 3번째 누를 때 종단도 생성 오류»] 원인: 정점을 다 지우다 2개 아래가 되면 AutoCAD가 eDegenerateGeometry —
+            //   있는 정점은 자리만 옮기고(SetPointAt) 모자라면 더하고 남으면 끝에서 뺌(2개 아래로는 안 내려감)
+            int keep = System.Math.Min(pl.NumberOfVertices, pts.Count);
+            for (int i = 0; i < keep; i++) pl.SetPointAt(i, new Point2d(pts[i].X, pts[i].Y));
+            for (int i = keep; i < pts.Count; i++) pl.AddVertexAt(i, new Point2d(pts[i].X, pts[i].Y), 0, 0, 0);
+            while (pl.NumberOfVertices > pts.Count && pl.NumberOfVertices > 2) pl.RemoveVertexAt(pl.NumberOfVertices - 1);
             pl.Closed = false;
             tr.Commit();
         }

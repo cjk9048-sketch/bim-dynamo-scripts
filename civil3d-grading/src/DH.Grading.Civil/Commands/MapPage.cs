@@ -142,11 +142,90 @@ internal static class MapPage
     tell('cancel',null,function(){info.textContent=msg;},function(){info.textContent=msg;});
   });
 
+  // ★★[튜토리얼 · JACK 1117] CAD가 'tut:{on,…}'으로 켜면 — 어둡게 덮고 할 곳만 뚫는다(클릭도 그 자리만).
+  //   작은 단계: 1 검색 칸 → 2 지도(모서리 두 곳) → 3 [이 범위 가져오기] · 0 보내는 중(덮개 걷음). 바뀌면 CAD에 'sub'로 알린다.
+  //   Leaflet이 안 와도 살아 있어야 한다(그래서 여기 — 아래 return 앞).
+  var TS={on:false,found:false,sending:false,t:[],base:2,total:10,skip:'',quit:'',sub:-1,el:null,sig:''};
+  function tutPost(ev,x){ if(!EMBED) return; var o={kind:'tut',ev:ev}; if(x) for(var k in x) o[k]=x[k];
+    try{ window.chrome.webview.postMessage(JSON.stringify(o)); }catch(e){} }
+  function tutDom(){
+    if(TS.el) return TS.el;
+    var css=document.createElement('style');
+    css.textContent='.tutd{position:fixed;background:rgba(10,14,22,.62);z-index:5000}'+
+      '#tutg{position:fixed;z-index:5001;pointer-events:none;border:3px solid #ffb020;border-radius:8px;'+
+      'box-shadow:0 0 0 3px rgba(255,176,32,.35),0 0 18px 4px rgba(255,176,32,.8);animation:tutp 1.2s ease-in-out infinite}'+
+      '@keyframes tutp{0%,100%{opacity:1}50%{opacity:.4}}'+
+      '#tutb{position:fixed;z-index:5002;max-width:330px;background:#0a6269;color:#fff;border:2px solid #a8e0e3;border-radius:10px;'+
+      'padding:9px 12px;font-size:14px;font-weight:600;line-height:1.45;box-shadow:0 6px 18px rgba(0,0,0,.45)}'+
+      '#tutb .n{display:inline-block;padding:0 8px;border-radius:10px;background:#ffb020;color:#1f2430;font-weight:bold;margin-right:6px}'+
+      '#tutb .r{margin-top:8px;display:flex;gap:6px;justify-content:flex-end}'+
+      '#tutb button{padding:3px 10px;font-size:12px;background:#11474c;border-color:#5fb3b8}';
+    document.head.appendChild(css);
+    var d=[0,1,2,3].map(function(){ var x=document.createElement('div'); x.className='tutd'; document.body.appendChild(x); return x; });
+    var g=document.createElement('div'); g.id='tutg'; document.body.appendChild(g);
+    var b=document.createElement('div'); b.id='tutb'; document.body.appendChild(b);
+    TS.el={d:d,g:g,b:b}; return TS.el;
+  }
+  function tutHide(){ if(!TS.el) return; TS.el.d.forEach(function(x){x.style.display='none';}); TS.el.g.style.display='none'; TS.el.b.style.display='none'; }
+  function tutBalloon(idx){
+    var el=tutDom(), b=el.b, sig=idx+'|'+TS.t.join('|');
+    if(TS.sig===sig) return; TS.sig=sig;
+    b.innerHTML='';
+    var top=document.createElement('div'), n=document.createElement('span'); n.className='n';
+    n.textContent=(TS.base+idx-1)+' / '+TS.total; top.appendChild(n);
+    top.appendChild(document.createTextNode(TS.t[idx-1]||'')); b.appendChild(top);
+    var r=document.createElement('div'); r.className='r';
+    if(idx===1&&TS.skip){ var s=document.createElement('button'); s.textContent=TS.skip;
+      s.addEventListener('click',function(){ TS.found=true; tutTick(); }); r.appendChild(s); }
+    var q=document.createElement('button'); q.textContent=TS.quit||'그만두기';
+    q.addEventListener('click',function(){ tutPost('quit'); }); r.appendChild(q);
+    b.appendChild(r);
+  }
+  function tutTick(){
+    if(!TS.on){ tutHide(); TS.sub=-1; return; }
+    var idx=TS.sending?0:(box?3:((TS.found||p1)?2:1));
+    if(idx!==TS.sub){ TS.sub=idx; tutPost('sub',{n:idx}); }
+    if(idx===0){ tutHide(); return; }
+    var ids=idx===1?['srow','slist']:(idx===2?['map']:['send']);
+    var L0=1e9,T0=1e9,R0=-1e9,B0=-1e9;
+    ids.forEach(function(id){ var e=document.getElementById(id); if(!e||e.style.display==='none') return;
+      var r=e.getBoundingClientRect(); if(r.width<1||r.height<1) return;
+      L0=Math.min(L0,r.left);T0=Math.min(T0,r.top);R0=Math.max(R0,r.right);B0=Math.max(B0,r.bottom); });
+    if(R0<L0){ tutHide(); return; }
+    var p=4; L0-=p;T0-=p;R0+=p;B0+=p;
+    var W=window.innerWidth,H=window.innerHeight,el=tutDom(),d=el.d;
+    function put(x,l,t,w,h){ x.style.display='block'; x.style.left=l+'px'; x.style.top=t+'px'; x.style.width=Math.max(0,w)+'px'; x.style.height=Math.max(0,h)+'px'; }
+    put(d[0],0,0,W,T0); put(d[1],0,B0,W,H-B0); put(d[2],0,T0,L0,B0-T0); put(d[3],R0,T0,W-R0,B0-T0);
+    put(el.g,L0,T0,R0-L0,B0-T0);
+    tutBalloon(idx);
+    var b=el.b; b.style.display='block';
+    var bw=b.offsetWidth,bh=b.offsetHeight,bl,bt;
+    if(idx===2){ bl=L0+12; bt=T0+12; }
+    else { bl=Math.max(8,Math.min(L0,W-bw-8)); bt=(B0+10+bh<H)?B0+10:Math.max(8,T0-bh-10); }
+    b.style.left=bl+'px'; b.style.top=bt+'px';
+  }
+  if(EMBED && window.chrome && window.chrome.webview){
+    window.chrome.webview.addEventListener('message',function(ev){
+      var m=(typeof ev.data==='string')?ev.data:'';
+      if(m.indexOf('tut:')!==0) return;
+      var o=null; try{ o=JSON.parse(m.substring(4)); }catch(e){}
+      if(!o) return;
+      TS.on=!!o.on; if(o.t) TS.t=o.t; if(o.base) TS.base=o.base; if(o.total) TS.total=o.total;
+      if(o.skip) TS.skip=o.skip; if(o.quit) TS.quit=o.quit; TS.sig=''; TS.sub=-1;
+      tutTick(); tutPost('ack');
+    });
+    document.addEventListener('keydown',function(e){ if(TS.on&&e.key==='Escape') tutPost('quit'); });
+    setInterval(tutTick,250);
+    tutPost('ready');
+  }
+
   function dead(msg){
     document.getElementById('map').style.display='none';
     document.getElementById('noweb').style.display='block';
     send.disabled=true;
     if(msg) info.textContent=msg;
+    if(TS.on){ TS.on=false; tutHide(); }
+    tutPost('dead',{msg:msg||''});   // ★[튜토리얼] 덮개를 걷고 CAD 말풍선이 까닭을 말한다
   }
   if (typeof L === 'undefined') { dead('지도 로드 실패'); return; }
 
@@ -275,18 +354,18 @@ internal static class MapPage
 
   send.addEventListener('click',function(){
     if(!box) return;
-    send.disabled=true; info.textContent='전송 중…';
+    send.disabled=true; info.textContent='전송 중…'; TS.sending=true;
     // ★[JACK 0901] 지적도 체크는 <b>지도 위 표시</b>이자 <b>같이 가져올지</b>의 뜻이다.
     box.cad = document.getElementById('cad').checked;
     tell('box',box,
       function(){ info.textContent=EMBED?'가져오는 중…':'전송 완료 · 창 닫아도 됨';
                   if(!EMBED) document.body.style.opacity=.6; },
-      function(){ info.textContent='전송 실패'; send.disabled=false; });
+      function(){ info.textContent='전송 실패'; send.disabled=false; TS.sending=false; });
   });
   // ★[주소 검색] 도킹바(EMBED)에서만 — 통신은 C#이 한다(키 · 로그). 결과는 'geo:[{t,c,x,y}]' 로 온다.
   var smk=null, sq=document.getElementById('q'), slist=document.getElementById('slist'), smsg=document.getElementById('smsg');
   function goHit(h){
-    slist.style.display='none'; smsg.textContent='';
+    slist.style.display='none'; smsg.textContent=''; TS.found=true;
     var ll=L.latLng(h.y,h.x);
     map.setView(ll,17);                       // 한가운데 · 17단계(지적도 시작 단계)
     if(smk) map.removeLayer(smk);
@@ -322,7 +401,7 @@ internal static class MapPage
     window.chrome.webview.addEventListener('message',function(ev){
       var m=(typeof ev.data==='string')?ev.data:'';
       if(m.indexOf('geo:')===0){ onGeo(m.substring(4)); return; }
-      if(m.indexOf('reject:')===0){ info.textContent=m.substring(7); send.disabled=!box; }
+      if(m.indexOf('reject:')===0){ info.textContent=m.substring(7); send.disabled=!box; TS.sending=false; }
     });
   }
 })();

@@ -178,7 +178,7 @@ public sealed partial class XsecViewCommand
     }
 
     /// <summary>★★[v116.8 · JACK 1110 «포장 아스팔트 · 콘크리트 — 횡단에도 표현» · 계획 `2026-11-10_진입도로_포장종류.md` §4] 진입도로 횡단 — 마감면(계획 종단 + 횡단 경사) 아래
-    /// 차로 양 끝 사이 포장 층(<see cref="RoadPave.Rings"/>) · 층마다 윤곽 + 비연관 해치(종이 1 mm보다 얇으면 윤곽만) · 뷰마다 지시선 하나에 층 이름 · 두께를 쌓은 글.
+    /// 길어깨 양 끝 사이 포장 층(<see cref="RoadPave.Rings"/> · ★[JACK 1117] 길어깨 = 차로와 같은 층) · 층마다 윤곽 + 비연관 해치(종이 1 mm보다 얇으면 윤곽만) · 뷰마다 지시선 하나에 층 이름 · 두께를 쌓은 글.
     /// 토공 · 도로 면은 그대로(표시만). 표식은 <see cref="BuildRoad"/>가 그린 것 모두에(«XSEC» — 다시 그릴 때 · 초기화가 지움).
     /// 자가 점검: 차로 세 점(−좌 반폭 · 0 · +우 반폭)에서 설계 윗선 − 진입도로 면 높이(10 mm 넘으면 ⚠ · 그리기는 설계 그대로 — 측구와 같은 법).</summary>
     static string DrawPaveSections(Database db, List<(ObjectId Id, double St, string Name)> views, ObjectId alignId, double wl, double wr, double scale, System.Text.StringBuilder log)
@@ -187,7 +187,7 @@ public sealed partial class XsecViewCommand
         int nView = 0, nEnt = 0, nMap = 0, nHatch = 0, nThin = 0, nFail = 0, nChk = 0; double dzMax = 0; string dzAt = "", failWhy = "";
         var sw = System.Diagnostics.Stopwatch.StartNew();
         var dash = WallSectionDraw.Prepare(db);
-        string kindTxt = "", drawnKey = "";
+        string kindTxt = "", drawnKey = "", ringO = "";
         PaveDrawn.TryRemove(alignId, out _);
         try
         {
@@ -202,7 +202,8 @@ public sealed partial class XsecViewCommand
             var al = tr.GetObject(alignId, OpenMode.ForRead) as CivilDb.Alignment;
             var rg = RoadRanges.Of(tr, alignId, d);
             var sec = d.Section();
-            var rings = RoadPave.Rings(sec, layers);
+            var rings = RoadPave.Rings(sec, layers, true);   // ★[JACK 1117] 길어깨까지(길어깨 층 값이 따로 없어 차로 층 그대로)
+            ringO = rings.Count > 0 ? $"{rings[0].Min(q => q.O):F2} ~ {rings[0].Max(q => q.O):F2} m(차로 {sec.HalfL:0.##}/{sec.HalfR:0.##} · 길어깨 {sec.ShoulderL:0.##}/{sec.ShoulderR:0.##})" : "";
             double totalT = layers.Sum(l => l.T);
             CivilDb.TinSurface? rs = null;
             try { if (d.SurfaceHandle.Length > 0 && db.TryGetObjectId(new Handle(System.Convert.ToInt64(d.SurfaceHandle, 16)), out var sid) && !sid.IsErased) rs = tr.GetObject(sid, OpenMode.ForRead) as CivilDb.TinSurface; } catch { }
@@ -237,7 +238,7 @@ public sealed partial class XsecViewCommand
                         Put(pl, lp);
                         // 해치 — 종이 위 두께가 얇으면 윤곽만(결정 D5) · 무늬 크기 · 각은 무늬를 걸기 전에도 · 건 뒤에도(지적도 해치와 같은 차례 — 다시 걸어야 먹음)
                         // 종이 위 두께 = 그려진 두께(뷰 세로 과장 포함 — 크라운에서 위 · 밑 점 사이) ÷ 축척
-                        double drawnT = System.Math.Abs(P(0, ring[4].Z).Y - P(0, ring[1].Z).Y);
+                        double drawnT = System.Math.Abs(P(0, 0).Y - P(0, -ly.T).Y);   // ★[JACK 1117] 꼭짓점 차례와 무관(길어깨 꼭짓점이 끼어도)
                         if (drawnT * 1000.0 / scale < RoadPave.ThinPaperMm) { nThin++; continue; }
                         Hatch? h = null;
                         try
@@ -303,7 +304,7 @@ public sealed partial class XsecViewCommand
         catch (System.Exception ex) { log?.AppendLine("  포장 단면 — 실패: " + ex.Message); return "⚠포장 단면 못 넣음 — " + ex.Message; }
         string chk = nChk > 0 ? $" · 윗선 − 도로 면 최대 {dzMax * 1000:F1} mm{(dzMax > 0.01 ? " ⚠ " + dzAt : "")}" : "";
         PaveDrawn[alignId] = drawnKey;
-        log?.AppendLine($"  포장 단면({kindTxt}) — 뷰 {nView} · 객체 {nEnt} · 해치 {nHatch}(얇아 뺌 {nThin} · 실패 {nFail}{(failWhy.Length > 0 ? " — " + failWhy : "")}){chk}" + (nMap > 0 ? $" · ⚠뷰 좌표를 못 잰 뷰 {nMap}" : "") + $" · {sw.ElapsedMilliseconds} ms");
+        log?.AppendLine($"  포장 단면({kindTxt} · 길어깨까지{(ringO.Length > 0 ? " · 옵셋 " + ringO : "")}) — 뷰 {nView} · 객체 {nEnt} · 해치 {nHatch}(얇아 뺌 {nThin} · 실패 {nFail}{(failWhy.Length > 0 ? " — " + failWhy : "")}){chk}" + (nMap > 0 ? $" · ⚠뷰 좌표를 못 잰 뷰 {nMap}" : "") + $" · {sw.ElapsedMilliseconds} ms");
         try { DiagLog.Append($"\n[진입도로 횡단] 포장 단면({kindTxt}) — 뷰 {nView} · 해치 {nHatch}(얇아 뺌 {nThin} · 실패 {nFail}){chk}"); } catch { }
         return nView > 0 ? $"포장 단면 {nView}" + (nFail > 0 ? $"(⚠해치 실패 {nFail})" : "") + (dzMax > 0.01 ? $"(⚠윗선 − 도로 면 {dzMax * 1000:F0} mm)" : "") : "";
     }

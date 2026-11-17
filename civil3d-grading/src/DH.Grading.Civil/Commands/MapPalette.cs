@@ -37,6 +37,12 @@ public static class MapPalette
     /// <summary>★[v109] VWorld 키가 바뀌었다 — 열려 있으면 새 키로 다시 연다.</summary>
     internal static void KeyChanged() { try { _panel?.KeyChanged(); } catch { } }
 
+    // ★[튜토리얼 · JACK 1117] 지도 페이지 안 덮개 — 페이지가 보낸 <c>{kind:'tut',…}</c>는 튜토리얼로 · 튜토리얼 말은 <c>tut:{…}</c>로 페이지에
+    internal static event Action<string>? TutMessage;
+    internal static void RaiseTut(string raw) { try { TutMessage?.Invoke(raw); } catch { } }
+    internal static void TutPost(string json) { try { _panel?.TutPost(json); } catch { } }
+    internal static bool IsOpen { get { try { return _ps != null && _ps.Visible; } catch { return false; } } }
+
     /// <summary>지도 도킹바를 연다.</summary>
     /// <param name="epsg">조회에 쓸 원점 — <b>부르는 쪽이 정해서 넘긴다</b>(박스와 조회가 같아야 한다).</param>
     internal static void Show(Document doc, int epsg, string csNote)
@@ -617,6 +623,12 @@ internal sealed class MapPanel : UserControl
         }
     }
 
+    /// <summary>★[튜토리얼] 페이지에 튜토리얼 말(<c>tut:{…}</c>) — 아직 안 떴으면 버린다(페이지가 뜨면 'ready'를 보내 다시 받는다).</summary>
+    internal void TutPost(string json)
+    {
+        try { _web?.CoreWebView2?.PostWebMessageAsString("tut:" + json); } catch { }
+    }
+
     /// <summary>지도에 <b>안 됐다고 알린다</b> — 안 그러면 "받는 중"에서 영영 멈춘 것처럼 보인다.</summary>
     private void Reject(string why)
     {
@@ -644,6 +656,7 @@ internal sealed class MapPanel : UserControl
         try { raw = e.TryGetWebMessageAsString(); }
         catch { try { raw = e.WebMessageAsJson; } catch { return; } }
         if (string.IsNullOrEmpty(raw)) return;
+        if (raw.StartsWith("{\"kind\":\"tut\"", StringComparison.Ordinal)) { MapPalette.RaiseTut(raw); return; }   // ★[튜토리얼]
 
         // 지도가 제 상태를 알려 온 것 — 검은 화면일 때 왜인지 로그에 남는다.
         if (raw.StartsWith("{\"kind\":\"search\"", StringComparison.Ordinal))

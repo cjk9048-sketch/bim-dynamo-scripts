@@ -147,6 +147,12 @@ public static class GradingPalette
     }
 
     /// <summary>★[v111.7 · JACK 1102] 진입도로 창을 열 때 이 창을 숨긴다(떠 있을 때만 · 고른 것 · 값은 그대로 — 닫기 단추와 같음).</summary>
+    /// <summary>★[튜토리얼 · JACK 1117] 떠 있는 창의 알맹이 — 닫혀 있으면 null.</summary>
+    internal static GradingPanel? OpenPanel
+    {
+        get { try { return _ps != null && _ps.Visible ? _panel : null; } catch { return null; } }
+    }
+
     internal static void Hide()
     {
         try { if (_ps != null && _ps.Visible) _ps.Visible = false; } catch { }

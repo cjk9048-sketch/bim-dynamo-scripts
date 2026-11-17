@@ -41,7 +41,9 @@ public static class XsecQtyRight
     /// <param name="py">계획면 높이(없으면 NaN)</param>
     /// <param name="rockAt">층따기 — 그 가로 위치 원지반이 암반인가(null = 토사)</param>
     /// <param name="forest">입목지 구간 (x0, x1) 목록 · null = 임상도를 못 읽음(벌개 NaN)</param>
-    public static Result Measure(double[] xs, double[] gy, double[] py, IReadOnlyList<(double A, double B)>? forest, Opts o, System.Func<double, bool>? rockAt = null)
+    /// <param name="natOk">★[JACK 1117 · 검토 MED1] 표토제거 · 벌개재근을 셀 칸(자연 땅) — 진입도로 횡단은 부지 정지면 · 본 도로 위를 뺌 · null = 모든 칸</param>
+    /// <param name="benchOk">★[JACK 1117] 층따기를 할 수 있는 칸(i = xs[i]~xs[i+1]) — 진입도로 횡단은 자연 땅(바탕면 = 원지반) 칸만 · null = 모든 칸</param>
+    public static Result Measure(double[] xs, double[] gy, double[] py, IReadOnlyList<(double A, double B)>? forest, Opts o, System.Func<double, bool>? rockAt = null, bool[]? benchOk = null, bool[]? natOk = null)
     {
         var r = new Result();
         int n = xs.Length;
@@ -93,8 +95,9 @@ public static class XsecQtyRight
         {
             if (sg[i] == 0) continue;
             double w = W(i);
-            if (sg[i] > 0) sf += w; else sc += w;
-            if (forest != null)
+            bool nat = natOk == null || (i < natOk.Length && natOk[i]);
+            if (nat) { if (sg[i] > 0) sf += w; else sc += w; }
+            if (forest != null && nat)
             {
                 double ov = 0;
                 foreach (var (fa, fb) in forest) ov += System.Math.Max(0, System.Math.Min(xs[i + 1], fb) - System.Math.Max(xs[i], fa));
@@ -106,7 +109,7 @@ public static class XsecQtyRight
         if (o.Bench && lo >= 0)
         {
             var fillCell = new bool[n - 1];
-            for (int i = 0; i + 1 < n; i++) fillCell[i] = d[i] > Tol;
+            for (int i = 0; i + 1 < n; i++) fillCell[i] = d[i] > Tol && (benchOk == null || (i < benchOk.Length && benchOk[i]));
             var spec = o.Spec ?? (BenchSpec.Soil with { Grade = o.BenchGrade });
             var bc = BenchCut.Cut(xs, gy, fillCell, spec, rockAt);
             bn = bc.Area; r.BenchLines = bc.Lines;

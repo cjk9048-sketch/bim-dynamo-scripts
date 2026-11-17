@@ -40,6 +40,13 @@ static class RoadPaveCheck
             Check(" ② 맨 윗선 = Drop · 층 두께 = T · 위 층 밑 = 아래 층 위 · 끝 = ±반폭", topErr < 1e-9 && tErr < 1e-9 && gapErr < 1e-9 && ends, $"윗선 {topErr:E1} · 두께 {tErr:E1} · 틈 {gapErr:E1} · 끝 {ends}");
             double sa = 0; var r0 = rg[0]; for (int i = 0; i < r0.Count; i++) { var a = r0[i]; var b = r0[(i + 1) % r0.Count]; sa += a.O * b.Z - b.O * a.Z; }
             Check(" ② 고리 반시계(O–Z 평면) · 넓이 = 폭 × 두께", sa > 0 && Math.Abs(sa / 2 - 6.5 * ly[0].T) < 1e-9, $"{sa / 2:F6} ㎡");
+            // ★[JACK 1117 «횡단에서 길어깨가 안 나와»] 길어깨까지 — 끝 = ±(반폭 + 길어깨) · 윗선 = Drop(길어깨 꺾임 포함) · 넓이 = (6.5 + 1.0) × 두께
+            var rs = RoadPave.Rings(sec, ly, true);
+            double topS = 0; int nv = rs[0].Count / 2;
+            foreach (var (o, z) in rs[0].Skip(nv)) topS = Math.Max(topS, Math.Abs(z - sec.Drop(o)));
+            double ss = 0; var s0 = rs[0]; for (int i = 0; i < s0.Count; i++) { var a = s0[i]; var b = s0[(i + 1) % s0.Count]; ss += a.O * b.Z - b.O * a.Z; }
+            bool endsS = rs.All(r => Math.Abs(r[0].O + 3.5) < 1e-12 && Math.Abs(r[nv - 1].O - 4.0) < 1e-12 && r.Any(q => Math.Abs(q.O + 3) < 1e-12));
+            Check(" ② 길어깨까지 고리 — 끝 = ±(반폭 + 길어깨) · 윗선 = Drop · 넓이 = 7.5 × 두께", nv == 5 && endsS && topS < 1e-9 && Math.Abs(ss / 2 - 7.5 * ly[0].T) < 1e-9, $"꼭짓점 {nv} · 끝 {endsS} · 윗선 {topS:E1} · {ss / 2:F6} ㎡");
         }
         // ③ 횡단 도장 판정 — 차례 측점 → 지표면 → 포장 → 축척 → 배치 · 옛 3칸 = 한 번 알림 · 실패 도장(빈 글)은 옛 판처럼
         {

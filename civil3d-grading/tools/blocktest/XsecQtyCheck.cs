@@ -36,7 +36,7 @@ static class XsecQtyCheck
         double slope = Math.Sqrt(100 + 25);
         check("S310d 성토 — 면고르기 = 성토 사면 빗길이 11.18 m(평탄 패드 뺌)", Near(r.SmoothFill, slope, 0.2) && Near(r.SmoothCut, 0), $"{r.SmoothFill:F2}");
         check("S310e 식생공법 = 면고르기와 같은 길이(2D 종자살포 = 성토 + 절토 면고르기)", Near(r.SeedFill, r.SmoothFill) && Near(r.SeedCut, r.SmoothCut), $"{r.SeedFill:F2}");
-        check("S310f 성토 — 층따기 = 성토 아래 원지반 1:2(> 1:4) 10 m 구간 계단 단면적 2.54 ㎡(손 계산 — 아래 S311)", Near(r.Bench, 2.5435, 0.03), $"{r.Bench:F3}");
+        check("S310f 성토 — 층따기 = 성토 아래 원지반 1:2(> 1:4) 10 m 구간 계단 단면적 2.46 ㎡(손 계산 — 아래 S311e · JACK 1117 끝 걸음 닫힘)", Near(r.Bench, 2.4565, 0.03), $"{r.Bench:F3}");
 
         // 절토 — 원지반 5 평탄 · 계획 10~20 1:2로 0까지 · 0 평탄(20~30) · 30~40 올라옴 → 사면 둘 + 골 바닥은 빠짐
         var g2 = Line(xs, (0, 5), (60, 5));
@@ -54,6 +54,12 @@ static class XsecQtyCheck
         check("S310k 소단 — 사면 둘(11.18 × 2) + 같은 쪽 소단 5 m = 27.36 m", Near(r3.SmoothCut, Math.Sqrt(100 + 25) + 5 + Math.Sqrt(100 + 25), 0.3), $"{r3.SmoothCut:F2}");
 
         Bench311(check, xs, on);
+
+        // ★[JACK 1117 · 검토 MED1] 자연 땅 칸만 표토 · 벌개(진입도로가 부지 정지면 위) — 0~35 m를 자연 땅 아님으로(공사 범위 20~50): 표토 30 → 15 · 벌개 10 → 5 · 면고르기 그대로 · null = 종전
+        var nat15 = new bool[xs.Length - 1];
+        for (int i = 0; i + 1 < xs.Length; i++) nat15[i] = xs[i] >= 35 - 1e-9;
+        var rn = XsecQtyRight.Measure(xs, g, p, f, on, null, null, nat15);
+        check("S310n 자연 땅 칸만 표토 · 벌개 — 15 / 5 m · 면고르기 · 층따기 그대로", Near(rn.StripFill, 15) && Near(rn.ClearFill, 5) && Near(rn.SmoothFill, r.SmoothFill, 1e-9) && Near(rn.Bench, r.Bench, 1e-9), $"표토 {rn.StripFill:F2} · 벌개 {rn.ClearFill:F2} · 면고르기 {rn.SmoothFill:F2} · 층따기 {rn.Bench:F3}");
 
         // 끈 항목은 NaN(표 –)
         var off = new XsecQtyRight.Opts(false, true, false, false, false, 0.25);
@@ -96,7 +102,7 @@ static class XsecQtyCheck
     static void Bench311(Action<string, bool, string> check, double[] xs, XsecQtyRight.Opts on)
     {
         bool Near(double a, double b, double tol) => Math.Abs(a - b) <= tol;
-        // 계단 꺾은선 검사 — 수직 턱 H ≥ hMin · 디딤 기울기 = 배수 · 디딤 폭 ≥ wMin(맨 끝 자른 한 칸만 예외)
+        // 계단 꺾은선 검사 — 수직 턱 H ≥ hMin · 디딤 기울기 = 배수 · 디딤 폭 ≥ wMin(맨 끝 걸음만 예외 — [JACK 1117] 턱을 줄여 구간 끝 땅점에서 닫음)
         (bool Ok, string Msg, int Steps) Chk(List<(double X, double Z)[]> lines, double hMin, double wMin, double drain)
         {
             if (lines.Count != 1) return (false, $"구간 {lines.Count}개", 0);
@@ -104,7 +110,7 @@ static class XsecQtyCheck
             for (int k = 0; k + 1 < p.Length; k++)
             {
                 double dx = p[k + 1].X - p[k].X, dz = p[k].Z - p[k + 1].Z;
-                if (Math.Abs(dx) < 1e-9) { steps++; minH = Math.Min(minH, dz); }
+                if (Math.Abs(dx) < 1e-9) { steps++; if (k + 2 < p.Length - 1) minH = Math.Min(minH, dz); }
                 else
                 {
                     bool last = k + 2 >= p.Length;
@@ -129,31 +135,52 @@ static class XsecQtyCheck
         }
         var flat10 = Ln((0, 10), (60, 10));
         // ① 1:3 — g = 1/3 · H = max(0.5, 1.0 × (1/3 − 0.04)) = 0.5 · 디딤 폭 = 0.5/0.29333 = 1.7045 · 걸음 면적 0.42614
-        //    30 m ÷ 1.7045 = 17 걸음 + 자른 끝 1.0227 m(면적 (0.5 + 0.2)/2 × 1.0227 = 0.35795) → 17 × 0.42614 + 0.35795 = 7.6023 ㎡
+        //    30 m ÷ 1.7045 = 17 걸음 + 끝 1.0227 m — ★[JACK 1117] 마지막 걸음은 턱 0.3(= 1.0227 × 0.29333)으로 줄여 x = 30 땅점에서 닫음(면적 0.3 × 1.0227 / 2 = 0.15341) → 17 × 0.42614 + 0.15341 = 7.3977 ㎡
+        //    (종전 7.6023 = 턱 0.5 그대로 디딤을 x = 30에서 잘라 땅보다 0.2 m 아래에 열린 채 끝남)
         var r3 = XsecQtyRight.Measure(xs, Ln((0, 10), (30, 0), (60, 0)), flat10, null, on);
         var c3 = Chk(r3.BenchLines, 0.5, 1.0, 0.04);
         check("S311a 1:3 — 턱 ≥ 0.5 · 디딤 폭 ≥ 1.0 · 디딤 경사 4 % · 18걸음", c3.Ok && c3.Steps == 18, c3.Msg + $" · {c3.Steps}걸음");
-        check("S311b 1:3 — 층따기 단면적 7.60 ㎡(손 계산)", Near(r3.Bench, 7.6023, 0.03), $"{r3.Bench:F3}");
+        check("S311b 1:3 — 층따기 단면적 7.40 ㎡(손 계산 · 끝 걸음 닫힘)", Near(r3.Bench, 7.3977, 0.03), $"{r3.Bench:F3}");
+        var k3 = BenchCut.Check(xs, Ln((0, 10), (30, 0), (60, 0)), r3.BenchLines);
+        check("S311j [JACK 1117] 디딤 끝이 모두 땅에 닿음(닫힌 계단)", k3.Treads == 18 && k3.Open == 0, $"디딤 {k3.Treads} · 안 닿음 {k3.Open} · 최대 틈 {k3.GapMax:F4}");
         // ② 1:5 · 1:4(경계) — 안 함
         var r5 = XsecQtyRight.Measure(xs, Ln((0, 10), (50, 0), (60, 0)), flat10, null, on);
         check("S311c 1:5 — 층따기 없음(면적 0 · 계단 0)", Near(r5.Bench, 0, 1e-9) && r5.BenchLines.Count == 0, $"{r5.Bench:F3} / {r5.BenchLines.Count}");
         var r4 = XsecQtyRight.Measure(xs, Ln((0, 10), (40, 0), (60, 0)), flat10, null, on);
         check("S311d 1:4(경계) — 층따기 없음(1:4는 «보다 급한»에 안 듦)", Near(r4.Bench, 0, 1e-9) && r4.BenchLines.Count == 0, $"{r4.Bench:F3} / {r4.BenchLines.Count}");
-        // ③ 섞인 땅 — 평탄 · 1:2(10~20) · 1:5(20~40) · 평탄: 1:2 구간만 · 2.5435 ㎡(10 m ÷ 1.087 = 9걸음 + 0.217 m)
+        // ③ 섞인 땅 — 평탄 · 1:2(10~20) · 1:5(20~40) · 평탄: 1:2 구간만 · 9 × 0.27174 + 끝 걸음(턱 0.1 · 0.217 m → 0.01087) = 2.4565 ㎡
         var rm = XsecQtyRight.Measure(xs, Ln((0, 5), (10, 5), (20, 0), (40, -4), (60, -4)), Ln((0, 5), (60, 5)), null, on);
         bool inside = rm.BenchLines.Count == 1 && rm.BenchLines[0].All(p => p.X >= 10 - 1e-6 && p.X <= 20 + 1e-6);
         var cm = Chk(rm.BenchLines, 0.5, 1.0, 0.04);
-        check("S311e 섞인 땅 — 1:2 구간(10~20 m)만 계단 · 2.54 ㎡", inside && cm.Ok && Near(rm.Bench, 2.5435, 0.03), $"{rm.Bench:F3} · {cm.Msg}");
+        check("S311e 섞인 땅 — 1:2 구간(10~20 m)만 계단 · 2.46 ㎡", inside && cm.Ok && Near(rm.Bench, 2.4565, 0.03), $"{rm.Bench:F3} · {cm.Msg}");
         // ④ 암반 — 턱 최소 0.4 → H = max(0.4, 0.46) = 0.46 · 폭 1.0 · 10걸음 · 10 × 0.23 = 2.30 ㎡
         var rr = XsecQtyRight.Measure(xs, Ln((0, 5), (10, 5), (20, 0), (40, -4), (60, -4)), Ln((0, 5), (60, 5)), null, on, a => true);
         check("S311f 암반 — 턱 최소 0.4(H = 0.46 · 폭 1.0) · 2.30 ㎡", Near(rr.Bench, 2.30, 0.03), $"{rr.Bench:F3}");
         // ⑤ 왼쪽이 낮은 땅(왼쪽으로 내려감) — 좌우 뒤집어도 같은 면적
         var rl = XsecQtyRight.Measure(xs, Ln((0, 0), (30, 10), (60, 10)), flat10, null, on);
         var cl = Chk(rl.BenchLines, 0.5, 1.0, 0.04);
-        check("S311g 왼쪽으로 내려가는 1:3 — 같은 7.60 ㎡ · 디딤은 내리막(왼쪽) 쪽", cl.Ok && Near(rl.Bench, 7.6023, 0.03) && rl.BenchLines[0][0].X > rl.BenchLines[0][^1].X, $"{rl.Bench:F3} · {cl.Msg}");
+        check("S311g 왼쪽으로 내려가는 1:3 — 같은 7.40 ㎡ · 디딤은 내리막(왼쪽) 쪽", cl.Ok && Near(rl.Bench, 7.3977, 0.03) && rl.BenchLines[0][0].X > rl.BenchLines[0][^1].X, $"{rl.Bench:F3} · {cl.Msg}");
         // ⑥ 설정값 — 폭 최소 3.0(장비 작업) → H = max(0.5, 3 × 0.2933 = 0.88)
         var rw = XsecQtyRight.Measure(xs, Ln((0, 10), (30, 0), (60, 0)), flat10, null, on with { Spec = BenchSpec.Soil with { WMin = 3.0 } });
         var cw = Chk(rw.BenchLines, 0.88, 3.0, 0.04);
         check("S311h 폭 최소 3.0 — 턱 ≥ 0.88 · 디딤 폭 ≥ 3.0", cw.Ok, cw.Msg);
+        // ⑦ [JACK 1117] 진입도로 — 층따기 가능 칸(자연 땅)만: 1:3 땅의 15 m 넘는 칸을 막으면 계단은 0~15 m 안 · 면적 < 7.60 · null이면 ①과 같음
+        var ok15 = new bool[xs.Length - 1];
+        for (int i = 0; i + 1 < xs.Length; i++) ok15[i] = xs[i + 1] <= 15 + 1e-9;
+        var rk = XsecQtyRight.Measure(xs, Ln((0, 10), (30, 0), (60, 0)), flat10, null, on, null, ok15);
+        var rk0 = XsecQtyRight.Measure(xs, Ln((0, 10), (30, 0), (60, 0)), flat10, null, on, null, null);
+        bool in15 = rk.BenchLines.Count > 0 && rk.BenchLines.All(l => l.All(p => p.X <= 15 + 1e-6));
+        check("S311l 층따기 가능 칸만(0~15 m) — 계단이 그 안 · 면적 줄어듦 · null = 종전", in15 && rk.Bench > 0 && rk.Bench < r3.Bench - 1 && Near(rk0.Bench, r3.Bench, 1e-12), $"{rk.Bench:F3} / {rk0.Bench:F3} / {r3.Bench:F3}");
+        // ⑧ [JACK 1117 «그리다 말고 끊어져»] 급한 땅 사이 짧은 완만한 꺾임(0.4 m) — 한 줄 계단 · 디딤 끝이 모두 땅에 닿음 · 면적 = 닫힌 꼴(디딤마다 땅 아래)
+        var gk = Ln((0, 12), (8, 9), (8.4, 8.95), (16, 6), (16.4, 5.95), (24, 3), (60, 3));
+        var rkk = XsecQtyRight.Measure(xs, gk, Ln((0, 13), (60, 13)), null, on);
+        var kk = BenchCut.Check(xs, gk, rkk.BenchLines);
+        // ⑨ [검토 LOW] 마지막 턱 5 cm 미만은 그리지 않음 — 모든 턱 ≥ LastMinH
+        double minRise = 1e9;
+        foreach (var rr0 in new[] { r3, rm, rkk, rl, rw })
+            foreach (var ln in rr0.BenchLines)
+                for (int k = 0; k + 1 < ln.Length; k++) if (Math.Abs(ln[k + 1].X - ln[k].X) < 1e-9) minRise = Math.Min(minRise, ln[k].Z - ln[k + 1].Z);
+        check("S311m 모든 턱 ≥ 5 cm(가는 조각 없음)", minRise >= BenchCut.LastMinH - 1e-9, $"최소 턱 {minRise:F3} m");
+        check("S311k 꺾인 급한 땅 — 계단 1줄 · 디딤 끝 모두 땅에 닿음", rkk.BenchLines.Count == 1 && kk.Open == 0 && kk.Treads > 5 && rkk.Bench > 0, $"줄 {rkk.BenchLines.Count} · 디딤 {kk.Treads} · 안 닿음 {kk.Open} · 최대 틈 {kk.GapMax:F4} · {rkk.Bench:F3} ㎡");
     }
 }
