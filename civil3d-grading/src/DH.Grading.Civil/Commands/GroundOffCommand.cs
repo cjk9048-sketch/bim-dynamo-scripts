@@ -28,6 +28,7 @@ public sealed class GroundOffCommand
         try
         {
             var grounds = new System.Collections.Generic.List<(ObjectId Id, string Name, int Pts)>();
+            var ext = new System.Collections.Generic.Dictionary<string, Extents3d>();   // ★[JACK 1117] 이름 → 범위(창에서 누르면 그 자리로 화면 이동)
             int nEnt = 0, nLegacy = 0;
             using (var tr = db.TransactionManager.StartTransaction())
             {
@@ -40,6 +41,7 @@ public sealed class GroundOffCommand
                         if (!SectionCommand.IsBase(nm, ImportGisCommand.GroundSurfaceName)) continue;   // 원지반 이름만 — 남의 면은 안 건드림
                         int pts = -1; try { pts = s.GetGeneralProperties().NumberOfPoints; } catch { }
                         grounds.Add((sid, nm, pts));
+                        try { ext[nm] = s.GeometricExtents; } catch { }
                     }
                     catch { }
                 nEnt = OnLayers(db, tr, GroundLayers()).Count;
@@ -61,6 +63,7 @@ public sealed class GroundOffCommand
             {
                 var used = UsedBy(db, grounds.Select(g => g.Id).ToList());
                 var dlg = new GroundOffDialog(grounds.Select(g => new GroundOffDialog.Item(g.Name, g.Pts, used.TryGetValue(g.Id, out var u) ? u : "")).ToList(), nLegacy > 0);
+                dlg.ZoomTo = it => { if (ext.TryGetValue(it.Name, out var e)) ZoomToExt(ed, e); };
                 AcadApp.ShowModalWindow(dlg);
                 var names = dlg.Chosen;
                 if (dlg.DialogResult != true || names.Count == 0) { ed.WriteMessage("\n[원지반 삭제] 취소"); return; }
@@ -322,4 +325,38 @@ public sealed class GroundOffCommand
             catch { }
         return ids;
     }
+
+    /// <summary>★[JACK 1117 «누르면 해당 원지반으로 줌인»] 원지반 범위(가장자리 8 % 여유)로 화면 이동 — 창이 떠 있는 채(명령 안).
+    /// 먼저 SetCurrentView, 화면 가운데가 안 바뀌었으면(조용히 안 먹는 자리 — MapPalette 0901 메모) ZOOM 창(W)으로 한 번 더.</summary>
+    static void ZoomToExt(Editor ed, Extents3d e)
+    {
+        double w = System.Math.Max(1.0, e.MaxPoint.X - e.MinPoint.X), h = System.Math.Max(1.0, e.MaxPoint.Y - e.MinPoint.Y);
+        double cx = (e.MinPoint.X + e.MaxPoint.X) / 2, cy = (e.MinPoint.Y + e.MaxPoint.Y) / 2;
+        try
+        {
+            using var v = ed.GetCurrentView();
+            // 화면 좌표(DCS) 가운데 — 평면 보기(위에서)만 정확 · 다른 보기면 ZOOM으로
+            bool plan = v.ViewDirection.IsParallelTo(Autodesk.AutoCAD.Geometry.Vector3d.ZAxis) && System.Math.Abs(v.ViewTwist) < 1e-9;
+            if (plan)
+            {
+                double asp = v.Width / System.Math.Max(v.Height, 1e-9);
+                double vh = System.Math.Max(h, w / System.Math.Max(asp, 1e-9)) * 1.16;
+                v.CenterPoint = new Autodesk.AutoCAD.Geometry.Point2d(cx - v.Target.X, cy - v.Target.Y);
+                v.Height = vh; v.Width = vh * asp;
+                ed.SetCurrentView(v);
+                Autodesk.AutoCAD.ApplicationServices.Application.UpdateScreen();
+                using var r = ed.GetCurrentView();
+                if (System.Math.Abs(r.CenterPoint.X + r.Target.X - cx) < w * 0.01 + 0.01 && System.Math.Abs(r.CenterPoint.Y + r.Target.Y - cy) < h * 0.01 + 0.01) return;
+            }
+        }
+        catch { }
+        try
+        {
+            ed.Command("_.ZOOM", "_W",
+                new Autodesk.AutoCAD.Geometry.Point3d(e.MinPoint.X - w * 0.08, e.MinPoint.Y - h * 0.08, 0),
+                new Autodesk.AutoCAD.Geometry.Point3d(e.MaxPoint.X + w * 0.08, e.MaxPoint.Y + h * 0.08, 0));
+        }
+        catch (System.Exception ex) { ed.WriteMessage("\n[원지반 삭제] 화면 이동 못 함 — " + ex.Message); }
+    }
+
 }

@@ -8,8 +8,11 @@ namespace DH.Grading.Civil;
 /// 도면 일은 안 한다 — 고른 이름만 돌려주고 부른 명령(<see cref="Commands.GroundOffCommand"/>)이 지운다.</summary>
 internal sealed class GroundOffDialog : Window
 {
-    /// <summary>한 줄 — 이름 · 점 수(−1 = 모름) · 쓰는 것(빈 글 = 안 쓰임).</summary>
+    /// <summary>한 줄 — 이름 · 점 수(−1 = 모름 · 화면엔 안 보임) · 쓰는 것(빈 글 = 안 쓰임).</summary>
     internal sealed record Item(string Name, int Points, string UsedBy);
+
+    /// <summary>★[JACK 1117 «점 몇 개로는 뭔지 모름 — 점 지우고 누르면 그 원지반으로 줌인»] 이름을 누르면 부르는 일(그 원지반 범위로 화면 이동) — 없으면 이름은 그냥 글.</summary>
+    internal System.Action<Item>? ZoomTo;
 
     readonly System.Collections.Generic.List<(Item It, CheckBox Cb)> _rows = new();
 
@@ -42,8 +45,14 @@ internal sealed class GroundOffDialog : Window
                 DockPanel.SetDock(tag, Dock.Right);
                 row.Children.Add(tag);
             }
-            string pts = it.Points >= 0 ? $"  ·  점 {it.Points:N0}개" : "";
-            row.Children.Add(new TextBlock { Text = it.Name + pts, Foreground = DhBrand.Ink, VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis });
+            // ★[JACK 1117] 점 수는 안 보임(사람이 판단 못 함) — 이름을 누르면 그 원지반으로 화면 이동(체크는 안 바뀜)
+            var name = new TextBlock { Text = it.Name, Foreground = DhBrand.Ink, VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis,
+                                       Cursor = System.Windows.Input.Cursors.Hand, ToolTip = "눌러서 보기", Background = Brushes.Transparent };
+            name.MouseEnter += (_, __) => name.TextDecorations = TextDecorations.Underline;
+            name.MouseLeave += (_, __) => name.TextDecorations = null;
+            var itc = it;
+            name.MouseLeftButtonUp += (_, e) => { e.Handled = true; try { ZoomTo?.Invoke(itc); } catch { } };
+            row.Children.Add(name);
             var card = new Border { Background = DhBrand.Card, BorderBrush = DhBrand.Line, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(6), Padding = new Thickness(10, 8, 10, 8), Child = row };
             sp.Children.Add(card);
             _rows.Add((it, cb));

@@ -72,7 +72,15 @@ internal sealed class WallSectionWindow : Window
         _condRow.ToolTip = "2008 도로옹벽 표준도(국토해양부) 일람표의 칸 — 벽 뒤 흙이 평평한지, 비탈(1:1.8 · 1:1.5)로 얼마나 쌓였는지(성토고 = 벽 높이 H의 배수), 지진을 고려하는지.\n"
                          + "조건을 바꾸면 그 조건의 표준 표로 바뀝니다. 절토 · 성토가 같은 형식이면 조건도 하나를 같이 씁니다.";
         top.Children.Add(_condRow);
-        root.Children.Add(top);
+        // ★[JACK 1117 «단면표 우측 맨 위 도움말 박스 — 누르면 도움말 창»]
+        var head = new DockPanel { LastChildFill = true };
+        var help = new Button { Content = "? 도움말", Height = 28, MinWidth = 84, Padding = new Thickness(10, 0, 10, 0), VerticalAlignment = VerticalAlignment.Top,
+                                Background = DhBrand.Card, BorderBrush = DhBrand.Brand, Foreground = DhBrand.Brand, FontWeight = FontWeights.SemiBold, ToolTip = "옹벽 단면 표 설명" };
+        help.Click += (_, __) => { try { new WallSectionHelpWindow(_common, _margin, _slope, _cut) { Owner = this }.ShowDialog(); } catch (System.Exception ex) { MessageBox.Show("도움말 못 엶 — " + ex.Message, "옹벽 단면 표"); } };
+        DockPanel.SetDock(help, Dock.Right);
+        head.Children.Add(help);
+        head.Children.Add(top);
+        root.Children.Add(head);
         _src = new TextBlock { FontSize = 11, Foreground = DhBrand.Sub, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 8) };
         root.Children.Add(_src);
 

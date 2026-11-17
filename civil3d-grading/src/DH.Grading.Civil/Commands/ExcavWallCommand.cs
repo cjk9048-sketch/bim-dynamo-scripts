@@ -188,6 +188,13 @@ public sealed class ExcavWallCommand
     }
 
     /// <summary>(x,y)에 가장 가까운 둘레 · 그 위 자리(호길이).</summary>
+    /// <summary>★[검토 MED] 클릭 자리와 둘레 위 그 점(T) 사이 평면 거리.</summary>
+    private static double RimDist(Rim r, double t, double x, double y)
+    {
+        var q = GradingGeometry.PointAtParam(r.Pts, r.Cum, t);
+        return System.Math.Sqrt((q.X - x) * (q.X - x) + (q.Y - y) * (q.Y - y));
+    }
+
     private static (Rim R, double T)? NearestRim(System.Collections.Generic.List<Rim> rims, double x, double y)
     {
         Rim? best = null; double bd = double.MaxValue, bt = 0;
@@ -248,6 +255,127 @@ public sealed class ExcavWallCommand
 
     private static double ArrowOf(double tot) => System.Math.Max(1.5, System.Math.Min(tot * 0.02, 8.0));
 
+    /// <summary>시작점 표식 — 둘레(자리 <paramref name="t"/>)를 가로지르는 빨간 짧은 띠([부분 변환] · [사면 변환] 전체 가시설).</summary>
+    private static void DrawTick(Autodesk.AutoCAD.GraphicsInterface.ViewportDraw dc, Rim r, double t)
+    {
+        double half = ZoneEditCommon.BandHalf(r.Total), arrow = ArrowOf(r.Total);
+        var o = GradingGeometry.OutwardAt(r.Pts, r.Cum, t, arrow * 0.5);
+        var i2 = GradingGeometry.OutwardAt(r.Pts, r.Cum, t, -arrow * 0.5);
+        ZoneEditCommon.DrawBand(dc, new System.Collections.Generic.List<Point3> { i2, o }, half);
+    }
+
+    /// <summary>★[JACK 1117] 가시설 구간 없이 <b>둘레 전체가 수직</b>인 기록 — 체크박스(구배 0.01) · 구배 0으로 만든 것.</summary>
+    private static bool AllVertical(ExcavBundle r)
+        => (r.WallZones == null || r.WallZones.Count == 0)
+           && System.Math.Max(r.Slope, r.MinSlope) <= GradingSettings.WallGateSlope + 1e-9;
+
+    /// <summary>★[JACK 1117] 기록에 가시설 전 구배가 없을 때(옛 도면 · 옛 애드인이 다시 씀) — 이 세션 값 → 이것.</summary>
+    private const double PreSlopeDefault = 0.5;
+
+    /// <summary>★[JACK 1117] 찍은 구간 — ②끝점 · ③날개의 답(T가 느는 차례 · 날개는 찍은 구간의 T0 끝 · T1 끝).</summary>
+    private sealed class SpanPick
+    {
+        public double T0, T1, Span;
+        public bool Whole;
+        public (double X, double Y)? W0, W1;
+    }
+
+    /// <summary>★[JACK 1117 «처음 가시설로 만들었으면 [사면 변환]도 부분 변환처럼 — 시작점 → 둘레 따라 끝점 → 날개»] ②끝점 · ③날개 — [부분 변환]과 같이 쓴다.
+    /// null = 취소 · 거절(글은 이미 냄).</summary>
+    /// <param name="slopeSpan">참 = 찍은 구간이 사면이 되고 <b>나머지</b>가 가시설 — 날개는 나머지 구간(찍은 구간 T1 → T0)의 끝 날개로 잰다.</param>
+    /// <param name="outer">날개가 닿을 바깥 링 — 없으면 터파기 윗선(날개 홈 메운 것).</param>
+    private static SpanPick? PickSpan(AcDoc doc, Editor ed, string label, System.Collections.Generic.List<ExcavBundle> recs,
+                                      Rim rim, double ta, bool slopeSpan, System.Collections.Generic.List<Point3>? outer = null)
+    {
+        double tot = rim.Total;
+        var rec = recs[rim.Idx];
+        // ── ② 끝점 — 시작점부터 커서까지 둘레 따라 굵은 빨간 띠 + 화살촉(커서가 지나온 쪽) ──
+        double acc = 0, lastT = ta; bool moved = false;
+        void OnEnd(object? s, PointMonitorEventArgs e)
+        {
+            try
+            {
+                if (!e.Context.PointComputed) return;
+                var c = e.Context.ComputedPoint;
+                double tt = GradingGeometry.ParamAt(rim.Pts, rim.Cum, c.X, c.Y);
+                double d = W(tt - lastT, tot); if (d > tot * 0.5) d -= tot;
+                acc = System.Math.Max(-tot, System.Math.Min(tot, acc + d)); lastT = tt; moved = true;
+                var st = Stretch(ta, tt, acc, tot);
+                var at = GradingGeometry.PointAtParam(rim.Pts, rim.Cum, tt);
+                e.AppendToolTipText(st.Whole ? $"둘레 전체 {tot:0.00}m" : $"구간 {st.Span:0.00}m");
+                var dc = e.Context.DrawContext;
+                if (dc == null) return;
+                double half = ZoneEditCommon.BandHalf(tot), arrow = ArrowOf(tot);
+                DrawZones(dc, recs, half);
+                if (st.Span < 1e-6) return;
+                var path = GradingGeometry.SubPath(rim.Pts, rim.Cum, st.S0, st.S1);
+                if (path.Count < 2) return;
+                ZoneEditCommon.DrawBand(dc, path, half);
+                if (st.Whole) return;
+                var near = GradingGeometry.PointAtParam(rim.Pts, rim.Cum, tt + (st.Fwd ? -1.0 : 1.0));
+                ZoneEditCommon.DrawArrow(dc, at, at.X - near.X, at.Y - near.Y, arrow);
+            }
+            catch (System.Exception gex) { GlyphFail(gex); }
+        }
+        var p2 = GetPointWatched(ed, $"\n[{label}] 끝점 클릭(둘레 따라 · 한 바퀴 = 전체): ", OnEnd);
+        if (p2.Status != PromptStatus.OK) { ed.WriteMessage($"\n[{label}] 취소."); return null; }
+        double tb = GradingGeometry.ParamAt(rim.Pts, rim.Cum, p2.Value.X, p2.Value.Y);
+        // ★찍힌 그 점으로 마지막 걸음을 더한다(스냅 · 좌표 입력이면 커서 자리와 다르다) · 커서가 한 번도 안 움직였으면(명령줄 입력) 짧은 쪽
+        if (moved) { double d = W(tb - lastT, tot); if (d > tot * 0.5) d -= tot; acc = System.Math.Max(-tot, System.Math.Min(tot, acc + d)); }
+        else { double f = W(tb - ta, tot); acc = f <= tot - f ? f : -(tot - f); }
+        var pick = Stretch(ta, tb, acc, tot);
+        if (pick.Span < MinRun) { ed.WriteMessage($"\n[{label}] 구간 너무 짧음 — {pick.Span:0.##}m → {MinRun:0.#}m 이상 찍기"); return null; }
+        double t0 = pick.S0, t1 = pick.S1;
+
+        // ── ③ 날개 — 끝점 쪽 → 시작점 쪽(옛 손 폴리곤과 같은 그리기 · 빨간 선은 터파기 윗선까지) ──
+        (double X, double Y)? wT0 = null, wT1 = null;
+        if (pick.Whole) ed.WriteMessage($"\n[{label}] 둘레 전체 — 날개 없음");
+        else if ((outer ?? rec.FinalRing) == null || (outer ?? rec.FinalRing)!.Count < 3)
+            ed.WriteMessage($"\n[{label}] 터파기 윗선 없음 → 날개 자동");
+        else
+        {
+            var seg = WallInPoly.SegmentPoints(rim.Pts, rim.Cum, t0, t1);
+            var n0 = WallInPoly.FenceNormal(rim.Pts, rim.Cum, t0);
+            var n1 = WallInPoly.FenceNormal(rim.Pts, rim.Cum, t1);
+            int ow = GradingGeometry.OutwardSideOfTravel(rim.Pts);
+            // WallPolyDraw는 구간 끝(end1)부터 묻는다 — 끝점(마지막에 찍은 자리)이 end1이 되게 · 거꾸로면 구간을 뒤집고 바깥쪽 부호도 뒤집는다
+            bool endIsT1 = pick.Fwd;
+            var segO = new System.Collections.Generic.List<Point3>(seg);
+            if (!endIsT1) segO.Reverse();
+            var got = new WallPolyDraw.Picked();
+            string[] nm = { "끝점", "시작점" };
+            // ★[v117.17 · JACK 1116 «남은 것 모두» · 검토 LOW] 찍기용 윗선은 날개 홈이 없는 것 — 이미 날개 단 구간 위를 다시 찍어도 홈 벽에 막히지 않게(기록에는 방향만 남음)
+            string gnote = "";
+            var pickRing = outer ?? GrooveFree(rec, out gnote);
+            // ★[v117.17] 머리 «[가시설 변환]» — 거절 글 단답형 · 조립 메모는 로그로만(부지 [옹벽 변환]은 head 없이 종전 그대로)
+            var poly = WallPolyDraw.Run(doc, pickRing, segO, endIsT1 ? n0 : n1, endIsT1 ? n1 : n0, endIsT1 ? ow : -ow,
+                                        out _, out _, out string plog,
+                                        ask: step => $"\n[{label}] {nm[step]} 쪽 날개 방향 클릭(Esc = 날개 자동): ",
+                                        outDirs: got, head: $"[{label}]");
+            try { DiagLog.Append($"\n■ 가시설 날개 찍기 — 구조물 {rim.Idx + 1} · [{t0:F2}~{t1:F2}m]" + (slopeSpan ? " · 사면 구간(나머지 가시설)" : "") + (gnote.Length > 0 ? " · " + gnote : "") + $"\n{plog}"); } catch { }
+            if (got.N < 2) ed.WriteMessage($"\n[{label}] 날개 안 찍음 → 날개 자동");
+            else if (poly == null) { ed.WriteMessage($"\n[{label}] 날개 못 씀 — 두 날개가 엇갈리거나 사이가 너무 좁음 → 날개 방향 바꿔 다시"); return null; }
+            else
+            {
+                var a = endIsT1 ? got.DirA : got.DirB;   // T1 끝
+                var b = endIsT1 ? got.DirB : got.DirA;   // T0 끝
+                // ★[JACK 1117] 사면 구간이면 가시설은 나머지(T1 → T0) — 그 구간의 날개로 잰다(T0 끝 = a · T1 끝 = b)
+                string wwhy, wtech;
+                var chk = slopeSpan
+                    ? ExcavWing.Region(rim.Pts, t1, t0, a, b, pickRing, GradingSettings.WallPolygonMargin, out wwhy, out wtech)
+                    : ExcavWing.Region(rim.Pts, t0, t1, b, a, pickRing, GradingSettings.WallPolygonMargin, out wwhy, out wtech);
+                if (chk == null)
+                {
+                    try { DiagLog.Append($"   가시설 날개 거절 — {wwhy}" + (wtech.Length > 0 ? " · " + wtech : "") + "\n"); } catch { }
+                    ed.WriteMessage($"\n[{label}] 날개 못 씀 — {wwhy} → {ExcavCommand.WingTodo(wwhy, true)}");   // ★[v117.17 · 설치 전 검토 LOW] 할 일은 까닭 따라
+                    return null;
+                }
+                wT0 = b; wT1 = a;
+            }
+        }
+        return new SpanPick { T0 = t0, T1 = t1, Span = pick.Span, Whole = pick.Whole, W0 = wT0, W1 = wT1 };
+    }
+
     /// <summary>[가시설 변환] — 시작점 → 둘레 따라 끝점 → 날개 둘 → 그 구간 수직(흙막이).</summary>
     private static void PickWall()
     {
@@ -278,11 +406,8 @@ public sealed class ExcavWallCommand
                     e.AppendToolTipText($"시작점 · 구조물 {r.Idx + 1} · 둘레 {t:0.00}m");
                     var dc = e.Context.DrawContext;
                     if (dc == null) return;
-                    double half = ZoneEditCommon.BandHalf(r.Total), arrow = ArrowOf(r.Total);
-                    DrawZones(dc, recs, half);
-                    var o = GradingGeometry.OutwardAt(r.Pts, r.Cum, t, arrow * 0.5);
-                    var i2 = GradingGeometry.OutwardAt(r.Pts, r.Cum, t, -arrow * 0.5);
-                    ZoneEditCommon.DrawBand(dc, new System.Collections.Generic.List<Point3> { i2, o }, half);
+                    DrawZones(dc, recs, ZoneEditCommon.BandHalf(r.Total));
+                    DrawTick(dc, r, t);
                 }
                 catch (System.Exception gex) { GlyphFail(gex); }
             }
@@ -301,85 +426,11 @@ public sealed class ExcavWallCommand
                 return;
             }
 
-            // ── ② 끝점 — 시작점부터 커서까지 둘레 따라 굵은 빨간 띠 + 화살촉(커서가 지나온 쪽) ──
-            double acc = 0, lastT = ta; bool moved = false;
-            void OnEnd(object? s, PointMonitorEventArgs e)
-            {
-                try
-                {
-                    if (!e.Context.PointComputed) return;
-                    var c = e.Context.ComputedPoint;
-                    double tt = GradingGeometry.ParamAt(rim.Pts, rim.Cum, c.X, c.Y);
-                    double d = W(tt - lastT, tot); if (d > tot * 0.5) d -= tot;
-                    acc = System.Math.Max(-tot, System.Math.Min(tot, acc + d)); lastT = tt; moved = true;
-                    var st = Stretch(ta, tt, acc, tot);
-                    var at = GradingGeometry.PointAtParam(rim.Pts, rim.Cum, tt);
-                    e.AppendToolTipText(st.Whole ? $"둘레 전체 {tot:0.00}m" : $"구간 {st.Span:0.00}m");
-                    var dc = e.Context.DrawContext;
-                    if (dc == null) return;
-                    double half = ZoneEditCommon.BandHalf(tot), arrow = ArrowOf(tot);
-                    DrawZones(dc, recs, half);
-                    if (st.Span < 1e-6) return;
-                    var path = GradingGeometry.SubPath(rim.Pts, rim.Cum, st.S0, st.S1);
-                    if (path.Count < 2) return;
-                    ZoneEditCommon.DrawBand(dc, path, half);
-                    if (st.Whole) return;
-                    var near = GradingGeometry.PointAtParam(rim.Pts, rim.Cum, tt + (st.Fwd ? -1.0 : 1.0));
-                    ZoneEditCommon.DrawArrow(dc, at, at.X - near.X, at.Y - near.Y, arrow);
-                }
-                catch (System.Exception gex) { GlyphFail(gex); }
-            }
-            var p2 = GetPointWatched(ed, "\n[가시설 변환] 끝점 클릭(둘레 따라 · 한 바퀴 = 전체): ", OnEnd);
-            if (p2.Status != PromptStatus.OK) { ed.WriteMessage($"\n[{label}] 취소."); return; }
-            double tb = GradingGeometry.ParamAt(rim.Pts, rim.Cum, p2.Value.X, p2.Value.Y);
-            // ★찍힌 그 점으로 마지막 걸음을 더한다(스냅 · 좌표 입력이면 커서 자리와 다르다) · 커서가 한 번도 안 움직였으면(명령줄 입력) 짧은 쪽
-            if (moved) { double d = W(tb - lastT, tot); if (d > tot * 0.5) d -= tot; acc = System.Math.Max(-tot, System.Math.Min(tot, acc + d)); }
-            else { double f = W(tb - ta, tot); acc = f <= tot - f ? f : -(tot - f); }
-            var pick = Stretch(ta, tb, acc, tot);
-            if (pick.Span < MinRun) { ed.WriteMessage($"\n[{label}] 구간 너무 짧음 — {pick.Span:0.##}m → {MinRun:0.#}m 이상 찍기"); return; }
-            double t0 = pick.S0, t1 = pick.S1;
-
-            // ── ③ 날개 — 끝점 쪽 → 시작점 쪽(옛 손 폴리곤과 같은 그리기 · 빨간 선은 터파기 윗선까지) ──
-            (double X, double Y)? wT0 = null, wT1 = null;
-            if (pick.Whole) ed.WriteMessage($"\n[{label}] 둘레 전체 — 날개 없음");
-            else if (rec.FinalRing == null || rec.FinalRing.Count < 3)
-                ed.WriteMessage($"\n[{label}] 터파기 윗선 없음 → 날개 자동");
-            else
-            {
-                var seg = WallInPoly.SegmentPoints(rim.Pts, rim.Cum, t0, t1);
-                var n0 = WallInPoly.FenceNormal(rim.Pts, rim.Cum, t0);
-                var n1 = WallInPoly.FenceNormal(rim.Pts, rim.Cum, t1);
-                int ow = GradingGeometry.OutwardSideOfTravel(rim.Pts);
-                // WallPolyDraw는 구간 끝(end1)부터 묻는다 — 끝점(마지막에 찍은 자리)이 end1이 되게 · 거꾸로면 구간을 뒤집고 바깥쪽 부호도 뒤집는다
-                bool endIsT1 = pick.Fwd;
-                var segO = new System.Collections.Generic.List<Point3>(seg);
-                if (!endIsT1) segO.Reverse();
-                var got = new WallPolyDraw.Picked();
-                string[] nm = { "끝점", "시작점" };
-                // ★[v117.17 · JACK 1116 «남은 것 모두» · 검토 LOW] 찍기용 윗선은 날개 홈이 없는 것 — 이미 날개 단 구간 위를 다시 찍어도 홈 벽에 막히지 않게(기록에는 방향만 남음)
-                var pickRing = GrooveFree(rec, out string gnote);
-                // ★[v117.17] 머리 «[가시설 변환]» — 거절 글 단답형 · 조립 메모는 로그로만(부지 [옹벽 변환]은 head 없이 종전 그대로)
-                var poly = WallPolyDraw.Run(doc, pickRing, segO, endIsT1 ? n0 : n1, endIsT1 ? n1 : n0, endIsT1 ? ow : -ow,
-                                            out _, out _, out string plog,
-                                            ask: step => $"\n[{label}] {nm[step]} 쪽 날개 방향 클릭(Esc = 날개 자동): ",
-                                            outDirs: got, head: $"[{label}]");
-                try { DiagLog.Append($"\n■ 가시설 날개 찍기 — 구조물 {rim.Idx + 1} · [{t0:F2}~{t1:F2}m]" + (gnote.Length > 0 ? " · " + gnote : "") + $"\n{plog}"); } catch { }
-                if (got.N < 2) ed.WriteMessage($"\n[{label}] 날개 안 찍음 → 날개 자동");
-                else if (poly == null) { ed.WriteMessage($"\n[{label}] 날개 못 씀 — 두 날개가 엇갈리거나 사이가 너무 좁음 → 날개 방향 바꿔 다시"); return; }
-                else
-                {
-                    var a = endIsT1 ? got.DirA : got.DirB;   // T1 끝
-                    var b = endIsT1 ? got.DirB : got.DirA;   // T0 끝
-                    var chk = ExcavWing.Region(rim.Pts, t0, t1, b, a, pickRing, GradingSettings.WallPolygonMargin, out string wwhy, out string wtech);
-                    if (chk == null)
-                    {
-                        try { DiagLog.Append($"   가시설 날개 거절 — {wwhy}" + (wtech.Length > 0 ? " · " + wtech : "") + "\n"); } catch { }
-                        ed.WriteMessage($"\n[{label}] 날개 못 씀 — {wwhy} → {ExcavCommand.WingTodo(wwhy, true)}");   // ★[v117.17 · 설치 전 검토 LOW] 할 일은 까닭 따라
-                        return;
-                    }
-                    wT0 = b; wT1 = a;
-                }
-            }
+            // ── ② 끝점 · ③ 날개 — ★[JACK 1117] [사면 변환](전체 가시설 → 구간 사면)과 같은 길(PickSpan) ──
+            var sp = PickSpan(doc, ed, label, recs, rim, ta, slopeSpan: false);
+            if (sp == null) return;
+            double t0 = sp.T0, t1 = sp.T1;
+            (double X, double Y)? wT0 = sp.W0, wT1 = sp.W1;
 
             rec.WallZones ??= new System.Collections.Generic.List<SlopeZone>();
             var z = new SlopeZone { T0 = t0, T1 = t1, WingT0 = wT0, WingT1 = wT1 };
@@ -400,7 +451,7 @@ public sealed class ExcavWallCommand
             if (ExcavCommand.ZonesDroppedFor(rec.PolyHandle))
                 ed.WriteMessage($"\n[{label}] 구조물 {rim.Idx + 1} · 구간 안 들어감 — 터파기선 바뀜(위 ⚠) → [가시설 변환] 다시");
             else
-                ed.WriteMessage($"\n[{label}] 구조물 {rim.Idx + 1} · {pick.Span:0.#}m 수직" + (z.HasWings ? (fell ? " · 날개 자동(위 ⚠)" : " · 날개 2") : pick.Whole ? "" : " · 날개 자동")
+                ed.WriteMessage($"\n[{label}] 구조물 {rim.Idx + 1} · {sp.Span:0.#}m 수직" + (z.HasWings ? (fell ? " · 날개 자동(위 ⚠)" : " · 날개 2") : sp.Whole ? "" : " · 날개 자동")
                               + (dup > 0 ? $" · 겹친 옛 구간 {dup}개 합침" : ""));
         }
         catch (System.Exception ex)
@@ -449,7 +500,9 @@ public sealed class ExcavWallCommand
             if (recs == null) { ed.WriteMessage($"\n[{label}] " + why); return; }
             int nz = 0;
             foreach (var r in recs) nz += r.WallZones?.Count ?? 0;
-            if (nz == 0) { ed.WriteMessage($"\n[{label}] 가시설 구간 없음"); return; }
+            // ★[JACK 1117 «가시설 체크로 만든 뒤 [사면 변환] → 가시설 구간 없음»] 구간 없이 둘레 전체 수직(체크박스 · 구배 0)인 기록 — 시작점 → 끝점 → 날개로 그 구간만 사면
+            bool anyAll = recs.Exists(AllVertical);
+            if (nz == 0 && !anyAll) { ed.WriteMessage($"\n[{label}] 가시설 구간 없음"); return; }
             var rims = RimsOf(recs);
 
             // 커서 밑 구간 — 가장 가까운 둘레의 그 자리를 품은 구간(구간은 제 자로 잰다)
@@ -481,6 +534,13 @@ public sealed class ExcavWallCommand
                     var dc = e.Context.DrawContext;
                     var hit = NearestRim(rims, c.X, c.Y);
                     double half = ZoneEditCommon.BandHalf(hit?.R.Total ?? 40);
+                    if (u == null && hit != null && AllVertical(recs[hit.Value.R.Idx]))
+                    {
+                        // ★[JACK 1117] 둘레 전체 가시설 — [부분 변환] 시작점과 같은 표식
+                        e.AppendToolTipText($"전체 가시설 · 시작점 {hit.Value.T:0.00}m");
+                        if (dc != null) { DrawZones(dc, recs, half); DrawTick(dc, hit.Value.R, hit.Value.T); }
+                        return;
+                    }
                     if (u == null)
                     {
                         e.AppendToolTipText("가시설 아님");
@@ -496,9 +556,15 @@ public sealed class ExcavWallCommand
                 }
                 catch (System.Exception gex) { GlyphFail(gex); }
             }
-            var pr = GetPointWatched(ed, "\n[사면 변환] 가시설 구간 클릭: ", OnMove);
+            var pr = GetPointWatched(ed, nz == 0 ? "\n[사면 변환] 시작점 클릭(터파기 둘레): " : "\n[사면 변환] 가시설 구간 클릭: ", OnMove);
             if (pr.Status != PromptStatus.OK) { ed.WriteMessage($"\n[{label}] 취소."); return; }
             var got = Under(pr.Value.X, pr.Value.Y);
+            if (got == null)
+            {
+                var h1 = NearestRim(rims, pr.Value.X, pr.Value.Y);
+                // ★[검토 MED] 둘레 곁(3 m 안)을 눌렀을 때만 — 먼 곳 잘못 클릭이 사면 변환으로 흘러가지 않게
+                if (h1 != null && AllVertical(recs[h1.Value.R.Idx]) && RimDist(h1.Value.R, h1.Value.T, pr.Value.X, pr.Value.Y) <= 3.0) { SpanToSlope(doc, ed, label, recs, h1.Value.R, h1.Value.T); return; }
+            }
             if (got == null) { ed.WriteMessage($"\n[{label}] 가시설 구간 아님 — 파란 띠 위 클릭"); return; }
             var rec0 = recs[got.Value.Rec];
             rec0.WallZones!.Remove(got.Value.Z);
@@ -513,6 +579,57 @@ public sealed class ExcavWallCommand
             try { DiagLog.Append($"\n■ 사면 변환(가시설) 예외 — {ex.GetType().Name}: {ex.Message}\n"); } catch { }
         }
         finally { PickSession.End(); }
+    }
+
+    /// <summary>★[JACK 1117 «처음 가시설로 만들었으면 [사면 변환]도 부분 변환처럼»] 둘레 전체 가시설 → <b>찍은 구간만 사면</b>.
+    /// 시작점(이미 찍음) → 둘레 따라 끝점 → 날개(Esc = 날개 자동) — [부분 변환]과 같은 길(<see cref="PickSpan"/>).
+    /// 찍은 구간 = 가시설 전 구배의 사면 · 나머지 = 보통 가시설 구간(날개는 그 구간 끝) → 그 뒤 [사면 변환] · [부분 변환] · [전체 해제]는 종전 그대로.</summary>
+    private static void SpanToSlope(AcDoc doc, Editor ed, string label, System.Collections.Generic.List<ExcavBundle> recs, Rim rim, double ta)
+    {
+        var rec = recs[rim.Idx];
+        double tot = rim.Total;
+        // 사면 구배 — 기록(가시설 전 구배) → 이 세션의 체크 전 값 → 기본값
+        double pre = rec.PreWallSlope > GradingSettings.WallGateSlope ? rec.PreWallSlope
+                   : ExcavCommand.SlopeBeforeWall > GradingSettings.WallGateSlope ? ExcavCommand.SlopeBeforeWall
+                   : PreSlopeDefault;
+        // 날개가 닿을 링 — 지금 윗선은 수직이라 바닥에 붙어 있다(1:0.01 → 깊이 5m에 5cm) → 사면이 될 자리(바닥 + 구배 × 가장 깊은 곳 + 0.5m)
+        double zb = double.MaxValue, zt = double.MinValue;
+        foreach (var p in rec.Bottom) zb = System.Math.Min(zb, p.Z);
+        if (rec.FinalRing != null) foreach (var p in rec.FinalRing) zt = System.Math.Max(zt, p.Z);
+        double dep = zt - zb;
+        if (!(dep > 0.1 && dep < 500)) dep = 5.0;   // 윗선 높이를 모르면 5m로 봄(찍기 안내선 길이만 바뀜 — 지을 때 엔진 링으로 다시 잼)
+        var outer = GradingGeometry.BufferedRingOutward(rec.Bottom, System.Math.Max(1.0, pre * dep) + 0.5);
+        // ★[검토 MED] 안내 윗선을 못 만들면 거절 — 수직 윗선(바닥에 붙음)으로 날개를 찍으면 지을 때 엔진 링과 달라짐
+        if (outer == null || outer.Count < 3) { ed.WriteMessage($"\n[{label}] 사면 자리 윗선 못 만듦 → 터파기선 확인 · 다시"); return; }
+        var sp = PickSpan(doc, ed, label, recs, rim, ta, slopeSpan: true, outer);
+        if (sp == null) return;
+        try { DiagLog.Append($"\n■ 사면 변환(전체 가시설) — 구조물 {rim.Idx + 1} · [{sp.T0:F2}~{sp.T1:F2}m] · 둘레 {tot:F2}m · 사면 1:{pre:0.###}"
+                           + $"(기록 {rec.PreWallSlope:0.###} · 세션 {ExcavCommand.SlopeBeforeWall:0.###})\n"); } catch { }
+        rec.Slope = pre;
+        SlopeZone? z = null;
+        if (sp.Whole) rec.WallZones = null;
+        else
+        {
+            // 나머지(T1 → T0)가 가시설 — 날개는 그 구간의 T0 끝(= 찍은 구간 T1 끝) · T1 끝(= 찍은 구간 T0 끝)
+            z = new SlopeZone { T0 = sp.T1, T1 = sp.T0, WingT0 = sp.W1, WingT1 = sp.W0 };
+            z.Rules.Add((0, rec.MinSlope, -1));
+            z.Ref = new System.Collections.Generic.List<Point3>(rec.Bottom);
+            rec.WallZones = new System.Collections.Generic.List<SlopeZone> { z };
+        }
+        // 창(구배 칸 · 가시설 체크)이 이 기록을 따라가게 — [업데이트]와 같은 길(창 새로 고침 → 체크 꺼짐)
+        ExcavCommand.Slope = pre;
+        Save(doc, recs);
+        bool built = Rebuild(doc, recs, ed, rim.Idx, label);
+        if (!SelfCheckLog.Headless) try { ExcavPalette.Refresh(); } catch { }
+        if (!built) return;   // Rebuild가 이미 «구간만 저장» 줄을 냄
+        bool fell = z != null && z.HasWings && ExcavCommand.WingFailedFor(rec.PolyHandle, z);
+        if (z != null && ExcavCommand.ZonesDroppedFor(rec.PolyHandle))
+            ed.WriteMessage($"\n[{label}] 구조물 {rim.Idx + 1} · 가시설 구간 안 들어감 — 터파기선 바뀜(위 ⚠) → [부분 변환] 다시");
+        else if (z == null)
+            ed.WriteMessage($"\n[{label}] 구조물 {rim.Idx + 1} · 둘레 전체 → 사면 1:{pre:0.##}");
+        else
+            ed.WriteMessage($"\n[{label}] 구조물 {rim.Idx + 1} · {sp.Span:0.#}m → 사면 1:{pre:0.##} · 나머지 {tot - sp.Span:0.#}m 가시설"
+                          + (z.HasWings ? (fell ? " · 날개 자동(위 ⚠)" : " · 날개 2") : " · 날개 자동"));
     }
 
     /// <summary>커서를 따라 그리며 점 하나를 받는다 — 어느 길로 빠져나가든 듣기를 끊는다(ZoneEditCommon.PickOnRing과 같은 문).

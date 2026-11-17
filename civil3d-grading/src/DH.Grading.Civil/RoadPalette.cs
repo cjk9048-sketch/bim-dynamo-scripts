@@ -564,7 +564,17 @@ internal sealed class RoadPanel : UserControl
         t.Visibility = text.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
     }
 
+    /// <summary>[지표면 업데이트] 할 일 있음 — 고친 것 있음(<see cref="StateText"/> 깜박 판정) 또는 끝 맞춤 필요 · 처음 만드는 중이면 아님. 진입도로 창 · 진입도로 종횡단도 창이 같이 씀.</summary>
+    internal static bool NeedUpdate(RoadSession? s) => s != null && !s.Making && (StateText(s).Blink || (s.Design.EndsOn && s.EndsStale.Length > 0));
+
     /// <summary>단추 깜박임(흐려졌다 돌아옴 · 0.6초) — 켜져 있으면 다시 걸지 않음. ★[v111.6] 정지 창 ■ 도면도 이것을 쓴다.</summary>
+    /// <summary>★[JACK 1117 «지표면 업데이트 단추 모두 같게»] 할 일 있음 = 빨강(DhCaution) + 깜박 · 없음 = 기본 모양(꺼진 단추 회색) · 안 깜박. 켜고 끄기는 부르는 쪽.</summary>
+    internal static void UpdateLook(Button b, bool need)
+    {
+        try { if (need && DhBrand.Skin != null) b.Style = (Style)DhBrand.Skin["DhCaution"]; else b.ClearValue(FrameworkElement.StyleProperty); } catch { }
+        Blink(b, need);
+    }
+
     internal static void Blink(Button b, bool on)
     {
         bool now = Equals(b.Tag, "blink");
@@ -848,9 +858,11 @@ internal sealed class RoadPanel : UserControl
             var (stText, stWarn, stBlink) = StateText(s);
             SetState(_autoState, stText);
             _autoState.Foreground = stWarn ? DhBrand.Warn : DhBrand.Sub;
-            Blink(_updateBtn, stBlink);
-            // ★[JACK 1116] 대상이면 빨강(DhCaution) · 아니면 기본 모양 · 접힌 ■ 진입도로 수정 제목에 «지표면 업데이트 필요»
-            try { if (stBlink && DhBrand.Skin != null) _updateBtn.Style = (Style)DhBrand.Skin["DhCaution"]; else _updateBtn.ClearValue(FrameworkElement.StyleProperty); } catch { }
+            // ★[JACK 1117 «바뀐 것이 있으면 빨갛게 반짝 · 없으면 비활성 · 지표면 업데이트 단추 모두 같게»] 켜짐 = 고친 것 있음(깜박 판정) 또는 끝 맞춤 필요
+            bool need = NeedUpdate(s);
+            _updateBtn.IsEnabled = need;
+            UpdateLook(_updateBtn, need);
+            // ★[JACK 1116] 접힌 ■ 진입도로 수정 제목에 «지표면 업데이트 필요»
             _editBadge.Text = stBlink ? "지표면 업데이트 필요" : "";
             _result.Inlines.Clear();
             if (r == null) return;

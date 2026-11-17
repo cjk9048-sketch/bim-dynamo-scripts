@@ -180,7 +180,7 @@ internal sealed class GradingPanel : UserControl
         _makeBadge = new TextBlock();
         root.Children.Add(secTarget);
         // ★[JACK 1112 «경계 선택 · 원지반 선택을 한 줄로 · 미선택 선택 그 부분도»] 한 줄에 둘(단추 + 상태) — 좁으면 아래로 내려간다. 단추에 올리면 맨 위 설명 칸에 장면.
-        var pickGrid = new Grid { Margin = new Thickness(0, 0, 0, 8) };
+        var pickGrid = new Grid { Margin = new Thickness(0) };
         pickGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         pickGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         pickGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
@@ -199,7 +199,8 @@ internal sealed class GradingPanel : UserControl
                 Grid.SetRow(pickGrid.Children[i], narrow ? i : 0);
             }
         };
-        secTarget.Children.Add(pickGrid);
+        // ★[JACK 1117 «계획경계 선택 · 원지반 선택은 중요한 필수 행동 단추 → 네모 박스 안»]
+        secTarget.Children.Add(MustBox(pickGrid));
 
         // ★[계획 §5.1] <b>이어서/새로시작</b> — 기존 정지 결과가 있을 때만 보인다.
         //   종전 명령은 계획선을 찍은 <b>뒤</b> 이것을 묻고, 그 답에 따라 원지반을 아예 안 물었다.
@@ -313,8 +314,10 @@ internal sealed class GradingPanel : UserControl
         //   형식은 3D 모양만 정한다(InfraWorks · 노리선 · 예시 그림) — 레지스트리 그대로(사용자 전역).
         //   터파기는 형식과 따로 켠다(JACK 1021) — 켜면 모든 옹벽 · 종단 · 횡단을 그릴 때 `옹벽터파기_DH`를 짓는다. 이 도면에만(WALLEXCAV).
         //   설명은 풍선 글 + ★[v103.3.1 · JACK 1021 «사면설정처럼 연동되는 설명»] 예시 그림(칸을 고치면 바로 다시 그린다).
-        var secWall = GradingDialog.AddCollapsible(secEtc, "옹벽", out _wallBadge,
-            "옹벽 형식 · 뒷채움 터파기", open: true, key: "정지:옹벽", level: 3);
+        // ★[JACK 1117 «계획부지 생성 탭의 옹벽은 계획부지 수정 탭으로 — 단추 박스 밖 그 아래 · 그 아래 옹벽 합성 미루기»] 담아 두고 수정 탭에 놓음
+        var wallHost = new StackPanel();
+        var secWall = GradingDialog.AddCollapsible(wallHost, "옹벽", out _wallBadge,
+            "옹벽 형식 · 뒷채움 터파기", open: true, key: "정지:옹벽", level: 2);
         // ★★★[v105 · JACK 1022 «3D 모양 관련은 … 애초에 생성을 단면 가지고 만들 거니깐 필요 없지 않나?» → «없애고 단면 형상으로 옹벽을 만들어 인프라웍스 내보내기에»]
         //   «절토/성토 3D 모양» 콤보 두 줄을 없앴다 — InfraWorks 3D는 단면 덩어리(WallSolidDwg) · 노리선은 경사 ≤ 게이트 · 사면 그림의 옹벽은 단면 형식에서.
         // ★★[v105 · JACK 1022 «옹벽 관련 그림은 뒷채움 터파기 사용 유무와 관계없이 기본적으로 소제목 옹벽 밑에 나오고 그 아래 설정들에 따라 달라졌음»] 그림이 맨 위 ·
@@ -510,7 +513,10 @@ internal sealed class GradingPanel : UserControl
         // ★[v117.12 · JACK 1112 «용지 경계 기능은 없애»] [용지 경계] 단추 없앰(DHLANDBOUND 명령 · 기초 외곽 검사도 없앰)
         // ★[v102.2 · JACK 0930 «옹벽합성 버튼은 없애고 노선 선정과정이 끝나면 자동으로 진행되게»] [옹벽 합성] 버튼 없앰 —
         //   옹벽 변환(부분 지정)이 옹벽을 끝까지 지으면 합성이 이어서 돈다(ZoneEditCommon). DHWALLCOMP 명령은 남는다(손으로 다시 합성 · 복구용)
-        secFix.Children.Add(row1); secFix.Children.Add(row2); secFix.Children.Add(wRow);
+        // ★[JACK 1117 «계획부지 수정 단추 네 개도 박스 안»] 단추(+ 옛 옹벽 옮기기) = 박스 · 그 아래 옹벽(생성 탭에서 옮김) · 그 아래 옹벽 합성 미루기
+        var fixBtns = new StackPanel(); fixBtns.Children.Add(row1); fixBtns.Children.Add(row2); fixBtns.Children.Add(wRow);
+        secFix.Children.Add(MustBox(fixBtns));
+        secFix.Children.Add(wallHost);
         // ★★★[v103.1.12 · JACK 1014 · 1015] «옹벽 합성 미루기» — 끔(기본) = 종전(변환마다 바로 합성) · 켬 = 옹벽만 짓고 합성은 [옹벽 합성] 한 번에
         //   (내보내기 · 터파기 · «이어서» 직전에는 합성이 빠졌으면 먼저 합성한다). [옹벽 합성] · «대기 N»은 켬이거나 빠진 옹벽이 있을 때만 보인다(설명 글 없음 — JACK 1014)
         _defer = new CheckBox
@@ -1028,6 +1034,13 @@ internal sealed class GradingPanel : UserControl
             try { DiagLog.Append("\n■ 정지창 [계획지표면 초기화] 켜짐 갱신 실패 — " + ex.Message + "\n"); } catch { }
         }
     }
+
+    /// <summary>★[JACK 1117] 꼭 눌러야 하는 단추 묶음 네모 박스 — 브랜드 선 · 흰 바탕 · 둥근 모서리.</summary>
+    static Border MustBox(UIElement child) => new()
+    {
+        BorderBrush = DhBrand.Brand, BorderThickness = new Thickness(1.2), CornerRadius = new CornerRadius(6), Background = DhBrand.Card,
+        Padding = new Thickness(8, 8, 8, 4), Margin = new Thickness(0, 0, 0, 10), Child = child,
+    };
 
     /// <summary>★★[v103.1.12] «옹벽 합성 미루기»를 이 도면에 적는다(문서 잠금 · 자가점검 한 줄). 칸을 채우는 중(<see cref="_loading"/>)이면 안 적는다.</summary>
     private void SetDefer(bool on)

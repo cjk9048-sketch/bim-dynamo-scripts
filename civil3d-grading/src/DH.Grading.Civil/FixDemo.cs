@@ -1834,6 +1834,7 @@ internal sealed partial class FixDemoView : Border
         if (pick > 0) Pl(box, A(Color.FromRgb(0xD8, 0xD8, 0xD8), pick), Fz(0xE0, 0x7A, 0x1F), 3.2);
         Tx(176, 146, "구조물 바닥", 13, Txt, true);
         if (pick > 0) Tx(152, 204, "터파기선", 12, Fz(0xC0, 0x5A, 0x10), true);
+        Tx(30, 254, "구조물 터파기 바닥경계(고도포함)를 작도하고 선택", 12, Txt, true);   // ★[JACK 1117] 처음부터 보이는 안내 한 줄
         var home = new Point(395, 270);
         double press = t >= 1.0 && t < 1.4 ? (t - 1.0) / 0.4 : 0;
         if (t < 3.6) Ptr(L(home, new Point(280, 160), Seg(t, 0.2, 1.0)), press);

@@ -64,6 +64,11 @@ public sealed class ExcavBundle
     /// <para>v1~v3에는 이 값이 없다 — 그 시절은 <b>구조물 전체</b>로만 갈랐으므로
     /// 읽을 때 비워 두면 <b>형상이 안 바뀐다</b>.</para></summary>
     public System.Collections.Generic.List<DH.Grading.Core.SlopeZone>? WallZones;
+
+    /// <summary>★[JACK 1117 «전체 가시설로 만든 뒤 [사면 변환] = 고른 구간만 사면 · 구배는 체크 전 값»] <b>가시설(둘레 전체 수직)로 만들기 전 구배</b> — 0 = 모름.
+    /// <para>둘레 전체 수직 기록만 든다. [사면 변환]이 고른 구간을 이 구배의 사면으로 되돌린다.</para>
+    /// <para>★판 번호를 안 올린다 — 기록 끝 꼬리(<c>DH_EXCAV_PRE</c>)에 적어 옛 애드인은 읽지 않고 지나간다(옛 애드인이 다시 쓰면 사라짐 → 모름).</para></summary>
+    public double PreWallSlope;
 }
 
 /// <summary>
@@ -93,6 +98,8 @@ public static class ExcavBundleStore
     /// 날개 단 구간이 하나도 없으면 <b>v4로 쓴다</b> — 옛 애드인이 그 도면을 그대로 읽게.</para></summary>
     private const int Version = 5;
     private const string Sig = "DH_EXCAV";
+    /// <summary>★[JACK 1117] 기록 끝 꼬리 서명 — 구조물마다 <see cref="ExcavBundle.PreWallSlope"/>.</summary>
+    private const string PreSig = "DH_EXCAV_PRE";
 
     public static void SaveAll(Database db, Transaction tr,
                                System.Collections.Generic.IReadOnlyList<ExcavBundle> list)
@@ -119,6 +126,15 @@ public static class ExcavBundleStore
             WriteZones(vals, e.WallZones, ver);                 // v4 — 가시설 구간 · v5 — 날개
             WritePts(vals, e.Bottom);
             WritePts(vals, e.FinalRing);
+        }
+        // ★[JACK 1117] 꼬리 — 가시설 전 구배(든 기록이 있을 때만 · 없으면 종전과 한 글자도 안 다름)
+        bool pre = false;
+        foreach (var e in list) if (e.PreWallSlope > 0) { pre = true; break; }
+        if (pre)
+        {
+            vals.Add(new((int)DxfCode.Text, PreSig));
+            vals.Add(new((int)DxfCode.Int32, list.Count));
+            foreach (var e in list) vals.Add(new((int)DxfCode.Real, e.PreWallSlope));
         }
 
         var nod = (DBDictionary)tr.GetObject(db.NamedObjectsDictionaryId, OpenMode.ForWrite);
@@ -183,6 +199,7 @@ public static class ExcavBundleStore
             }
             int n = I32(arr, ref i);
             var list = new System.Collections.Generic.List<ExcavBundle>(System.Math.Max(0, n));
+            var kOf = new System.Collections.Generic.List<int>(System.Math.Max(0, n));   // ★[JACK 1117] 꼬리를 쓴 차례(k)로 붙이려고
             for (int k = 0; k < n; k++)
             {
                 var e = new ExcavBundle
@@ -199,7 +216,20 @@ public static class ExcavBundleStore
                 e.WallZones = ver >= 4 ? ReadZones(arr, ref i, ver) : null;
                 e.Bottom = ReadPts(arr, ref i) ?? new System.Collections.Generic.List<Point3>();
                 e.FinalRing = ReadPts(arr, ref i);
-                if (e.Bottom.Count >= 3) list.Add(e);
+                if (e.Bottom.Count >= 3) { list.Add(e); kOf.Add(k); }
+            }
+            // ★[JACK 1117] 꼬리(가시설 전 구배) — 없으면 0(모름) · 못 읽어도 기록은 그대로 쓴다
+            if (i < arr.Length && (arr[i].Value as string) == PreSig)
+            {
+                try
+                {
+                    i++;
+                    int np = I32(arr, ref i);
+                    var pv = new double[System.Math.Max(0, np)];
+                    for (int k = 0; k < pv.Length; k++) pv[k] = Dbl(arr, ref i);
+                    for (int j = 0; j < list.Count; j++) if (kOf[j] < pv.Length) list[j].PreWallSlope = pv[kOf[j]];
+                }
+                catch { }
             }
             if (list.Count == 0) { reason = "터파기 기록에 구조물 없음"; return null; }
             return list;

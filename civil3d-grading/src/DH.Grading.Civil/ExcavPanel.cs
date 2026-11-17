@@ -502,6 +502,9 @@ internal sealed class ExcavPanel : UserControl
         {
             string cur = (_slope.Text ?? "").Trim();
             if (cur.Length > 0 && cur != GradingSettings.MinSlope.ToString(CultureInfo.InvariantCulture)) _prevSlopeText = cur;
+            // ★[JACK 1117] 체크 전 구배를 터파기에 넘김 — 기록에 굳어 [사면 변환](전체 가시설 → 고른 구간 사면)이 씀
+            if (double.TryParse(_prevSlopeText.Replace(',', '.'), NumberStyles.Float, CultureInfo.InvariantCulture, out double pre)
+                && pre > GradingSettings.WallGateSlope) Commands.ExcavCommand.SlopeBeforeWall = pre;
             _slope.Text = GradingSettings.MinSlope.ToString(CultureInfo.InvariantCulture);
         }
         else _slope.Text = _prevSlopeText;
@@ -540,8 +543,10 @@ internal sealed class ExcavPanel : UserControl
             bool busy = PickSession.Busy;
             var s = doc == null ? null : PickSession.Peek(doc, PickSession.KeyExcav);
             bool has = s != null;
-            _pickWhat.Text = has ? "● " + s.What : "○ 미선택";
-            _pickWhat.Foreground = has ? DhBrand.Brand : DhBrand.Sub;
+            // ★[JACK 1117] 고도 0 선을 골라 거절됐으면 미선택 자리에 빨간 «고도값 누락됨»
+            bool noZ = !has && doc != null && PickSession.ExcavNoZ(doc);
+            _pickWhat.Text = has ? "● " + s.What : noZ ? "○ 고도값 누락됨" : "○ 미선택";
+            _pickWhat.Foreground = has ? DhBrand.Brand : noZ ? DhBrand.Warn : DhBrand.Sub;
 
             // 계획지표면은 <b>정지를 먼저 해야</b> 고를 수 있다 — 없으면 그렇다고 말한다.
             bool hasPlan = doc != null && GradeStart.HasPrevious(doc.Database, out int nR) && nR > 0;
@@ -624,10 +629,11 @@ internal sealed class ExcavPanel : UserControl
                          || b.Base != (_basePlan.IsChecked == true ? 1 : 0)
                          || (pickedGround.Length > 0 && pickedGround != b.GroundHandle);
                 }
-                _update.IsEnabled = b != null;
+                // ★[JACK 1117 «설정이 바뀐 게 없으면 비활성 · 바뀌면 빨갛게 반짝»] 만든 터파기가 있고 구배 · 기준면 · 원지반이 다를 때만 켜짐
+                _update.IsEnabled = b != null && stale;
             }
             else _update.IsEnabled = false;
-            try { RoadPanel.Blink(_update, stale && _update.IsEnabled); } catch { }
+            try { RoadPanel.UpdateLook(_update, _update.IsEnabled); } catch { }
             if (!_slopeOk)
             {
                 // ★[검토 0910 · 높음1] <b>구배 칸이 있는 그 칸</b>에 적는다 — 기준면 칸에 적으면

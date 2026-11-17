@@ -41,6 +41,10 @@ public sealed class ExcavCommand
     /// <para>세션 동안 기억한다 — 정지옵션과는 섞지 않는다(JACK: "초반에 세팅하는 게 많아 보여서").</para></summary>
     internal static double Slope = 0.5;
 
+    /// <summary>★[JACK 1117] 가시설(둘레 전체 수직)로 바꾸기 <b>전</b> 구배 — 창 체크박스 · 구배 0 입력이 채움(0 = 모름).
+    /// 둘레 전체 수직 기록을 만들 때 <see cref="ExcavBundle.PreWallSlope"/>로 굳는다.</summary>
+    internal static double SlopeBeforeWall;
+
     /// <summary>★★★[JACK 0909] <b>이번에 팔 기준면</b> — 계획지표면이냐 원지반이냐.
     ///
     /// <para>갈리는 곳은 <b>성토부뿐</b>이다. 절토부는 어느 공정이든 계획면부터 판다 —
@@ -163,6 +167,7 @@ public sealed class ExcavCommand
     {
         var v = Ask(ed, "굴착 구배 1:n (0=수직)", Slope, 0.0, 30.0);
         if (v == null) return false;
+        if (v.Value <= GradingSettings.WallGateSlope && Slope > GradingSettings.WallGateSlope) SlopeBeforeWall = Slope;   // ★[JACK 1117] 수직 전 구배 기억
         Slope = v.Value;
 
         // ★★★[JACK 0909] <b>어느 면에서부터 파는가</b> — 공정에 따라 다르다.
@@ -355,6 +360,12 @@ public sealed class ExcavCommand
                 MinSlope = useMin,
                 // ★[JACK 0909] 기준면도 같은 이유로 굳힌다 — 다음 구조물이 이것을 안 바꾸게.
                 Base = (int)useBasis,
+                // ★[JACK 1117] 둘레 전체 수직이면 가시설 전 구배를 굳힌다 — 구간만 고칠 때는 물려받고 · 새로 만들 때는 창(체크 전 값) → 이 구조물의 옛 사면 구배 → 옛 기록 값
+                PreWallSlope = System.Math.Max(useSlope, useMin) > GradingSettings.WallGateSlope + 1e-9 ? 0
+                             : keep ? prev!.PreWallSlope
+                             : SlopeBeforeWall > GradingSettings.WallGateSlope ? SlopeBeforeWall
+                             : prev != null && prev.Slope > GradingSettings.WallGateSlope ? prev.Slope
+                             : prev?.PreWallSlope ?? 0,
             };
             if (newIdx >= 0) { recs[newIdx] = cur; log.AppendLine($"■ 같은 구조물 다시 — 기록 {newIdx + 1}번을 교체"); }
             else { recs.Add(cur); newIdx = recs.Count - 1; }

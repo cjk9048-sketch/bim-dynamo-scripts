@@ -103,10 +103,16 @@ internal sealed class SectionPanel : UserControl
             RoadField(vals, demo, "PVI 간격", d => d.MinPviLen, (d, v) => d.MinPviLen = v, 1, 1, 500);
             var row1r = new WrapPanel { Margin = new Thickness(0, 0, 0, 6) };
             sec1.Children.Add(row1r);
-            AddRoad(row1r, demo, "PVI 넣기", "DHROADPVIADD", "roadProfile", "종단도에서 찍은 측점에 PVI 넣기 · 모양은 그대로 · 넣은 뒤 끌어 높이 변경 (Enter 끝)");
-            AddRoad(row1r, demo, "PVI 지우기", "DHROADPVIDEL", "roadProfile", "종단도에서 찍은 자리 가까운 PVI 지우기 · 처음 · 끝은 못 지움 (Enter 끝)");
+            // ★[JACK 1117 «PVI 넣기가 아니라 측점 넣기 · 측점 지우기»] 명령은 그대로 · Enter로 끝내면 지표면 · 종단도 · 횡단도 바로 다시(측점이 바로 보임)
+            AddRoad(row1r, demo, "측점 넣기", "DHROADPVIADD", "roadProfile", "종단도 안 클릭 → 그 자리에 측점(꺾인 점) · 모양 그대로 · 끌어 높이 변경 · Enter 끝 → 바로 다시 만듦");
+            AddRoad(row1r, demo, "측점 지우기", "DHROADPVIDEL", "roadProfile", "꺾인 점 클릭 → 측점 지우기 · 시점 · 종점은 못 지움 · Enter 끝 → 바로 다시 만듦");
             AddRoad(row1r, demo, "종단 자동으로 다시", "DHROADREDRAFT", "roadProfile", "PVI를 모두 지우고 지금 땅 따라 최대 경사 · PVI 간격으로 다시 · 손으로 옮긴 PVI 사라짐 (한 번 물음)");
             AddRoad(row1r, demo, "시점↔종점", "DHROADREV", "pfRev", "방향 뒤집기 · 모양 · 높이 그대로 · 옹벽 · 측구 · 측점도 같이 · 다시 누르면 처음 · 그 뒤 [업데이트]");
+            // ★[JACK 1117 «PVI를 고친 뒤 지표면 업데이트 단추가 진입도로 창 측구 밑에만 있음 → 이 창으로»] 진입도로 창 단추와 같음(DHROADUPDATE · 할 일 있을 때만 켬 · 빨강 깜박) · 진입도로 창 것도 그대로
+            var rowUp = new WrapPanel { Margin = new Thickness(0, 0, 0, 6) };
+            sec1.Children.Add(rowUp);
+            _updBtn = AddRoad(rowUp, demo, "지표면 업데이트", "DHROADUPDATE", "roadProfile", "지표면 · 종단도 · 횡단도 한꺼번에 다시 · 고친 것 있으면 빨강 깜박");
+            _needRoad.Remove(_updBtn);   // 켜고 끄기 = 할 일 있음(ShowRoadSession)
         }
         else
         {
@@ -173,6 +179,7 @@ internal sealed class SectionPanel : UserControl
     private readonly Dictionary<TextBox, string> _shown = new();
     private RoadSession? _rs;
     private bool _loading;
+    private Button? _updBtn;   // [지표면 업데이트] — 진입도로 창 것과 같은 판정 · 모양(RoadPanel.NeedUpdate · UpdateLook)
 
     private void WireRoad()
     {
@@ -194,6 +201,13 @@ internal sealed class SectionPanel : UserControl
         try
         {
             foreach (var el in _needRoad) el.IsEnabled = s != null;
+            if (_updBtn != null)
+            {
+                bool need = false;
+                try { need = RoadPanel.NeedUpdate(s); } catch { }
+                _updBtn.IsEnabled = need;
+                RoadPanel.UpdateLook(_updBtn, need);
+            }
             foreach (var (box, get, _, scale, _, _) in _fields)
             {
                 box.IsEnabled = s != null;
@@ -234,7 +248,7 @@ internal sealed class SectionPanel : UserControl
         _fields.Add((tb, get, set, scale, lo, hi));
     }
 
-    private void AddRoad(Panel row, FixDemoView demo, string text, string cmd, string demoKey, string tip, bool primary = false)
+    private Button AddRoad(Panel row, FixDemoView demo, string text, string cmd, string demoKey, string tip, bool primary = false)
     {
         var b = new Button { Content = text, MinWidth = 96, Height = 30, Margin = new Thickness(0, 0, 6, 6), ToolTip = tip, IsEnabled = false };
         if (primary) { b.MinWidth = 120; try { if (DhBrand.Skin != null) b.Style = (Style)DhBrand.Skin["DhPrimary"]; } catch { } }
@@ -244,6 +258,7 @@ internal sealed class SectionPanel : UserControl
         hit.MouseLeave += (_, __) => demo.Idle();
         row.Children.Add(hit);
         _needRoad.Add(b);
+        return b;
     }
 
     /// <summary>값 확정 — RoadPalette.CommitCore와 같은 길(남은 바뀜 셈 → Fresh → 바뀐 칸만 쓰기 → SaveDesign → Recompute).</summary>

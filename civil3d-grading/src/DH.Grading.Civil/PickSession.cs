@@ -167,10 +167,17 @@ internal static class PickSession
             What = what ?? "",
             Mark = mk,
         };
+        if (key == KeyExcav) _excavNoZ.Remove(doc);
         _nPick++;
         Hook();
         Raise();
     }
+
+    /// <summary>★[JACK 1117 «고도값이 0인 걸 선택하면 미선택 자리에 고도값 누락됨 빨간색»] 마지막 터파기선 고르기가 고도 0이라 거절된 도면 — 창이 «○ 고도값 누락됨»(빨강).
+    /// 제대로 고르거나 다 잊으면 꺼짐.</summary>
+    static readonly HashSet<AcDoc> _excavNoZ = new();
+    internal static bool ExcavNoZ(AcDoc doc) => doc != null && _excavNoZ.Contains(doc);
+    internal static void SetExcavNoZ(AcDoc doc, bool on) { if (doc == null) return; if (on) _excavNoZ.Add(doc); else _excavNoZ.Remove(doc); Raise(); }
 
     /// <summary>한 자리만 잊는다(표시도 걷는다).</summary>
     internal static void Forget(AcDoc doc, string key)
@@ -188,6 +195,7 @@ internal static class PickSession
         if (m == null) return;
         foreach (var s in m.Values) { try { s.Mark?.Dispose(); } catch { } }
         m.Clear();
+        _excavNoZ.Remove(doc);
         Raise();
     }
 
@@ -747,6 +755,32 @@ public sealed class PickCommands
         catch { return false; }
     }
 
+    /// <summary>★[JACK 1117] 선의 점 높이가 전부 0인가(폴리선 = 고도 · 3D 폴리선 · 피처라인 = 꼭짓점마다). 못 읽으면 거짓(막지 않음).</summary>
+    static bool AllZeroZ(AcDoc doc, ObjectId id)
+    {
+        try
+        {
+            using var tr = doc.Database.TransactionManager.StartTransaction();
+            var o = tr.GetObject(id, OpenMode.ForRead);
+            bool zero = true; int n = 0;
+            switch (o)
+            {
+                case Polyline pl: zero = System.Math.Abs(pl.Elevation) < 1e-6; n = 1; break;
+                case Polyline3d p3:
+                    foreach (ObjectId vid in p3)
+                        if (tr.GetObject(vid, OpenMode.ForRead) is PolylineVertex3d v) { n++; if (System.Math.Abs(v.Position.Z) >= 1e-6) { zero = false; break; } }
+                    break;
+                case Autodesk.Civil.DatabaseServices.FeatureLine fl:
+                    foreach (Autodesk.AutoCAD.Geometry.Point3d q in fl.GetPoints(Autodesk.Civil.FeatureLinePointType.AllPoints)) { n++; if (System.Math.Abs(q.Z) >= 1e-6) { zero = false; break; } }
+                    break;
+                default: zero = false; break;
+            }
+            tr.Commit();
+            return zero && n > 0;
+        }
+        catch { return false; }
+    }
+
     private static void PickOne(string key, string what, string prompt, bool wantSurface)
     {
         var doc = AcadApp.DocumentManager.MdiActiveDocument;
@@ -793,6 +827,16 @@ public sealed class PickCommands
             }
             catch (System.Exception cx) { try { DiagLog.Append($"\n[찍기] {what} 닫기 · 이름 읽기 실패 — {cx.Message}"); } catch { } }
             if (closedNote.Length > 0) ed.WriteMessage($"\n[찍기] {what} — {closedNote}");
+
+            // ★[JACK 1117 «고도값이 0인 걸 선택하면 미선택 자리에 고도값 누락됨 빨간색»] 터파기선 = 구조물 바닥 고도가 든 선 — 점 높이가 전부 0이면 거절(고른 것 비움) + 창에 빨간 글
+            if (key == PickSession.KeyExcav && AllZeroZ(doc, r.ObjectId))
+            {
+                PickSession.Forget(doc, key);
+                PickSession.SetExcavNoZ(doc, true);
+                ed.WriteMessage($"\n[찍기] {what} — 고도값 누락됨(점 높이 전부 0) → 구조물 바닥 고도 넣고 다시 선택");
+                try { DiagLog.Append($"\n[찍기] 터파기선 거절 — 고도 0 ({name})"); } catch { }
+                return;
+            }
 
             // ★[v117.16 · JACK 1112 «원지반 선택에서 정지면_DH가 골라져 터파기 오류» — 검토로 찾은 오류] 원지반 자리에 우리가 만든 면(«…_DH» — 정지면_DH ·
             //   최종지표면_DH · 진입도로_DH 등)을 고르면 그 자리에서 거절(고르기 전 값 그대로). 종전엔 아무 말 없이 받아 [터파기 지표면 생성]에서야

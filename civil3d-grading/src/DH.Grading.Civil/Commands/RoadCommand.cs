@@ -1232,7 +1232,7 @@ public class RoadCommand
     {
         var doc = AcadApp.DocumentManager.MdiActiveDocument; var ed = doc.Editor; var db = doc.Database;
         var s = Need(ed); if (s == null) return;
-        string tag = add ? "[PVI 넣기]" : "[PVI 지우기]";
+        string tag = add ? "[측점 넣기]" : "[측점 지우기]";   // ★[JACK 1117 «PVI 넣기 → 측점 넣기 · 측점 지우기»] 명령 이름은 그대로
         try
         {
             (ObjectId View, Extents3d Ext)? tgt;
@@ -1241,7 +1241,7 @@ public class RoadCommand
                 tgt = PviView(tr, s.AlignId, ViewCenterWcs(ed));
                 tr.Commit();
             }
-            if (tgt == null) { ed.WriteMessage($"\n{tag} 이 도로의 종단도가 없습니다 — 진입도로 [종단도]부터"); return; }
+            if (tgt == null) { ed.WriteMessage($"\n{tag} 종단도 없음 → [종단도 생성]부터"); return; }
             ZoomTo(ed, tgt.Value.Ext);
             var planId = s.PlanId;
             Hilite(db, planId, true);
@@ -1256,9 +1256,9 @@ public class RoadCommand
                 while (true)
                 {
                     var ppo = new PromptPointOptions(add
-                        ? "\n[PVI 넣기] 넣을 자리 — 종단도 안 클릭(지금 계획선 위 · Enter 끝): "
-                        : "\n[PVI 지우기] 지울 PVI 클릭(종단도 안 · Enter 끝): ") { AllowNone = true };
-                    var pr = CursorLabel.GetPoint(ed, ppo, add ? "PVI 넣을 자리 클릭" : "지울 PVI 클릭",
+                        ? "\n[측점 넣기] 넣을 자리 — 종단도 안 클릭(계획선 위 · Enter 끝): "
+                        : "\n[측점 지우기] 지울 측점(꺾인 점) 클릭(종단도 안 · Enter 끝): ") { AllowNone = true };
+                    var pr = CursorLabel.GetPoint(ed, ppo, add ? "측점 넣을 자리 클릭" : "지울 측점 클릭",
                         extra: (wd, cur, has) => DrawPviMarks(wd, marks, cur, has, !add));
                     if (pr.Status != PromptStatus.OK) break;
                     var p = pr.Value.TransformBy(ed.CurrentUserCoordinateSystem);
@@ -1281,8 +1281,13 @@ public class RoadCommand
                 Hilite(db, planId, false);
                 if (done > 0) { try { s.Recompute(); } catch { } }
             }
-            // ★[v111.7.2 · JACK 1102 «마지막에 팝업창 단추를 누르면 한꺼번에»] 미리보기 선만 바로 — 지표면 · 종단도 · 횡단도는 [업데이트]
-            if (done > 0) ed.WriteMessage($"\n{tag} {done}개 — 미리보기 선만 바뀌었습니다 · 진입도로 창 [지표면 업데이트]를 누르면 지표면 · 종단도 · 횡단도를 다시 만듭니다 · 실행 취소(U)는 이번에 한 것을 한꺼번에 되돌림");
+            // ★[JACK 1117 «측점 넣기를 했는데 측점이 안 생겨»] 측점(종단도 검토선 · 밴드 · 횡단도)은 종단도를 다시 그릴 때 생김 — 옛날엔(v111.7.2~) [지표면 업데이트]를 눌러야 했음.
+            //   → Enter로 끝낼 때 넣고 · 지운 것이 있으면 [지표면 업데이트]와 같은 다시 만들기를 한 번(여러 개 = 한 번) · 같은 명령 안 = U 한 번에 측점과 다시 만든 것 함께 되돌림
+            if (done > 0)
+            {
+                ed.WriteMessage($"\n{tag} {done}개 → 지표면 · 종단도 · 횡단도 다시 만듦 (U = 한꺼번에 되돌림)");
+                RedrawStale(doc, s, ask: true);
+            }
             // 끝 — 계획 종단을 골라 둠(그립 → 바로 끌어 PVI 높이)
             try { if (!planId.IsNull && !planId.IsErased) ed.SetImpliedSelection(new[] { planId }); } catch { }
         }
@@ -1455,26 +1460,26 @@ public class RoadCommand
     static string PviAddAt(Transaction tr, RoadSession s, Point3d p)
     {
         var hit = PickInView(tr, s.AlignId, p);
-        if (hit == null) return "⚠종단도 밖입니다 — 이 도로 종단도 안을 찍으세요";
+        if (hit == null) return "⚠종단도 밖 → 이 도로 종단도 안 클릭";
         var prof = (CivilDb.Profile)tr.GetObject(s.PlanId, OpenMode.ForRead);   // ★[검토 L4] 거절이면 안 씀(쓰기는 넣기 바로 앞)
         double st = Math.Round(hit.Value.St, 2);
-        if (prof.PVIs.Count < 2) return "⚠계획 종단이 비었습니다";
+        if (prof.PVIs.Count < 2) return "⚠계획 종단 비어 있음";
         double a = prof.PVIs[0].RawStation, b = prof.PVIs[prof.PVIs.Count - 1].RawStation;
-        if (st <= a + PviGap || st >= b - PviGap) return $"⚠측점 {st:F2} m — 처음 · 끝 PVI 사이({a:F1} ~ {b:F1} m)만 넣습니다";
+        if (st <= a + PviGap || st >= b - PviGap) return $"⚠측점 {st:F2} m — 시점 · 종점 사이({a:F1} ~ {b:F1} m)만 가능";
         // ★[도로 마무리 ① · 계획 5.4] 도로 구간 밖(가상으로 자른 끝 · 빈 구간 안)은 거절
-        if (s.Ranges.Count > 0 && !RoadRanges.Inside(s.Ranges, st)) return $"⚠측점 {st:F2} m — 도로가 없는 자리(부지 바닥 · 잘린 끝)입니다";
+        if (s.Ranges.Count > 0 && !RoadRanges.Inside(s.Ranges, st)) return $"⚠측점 {st:F2} m — 도로 없는 자리(부지 바닥 · 잘린 끝)";
         for (int i = 0; i < prof.PVIs.Count; i++)
-            if (Math.Abs(prof.PVIs[i].RawStation - st) < PviGap) return $"⚠측점 {st:F2} m 곁 {PviGap} m 안에 PVI가 있습니다(측점 {prof.PVIs[i].RawStation:F2} m)";
+            if (Math.Abs(prof.PVIs[i].RawStation - st) < PviGap) return $"⚠측점 {st:F2} m — {PviGap} m 안에 측점 있음({prof.PVIs[i].RawStation:F2} m)";
         double z = prof.ElevationAt(st);
         prof.UpgradeOpen();
         prof.PVIs.AddPVI(st, z);
-        return $"측점 {st:F2} m · 표고 {z:F2} m 넣음(PVI {prof.PVIs.Count}개) — 잡아끌어 높이를 바꾸세요";
+        return $"측점 {st:F2} m · 표고 {z:F2} m 넣음";
     }
 
     static string PviDelAt(Transaction tr, RoadSession s, Point3d p)
     {
         var hit = PickInView(tr, s.AlignId, p);
-        if (hit == null) return "⚠종단도 밖입니다 — 이 도로 종단도 안을 찍으세요";
+        if (hit == null) return "⚠종단도 밖 → 이 도로 종단도 안 클릭";
         var pv = hit.Value.View;
         var prof = (CivilDb.Profile)tr.GetObject(s.PlanId, OpenMode.ForRead);
         int best = -1; double bd = double.MaxValue;
@@ -1488,12 +1493,12 @@ public class RoadCommand
             if (d < bd) { bd = d; best = i; }
         }
         double tol = PviPickTol();
-        if (best < 0 || bd > tol) return "⚠찍은 자리 가까이에 PVI가 없습니다 — PVI(꺾인 점) 바로 위를 찍으세요";
-        if (best == 0 || best == prof.PVIs.Count - 1) return "⚠처음 · 끝 PVI는 지울 수 없습니다(노선 시점 · 종점 높이)";
+        if (best < 0 || bd > tol) return "⚠가까운 측점 없음 → 꺾인 점 바로 위 클릭";
+        if (best == 0 || best == prof.PVIs.Count - 1) return "⚠시점 · 종점은 못 지움";
         double st = prof.PVIs[best].RawStation, z = prof.PVIs[best].Elevation;
         prof.UpgradeOpen();
         prof.PVIs.RemoveAt(best);
-        return $"측점 {st:F2} m · 표고 {z:F2} m 지움(PVI {prof.PVIs.Count}개)";
+        return $"측점 {st:F2} m · 표고 {z:F2} m 지움";
     }
 
     /// <summary>★★★[v111.7.2 · JACK 1102 «측점(PVI) 움직일 때마다 모든 게 재작성되니 오래 걸린다 · 마지막에 팝업창 단추를 누르면 한꺼번에 업데이트»] 진입도로 창 ■ 결과 [업데이트] —
