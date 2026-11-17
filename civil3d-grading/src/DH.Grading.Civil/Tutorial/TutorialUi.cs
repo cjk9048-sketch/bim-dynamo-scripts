@@ -323,6 +323,21 @@ internal static class TutRibbon
     }
 
     /// <summary>항목을 그린 바깥 WPF 조각 — 찾은 것은 기억(다시 볼 때 아직 보이는지만 확인 · 없으면 2초에 한 번만 다시 훑음).</summary>
+    /// <summary>★[5단원] 우리 탭에서 명령이 <paramref name="cmd"/>인 큰 단추(같은 글자 «종횡단도»가 둘이라 명령으로).</summary>
+    internal static RibbonItem? FindItemByCmd(string cmd)
+    {
+        try
+        {
+            var tab = ComponentManager.Ribbon?.FindTab(RibbonApp.TabId);
+            if (tab == null) return null;
+            foreach (var p in tab.Panels)
+                foreach (var it in p.Source.Items)
+                    if (it is RibbonButton b && b.CommandParameter is string c && c == cmd) return it;
+        }
+        catch { }
+        return null;
+    }
+
     internal static FrameworkElement? FindVisual(object item)
     {
         if (_hit != null && ReferenceEquals(_hitItem, item))

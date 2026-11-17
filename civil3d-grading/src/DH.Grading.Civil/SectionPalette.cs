@@ -54,6 +54,9 @@ public static class SectionPalette
         }
     }
 
+    /// <summary>★[튜토리얼 · JACK 1117] 진입도로 종횡단도 창 — 떠 있으면 창 안(튜토리얼이 단추를 비춤) · 아니면 null.</summary>
+    internal static SectionPanel? RoadOpenPanel { get { try { return RoadH.Ps != null && RoadH.Ps.Visible ? RoadH.Panel : null; } catch { return null; } } }
+
     /// <summary>리본이 계획면 · 찍기 상태를 다시 칠할 때 같이 부른다(떠 있는 창만).</summary>
     internal static void RefreshAll(bool hasPlan)
     {
@@ -240,7 +243,9 @@ internal sealed class SectionPanel : UserControl
             HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
             Background = Brushes.Transparent,
         }));
-        Content = deck;
+        // ★[튜토리얼 · JACK 1117] 덮개(Adorner) 자리 — 5단원 진입도로가 누를 단추만 뚫는다
+        SpotRoot = deck;
+        Content = new System.Windows.Documents.AdornerDecorator { Child = deck };
 
         void Wire() { try { PickSession.Changed -= OnPick; PickSession.Changed += OnPick; } catch { } }
         Loaded += (_, __) => { Wire(); Refresh(null); WireRoad(); };
@@ -255,6 +260,10 @@ internal sealed class SectionPanel : UserControl
     private RoadSession? _rs;
     private bool _loading;
     private Button? _updBtn;   // [지표면 업데이트] — 진입도로 창 것과 같은 판정 · 모양(RoadPanel.NeedUpdate · UpdateLook)
+    // ★[튜토리얼 · JACK 1117] 튜토리얼이 비추는 덮개 자리 · 진입도로 단추(명령 이름으로)
+    internal FrameworkElement? SpotRoot { get; private set; }
+    private readonly Dictionary<string, Button> _roadBtns = new();
+    internal Button? RoadButton(string cmd) => _roadBtns.TryGetValue(cmd, out var b) ? b : null;
 
     private void WireRoad()
     {
@@ -334,6 +343,7 @@ internal sealed class SectionPanel : UserControl
         hit.MouseLeave += (_, __) => demo.Idle();
         row.Children.Add(hit);
         _needRoad.Add(b);
+        _roadBtns[cmd] = b;
         return b;
     }
 

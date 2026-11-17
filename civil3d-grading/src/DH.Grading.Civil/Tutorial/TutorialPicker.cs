@@ -40,7 +40,7 @@ internal sealed class TutorialPicker : Window
             }
             var name = new TextBlock
             {
-                Text = (done.Contains((int)c) ? "✓ " : "　 ") + $"{(int)c}. {TutorialFlow.ChapterName(c)}"
+                Text = (done.Contains((int)c) ? "✓ " : "　 ") + $"{System.Array.IndexOf(TutorialFlow.Active, c) + 1}. {TutorialFlow.ChapterName(c)}"   // ★[5단원] 번호 = 여는 차례(종횡단도 4는 쉼)
                      + (hasBase ? "" : "  · 자료 없음"),
                 FontSize = 14, VerticalAlignment = VerticalAlignment.Center,
                 Foreground = done.Contains((int)c) ? DhBrand.Ok : DhBrand.Ink,

@@ -6,7 +6,7 @@ using Chapter = DH.Grading.Civil.Tutorial.TutorialFlow.Chapter;
 namespace DH.Grading.Civil.Tutorial;
 
 /// <summary>★[튜토리얼 · JACK 1117 «단원 · 한 지표면에서 이어서 · 중간 단원은 저장된 자료로»] 튜토리얼 자료 자리.
-/// <para>기본 자료(설치 번들 <c>Contents\Tutorial\</c> — 공개 저장소에는 없음 · .gitignore): <c>tut_base.dwg</c>(원지반 + 계획부지선 + 터파기선) · <c>tut_ch3.dwg</c>(2단원을 끝낸 꼴) · <c>tut_ch1.dxf</c>(수치지도).
+/// <para>기본 자료(설치 번들 <c>Contents\Tutorial\</c> — 공개 저장소에는 없음 · .gitignore): <c>tut_base.dwg</c>(원지반 + 계획부지선 + 터파기선) · <c>tut_ch3.dwg</c>(2단원을 끝낸 꼴) · <c>tut_ch5.dwg</c>(진입도로 시작 — 2단원 끝 + 노선 선) · <c>tut_ch1.dxf</c>(수치지도).
 /// 같은 이름이 <c>%LOCALAPPDATA%\DHGrading\tutorial\data\</c>에 있으면 그쪽이 먼저(설치 전 시험용).</para>
 /// <para>내 결과: 단원을 끝내면 <c>%LOCALAPPDATA%\DHGrading\tutorial\chN_done.dwg</c> · 끝낸 단원 표시 <c>progress.txt</c>.
 /// 단원은 늘 <b>사본</b>(<c>work\</c>)을 연다 — 기본 자료 · 내 결과 파일은 그대로.</para>
@@ -29,7 +29,8 @@ internal static class TutorialData
         return null;
     }
 
-    /// <summary>단원 시작 기본 자료 — 2 = <c>tut_base.dwg</c>(원지반 + 계획부지선 + 터파기선) · 3 = <c>tut_ch3.dwg</c>(2단원을 끝낸 꼴) · 4 = <c>tut_ch4.dwg</c>.</summary>
+    /// <summary>단원 시작 기본 자료 — 2 = <c>tut_base.dwg</c>(원지반 + 계획부지선 + 터파기선) · 3 = <c>tut_ch3.dwg</c>(2단원을 끝낸 꼴) · 4 = <c>tut_ch4.dwg</c> ·
+    /// 5 = <c>tut_ch5.dwg</c>(2단원을 끝낸 꼴 + 노선 따라 그릴 선 «TUT-노선»).</summary>
     internal static string? StartDwg(Chapter c) => c switch
     {
         Chapter.Ground => null,
@@ -42,8 +43,8 @@ internal static class TutorialData
     internal static string DonePath(Chapter c) => Path.Combine(Home, $"ch{(int)c}_done.dwg");
     internal static string? MyDone(Chapter c) { string p = DonePath(c); return File.Exists(p) ? p : null; }
 
-    /// <summary>단원 c를 «내 것으로 이어서» 시작할 때 여는 파일 — 앞 단원 결과.</summary>
-    internal static string? MineFor(Chapter c) => c == Chapter.Ground ? null : MyDone(c - 1);
+    /// <summary>단원 c를 «내 것으로 이어서» 시작할 때 여는 파일 — 앞 단원(여는 단원 차례 · 5 진입도로 = 3 터파기) 결과.</summary>
+    internal static string? MineFor(Chapter c) => TutorialFlow.Prev(c) is Chapter p ? MyDone(p) : null;
 
     // ── 끝낸 단원 ──
     static string ProgressFile => Path.Combine(Home, "progress.txt");

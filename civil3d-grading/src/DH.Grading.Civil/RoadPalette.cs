@@ -51,6 +51,8 @@ internal static class RoadPalette
         try { if (_ps != null && _ps.Visible) _ps.Visible = false; } catch { }
     }
 
+    /// <summary>★[튜토리얼 · JACK 1117] 떠 있으면 창 안(튜토리얼이 단추를 비춤) · 아니면 null.</summary>
+    internal static RoadPanel? OpenPanel { get { try { return _ps != null && _ps.Visible ? _panel : null; } catch { return null; } } }
 }
 
 internal sealed class RoadPanel : UserControl
@@ -94,7 +96,9 @@ internal sealed class RoadPanel : UserControl
             HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
             Background = System.Windows.Media.Brushes.Transparent,   // 바탕이 칠해지면 로고가 가려진다
         }));
-        Content = deck;
+        // ★[튜토리얼 · JACK 1117] 덮개(Adorner) 자리 — 창을 어둡게 덮고 누를 단추만 뚫는다(<see cref="Tutorial.TutSpot"/>)
+        _spotRoot = deck;
+        Content = new System.Windows.Documents.AdornerDecorator { Child = deck };
 
         // ── ■ 도로 설정 — 작은 칸 셋(한 번에 하나 펼침 · 창을 만들 때마다 «노선»이 열린 채로) ──
         // ★★[v111.7 · JACK 1102 «도킹창 묶음 정리»] 작은 칸 «종단» · «옹벽 제안»은 새 큰 칸 ■ 종단 · ■ 옹벽으로 옮김 — 여기는 값만(노선 · 횡단 · 사면)
@@ -125,6 +129,7 @@ internal sealed class RoadPanel : UserControl
                                        ToolTip = "그려 둔 폴리선 · 3D 폴리선 · Civil 노선을 고름" };
         var mkBtn = MakeBtn("진입도로 생성", "DHROADDRAW", "고른 방법(경로 그리기 / 폴리선 선택)으로 아래 도로 설정 값의 진입도로를 만듭니다", true, null);
         mkBtn.Tag = "pick-by-radio";
+        _mkBtn = mkBtn;
         mkBtn.MouseEnter += (_, __) => _demo.Play(rbPick.IsChecked == true ? "roadPick" : "roadDraw");
         mkBtn.MouseLeave += (_, __) => _demo.Idle();
         rbDraw.MouseEnter += (_, __) => _demo.Play("roadDraw"); rbDraw.MouseLeave += (_, __) => _demo.Idle();
@@ -246,9 +251,9 @@ internal sealed class RoadPanel : UserControl
                 row.Children.Add(hit);
                 return b;
             }
-            WB(wRow1, "옹벽 변환", "DHROADWALLCONV", "계단선 클릭 → 그 단부터 바깥이 옹벽", "toWall");
-            WB(wRow1, "사면 변환", "DHROADSLOPECONV", "옹벽선 클릭 → 다시 사면", "toSlope");
-            WB(wRow2, "옹벽 추가", "DHROADWALLADD", "경계 → 사면 띠 안 → 경계 클릭 → 선 따라 옹벽", "add");
+            _wallConv = WB(wRow1, "옹벽 변환", "DHROADWALLCONV", "계단선 클릭 → 그 단부터 바깥이 옹벽", "toWall");
+            _slopeConv = WB(wRow1, "사면 변환", "DHROADSLOPECONV", "옹벽선 클릭 → 다시 사면", "toSlope");
+            _wallAdd = WB(wRow2, "옹벽 추가", "DHROADWALLADD", "경계 → 사면 띠 안 → 경계 클릭 → 선 따라 옹벽", "add");
             _roadDel = WB(wRow2, "옹벽 삭제", "DHROADWALLDEL", "[옹벽 추가] 옹벽 자리 클릭 → Enter → 옹벽 지움 · 원래 사면", "delete");
             _host.Children.Add(wGrid);
         }
@@ -348,6 +353,19 @@ internal sealed class RoadPanel : UserControl
             fe.MouseLeave += (_, __) => _demo.Idle();
         }
     }
+
+    // ★[튜토리얼 · JACK 1117] 튜토리얼이 비추는 단추 · 덮개 자리(5단원 진입도로)
+    FrameworkElement? _spotRoot;
+    Button _mkBtn = null!, _wallConv = null!, _slopeConv = null!, _wallAdd = null!;
+    internal FrameworkElement? SpotRoot => _spotRoot;
+    internal Button MakeButton => _mkBtn;
+    internal ComboBox PaveKindBox => _paveKind;
+    internal Button WallConvButton => _wallConv;
+    internal Button SlopeConvButton => _slopeConv;
+    internal Button WallAddButton => _wallAdd;
+    internal Button? WallDelButton => _roadDel;
+    internal Button UpdateButton => _updateBtn;
+    internal Button ResetButton => _resetBtn;
 
     StackPanel _ditchBody = null!;
     readonly List<TextBox> _ditchUBoxes = new(), _ditchLBoxes = new();

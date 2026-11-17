@@ -180,6 +180,16 @@ internal sealed class Tut
     string? _wallBase;
     bool _wallRan;
     bool _fWall;
+    // ── 5단원 진입도로 — 명령 기록(시작 때 지난 기록 · 그때 단계) · 끝낸 일 비트 · 포장 단계 기준 · 노선 따라 그릴 선
+    TutorialFlow.RoadSnap _rdLast;
+    int _rdDone;
+    readonly List<(string Cmd, TutorialFlow.RoadSnap Before, Step At)> _rdRuns = new();
+    int? _paveBase;
+    bool _rdGuideFound;
+    ObjectId _rdGuide = ObjectId.Null;
+    List<Point2d>? _rdPts;
+    string? _rdNote;
+    TutorialFlow.Facts _facts;
     // ── 끝(결과 저장)
     bool _saved;
     TutBalloon? _balloon;
@@ -194,7 +204,7 @@ internal sealed class Tut
     internal Tut(Document doc, Chapter ch, bool mine, string work)
     {
         _doc = doc; _db = doc.Database; _ch = ch; _mine = mine; _work = work;
-        _step = ch switch { Chapter.Ground => Step.Ground, Chapter.Excav => Step.ExDraw, _ => Step.Draw };
+        _step = ch switch { Chapter.Ground => Step.Ground, Chapter.Excav => Step.ExDraw, Chapter.Road => Step.RdOpen, _ => Step.Draw };
     }
 
     internal void Begin()
@@ -227,8 +237,8 @@ internal sealed class Tut
     }
 
     static bool IsDraw(Step s) => TutorialFlow.IsDraw(s);
-    /// <summary>노란 점선을 띄우는 단계 — 따라 그리기 · 원지형 자르기(두 모서리 자리).</summary>
-    static bool HasHint(Step s) => IsDraw(s) || s == Step.Crop;
+    /// <summary>노란 점선을 띄우는 단계 — 따라 그리기 · 원지형 자르기(두 모서리 자리) · 진입도로 노선.</summary>
+    static bool HasHint(Step s) => IsDraw(s) || s == Step.Crop || s == Step.RdDraw;
 
     // ── 사건 ──────────────────────────────────────────────────────────────
     static bool IsImport(string n) => n is "DHCONTOURBOX" or "DHNGII" or "DHGNDCONTOUR";
@@ -239,6 +249,8 @@ internal sealed class Tut
         if (IsImport(n)) _importing = true;
         // ★[1부 DXF] 파일 창을 튜토리얼 DXF 자리에서 연다(한 번)
         if (n == "DHNGII" && _ch == Chapter.Ground && _part2 && TutorialData.DxfFile is string dxf) NgiiCommand.PresetFile = dxf;
+        // ★[5단원] 진입도로 명령 — 시작 앞 기록(지난 한가할 때 읽은 것) · 그때 단계를 적어 둠 → 끝난 뒤 한가할 때 견줌(ReadRoad)
+        if (_ch == Chapter.Road && n.StartsWith("DHROAD", StringComparison.Ordinal)) _rdRuns.Add((n, _rdLast, _step));
         Kick();
     }
 
@@ -430,7 +442,10 @@ internal sealed class Tut
                 Grade: _fGrade, Fits: _fFits, Ch: _ch, SlopeChanged: _slopeSeen, Wall: _fWall,
                 ExBoundary: _fExBoundary, ExElev: _fExElev, ExPanelOpen: exPanel != null,
                 ExPicked: PickSession.Peek(_doc, PickSession.KeyExcav) != null,
-                Shore: exPanel?.WallCheck.IsChecked == true, ExSurf: _fExSurf, Cropped: _fCropped);
+                Shore: exPanel?.WallCheck.IsChecked == true, ExSurf: _fExSurf, Cropped: _fCropped,
+                RdPanel: RoadPalette.OpenPanel != null, RdSecOpen: SectionPalette.RoadOpenPanel != null,
+                RdRoad: _rdLast.Road && _rdLast.Surf, RdDone: _rdDone);
+            _facts = f;
             var s = TutorialFlow.Derive(f);
             // 1단원: 서버 지표면이 됐으면 2부(수치지도 DXF)로 — DXF가 없으면 그대로 끝
             if (_ch == Chapter.Ground && s == Step.Done && !_part2 && TutorialData.DxfFile != null)
@@ -446,6 +461,7 @@ internal sealed class Tut
             if (_exBuildEnded && quiet) { _exBuildEnded = false; if (!_fExSurf) evNote = TutorialFlow.NoteExFail; }
             if (_wallEnded && quiet) { _wallEnded = false; if (!_fWall) evNote = TutorialFlow.NoteWallFail; }
             if (_cropEnded && quiet) { _cropEnded = false; if (s == Step.Crop) evNote = TutorialFlow.NoteCropFail; }
+            if (_rdNote != null && quiet) { evNote = _rdNote; _rdNote = null; }
 
             if (s != _step)
             {
@@ -456,6 +472,9 @@ internal sealed class Tut
                 else if (TutorialFlow.IsPanel(old) && s == Step.Panel) _note = TutorialFlow.NotePanelClosed;
                 else if (TutorialFlow.IsExPanel(old) && s == Step.ExPanel) _note = TutorialFlow.NoteExPanelClosed;
                 else if (old is Step.Elev or Step.Panel or Step.PickPlan or Step.PickGround or Step.Slope or Step.Build && s == Step.Draw) _note = TutorialFlow.NoteLineLost;
+                else if (TutorialFlow.IsRdPanel(old) && s == Step.RdOpen) _note = TutorialFlow.NoteRdClosed;
+                else if (TutorialFlow.IsRdSec(old) && s == Step.RdSec) _note = TutorialFlow.NoteRdSecClosed;
+                if (s == Step.RdPave) _paveBase = _rdLast.Pave;   // ★[5단원] 포장 단계가 된 때의 종류 — 바꾸면 끝
                 if (_balloon != null) _balloon.Dragged = false;
                 if (HasHint(old) && !HasHint(s)) { _hintWanted = false; _hintEraseWanted = true; }
                 if (HasHint(s)) { _hintWanted = true; _hintEraseWanted = false; }
@@ -472,6 +491,7 @@ internal sealed class Tut
 
     void ReadDb()
     {
+        if (_ch == Chapter.Road) { ReadRoad(); return; }
         using var tr = _db.TransactionManager.StartTransaction();
         var gid = GradingBuilder.FindSurfaceByBaseName(tr, ImportGisCommand.GroundSurfaceName);
         if (_ch == Chapter.Ground)
@@ -491,6 +511,41 @@ internal sealed class Tut
         if (_ch == Chapter.Site) ReadSite(tr, surf);
         else if (_ch == Chapter.Excav) ReadExcav(tr);
         tr.Commit();
+    }
+
+    /// <summary>★[5단원 진입도로] 기록 읽기 → 명령마다 앞뒤 견주기(그 단계에서 누른 명령만) → 끝낸 일 비트 · 실패 알림. 도로가 없어지면(U 등 · 초기화 아님) 처음부터.</summary>
+    void ReadRoad()
+    {
+        if (!_rdGuideFound)
+        {
+            _rdGuideFound = true;
+            try
+            {
+                using var tr = _db.TransactionManager.StartTransaction();
+                (_rdGuide, _rdPts) = TutRoad.Guide(_db, tr);
+                tr.Commit();
+                Log($"노선 따라 그릴 선 — {(!_rdGuide.IsNull ? "그려 둔 선 " + _rdGuide.Handle : _rdPts != null ? $"부지에서 셈 · 점 {_rdPts.Count}" : "없음")}");
+            }
+            catch (System.Exception ex) { Log("노선 선 찾기 실패 — " + ex.Message); }
+        }
+        var now = TutRoad.Read(_doc);
+        foreach (var (cmd, before, at) in _rdRuns)
+        {
+            bool did = TutorialFlow.RoadDid(cmd, before, now);
+            if (cmd is "DHROADDRAW" or "DHROAD")
+            {
+                if (at == Step.RdDraw && !did) _rdNote = TutorialFlow.NoteRdDrawFail;
+                continue;
+            }
+            var st = TutorialFlow.RoadStepOf(cmd);
+            if (st == Step.Done || st != at) continue;   // 그 단계에서 누른 명령만(차례 밖은 안 셈)
+            if (did) { _rdDone |= TutorialFlow.RdBit(st); Log($"{cmd} → {st} 끝"); }
+            else { _rdNote = TutorialFlow.RoadFailNote(cmd); Log($"{cmd} → 기록 안 바뀜 ({st})"); }
+        }
+        _rdRuns.Clear();
+        if (_step == Step.RdPave && _paveBase is int pb && TutorialFlow.PaveDid(pb, now)) { _rdDone |= TutorialFlow.RdBit(Step.RdPave); Log($"포장 {pb} → {now.Pave}"); }
+        if (_rdLast.Road && !now.Road && (_rdDone & TutorialFlow.RdBit(Step.RdReset)) == 0) { _rdDone = 0; _rdNote = TutorialFlow.NoteRdLost; Log("진입도로 없어짐 → 처음부터"); }
+        _rdLast = now;
     }
 
     /// <summary>가장 새 원지반(원지반 · 원지반_N 중 핸들이 가장 큰 것) — 1단원 2부 DXF 원지반.</summary>
@@ -763,13 +818,20 @@ internal sealed class Tut
         }
         catch { }
         var ms = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(_db), OpenMode.ForWrite);
-        var guide = _step == Step.ExDraw ? _exGuide : _step == Step.Crop ? ObjectId.Null : _planGuide;
+        var guide = _step == Step.ExDraw ? _exGuide : _step == Step.Crop ? ObjectId.Null : _step == Step.RdDraw ? _rdGuide : _planGuide;
         Polyline? shape = null;
         if (!guide.IsNull && tr.GetObject(guide, OpenMode.ForWrite) is Polyline g)
         {
             shape = (Polyline)g.Clone();
             g.Visible = false;   // 원래 선은 잠깐 숨김 — 점선만 보이게(끝나면 되돌림)
             _hidden.Add(guide);
+        }
+        else if (_step == Step.RdDraw)
+        {
+            // ★[5단원] 그려 둔 노선 선이 없으면(내 결과) 부지에서 셈한 꺾인 길 — 못 셈이면 점선 없음(글이 «부지 끝에서 바깥 땅으로»)
+            if (_rdPts == null || _rdPts.Count < 2) { tr.Commit(); return; }
+            shape = new Polyline();
+            for (int k = 0; k < _rdPts.Count; k++) shape.AddVertexAt(k, _rdPts[k], 0, 0, 0);
         }
         else
         {
@@ -868,11 +930,12 @@ internal sealed class Tut
     {
         if (_balloon == null || _glow == null) return;
         var s = _step;
-        int n = TutorialFlow.Num(s, dxf: _part2, graded: _fGrade);
+        int n = _ch == Chapter.Road ? TutorialFlow.RoadNum(s, _facts) : TutorialFlow.Num(s, dxf: _part2, graded: _fGrade);
         int total = TutorialFlow.Total(_ch);
-        string head = $"{(int)_ch}. {TutorialFlow.ChapterName(_ch)} · ";
+        // ★[5단원] 단원 번호 = 여는 차례(종횡단도 4는 쉼 — 진입도로는 4번째)
+        string head = $"{Array.IndexOf(TutorialFlow.Active, _ch) + 1}. {TutorialFlow.ChapterName(_ch)} · ";
         string num = s == Step.Done ? head + "완료" : head + $"{n} / {total}";
-        bool guide = s == Step.ExDraw ? !_exGuide.IsNull : !_planGuide.IsNull;
+        bool guide = s == Step.ExDraw ? !_exGuide.IsNull : s == Step.RdDraw ? !_rdGuide.IsNull || _rdPts != null : !_planGuide.IsNull;
         string text = s == Step.Done ? TutorialFlow.DoneText(_ch) : TutorialFlow.Text(s, _part2, guide);
         string? extra = null;
         if (s == Step.Elev && _recZ is double z) extra = $"추천 고도: {z:0.0}";
@@ -886,6 +949,7 @@ internal sealed class Tut
         if (s == Step.ExElev && _exHigh) note = TutorialFlow.NoteExHigh;
         if (s == Step.ExPick && PickSession.ExcavNoZ(_doc)) note = TutorialFlow.NoteNoZ;
         if (s == Step.Dxf && TutorialData.DxfFile == null) note = TutorialFlow.NoteNoDxf;
+        if (s == Step.RdUpdate && _rdLast.Road && !_rdLast.Need) note ??= TutorialFlow.NoteRdUpdateOff;
         var btns = new List<(string, string)>();
         if (s == Step.Ground)
         {
@@ -941,6 +1005,35 @@ internal sealed class Tut
                 _ => new() { exPanel.BuildButton },
             };
         }
+        else if (TutorialFlow.IsRdPanel(s) && RoadPalette.OpenPanel is RoadPanel rp)
+        {
+            // ★[5단원] 진입도로 창 — 누를 단추(접힌 ■ 진입도로 수정 안이면 안 덮고 «펼치기» 알림)
+            root = rp.SpotRoot;
+            FrameworkElement? t = s switch
+            {
+                Step.RdDraw => rp.MakeButton,
+                Step.RdWall => rp.WallConvButton,
+                Step.RdSlope => rp.SlopeConvButton,
+                Step.RdWallAdd => rp.WallAddButton,
+                Step.RdWallDel => rp.WallDelButton,
+                Step.RdPave => Cell(rp.PaveKindBox),
+                Step.RdReset => rp.ResetButton,
+                _ => null,
+            };
+            targets = t != null && t.IsVisible ? new() { t } : null;
+            if (targets == null && s is Step.RdWall or Step.RdSlope or Step.RdWallAdd or Step.RdWallDel) note ??= TutorialFlow.NoteRdOpenEdit;
+        }
+        else if (TutorialFlow.IsRdSec(s) && SectionPalette.RoadOpenPanel is SectionPanel sp)
+        {
+            root = sp.SpotRoot;
+            string cmd = s switch
+            {
+                Step.RdProf => "DHROADSHEET", Step.RdPviAdd => "DHROADPVIADD", Step.RdPviDel => "DHROADPVIDEL", Step.RdPviDraw => "DHROADPVIDRAW",
+                Step.RdRedraft => "DHROADREDRAFT", Step.RdRev => "DHROADREV", Step.RdXsec => "DHROADXSEC", _ => "DHROADUPDATE",
+            };
+            var b = sp.RoadButton(cmd);
+            targets = b != null && b.IsVisible ? new() { b } : null;
+        }
         Spot(root, targets, n);
 
         // 리본 빛 테
@@ -952,10 +1045,12 @@ internal sealed class Tut
             Step.Panel or Step.ExPanel => "계획부지\n생성",
             _ => null,
         };
-        if (ribText != null)
+        // ★[5단원] 진입도로 리본 단추 — «종횡단도»는 부지 · 진입도로 둘이라 명령으로 찾음
+        string? ribCmd = s switch { Step.RdOpen => "DHROADNEW ", Step.RdSec => "DHROADSECPANEL ", _ => null };
+        if (ribText != null || ribCmd != null)
         {
             if (_tabStep != s) { _tabStep = s; TutRibbon.ActivateTab(); }
-            var item = TutRibbon.FindItem(ribText);
+            var item = ribCmd != null ? TutRibbon.FindItemByCmd(ribCmd) : TutRibbon.FindItem(ribText!);
             var fe = item != null ? TutRibbon.FindVisual(item) : null;
             rib = fe != null ? TutRibbon.ScreenRect(fe) : null;
             if (rib == null && note == null) note = "리본 [DH 정지] 탭에서 찾기";

@@ -5,17 +5,18 @@ namespace DH.Grading.Civil.Tutorial;
 /// 사실이 같으면 같은 단계에 머물고, 사실이 앞서면(예: 원지반이 이미 있음) 그 단계로 건너간다.</para></summary>
 internal static class TutorialFlow
 {
-    /// <summary>★[JACK 1117 «단원으로 — 한 지표면에서 이어서»] 단원 — 1 원지반 가져오기(서버 지표면 맛보기 + 수치지도 DXF) · 2 계획부지 생성 · 3 터파기 생성 · 4 종횡단도 생성.</summary>
-    internal enum Chapter { Ground = 1, Site = 2, Excav = 3, Section = 4 }
-    internal const int ChapterCount = 4;
-    /// <summary>★[JACK 1117 «터파기 가시설까지만»] 지금 여는 단원 — 종횡단도(4)는 틀만 두고 뺌.</summary>
-    internal static readonly Chapter[] Active = { Chapter.Ground, Chapter.Site, Chapter.Excav };
+    /// <summary>★[JACK 1117 «단원으로 — 한 지표면에서 이어서»] 단원 — 1 원지반 가져오기(서버 지표면 맛보기 + 수치지도 DXF) · 2 계획부지 생성 · 3 터파기 생성 · 4 종횡단도 생성 · 5 진입도로.</summary>
+    internal enum Chapter { Ground = 1, Site = 2, Excav = 3, Section = 4, Road = 5 }
+    internal const int ChapterCount = 5;
+    /// <summary>★[JACK 1117 «터파기 가시설까지만»] 지금 여는 단원 — 종횡단도(4)는 틀만 두고 뺌 · ★[JACK 1117 «진입도로 튜토리얼도 기능을 한번씩 다 써보는걸로»] 5 진입도로.</summary>
+    internal static readonly Chapter[] Active = { Chapter.Ground, Chapter.Site, Chapter.Excav, Chapter.Road };
 
     internal static string ChapterName(Chapter c) => c switch
     {
         Chapter.Ground => "원지반 가져오기",
         Chapter.Site => "계획부지 생성",
         Chapter.Excav => "터파기 생성",
+        Chapter.Road => "진입도로",
         _ => "종횡단도 생성",
     };
 
@@ -25,12 +26,22 @@ internal static class TutorialFlow
         return i >= 0 && i + 1 < Active.Length ? Active[i + 1] : null;
     }
 
+    /// <summary>바로 앞 단원(여는 단원 차례) — «내 것으로 이어서»가 여는 결과. 첫 단원이면 null.</summary>
+    internal static Chapter? Prev(Chapter c)
+    {
+        int i = Array.IndexOf(Active, c);
+        return i > 0 ? Active[i - 1] : null;
+    }
+
     internal enum Step
     {
         Ground, Search, Pick, Send, Importing, Dxf, Crop,                   // 1 원지반 가져오기
         Draw, Elev, Panel, PickPlan, PickGround, Slope, Build, Wall,       // 2 계획부지 생성
         ExDraw, ExElev, ExPanel, ExPick, ExShore, ExBuild,                 // 3 터파기 생성
         SecPanel, Prof, Xsec, Qty,                                         // 4 종횡단도 생성(틀만)
+        RdOpen, RdDraw, RdWall, RdSlope, RdWallAdd, RdWallDel,             // 5 진입도로: 진입도로 창
+        RdSec, RdProf, RdPviAdd, RdPviDel, RdPviDraw, RdRedraft, RdRev, RdXsec,   //   진입도로 종횡단도 창
+        RdPave, RdUpdate, RdReset,                                         //   포장 → 업데이트 → 초기화(맨 끝)
         Done,
     }
 
@@ -43,14 +54,19 @@ internal static class TutorialFlow
     /// <param name="Wall">2단원: [옹벽 변환]으로 옹벽 구간이 늘었나.</param>
     /// <param name="Shore">3단원: 터파기 창 [가시설] 체크.</param>
     /// <param name="Cropped">★[JACK 1117] 1단원 2부: [원지형 자르기]가 잘라 남겼나(도면 자르기 기록).</param>
+    /// <param name="RdPanel">5단원: 진입도로 창이 떠 있나.</param>
+    /// <param name="RdSecOpen">5단원: 진입도로 종횡단도 창이 떠 있나.</param>
+    /// <param name="RdRoad">5단원: 열린 진입도로 + 그 지표면이 있나(도면 기록).</param>
+    /// <param name="RdDone">5단원: 끝낸 일(<see cref="RdBit"/> 비트) — 명령 기록이 바뀐 것을 보고 켬(<see cref="RoadDid"/>).</param>
     internal readonly record struct Facts(
         bool Ground, bool Importing, bool MapOpen, int PageSub, bool Dxf,
         bool Boundary, bool Elev, bool PanelOpen, bool PlanPicked, bool GroundPicked, bool Grade, bool Fits = true,
         Chapter Ch = Chapter.Site, bool SlopeChanged = true, bool Wall = false,
         bool ExBoundary = false, bool ExElev = false, bool ExPanelOpen = false, bool ExPicked = false, bool Shore = false, bool ExSurf = false,
-        bool SecOpen = false, bool Prof = false, bool Xsec = false, bool QtyFile = false, bool Cropped = false);
+        bool SecOpen = false, bool Prof = false, bool Xsec = false, bool QtyFile = false, bool Cropped = false,
+        bool RdPanel = false, bool RdSecOpen = false, bool RdRoad = false, int RdDone = 0);
 
-    internal static int Total(Chapter c) => c switch { Chapter.Ground => 6, Chapter.Site => 7, Chapter.Excav => 4, _ => 4 };
+    internal static int Total(Chapter c) => c switch { Chapter.Ground => 6, Chapter.Site => 7, Chapter.Excav => 4, Chapter.Road => RoadAll.Length, _ => 4 };
 
     internal static Step Derive(Facts f)
     {
@@ -70,6 +86,12 @@ internal static class TutorialFlow
                 if (!f.ExPicked) return Step.ExPick;
                 if (!f.Shore) return Step.ExShore;
                 return Step.ExBuild;
+            case Chapter.Road:
+                if ((f.RdDone & RdBit(Step.RdReset)) != 0) return Step.Done;
+                if (!f.RdRoad) return f.RdPanel ? Step.RdDraw : Step.RdOpen;
+                var next = RoadNext(f.RdDone);
+                if (IsRdSec(next)) return f.RdSecOpen ? next : Step.RdSec;
+                return f.RdPanel ? next : Step.RdOpen;
             case Chapter.Section:
                 if (f.QtyFile) return Step.Done;
                 if (!f.Prof) return f.SecOpen ? Step.Prof : Step.SecPanel;
@@ -95,6 +117,7 @@ internal static class TutorialFlow
         Step.Draw => 1, Step.Elev => 2, Step.Panel => graded ? 7 : 3, Step.PickPlan => 3, Step.PickGround => 4, Step.Slope => 5, Step.Build => 6, Step.Wall => 7,
         Step.ExDraw => 1, Step.ExElev => 1, Step.ExPanel => 2, Step.ExPick => 2, Step.ExShore => 3, Step.ExBuild => 4,
         Step.SecPanel => 1, Step.Prof => 2, Step.Xsec => 3, Step.Qty => 4,
+        _ when IsRoad(s) => Array.IndexOf(RoadAll, s) + 1,
         _ => 0,
     };
 
@@ -132,6 +155,23 @@ internal static class TutorialFlow
         Step.Prof => "[종단도 생성] → 노란 점선 따라 점 클릭 → Enter → 종단도",
         Step.Xsec => "[횡단도 생성] → 놓을 자리 클릭 → 측점마다 횡단도",
         Step.Qty => "[수량 산출서] → 창 [만들기] → 토공 수량 엑셀",
+        Step.RdOpen => "[진입도로 생성] → 진입도로 창 열기",
+        Step.RdDraw => "창 [진입도로 생성](경로 그리기) → " + (guide ? "노란 점선 따라" : "부지 끝에서 바깥 땅으로") + " 점 클릭 → Enter → 도로 · 지표면",
+        Step.RdWall => "■ 진입도로 수정 → [옹벽 변환] → 2단 소단선 클릭 → Enter → 옹벽",
+        Step.RdSlope => "[사면 변환] → 빨간 옹벽선 클릭 → Enter → 다시 사면",
+        Step.RdWallAdd => "[옹벽 추가] → 도로 면 경계 → 사면 안 → 경계 클릭 → Enter → 선 따라 옹벽",
+        Step.RdWallDel => "[옹벽 삭제] → 추가한 옹벽 클릭 → Enter → 원래 사면",
+        Step.RdSec => "진입도로 [종횡단도] → 진입도로 종횡단도 창 열기",
+        Step.RdProf => "[종단도 생성] → 빈 자리 클릭 → 종단도",
+        Step.RdPviAdd => "[측점 넣기] → 종단도 계획선 클릭 → Enter → 측점 더하기",
+        Step.RdPviDel => "[측점 지우기] → 넣은 측점 클릭 → Enter → 측점 빼기",
+        Step.RdPviDraw => "[종단 직접 그리기] → 시점 · 꺾인 점 · 종점 클릭 → 새 종단",
+        Step.RdRedraft => "[종단 자동으로 다시] → Enter(예) → 땅 따라 종단",
+        Step.RdRev => "[시점↔종점] → 방향 뒤집기",
+        Step.RdXsec => "[횡단도 생성] → 빈 자리 클릭 → 측점마다 횡단도",
+        Step.RdPave => "■ 도로 설정 → 포장 «종류» 바꾸기(예: 아스팔트 → 콘크리트) → 횡단도 포장",
+        Step.RdUpdate => "[지표면 업데이트](빨강) → 지표면 · 종단도 · 횡단도 다시",
+        Step.RdReset => "진입도로 창 [진입도로 초기화] → [예] → 진입도로 모두 지우기",
         _ => "완료",
     };
 
@@ -140,9 +180,217 @@ internal static class TutorialFlow
     {
         Chapter.Ground => "완료 → 원지반 가져오기 끝",
         Chapter.Site => "완료 → 정지면 · 옹벽 · 계획부지 생성 끝",
-        Chapter.Excav => "완료 → 가시설 터파기 · 튜토리얼 끝",
+        Chapter.Excav => "완료 → 가시설 터파기 끝",
+        Chapter.Road => "완료 → 진입도로 기능 모두 · 튜토리얼 끝",
         _ => "완료 → 종단도 · 횡단도 · 수량 산출서 끝",
     };
+
+    // ══ ★★[JACK 1117 «진입도로 튜토리얼도 기능을 한번씩 다 써보는걸로»] 5단원 진입도로 — 측구는 다시 설계 중이라 뺌 ══
+    //   단계 = 창 열기 · 노선 그리기(도로 · 지표면) · 진입도로 창 단추(옹벽 넷) · 종횡단도 창 단추(종단도 · 측점 둘 · 직접 그리기 · 자동 다시 · 시점↔종점 · 횡단도) ·
+    //   포장 종류 · 지표면 업데이트 · 진입도로 초기화(맨 끝). 끝 판정 = 명령이 끝난 뒤 도면 기록이 그 명령답게 바뀌었나(<see cref="RoadDid"/>) — 시간 · 모양 값 아님.
+
+    /// <summary>5단원 단계 차례(번호 = 자리 + 1).</summary>
+    internal static readonly Step[] RoadAll =
+    {
+        Step.RdOpen, Step.RdDraw, Step.RdWall, Step.RdSlope, Step.RdWallAdd, Step.RdWallDel,
+        Step.RdSec, Step.RdProf, Step.RdPviAdd, Step.RdPviDel, Step.RdPviDraw, Step.RdRedraft, Step.RdRev, Step.RdXsec,
+        Step.RdPave, Step.RdUpdate, Step.RdReset,
+    };
+
+    /// <summary>명령 기록으로 끝내는 일(비트가 있는 단계) — 창 열기 둘 · 노선 그리기(도면에 도로가 있나로 봄)는 뺌.</summary>
+    internal static readonly Step[] RoadOrder =
+    {
+        Step.RdWall, Step.RdSlope, Step.RdWallAdd, Step.RdWallDel,
+        Step.RdProf, Step.RdPviAdd, Step.RdPviDel, Step.RdPviDraw, Step.RdRedraft, Step.RdRev, Step.RdXsec,
+        Step.RdPave, Step.RdUpdate, Step.RdReset,
+    };
+
+    internal static bool IsRoad(Step s) => Array.IndexOf(RoadAll, s) >= 0;
+    /// <summary>진입도로 종횡단도 창에서 하는 단계.</summary>
+    internal static bool IsRdSec(Step s) => s is Step.RdProf or Step.RdPviAdd or Step.RdPviDel or Step.RdPviDraw or Step.RdRedraft or Step.RdRev or Step.RdXsec or Step.RdUpdate;
+    /// <summary>진입도로 창에서 하는 단계.</summary>
+    internal static bool IsRdPanel(Step s) => s is Step.RdDraw or Step.RdWall or Step.RdSlope or Step.RdWallAdd or Step.RdWallDel or Step.RdPave or Step.RdReset;
+    internal static int RdBit(Step s) { int i = Array.IndexOf(RoadOrder, s); return i < 0 ? 0 : 1 << i; }
+
+    /// <summary>아직 안 끝낸 첫 일(비트 차례) — 다 끝냈으면 Done.</summary>
+    internal static Step RoadNext(int done)
+    {
+        foreach (var s in RoadOrder) if ((done & RdBit(s)) == 0) return s;
+        return Step.Done;
+    }
+
+    /// <summary>보일 번호 — 창을 «다시» 여는 단계(도로가 이미 있음)는 이어서 할 일의 번호(처음 여는 때는 제 번호).</summary>
+    internal static int RoadNum(Step s, Facts f)
+    {
+        int own = Num(s);
+        if (!(s is Step.RdOpen or Step.RdSec) || !f.RdRoad) return own;
+        var p = RoadNext(f.RdDone);
+        int pn = p == Step.Done ? own : Num(p);
+        return pn == own + 1 ? own : pn;
+    }
+
+    /// <summary>진입도로 기록 한 벌(도면에서 읽음 · 명령 앞뒤로 견줌) — Autodesk 형 없음(화면 없이 시험).</summary>
+    /// <param name="Road">열린 진입도로가 있나.</param>
+    /// <param name="Surf">그 도로 지표면이 있나.</param>
+    /// <param name="Tier">[옹벽 변환] 옹벽 기록 수.</param>
+    /// <param name="Bound">[옹벽 추가] 옹벽 기록 수.</param>
+    /// <param name="Sheet">살아 있는 진입도로 종단도가 있나.</param>
+    /// <param name="Xsec">살아 있는 진입도로 횡단도가 있나.</param>
+    /// <param name="Pvi">계획 종단 꺾인 점 수.</param>
+    /// <param name="PviSig">계획 종단 꺾인 점(측점 · 높이 0.01 m) 한 줄.</param>
+    /// <param name="Dir">노선 시점 자리(0.01 m) — 시점↔종점이 바꿈.</param>
+    /// <param name="Pave">포장 종류(0 아스팔트 · 1 콘크리트).</param>
+    /// <param name="Need">[지표면 업데이트] 할 일이 있나(빨강 깜박과 같은 판정).</param>
+    /// <param name="AnyRoad">도면에 진입도로(노선 · 기록 · 도로 면)가 남았나.</param>
+    internal readonly record struct RoadSnap(
+        bool Road = false, bool Surf = false, int Tier = 0, int Bound = 0, bool Sheet = false, bool Xsec = false,
+        int Pvi = 0, string PviSig = "", string Dir = "", int Pave = 0, bool Need = false, bool AnyRoad = false);
+
+    /// <summary>명령 → 그 명령이 끝내는 단계(없으면 Done).</summary>
+    internal static Step RoadStepOf(string cmd) => cmd switch
+    {
+        "DHROADWALLCONV" => Step.RdWall,
+        "DHROADSLOPECONV" => Step.RdSlope,
+        "DHROADWALLADD" => Step.RdWallAdd,
+        "DHROADWALLDEL" => Step.RdWallDel,
+        "DHROADSHEET" => Step.RdProf,
+        "DHROADPVIADD" => Step.RdPviAdd,
+        "DHROADPVIDEL" => Step.RdPviDel,
+        "DHROADPVIDRAW" => Step.RdPviDraw,
+        "DHROADREDRAFT" => Step.RdRedraft,
+        "DHROADREV" => Step.RdRev,
+        "DHROADXSEC" => Step.RdXsec,
+        "DHROADUPDATE" => Step.RdUpdate,
+        "DHROADRESET" => Step.RdReset,
+        _ => Step.Done,
+    };
+
+    /// <summary>★명령 기록 판정 — 명령 앞(<paramref name="a"/>) · 뒤(<paramref name="b"/>) 기록이 그 명령답게 바뀌었나. Esc · 거절 · 실패면 거짓.</summary>
+    internal static bool RoadDid(string cmd, RoadSnap a, RoadSnap b) => cmd switch
+    {
+        "DHROADDRAW" or "DHROAD" => b.Road && b.Surf,
+        "DHROADWALLCONV" => b.Road && b.Tier > a.Tier,
+        "DHROADSLOPECONV" => b.Road && (b.Tier < a.Tier || b.Bound < a.Bound),
+        "DHROADWALLADD" => b.Road && b.Bound > a.Bound,
+        "DHROADWALLDEL" => b.Road && b.Bound < a.Bound,
+        "DHROADSHEET" => b.Road && b.Sheet,
+        "DHROADPVIADD" => b.Road && b.Pvi > a.Pvi,
+        "DHROADPVIDEL" => b.Road && b.Pvi < a.Pvi,
+        "DHROADPVIDRAW" or "DHROADREDRAFT" => b.Road && b.Pvi >= 2 && b.PviSig != a.PviSig,
+        "DHROADREV" => b.Road && b.Dir.Length > 0 && b.Dir != a.Dir,
+        "DHROADXSEC" => b.Road && b.Xsec,
+        "DHROADUPDATE" => b.Road && a.Need && !b.Need,
+        "DHROADRESET" => !b.AnyRoad,
+        _ => false,
+    };
+
+    /// <summary>포장 단계 — 그 단계가 된 때의 종류(<paramref name="baseKind"/>)와 지금 기록이 다른가.</summary>
+    internal static bool PaveDid(int baseKind, RoadSnap b) => b.Road && b.Pave != baseKind;
+
+    // ── 5단원 알림 한 줄 ──
+    internal const string NoteRdClosed = "진입도로 창 닫힘 → [진입도로 생성]으로 다시 열기";
+    internal const string NoteRdSecClosed = "종횡단도 창 닫힘 → 진입도로 [종횡단도]로 다시 열기";
+    internal const string NoteRdDrawFail = "도로 못 만듦 → 점 2개 이상 · 부지 안에서 시작 → 다시";
+    internal const string NoteRdLost = "진입도로가 없어짐 → 다시 그리기";
+    internal const string NoteRdOpenEdit = "■ 진입도로 수정 펼치기 → 옹벽 단추 보이기";
+    internal const string NoteRdWallFail = "옹벽 안 바뀜 → 다른 소단선(2단부터) 클릭 → Enter";
+    internal const string NoteRdSlopeFail = "사면 안 바뀜 → 빨간 옹벽선 클릭 → Enter";
+    internal const string NoteRdWallAddFail = "옹벽 안 생김 → 경계 밖에서 시작 · 사면 안 지나 · 경계 밖에서 끝 → 다시";
+    internal const string NoteRdWallDelFail = "옹벽 안 지워짐 → 추가한 옹벽 안 클릭 → Enter";
+    internal const string NoteRdProfFail = "종단도 안 생김 → 빈 자리 클릭";
+    internal const string NoteRdPviAddFail = "측점 안 생김 → 종단도 계획선 위 클릭 → Enter";
+    internal const string NoteRdPviDelFail = "측점 안 지워짐 → 꺾인 점(시점 · 종점 말고) 클릭 → Enter";
+    internal const string NoteRdPviDrawFail = "종단 안 바뀜 → 시점 · 종점까지 클릭";
+    internal const string NoteRdRedraftFail = "종단 그대로 → [종단 자동으로 다시] → Enter(예)";
+    internal const string NoteRdRevFail = "방향 그대로 → [시점↔종점] 다시";
+    internal const string NoteRdXsecFail = "횡단도 안 생김 → 명령창 글 확인 → 빈 자리 클릭";
+    internal const string NoteRdUpdateFail = "업데이트 덜 됨 → 명령창 글 확인 → 다시";
+    internal const string NoteRdUpdateOff = "업데이트할 것 없음 → 포장 «종류» 다시 바꾸기";
+    internal const string NoteRdResetFail = "안 지워짐 → [진입도로 초기화] → [예]";
+
+    /// <summary>명령 → 실패 알림(그 단계에서 명령이 끝났는데 기록이 안 바뀜).</summary>
+    internal static string? RoadFailNote(string cmd) => cmd switch
+    {
+        "DHROADDRAW" or "DHROAD" => NoteRdDrawFail,
+        "DHROADWALLCONV" => NoteRdWallFail,
+        "DHROADSLOPECONV" => NoteRdSlopeFail,
+        "DHROADWALLADD" => NoteRdWallAddFail,
+        "DHROADWALLDEL" => NoteRdWallDelFail,
+        "DHROADSHEET" => NoteRdProfFail,
+        "DHROADPVIADD" => NoteRdPviAddFail,
+        "DHROADPVIDEL" => NoteRdPviDelFail,
+        "DHROADPVIDRAW" => NoteRdPviDrawFail,
+        "DHROADREDRAFT" => NoteRdRedraftFail,
+        "DHROADREV" => NoteRdRevFail,
+        "DHROADXSEC" => NoteRdXsecFail,
+        "DHROADUPDATE" => NoteRdUpdateFail,
+        "DHROADRESET" => NoteRdResetFail,
+        _ => null,
+    };
+
+    // ══ 노선 따라 그릴 점선 — 부지 경계 변 가운데(부지 안 4 m)에서 바깥으로 꺾인 길 ══
+    //   후보 = 변마다(20 m 이상) × 꺾는 쪽 둘(±30°) · 길 = 바깥 45 m → 꺾어 45 m. 길과 양옆 30 m가 모두 원지반 안이어야 함.
+    //   점수 = 끝 땅과 부지 높이 차(6~20 m가 좋음 — 사면이 2단 이상 · 너무 가파르지 않게) − 원지반 끝 가까움.
+    internal const double RoadLeg = 45, RoadInset = 4, RoadSide = 30, RoadBendDeg = 30;
+
+    /// <summary>노선 후보(점수 높은 차례) — 점 셋(부지 안 시작 · 꺾인 점 · 끝) · 점수. 못 찾으면 빈 목록.</summary>
+    internal static List<((double X, double Y)[] Pts, double Score)> RoadPaths(IReadOnlyList<(double X, double Y)> pad, double padZ, Func<double, double, double?> gz)
+    {
+        var res = new List<((double X, double Y)[], double)>();
+        int n = pad.Count;
+        if (n < 3) return res;
+        double area2 = 0;
+        for (int i = 0; i < n; i++) { var a = pad[i]; var b = pad[(i + 1) % n]; area2 += a.X * b.Y - b.X * a.Y; }
+        double sgn = area2 >= 0 ? 1 : -1;
+        for (int i = 0; i < n; i++)
+        {
+            var a = pad[i]; var b = pad[(i + 1) % n];
+            double dx = b.X - a.X, dy = b.Y - a.Y, len = Math.Sqrt(dx * dx + dy * dy);
+            if (len < 20) continue;
+            double nx = sgn * dy / len, ny = -sgn * dx / len;   // 바깥 법선
+            double mx = (a.X + b.X) / 2, my = (a.Y + b.Y) / 2;
+            var p0 = (mx - nx * RoadInset, my - ny * RoadInset);
+            var p1 = (mx + nx * RoadLeg, my + ny * RoadLeg);
+            foreach (int turn in new[] { 1, -1 })
+            {
+                double ang = turn * RoadBendDeg * Math.PI / 180, c = Math.Cos(ang), s = Math.Sin(ang);
+                double ux = nx * c - ny * s, uy = nx * s + ny * c;
+                var p2 = (p1.Item1 + ux * RoadLeg, p1.Item2 + uy * RoadLeg);
+                var pts = new[] { p0, p1, p2 };
+                if (!PathOnGround(pts, gz, out double margin)) continue;
+                if (gz(p2.Item1, p2.Item2) is not double zEnd) continue;
+                double dz = Math.Abs(zEnd - padZ);
+                double score = (dz < 6 ? dz : dz <= 20 ? 6 + (dz - 6) * 0.1 : 7.4 - (dz - 20) * 0.5) + Math.Min(margin, 40) * 0.02;
+                res.Add((pts, score));
+            }
+        }
+        res.Sort((x, y) => y.Item2.CompareTo(x.Item2));
+        return res;
+    }
+
+    /// <summary>길과 양옆(<see cref="RoadSide"/>)이 모두 원지반 안인가 — 5 m마다. <paramref name="margin"/> = 끝 너머로 더 갈 수 있는 땅(최대 40 m).</summary>
+    static bool PathOnGround((double X, double Y)[] pts, Func<double, double, double?> gz, out double margin)
+    {
+        margin = 0;
+        for (int k = 0; k + 1 < pts.Length; k++)
+        {
+            var a = pts[k]; var b = pts[k + 1];
+            double dx = b.X - a.X, dy = b.Y - a.Y, len = Math.Sqrt(dx * dx + dy * dy);
+            if (len < 1e-9) continue;
+            double nx = -dy / len, ny = dx / len;
+            int m = Math.Max(1, (int)Math.Ceiling(len / 5));
+            for (int j = 0; j <= m; j++)
+            {
+                double x = a.X + dx * j / m, y = a.Y + dy * j / m;
+                foreach (double o in new[] { 0.0, RoadSide, -RoadSide })
+                    if (gz(x + nx * o, y + ny * o) == null) return false;
+            }
+        }
+        var e0 = pts[^2]; var e1 = pts[^1];
+        double ex = e1.X - e0.X, ey = e1.Y - e0.Y, el = Math.Sqrt(ex * ex + ey * ey);
+        if (el > 1e-9) for (double d = 5; d <= 40 && gz(e1.X + ex / el * d, e1.Y + ey / el * d) != null; d += 5) margin = d;
+        return true;
+    }
 
     internal const string NoteOpenSlope = "[사면 설정] 펼치기 → 구배 칸 보이기";
     internal const string NoteNoZ = "고도값 누락됨 → 선 고도 넣고 다시 선택";
