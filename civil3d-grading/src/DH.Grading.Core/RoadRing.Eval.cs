@@ -68,13 +68,17 @@ public static partial class RoadRing
         readonly int[] _nxtR, _prvR;
         /// <summary>★[v117.16] 안쪽 굽이(오목 꺾임 30° 넘게 모인 꼭짓점 무리)마다 곡률 중심 · 반경 — 곡률 중심 곁 옛 규칙 섞음(<see cref="EvoAlpha"/>).</summary>
         readonly List<(double X, double Y, double R)> _bends = new();
+        /// <summary>★[JACK 1117 다리 포락] 굽이마다 꺾임이 가장 큰 꼭짓점(다리 포락 원호인지 가림) · 다리 포락이 맡은 굽이(옛 규칙 섞음 안 함).</summary>
+        readonly List<int> _bendV = new(); bool[]? _bendEnv;
         /// <summary>★★[v117.16] 곡률 중심 곁 섞음 무게 α — 점에서 굽이 곡률 중심까지 거리 r만으로(돌림 대칭 · 발과 상관없이 매끈): r ≥ EvoHi·ρ → 0 · r ≤ EvoLo·ρ → 1.
         /// 가장 가까운 측점은 중심 곁에서 점 둘레를 한 바퀴 돌아(기울기 g·R/r) 코리더 값이 옛 규칙과 수 m 다르다 — 발 자리(곡률)로 섞으면 다리 ↔ 원호 이음에서 섞음이 뛰어 면이 떴다(1112 S270 R15 0.83 m).</summary>
         public double EvoAlpha(double x, double y)
         {
             double a = 0;
-            foreach (var (cx, cy, r) in _bends)
+            for (int bi = 0; bi < _bends.Count; bi++)
             {
+                if (_bendEnv != null && _bendEnv[bi]) continue;   // ★[JACK 1117 검토 H1] 다리 포락이 맡은 급한 굽이 — 옛 규칙(다리 · 둥글게 없음)을 섞으면 꼭지에서 포락 · 둥글게가 무너짐
+                var (cx, cy, r) = _bends[bi];
                 double d = Math.Sqrt(Sq(x - cx) + Sq(y - cy)), u = (EvoHi * r - d) / ((EvoHi - EvoLo) * r);
                 if (u <= 0) continue; if (u > 1) u = 1;
                 a = Math.Max(a, u * u * (3 - 2 * u));
@@ -111,7 +115,7 @@ public static partial class RoadRing
                     {
                         double cx = sx / sw, cy = sy / sw, rs = 0;
                         foreach (int i in grp) rs += turn[i] * Math.Sqrt(Sq(_bx[i] - cx) + Sq(_by[i] - cy));
-                        _bends.Add((cx, cy, rs / sw));
+                        _bends.Add((cx, cy, rs / sw)); _bendV.Add(grp.OrderByDescending(i => turn[i]).First());
                     }
                 }
                 grp.Clear(); gap = 0;
@@ -150,12 +154,14 @@ public static partial class RoadRing
             for (int k = -6; k <= 6; k++)
             {
                 int j = ((seg0 + k) % _m + _m) % _m, jn = (j + 1) % _m;
-                if (_ss[j] != _ss[seg0]) continue;
+                if (_ss[j] != _ss[seg0] || (_leg != null && _leg[j] != _leg[seg0])) continue;   // ★[JACK 1117] 다리 포락 — 제 다리 변만
                 double ex = _bx[jn] - _bx[j], ey = _by[jn] - _by[j];
                 double wx = x - _bx[j], wy = y - _by[j];
                 // 오목 꼭짓점에서만 법선을 이웃 변과 나눠 씀(볼록 · 곧은 꼭짓점은 제 변 법선 — 곧은 변 = 직각 발 그대로 · 볼록 모서리 부채는 꼭짓점이 발)
-                double m0x = D.Convex[j] ? D.NX[j] : _vnx[j], m0y = D.Convex[j] ? D.NY[j] : _vny[j];
-                double m1x = D.Convex[jn] ? D.NX[j] : _vnx[jn], m1y = D.Convex[jn] ? D.NY[j] : _vny[jn];
+                // ★[JACK 1117 다리 포락] 다리 끝 꼭짓점(다음 · 앞 변이 다른 다리)도 제 변 법선 — 다리 끝 너머 점은 끝 꼭짓점 원뿔로 이어짐(이웃 원호 법선을 섞으면 끝 곁 발이 뛰었다)
+                bool e0 = D.Convex[j] || (_leg != null && _leg[(j - 1 + _m) % _m] != _leg[j]), e1 = D.Convex[jn] || (_leg != null && _leg[jn] != _leg[j]);
+                double m0x = e0 ? D.NX[j] : _vnx[j], m0y = e0 ? D.NY[j] : _vny[j];
+                double m1x = e1 ? D.NX[j] : _vnx[jn], m1y = e1 ? D.NY[j] : _vny[jn];
                 double dmx = m1x - m0x, dmy = m1y - m0y;
                 // f(t) = cross(w − t e, m0 + t dm) = c0 + c1 t + c2 t²
                 double c0 = wx * m0y - wy * m0x, c1 = (wx * dmy - wy * dmx) - (ex * m0y - ey * m0x), c2 = -(ex * dmy - ey * dmx);
@@ -403,8 +409,9 @@ public static partial class RoadRing
         /// <summary>★★[v117.16] 제 무리 둘째 발 — A에서 둘레를 양쪽으로 걸으며(같은 쪽 · 같은 단면만 · Δσ ≤ 1.2π(D + W)) 거리 극소(변 속 직각 발 · 볼록 꼭짓점 부채)를 찾고
         /// 사이 봉우리(A와 B 사이 둘레의 가장 먼 거리)로 «다른 갈래»인지 잼. 무게 v = h((D_B − D)/W)·Π(봉우리)·φ(다리) — 가운데 축(D_B = D)에서 v = φ라 양쪽에서 같은 값(뜀 없음).
         /// 돌려줌 = 섞은 가장자리 높이 · 둘레 자리 · 측점 · 무게 합 · 가장 무거운 둘째 발(변 · 변 위 비율 · 거리 · 두 시점 무게 λ = ½·h·Π — <see cref="LoHi"/>).</summary>
-        (double Z, double Sig, double S, double Wsum, (int Seg, double T, double D, double Lam) Sec) Blend(double x, double y, double dn, int segn, double tn, int sideA, int profA, double zA, double sigA, double sA)
+        (double Z, double Sig, double S, double Wsum, (int Seg, double T, double D, double Lam) Sec) Blend(double x, double y, double dn, int segn, double tn, int sideA, int profA, int legA, double zA, double sigA, double sA)
         {
+            bool LegOut(int j) => legA >= 0 && _leg![j] != legA;   // ★[JACK 1117] 다리 포락 — 둘째 발은 제 다리 안에서만
             var sec = (Seg: -1, T: 0.0, D: 0.0, Lam: 0.0);
             double wMax = Math.Min(2 * dn, BlendWMax);
             if (!(wMax > 0.25) || sideA == 0) return (zA, sigA, sA, 0, sec);   // 도로 가장자리 바로 곁 · 마구리(곧은 한 변)는 섞을 갈래 없음
@@ -423,11 +430,12 @@ public static partial class RoadRing
                 int seg = segn;   // 지금 지나온 변(A가 있는 변)
                 // ★[v117.16 · 성능 예산] A에서 첫 오목 꼭짓점까지는 곧거나 볼록 — 거리가 늘기만 해 거리 극소(둘째 발)가 없다 → 그 꼭짓점으로 바로(봉우리 = 그 자리 거리)
                 {
-                    if (_ss[dir > 0 ? v : (v - 1 + _m) % _m] != sideA) continue;   // 바로 다음 변부터 다른 쪽(마구리)
+                    if (_ss[dir > 0 ? v : (v - 1 + _m) % _m] != sideA || LegOut(dir > 0 ? v : (v - 1 + _m) % _m)) continue;   // 바로 다음 변부터 다른 쪽(마구리) · 다른 다리
                     int r0 = dir > 0 ? _nxtR[v] : _prvR[v];
                     if (r0 < 0) continue;   // 같은 쪽 안에 오목 꼭짓점이 없음
                     if (r0 != v)
                     {
+                        if (LegOut(dir > 0 ? (r0 - 1 + _m) % _m : r0)) continue;   // 그 오목 꼭짓점 앞에서 다리가 바뀜(다리는 쪽 안에서 측점 차례)
                         double mv = dir > 0 ? ((_cum[r0] - _cum[v]) % per + per) % per : ((_cum[v] - _cum[r0]) % per + per) % per;
                         dsig += mv; v = r0; seg = dir > 0 ? (v - 1 + _m) % _m : v;
                         if (dsig > sigMax) continue;
@@ -438,7 +446,7 @@ public static partial class RoadRing
                 {
                     // 꼭짓점 v까지 왔다 — 다음 변(v에서 dir 쪽)
                     int nseg = dir > 0 ? v : (v - 1 + _m) % _m;
-                    if (_ss[nseg] != sideA) break;   // 쪽이 바뀜(마구리) — 그 너머는 다른 무리
+                    if (_ss[nseg] != sideA || LegOut(nseg)) break;   // 쪽이 바뀜(마구리) · 다리가 바뀜 — 그 너머는 다른 무리
                     double dvx = x - _bx[v], dvy = y - _by[v], Dv = Math.Sqrt(dvx * dvx + dvy * dvy);
                     // 볼록 꼭짓점 부채 = 거리 극소
                     //   (변 속 발은 t ∈ [0, 1) — 곧은 줄 꼭짓점에 수직으로 떨어진 발도 한 번 잡음 · 볼록 꼭짓점은 다음 변 발이 t &lt; 0일 때만 — 두 번 안 셈)
@@ -460,7 +468,7 @@ public static partial class RoadRing
                             if (nv == v) { nv = dir > 0 ? (v + 1) % _m : (v - 1 + _m) % _m; }
                             bool sideOk = true;
                             for (int q = v, g2 = 0; q != nv && g2 < _m; q = dir > 0 ? (q + 1) % _m : (q - 1 + _m) % _m, g2++)
-                            { int sq = dir > 0 ? q : (q - 1 + _m) % _m; if (_ss[sq] != sideA) { sideOk = false; break; } }
+                            { int sq = dir > 0 ? q : (q - 1 + _m) % _m; if (_ss[sq] != sideA || LegOut(sq)) { sideOk = false; break; } }
                             if (!sideOk) break;
                             double moved = dir > 0 ? ((_cum[nv] - _cum[v]) % per + per) % per : ((_cum[v] - _cum[nv]) % per + per) % per;
                             dsig += moved; v = nv; seg = dir > 0 ? (v - 1 + _m) % _m : v; continue;
@@ -532,7 +540,6 @@ public static partial class RoadRing
         {
             LoHi0(x, y, ref pt);
             if (_tr != null) ApplyTrans(x, y, ref pt);
-            if (_cn != null) ApplyCorner(x, y, ref pt);   // ★[JACK 1117 «안쪽 뭉개짐 · 송곳 둥글게»] 급한 굽이 안쪽 모퉁이(전이 끈 도로만 — 전이와 함께 켜지지 않음)
         }
 
         void LoHi0(double x, double y, ref Pt pt)
@@ -580,7 +587,7 @@ public static partial class RoadRing
             pt.DNear = dn; pt.SegNear = segn; pt.SigNear = segn >= 0 ? SigSeg(segn, sn) : double.NaN;
             pt.Group = -1; pt.SStar = double.NaN; pt.Blend = 0;
             // ★★[v117.16] 제 무리 코리더 값 — 가장 가까운 발 A의 가장자리 높이(둘째 발과 섞음) ∓ F_제단면(D)
-            int sideA = 0, profA = 0; double sigA = double.NaN, sAown = double.NaN, vLo = double.NegativeInfinity, vHi = double.PositiveInfinity;
+            int sideA = 0, profA = 0, legA = -1; double sigA = double.NaN, sAown = double.NaN, vLo = double.NegativeInfinity, vHi = double.PositiveInfinity;
             bool own = useOwn && segn >= 0;
             if (own)
             {
@@ -588,27 +595,41 @@ public static partial class RoadRing
                 bool v0 = sn * L <= 1e-9, v1 = (1 - sn) * L <= 1e-9;
                 sideA = v0 ? D.BSide[segn] : v1 ? D.BSide[jn] : _ss[segn];
                 profA = v0 ? _vp[segn] : v1 ? _vp[jn] : _sp[segn];
+                // 꼭짓점 발이면 sideA 쪽 변의 다리(마구리 모서리 부채에서 마구리 변 · 쪽 변을 동률로 아무렇게나 고르던 것 막음)
+                if (_leg != null) { int ls = v0 ? (_ss[segn] == sideA ? segn : (segn - 1 + _m) % _m) : v1 ? (_ss[segn] == sideA ? segn : jn) : segn; legA = _ss[ls] == sideA ? _leg[ls] : -1; }   // ★[JACK 1117] 다리 포락 — 제 다리(급한 굽이 안쪽 쪽만)
                 // ★[v117.16] 가장자리 높이 · 측점 · 둘레 자리 = 매끈한 발(거리 D는 참 가장 가까운 거리 그대로)
                 var (fs, ft) = SmoothFoot(x, y, segn, sn); int fk = (fs + 1) % _m;
                 double zA = _bz[fs] + ft * (_bz[fk] - _bz[fs]), sA = _bs[fs] + ft * (_bs[fk] - _bs[fs]);
                 sigA = SigSeg(fs, ft); sAown = sA;
-                var (zS, gS, sS, wS, sc) = Blend(x, y, dn, segn, sn, sideA, profA, zA, sigA, sA);
+                var (zS, gS, sS, wS, sc) = Blend(x, y, dn, segn, sn, sideA, profA, legA, zA, sigA, sA);
                 if (fSeg < 0) sec = sc;
                 pt.Group = sideA + 1 + 3 * profA; pt.SStar = sS; pt.Blend = wS;
                 alpha = EvoAlpha(x, y);
                 double gStar = ((gS % D.Perimeter) + D.Perimeter) % D.Perimeter;
-                vLo = zS - PfA[profA].F(dn); vHi = zS + PcA[profA].F(dn);
+                // ★[JACK 1117 «송곳 → 둥글게»] 급한 굽이 두 다리가 V자로 만나는 자리(높이 차 0.5 m 아래)만 두 다리 거리를 함께 줄임(sh — 점 자리만의 함수 · 없으면 0)
+                double dF = Math.Max(0, dn - (legA >= 0 ? LegShift(x, y, sideA, profA, legA) : 0));
+                vLo = zS - PfA[profA].F(dF); vHi = zS + PcA[profA].F(dF);
                 int src = v0 ? _m + segn : v1 ? _m + jn : segn;
                 lo = vLo; hi = vHi;
-                wl = new Win { V = vLo, Src = src, Sigma = gStar, Dist = dn, Own = true, Prof = profA };
-                wh = new Win { V = vHi, Src = src, Sigma = gStar, Dist = dn, Own = true, Prof = profA };
+                wl = new Win { V = vLo, Src = src, Sigma = gStar, Dist = dF, Own = true, Prof = profA };
+                wh = new Win { V = vHi, Src = src, Sigma = gStar, Dist = dF, Own = true, Prof = profA };
+                // ★[JACK 1117 다리 포락] 원호(급한 굽이 안쪽 · 홀수) 점은 제 무리 코리더 값 없음 — 원호 원천은 낱 원천(옛 E2) · 다리는 그 다리 코리더 값(다리 쪽 점과 같은 두 값 → 경계에서 이어짐 ·
+                //   원호 코리더 값을 두면 원호 낱 원천 원뿔이 경계 한쪽에서만 눌려 2.8 cm 턱이 났다 · 현장 덤프 A 꺾임 4 (318.6, 122.6) 계측)
+                if (legA >= 0 && (legA & 1) == 1)
+                {
+                    vLo = double.NegativeInfinity; vHi = double.PositiveInfinity; lo = vLo; hi = vHi;
+                    wl = new Win { V = lo, Src = -1 }; wh = new Win { V = hi, Src = -1 };
+                }
+                // ★★[JACK 1117 «안쪽 사면과 소단 뭉개짐»] 다리 포락 — 같은 쪽 · 같은 단면 다른 다리는 그 다리 코리더 값 하나로(높은 쪽이 덮음 · 깎지 않은 max/min)
+                if (legA >= 0) LegCands(x, y, sideA, profA, legA, ref lo, ref hi, ref wl, ref wh);
             }
             double per = D.Perimeter;
             // 무리 경계 무게 — 같은 쪽 · 같은 단면이면 Δσ로(다른 무리 = 0)
             // ★ φ = 다리 무게 × 섞음 무게(둘째 발 섞음과 같은 φ라야 가운데 축에서 양쪽 값이 같다)
-            double Phi(int sd, int p, double sig, double dist, double st, bool localMin)
+            double Phi(int sd, int p, double sig, double dist, double st, bool localMin, int lg)
             {
                 if (!own || sd != sideA || p != profA) return 0;
+                int lp = LegPhi(legA, lg); if (lp >= 0) return lp;   // ★[JACK 1117] 다른 다리 낱 원천은 안 셈(그 다리 코리더 값이 대신 — LegCands) · 원호 낱 원천은 그대로(높은 쪽이 덮음)
                 double f = Leg(CycDist(sig, sigA, per), Math.Max(dist, dn));
                 if (f > 0) f *= BlendOk(st - sAown, Math.Max(dist, dn));   // ★ 모든 원천에 — 변 발만 주면 변 끝을 넘는 순간 같은 면이 꼭짓점 원뿔(φ = 1)로 바뀌어 덮던 것이 빠졌다(1112 S270 R15 굽이 가운데 1 m 뜀)
                 if (f > 0 && f < 1) Interlocked.Increment(ref LegPartial);
@@ -627,7 +648,7 @@ public static partial class RoadRing
                         double zf = _bz[j] + t * (_bz[jn] - _bz[j]);
                         int p = _sp[j];
                         double l1 = zf - PfA[p].F(dd), h1 = zf + PcA[p].F(dd);
-                        if (own) { double f = Phi(_ss[j], p, SigSeg(j, t), dd, _bs[j] + t * (_bs[jn] - _bs[j]), true); if (f > 0) { l1 -= f * Math.Max(0, l1 - vLo); h1 += f * Math.Max(0, vHi - h1); } }
+                        if (own) { double f = Phi(_ss[j], p, SigSeg(j, t), dd, _bs[j] + t * (_bs[jn] - _bs[j]), true, _leg == null ? -1 : _leg[j]); if (f > 0) { l1 -= f * Math.Max(0, l1 - vLo); h1 += f * Math.Max(0, vHi - h1); } }
                         if (l1 > lo || h1 < hi)
                         {
                             double fx = _bx[j] + t * vx, fy = _by[j] + t * vy;
@@ -650,7 +671,7 @@ public static partial class RoadRing
                         double tau = Tau(j, rx, ry, r);
                         double l1 = zmaxBound - Mu * tau, h1 = zminBound + Mu * tau;
                         // 부채 안(곧은 줄 꼭짓점에 수직으로 떨어진 자리 포함) = 거리 극소 — 이웃 변 직각 발과 같은 φ
-                        if (own) { double f = Phi(D.BSide[j], p, _cum[j], r, _bs[j], tau == 0); if (f > 0) { l1 -= f * Math.Max(0, l1 - vLo); h1 += f * Math.Max(0, vHi - h1); } }
+                        if (own) { double f = Phi(D.BSide[j], p, _cum[j], r, _bs[j], tau == 0, LegOfVtx(j)); if (f > 0) { l1 -= f * Math.Max(0, l1 - vLo); h1 += f * Math.Max(0, vHi - h1); } }
                         if (l1 > lo || h1 < hi)
                         {
                             if (Blocked(_bx[j], _by[j], x, y, -1, j)) { if (l1 > blkLo) blkLo = l1; if (h1 < blkHi) blkHi = h1; }
@@ -677,13 +698,13 @@ public static partial class RoadRing
                     foreach (var q in rl.Lo)
                     {
                         double v = q.Z - PfA[q.P].F(q.A + rr) - q.Pen - Mu * Bend(q);
-                        if (own && q.Sd == sideA && q.P == profA) { double f = Phi(q.Sd, q.P, q.Sig, q.A + rr, SigToStation(D, q.Sig).S, false); if (f > 0) v -= f * Math.Max(0, v - vLo); }
+                        if (own && q.Sd == sideA && q.P == profA) { double f = Phi(q.Sd, q.P, q.Sig, q.A + rr, SigToStation(D, q.Sig).S, false, LegOfSig(q.Sig)); if (f > 0) v -= f * Math.Max(0, v - vLo); }
                         if (v > bl) { bl = v; gl = q.Sig; al = q.A; pl = q.P; }
                     }
                     foreach (var q in rl.Hi)
                     {
                         double v = q.Z + PcA[q.P].F(q.A + rr) + q.Pen + Mu * Bend(q);
-                        if (own && q.Sd == sideA && q.P == profA) { double f = Phi(q.Sd, q.P, q.Sig, q.A + rr, SigToStation(D, q.Sig).S, false); if (f > 0) v += f * Math.Max(0, vHi - v); }
+                        if (own && q.Sd == sideA && q.P == profA) { double f = Phi(q.Sd, q.P, q.Sig, q.A + rr, SigToStation(D, q.Sig).S, false, LegOfSig(q.Sig)); if (f > 0) v += f * Math.Max(0, vHi - v); }
                         if (v < bh) { bh = v; gh = q.Sig; ah = q.A; ph = q.P; }
                     }
                     if (bl <= lo && bh >= hi) continue;

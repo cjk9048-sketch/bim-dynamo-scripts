@@ -931,6 +931,8 @@ public partial class RoadCommand
                 else
                 {
                     // ★[설치 전 검토 M2] 전체구간 = 고른 옹벽선을 낸 기록만 통째로(옆 단 · 옆 구간 기록은 그대로) · 구간지정 = 그 구간의 옹벽을 모두 잘라 냄
+                    // ★[JACK 1117 다리 포락] 전체구간 — 굽이 모퉁이까지 늘린 자리(다른 다리) 옹벽선이면 그 기록 저장 끝까지 넓혀 찾음
+                    if (!part) { var (u0, u1) = RoadGrade.UnwidenRange(ownR, c0, c1); a0 = u0 + s0Snap; a1 = u1 + s0Snap; }
                     int n = RoadGrade.CutWallRecords(d.TierWalls, line.Side, a0, a1, whole: !part, match: part ? null : RoadGrade.WallLineMatch(ownR, line));
                     if (n == 0) { ed.WriteMessage("\n → 이 자리에는 옹벽 기록이 없습니다 — 다른 옹벽선을 클릭하세요."); Paint(selId, false); selId = ObjectId.Null; continue; }
                     s.SaveDesign(); changed = true; s.Recompute();   // ★[검토 L6] 기록이 저장되면 바뀐 것(다시 계산이 실패해도 도로 면은 다시)

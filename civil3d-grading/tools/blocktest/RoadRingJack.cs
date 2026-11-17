@@ -33,6 +33,8 @@ static class RoadRingJack
         }
         /// <summary>[하네스] 원뿔 둔덕(절대 좌표 · 반경 · 높이) — 사면 속 땅 섬 재현(BLOCKTEST_RRBUMP).</summary>
         public static (double X, double Y, double R, double H)? Bump;
+        /// <summary>[하네스] 땅 높이 차 배율(BLOCKTEST_RRZSCALE — 중심선과 같은 기준 높이 · 같은 배율).</summary>
+        public static double ZScale = 1, Z0, FlatZ = double.NaN;
         int Ix(double x) => Math.Clamp((int)((x - _x0) / C), 0, _nx - 1);
         int Iy(double y) => Math.Clamp((int)((y - _y0) / C), 0, _ny - 1);
         public bool TryGetElevation(double x, double y, out double z)
@@ -44,7 +46,7 @@ static class RoadRingJack
                 double d = (B.Y - Cc.Y) * (A.X - Cc.X) + (Cc.X - B.X) * (A.Y - Cc.Y); if (Math.Abs(d) < 1e-14) continue;
                 double w1 = ((B.Y - Cc.Y) * (x - Cc.X) + (Cc.X - B.X) * (y - Cc.Y)) / d, w2 = ((Cc.Y - A.Y) * (x - Cc.X) + (A.X - Cc.X) * (y - Cc.Y)) / d, w3 = 1 - w1 - w2;
                 if (w1 < -1e-9 || w2 < -1e-9 || w3 < -1e-9) continue;
-                z = w1 * A.Z + w2 * B.Z + w3 * Cc.Z; if (Bump != null) { double bd = Math.Sqrt((x - Bump.Value.X) * (x - Bump.Value.X) + (y - Bump.Value.Y) * (y - Bump.Value.Y)); if (bd < Bump.Value.R) z += Bump.Value.H * (1 - bd / Bump.Value.R); } return true;
+                z = w1 * A.Z + w2 * B.Z + w3 * Cc.Z; if (ZScale != 1) z = Z0 + (z - Z0) * ZScale; if (!double.IsNaN(FlatZ)) z = FlatZ; if (Bump != null) { double bd = Math.Sqrt((x - Bump.Value.X) * (x - Bump.Value.X) + (y - Bump.Value.Y) * (y - Bump.Value.Y)); if (bd < Bump.Value.R) z += Bump.Value.H * (1 - bd / Bump.Value.R); } return true;
             }
             return false;
         }
@@ -143,8 +145,8 @@ static class RoadRingJack
     public static void Run()
     {
         var dir = Environment.GetEnvironmentVariable("BLOCKTEST_RRJACK"); if (string.IsNullOrEmpty(dir)) return;
-        if (Environment.GetEnvironmentVariable("BLOCKTEST_RRROUND") != null) RoadRing.CornerRounding = true;
-        if (Environment.GetEnvironmentVariable("BLOCKTEST_RRCORNER") != null) RoadRing.CornerRule = true;
+        { var rr = Environment.GetEnvironmentVariable("BLOCKTEST_RRROUND"); if (rr != null) RoadRing.CornerRounding = rr != "0"; }
+        { var cr = Environment.GetEnvironmentVariable("BLOCKTEST_RRCORNER"); if (cr != null) RoadRing.CornerRule = cr != "0"; }
         if (Environment.GetEnvironmentVariable("BLOCKTEST_RRNOISLE") != null) RoadRing.IsleFill = false;
         if (Environment.GetEnvironmentVariable("BLOCKTEST_RRNOCAP") != null) RoadRing.CapWalls = false;
         var ci = CultureInfo.InvariantCulture;
@@ -154,8 +156,10 @@ static class RoadRingJack
         { var bp = Environment.GetEnvironmentVariable("BLOCKTEST_RRBUMP"); if (!string.IsNullOrEmpty(bp)) { var q = bp.Split(',').Select(v => double.Parse(v, CultureInfo.InvariantCulture)).ToArray(); double bx0 = Math.Floor(inp.X[0] / 1000) * 1000, by0 = Math.Floor(inp.Y[0] / 1000) * 1000; Gr.Bump = (bx0 + q[0], by0 + q[1], q[2], q[3]); Console.WriteLine($"[RJ] 둔덕 ({q[0]},{q[1]}) r {q[2]} h {q[3]}"); } }
         // ★[v117.18.2] BLOCKTEST_RRSLOPE="0.01" — 절토 · 성토 사면 경사(1 : n) 바꿔 지어 봄(진입도로 경사 하한 시험 · 따로 도는 묶음)
         { var sv = Environment.GetEnvironmentVariable("BLOCKTEST_RRSLOPE"); if (!string.IsNullOrEmpty(sv)) { double v = double.Parse(sv, CultureInfo.InvariantCulture); inp.Cut.Slope = v; inp.Fill.Slope = v; Console.WriteLine($"[RJ] 경사 {v} 로 바꿈"); } }
+        // [하네스] BLOCKTEST_RRZSCALE=k — 중심선 높이 차를 k배로(완만한 종단에서 굽이 안쪽 둥글게 시험)
+        { var zs = Environment.GetEnvironmentVariable("BLOCKTEST_RRZSCALE"); if (!string.IsNullOrEmpty(zs)) { double k = double.Parse(zs, ci), z0 = inp.Z[0]; for (int i = 0; i < inp.Z.Length; i++) inp.Z[i] = z0 + (inp.Z[i] - z0) * k; Gr.ZScale = k; Gr.Z0 = z0; var fg = Environment.GetEnvironmentVariable("BLOCKTEST_RRFLATG"); if (!string.IsNullOrEmpty(fg)) Gr.FlatZ = z0 - double.Parse(fg, ci); Console.WriteLine($"[RJ] 종단 · 땅 높이 차 × {k} · 평평한 땅 {Gr.FlatZ}"); } }
         var tw = Environment.GetEnvironmentVariable("BLOCKTEST_RRJACKWALL");   // "a0,a1" = [옹벽 변환] 기록(우 · K 1 · 소단 1 m) — rconv 재현
-        if (!string.IsNullOrEmpty(tw)) { var q = tw.Split(','); inp.TierWalls.Add(new RoadGrade.TierWall(double.Parse(q[0], ci), double.Parse(q[1], ci), 1, 1, 1)); }
+        if (!string.IsNullOrEmpty(tw)) { var q = tw.Split(','); inp.TierWalls.Add(new RoadGrade.TierWall(double.Parse(q[0], ci), double.Parse(q[1], ci), q.Length > 2 ? int.Parse(q[2]) : 1, q.Length > 3 ? int.Parse(q[3]) : 1, 1)); }
         var sw = System.Diagnostics.Stopwatch.StartNew();
         var prbE = Environment.GetEnvironmentVariable("BLOCKTEST_RRPROBE");   // "x,y" (1000 m 격자 안 좌표) — 그 점 세모 · 변 출처 로그
         if (!string.IsNullOrEmpty(prbE)) { var pq = prbE.Split(','); double bx0_ = Math.Floor(inp.X[0] / 1000) * 1000, by0_ = Math.Floor(inp.Y[0] / 1000) * 1000; RoadRing.DebugProbe = (bx0_ + double.Parse(pq[0], System.Globalization.CultureInfo.InvariantCulture), by0_ + double.Parse(pq[1], System.Globalization.CultureInfo.InvariantCulture)); RoadRing.DebugRing = s => { if (s.Contains("[자리")) Console.WriteLine("   " + s); }; }
@@ -299,13 +303,33 @@ static class RoadRingJack
         {
             var q = gp.Split(',').Select(t => double.Parse(t, ci)).ToArray(); double bx0 = Math.Floor(inp.X[0] / 1000) * 1000, by0 = Math.Floor(inp.Y[0] / 1000) * 1000;
             double L = Math.Sqrt(Math.Pow(q[2] - q[0], 2) + Math.Pow(q[3] - q[1], 2));
-            for (double t = 0; t <= L + 1e-9; t += 0.5)
+            double stp = q.Length > 4 ? q[4] : 0.5;
+            for (double t = 0; t <= L + 1e-9; t += stp)
             {
                 double x = bx0 + q[0] + (q[2] - q[0]) * t / L, y = by0 + q[1] + (q[3] - q[1]) * t / L; var e = b.Ev.Eval(x, y); var w = e.Kind == 3 ? e.WLo : e.WHi;
                 var prof = e.Kind == 3 ? b.Ev.PfA : b.Ev.PcA; string br = w.Prof >= 0 && w.Prof < prof.Length ? string.Join("/", prof[w.Prof].E.Select(v => v.D.ToString("F1", ci))) : "";
-                Console.WriteLine($"      갭 {t,4:F1} m ({x % 1000:F1},{y % 1000:F1}) z {e.Z:F2} 종류 {e.Kind} 도로까지 {e.DNear:F2} · 원천 {w.Src} 거리 {w.Dist:F2} 제 무리 {w.Own} 단면 {w.Prof} 무리 {e.Group} 섞음 {e.Blend:F2} · 꺾임 d {br}");
+                Console.WriteLine($"      갭 {t,5:F2} m ({x % 1000:F2},{y % 1000:F2}) z {e.Z:F3} lo {e.Lo:F3} hi {e.Hi:F3} 종류 {e.Kind} 도로까지 {e.DNear:F2} 변 {e.SegNear} · 원천 {w.Src} 거리 {w.Dist:F2} 제 무리 {w.Own} 단면 {w.Prof} 무리 {e.Group} 섞음 {e.Blend:F2}" + (stp >= 0.5 ? $" · 꺾임 d {br}" : ""));
             }
         }
+        { var dg = Environment.GetEnvironmentVariable("BLOCKTEST_RRDBG"); if (!string.IsNullOrEmpty(dg)) { double bx0 = Math.Floor(inp.X[0] / 1000) * 1000, by0 = Math.Floor(inp.Y[0] / 1000) * 1000; foreach (var pq in dg.Split(';')) { var q = pq.Split(',').Select(t => double.Parse(t, ci)).ToArray(); Console.WriteLine($"[DBG] ({q[0]},{q[1]})"); RoadRing.Evaluator.DebugEval = s => Console.WriteLine("[DBG]   " + s); var e = b.Ev.Eval(bx0 + q[0], by0 + q[1]); RoadRing.Evaluator.DebugEval = null; Console.WriteLine($"[DBG]   z {e.Z:F3} lo {e.Lo:F3}({e.WLo.Src} d {e.WLo.Dist:F2} own {e.WLo.Own}) hi {e.Hi:F3}({e.WHi.Src})"); } } }
+        // ★[JACK 1117 검토] 면 뜀 찾기 — BLOCKTEST_RRJUMP="x0,y0,x1,y1,간격;..."(1000 나머지 좌표): 격자마다 lo · hi(성토 · 절토 면 — 땅과 상관없는 포락) 이웃 차 ÷ 간격이 2 넘는 칸(사면 1:0.5보다 가파름 = 끊김) 수 · 최대 · 자리
+        { var jp = Environment.GetEnvironmentVariable("BLOCKTEST_RRJUMP"); if (!string.IsNullOrEmpty(jp)) { double bx0 = Math.Floor(inp.X[0] / 1000) * 1000, by0 = Math.Floor(inp.Y[0] / 1000) * 1000;
+            foreach (var box in jp.Split(';'))
+            {
+                var q = box.Split(',').Select(t => double.Parse(t, ci)).ToArray(); double jst = q[4]; int nx = (int)Math.Round((q[2] - q[0]) / jst) + 1, ny = (int)Math.Round((q[3] - q[1]) / jst) + 1;
+                var LO = new double[nx * ny]; var HI = new double[nx * ny]; var K = new byte[nx * ny];
+                Parallel.For(0, ny, j => { for (int i = 0; i < nx; i++) { var e = b.Ev.Eval(bx0 + q[0] + i * jst, by0 + q[1] + j * jst); LO[j * nx + i] = e.Lo; HI[j * nx + i] = e.Hi; K[j * nx + i] = e.Kind; } });
+                int nL = 0, nH = 0; double mL = 0, mH = 0; (double X, double Y) aL = default, aH = default;
+                for (int j = 0; j < ny; j++) for (int i = 0; i < nx; i++)
+                    foreach (var (di, dj) in new[] { (1, 0), (0, 1) })
+                    {
+                        int i2 = i + di, j2 = j + dj; if (i2 >= nx || j2 >= ny) continue; int a = j * nx + i, c = j2 * nx + i2;
+                        if (K[a] == 1 || K[c] == 1 || K[a] == 255 || K[c] == 255) continue;
+                        if (double.IsFinite(LO[a]) && double.IsFinite(LO[c]) && (K[a] == 3 || K[c] == 3)) { double g = Math.Abs(LO[a] - LO[c]) / jst; if (g > 2) { nL++; if (g > mL) { mL = g; aL = (q[0] + i * jst, q[1] + j * jst); } } }
+                        if (double.IsFinite(HI[a]) && double.IsFinite(HI[c]) && (K[a] is 2 or 4 || K[c] is 2 or 4)) { double g = Math.Abs(HI[a] - HI[c]) / jst; if (g > 2) { nH++; if (g > mH) { mH = g; aH = (q[0] + i * jst, q[1] + j * jst); } } }
+                    }
+                Console.WriteLine($"[JMP] 상자 {box} 칸 {nx}×{ny} · 성토면 뜀 {nL}(최대 기울기 {mL:F2} @({aL.X:F2},{aL.Y:F2}) 턱 {mL * jst * 1000:F1} mm) · 절토면 뜀 {nH}(최대 {mH:F2} @({aH.X:F2},{aH.Y:F2}) 턱 {mH * jst * 1000:F1} mm)");
+            } } }
         // 소단 지도 — BLOCKTEST_RRMAP="x0,y0,x1,y1"(1000 나머지 좌표) 0.5 m 격자: 숫자 = 이긴 원천 단면의 k번째 소단(평평한 토막) 안 · 대문자 = 제 무리 · 소문자(a b c) = 다른 무리 · . = 사면 · R = 도로 · - = 땅
         var mp = Environment.GetEnvironmentVariable("BLOCKTEST_RRMAP");
         if (!string.IsNullOrEmpty(mp))

@@ -134,7 +134,7 @@ static class RoadRingBend
             var l1 = RoadRing.DisplayLines(b1, b1.Lines, out _);
             var wk = RoadGrade.PickLines(l1, false, null, out _).Where(l => l.Role == RoadGrade.LineRole.Wall && sel.Any(q => q.Side == l.Side && q.Cut == l.Cut)).ToList();
             // 옹벽선 조각마다 클릭 → 그 조각 측점 구간이 겹치는 기록(쪽 같은)이 지워지는지
-            int hit = 0; foreach (var w in wk) { var (a, c) = RoadGrade.RangeOnLine(w, null, null); if (RoadGrade.CutWallRecords(inp.TierWalls.Select(t => new[] { t.S0, t.S1, (double)t.Side, t.Tier, t.BenchL }).ToList(), w.Side, a, c, true) > 0) hit++; }
+            int hit = 0; foreach (var w in wk) { var (a, c) = RoadGrade.UnwidenRange(b1.Deck?.RecWiden, RoadGrade.RangeOnLine(w, null, null).S0, RoadGrade.RangeOnLine(w, null, null).S1); if (RoadGrade.CutWallRecords(inp.TierWalls.Select(t => new[] { t.S0, t.S1, (double)t.Side, t.Tier, t.BenchL }).ToList(), w.Side, a, c, true) > 0) hit++; }
             double cov = 0, tot = recs.Sum(r => r.C - r.A);
             foreach (var r in recs) { var rs = wk.Where(w => w.Side == r.L.Side).Select(w => RoadGrade.RangeOnLine(w, null, null)).Where(q => q.S1 > r.A && q.S0 < r.C).OrderBy(q => q.S0).ToList(); double e = double.NaN; foreach (var q in rs) { double s0 = Math.Max(q.S0, r.A), s1 = Math.Min(q.S1, r.C); if (double.IsNaN(e)) { cov += s1 - s0; e = s1; } else if (s1 > e) { cov += s1 - Math.Max(s0, e); e = s1; } } }
             if (Environment.GetEnvironmentVariable("BLOCKTEST_RRTRWALLS") != null)

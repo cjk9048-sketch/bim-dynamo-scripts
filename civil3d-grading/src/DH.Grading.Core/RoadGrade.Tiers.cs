@@ -456,6 +456,23 @@ public static partial class RoadGrade
     /// <summary>★[v110.3.1 · JACK 1029 «계획지표면때 기능을 답습»] [사면 변환] — 옹벽 기록 [s0, s1, 쪽, 단, 소단] 중 그 쪽 · [a, b]와 겹친 것을 사면으로 되돌린다.
     /// <paramref name="whole"/> = 겹친 기록을 통째로 지움(전체구간) · 아니면 [a, b]만 잘라 냄(구간지정 — 양끝 남는 토막은 <paramref name="minLen"/> 넘을 때만 남김 · 차례 그대로라 나중 기록이 이기는 뜻 그대로).
     /// 돌려줌 = 손댄 기록 수. 꼴 틀린 줄(5칸 미만)은 그대로 둔다. <paramref name="match"/> = 통째로 지울 기록 고르기(<see cref="WallLineMatch"/>).</summary>
+    /// <summary>★[JACK 1117 다리 포락] 클릭한 옹벽선 측점 구간 [a, b](Core 측점)가 고리 엔진이 급한 굽이 모퉁이까지 늘린 자리와 겹치면 그 기록의 저장 끝(늘리기 전)까지 넓힘 —
+    /// 늘린 자리(다른 다리) 옹벽선을 클릭해도 [사면 변환]이 그 기록을 찾음(넓히지 않으면 저장 기록과 안 겹쳐 «기록이 없습니다»).</summary>
+    public static (double A, double B) UnwidenRange(Result? r, double a, double b) => UnwidenRange(r?.RecWiden, a, b);
+    public static (double A, double B) UnwidenRange(IReadOnlyList<(double From, double To)>? widen, double a, double b)
+    {
+        if (widen == null) return (a, b);
+        double lo = Math.Min(a, b), hi = Math.Max(a, b);
+        foreach (var (f, t) in widen)
+        {
+            double e0 = Math.Min(f, t), e1 = Math.Max(f, t);
+            if (e1 - e0 < 1e-9 || !(hi > e0 - 1e-6 && lo < e1 + 1e-6)) continue;
+            double inn = t > f ? f - 0.01 : f + 0.01;   // 저장 끝에서 기록 안쪽으로 1 cm(끝끼리 맞닿음만으로는 겹침이 아님)
+            lo = Math.Min(lo, inn); hi = Math.Max(hi, inn);
+        }
+        return (lo, hi);
+    }
+
     public static int CutWallRecords(List<double[]> recs, int side, double a, double b, bool whole, double minLen = 0.5, Func<double[], bool>? match = null)
     {
         double lo = Math.Min(a, b), hi = Math.Max(a, b);

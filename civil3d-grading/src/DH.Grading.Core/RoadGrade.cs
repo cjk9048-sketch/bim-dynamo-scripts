@@ -132,6 +132,8 @@ public static partial class RoadGrade
         /// <summary>★[v110.3] 단면들(0 = 기본 · 그 뒤 = 계단선 변환 변형) · 변환 기록 · 기록 → 단면 번호.</summary>
         internal List<Profile> CutProfs = new(), FillProfs = new();
         internal List<TierWall> Recs = new();
+        /// <summary>★[JACK 1117 다리 포락] 고리 엔진이 급한 굽이 모퉁이까지 늘린 옹벽 기록 끝(저장 측점 → 늘린 측점 · Core 측점) — 늘린 자리 옹벽선을 클릭해도 그 기록을 찾게(<see cref="RoadGrade.UnwidenRange(Result?, double, double)"/>).</summary>
+        internal List<(double From, double To)> RecWiden = new();
         internal int[] RecProf = Array.Empty<int>();
         /// <summary>★★[v111.3 · JACK 1030 «끝면도 옹벽처럼 단»] 단면 번호 → 본 단면(끝면 띠 단면이면 그 옹벽 단면 · 아니면 자기) · 변형 단면의 (단, 소단 길이).</summary>
         internal int[] ProfMain = Array.Empty<int>();

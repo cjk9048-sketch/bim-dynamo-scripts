@@ -53,6 +53,14 @@ public static partial class RoadRing
             var a = E[lo]; var b = E[lo + 1];
             return b.D - a.D < 1e-12 ? b.R : a.R + (b.R - a.R) * (d - a.D) / (b.D - a.D);
         }
+        /// <summary>★[JACK 1117] F의 거꿀 — F(d) &lt; v인 가장 큰 d(v ≤ 0이면 0 · 소단 높이 그대로면 소단 안 끝).</summary>
+        public double Inv(double v)
+        {
+            if (!(v > 0)) return 0;
+            for (int i = 1; i < E.Count; i++)
+                if (E[i].R >= v) { var a = E[i - 1]; var b = E[i]; return b.R - a.R < 1e-12 ? a.D : a.D + (v - a.R) / (b.R - a.R) * (b.D - a.D); }
+            return E[^1].D + (v - E[^1].R) / Math.Max(Tail, 1e-9);
+        }
     }
 
     // ───────────────────────── 도로 면
@@ -253,7 +261,7 @@ public static partial class RoadRing
         // ★[v117.18.8 · JACK 1116 «변환이 이상하게» · 검토 H2] 급한 굽이 안의 0.25 m 호 마디(R 7)에 끼운 점은 바깥 둘레를 스스로 겹치게 함(안쪽 가장자리가 반경 ≈ 반폭) — 그 안(급한 굽이 구간 · 마디 ≤ 0.26 m)에서는
         //   옹벽 기록 끝을 가까운 마디로 붙임(한계 ≤ 0.13 m · 끝마다 독립 — 차례 무관) · 기록 S0 · S1 자체를 고쳐 쓰므로 둘레 · 결과 · 수량이 같은 값을 봄 · 두 끝이 한 마디로 모이면 기록이 사라지므로 못 지음(말없이 안 버림)
         // ★[JACK 1117 «소단선이 여기밖에 안 잡혀 이쪽만 옹벽 변환됨» · «변환했는데도 사면이 남아 있음»] 옹벽 기록 끝이 급한 굽이 안쪽 모퉁이 범위(구간 ± 단 × 단 하나 거리 — 그 단 소단선이 굽이를 도는 범위)에 있으면
-        //   그 범위 끝까지 늘림(두 다리 모두 · 모퉁이를 돌아) — 모퉁이 면은 두 다리 단면을 하나로 셈(<see cref="Evaluator.ApplyCorner"/>) · 기록 자체(도면 저장 값)는 그대로(이 짓기 안에서만)
+        //   그 범위 끝까지 늘림(두 다리 모두 · 모퉁이를 돌아) — 모퉁이 면은 다리마다 제 단면 · 높은 쪽이 덮음(다리 포락 — RoadRing.Corner.cs) · 기록 자체(도면 저장 값)는 그대로(이 짓기 안에서만)
         var widen = new List<(double From, double To)>();
         //   ★[JACK 1117 «변환했는데도 사면이 남아 있음» · 검토 9] 기록 끝이 도로 끝에서 RecEndSnap 안이면 도로 끝으로(선 자르기 · 고르기 오차로 1 cm 모자라 마구리가 사면으로 남던 것)
         for (int i = 0; i < recs.Count; i++)

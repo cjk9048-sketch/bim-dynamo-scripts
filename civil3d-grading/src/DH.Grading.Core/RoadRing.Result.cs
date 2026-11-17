@@ -98,7 +98,7 @@ public static partial class RoadRing
             r.FS[k] = (float)s; r.FSide[k] = (sbyte)sd;
         }
         // ★[v117.16 · JACK 1112 «[옹벽 변환]도 고리 엔진»] 기록 · 단면 번호(옛 엔진과 같은 번호 — [사면 변환] 기록 고르기 WallLineMatch · OwnerRange) · 끝면 띠 없음(ProfMain = 자기)
-        r.Recs = b.Deck.Recs.ToList(); r.RecProf = b.Deck.RecProf.ToArray();
+        r.Recs = b.Deck.Recs.ToList(); r.RecProf = b.Deck.RecProf.ToArray(); r.RecWiden = b.Deck.RecWiden.ToList();
         r.ProfMain = Enumerable.Range(0, b.Deck.ProfKeys.Count).ToArray();
         r.ProfTier = b.Deck.ProfKeys.Select(k => k.Tier).ToArray(); r.ProfBenchL = b.Deck.ProfKeys.Select(k => k.BenchL).ToArray();
         r.CutVol = b.CutVol; r.FillVol = b.FillVol; r.MaxCut = b.MaxCut; r.MaxFill = b.MaxFill;

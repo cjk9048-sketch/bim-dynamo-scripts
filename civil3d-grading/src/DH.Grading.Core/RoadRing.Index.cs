@@ -72,6 +72,33 @@ public static partial class RoadRing
             return best <= maxD ? (best, bt, bs) : (double.PositiveInfinity, 0, -1);
         }
 
+        /// <summary>★[JACK 1117] <see cref="Nearest"/>와 같되 열쇠 <paramref name="key"/>[j] = <paramref name="want"/>인 변만(다리 포락 — 다른 다리 가장 가까운 발).</summary>
+        public (double D, double T, int Seg) NearestKey(double px, double py, double maxD, int[] key, int want)
+        {
+            double best = double.PositiveInfinity, bt = 0; int bs = -1;
+            int ci = (int)Math.Floor((px - _x0) / _c), cj = (int)Math.Floor((py - _y0) / _c);
+            int rmax = (int)Math.Ceiling(maxD / _c) + 1;
+            for (int r = 0; r <= rmax; r++)
+            {
+                if ((r - 1) * _c > Math.Min(best, maxD)) break;
+                for (int a = ci - r; a <= ci + r; a++)
+                    for (int b = cj - r; b <= cj + r; b++)
+                    {
+                        if (Math.Max(Math.Abs(a - ci), Math.Abs(b - cj)) != r) continue;
+                        if (a < 0 || b < 0 || a >= _nx || b >= _ny) continue;
+                        foreach (int j in _cells[b * _nx + a])
+                        {
+                            if (key[j] != want) continue;
+                            int k = (j + 1) % _m; double vx = _x[k] - _x[j], vy = _y[k] - _y[j], l2 = vx * vx + vy * vy;
+                            double t = l2 < 1e-12 ? 0 : Math.Clamp(((px - _x[j]) * vx + (py - _y[j]) * vy) / l2, 0, 1);
+                            double qx = _x[j] + t * vx - px, qy = _y[j] + t * vy - py, d = Math.Sqrt(qx * qx + qy * qy);
+                            if (d < best) { best = d; bt = t; bs = j; }
+                        }
+                    }
+            }
+            return best <= maxD ? (best, bt, bs) : (double.PositiveInfinity, 0, -1);
+        }
+
         /// <summary>가까운 칸부터(체비쇼프 고리) 변마다 <paramref name="onSeg"/> 한 번 — 칸 높이 범위 · 최소 거리로 <paramref name="skip"/>(zmax, zmin, dmin)이 참이면 그 칸은 건너뜀 ·
         /// 고리 하나를 다 본 뒤 전체 높이 범위로도 참이면 멈춤.</summary>
         public void Visit(double px, double py, double reach, Action<int> onSeg, Func<double, double, double, bool> skip)
