@@ -106,6 +106,8 @@ internal sealed class SectionPanel : UserControl
             // ★[JACK 1117 «PVI 넣기가 아니라 측점 넣기 · 측점 지우기»] 명령은 그대로 · Enter로 끝내면 지표면 · 종단도 · 횡단도 바로 다시(측점이 바로 보임)
             AddRoad(row1r, demo, "측점 넣기", "DHROADPVIADD", "roadProfile", "종단도 안 클릭 → 그 자리에 측점(꺾인 점) · 모양 그대로 · 끌어 높이 변경 · Enter 끝 → 바로 다시 만듦");
             AddRoad(row1r, demo, "측점 지우기", "DHROADPVIDEL", "roadProfile", "꺾인 점 클릭 → 측점 지우기 · 시점 · 종점은 못 지움 · Enter 끝 → 바로 다시 만듦");
+            // ★[JACK 1117 «종단 직접 그리기»] 종단을 처음부터 새로 찍음 · 끝나면 PVI 간격마다 측점 · 바로 다시 만듦
+            AddRoad(row1r, demo, "종단 직접 그리기", "DHROADPVIDRAW", "roadProfile", "시점 클릭 → 점 클릭 또는 경사·길이 입력 → 종점 클릭 · 장 넘으면 장 끝 · 다음 장 시점 클릭 · Esc 취소");
             AddRoad(row1r, demo, "종단 자동으로 다시", "DHROADREDRAFT", "roadProfile", "PVI를 모두 지우고 지금 땅 따라 최대 경사 · PVI 간격으로 다시 · 손으로 옮긴 PVI 사라짐 (한 번 물음)");
             AddRoad(row1r, demo, "시점↔종점", "DHROADREV", "pfRev", "방향 뒤집기 · 모양 · 높이 그대로 · 옹벽 · 측구 · 측점도 같이 · 다시 누르면 처음 · 그 뒤 [업데이트]");
             // ★[JACK 1117 «PVI를 고친 뒤 지표면 업데이트 단추가 진입도로 창 측구 밑에만 있음 → 이 창으로»] 진입도로 창 단추와 같음(DHROADUPDATE · 할 일 있을 때만 켬 · 빨강 깜박) · 진입도로 창 것도 그대로
@@ -318,15 +320,16 @@ internal sealed class SectionPanel : UserControl
     {
         sec.Children.Add(SubHead("수량표 항목"));
         var box = new WrapPanel { Margin = new Thickness(2, 0, 0, 6), Background = Brushes.Transparent };
-        foreach (var (name, _) in XqItems)
+        foreach (var (name, bit) in XqItems)
         {
             var cb = new CheckBox { Content = name, Margin = new Thickness(0, 0, 12, 4), Foreground = DhBrand.Ink };
             cb.Click += (_, __) => SaveXq(demo);
+            // ★[JACK 1117 «항목마다 별도 애니메이션»] 체크에 올리면 그 항목 장면
+            cb.MouseEnter += (_, __) => { demo.XqMask = XqMaskNow(); demo.Play(FixDemoView.XqKey(bit)); };
+            cb.MouseLeave += (_, __) => demo.Idle();
             _xq.Add(cb); box.Children.Add(cb);
         }
         box.ToolTip = "횡단 수량표 오른쪽 칸 · 끄면 안 재고 표에 – · 다음 횡단도 생성부터 · 층따기는 도면 설정에서";
-        box.MouseEnter += (_, __) => { demo.XqMask = XqMaskNow(); demo.Play("xqty"); };
-        box.MouseLeave += (_, __) => demo.Idle();
         sec.Children.Add(box);
         LoadXq();
     }

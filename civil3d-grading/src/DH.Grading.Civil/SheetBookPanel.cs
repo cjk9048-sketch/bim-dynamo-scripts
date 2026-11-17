@@ -26,7 +26,7 @@ internal sealed class SheetBookPanel : UserControl
         public Dictionary<Kind, bool> On = Kinds.ToDictionary(k => k, _ => true);
         public Dictionary<Kind, string> Titles = Kinds.ToDictionary(k => k, DefaultTitle);
         /// <summary>★[v112.5] 평면 꾸미기 — 기울기(도) · 등고값 · 측점 · 등고선 간격(주곡선 · 계곡선 m — 도면 기록 ContourInterval).</summary>
-        public double PlanRot; public bool ContourLabels = true, Stations = true; public double CMinor = 1, CMajor = 5;
+        public double PlanRot; public bool ContourLabels = true, StationsSite = true, StationsRoad = true; public double CMinor = 1, CMajor = 5;
     }
 
     /// <summary>평면 축척 고르기 — 0 = 자동.</summary>
@@ -56,7 +56,8 @@ internal sealed class SheetBookPanel : UserControl
     readonly TextBlock _frameWarn = new() { FontSize = 11, Foreground = DhBrand.Warn, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 0, 0) };
     readonly TextBox _rot = Box(56), _cMinor = Box(44), _cMajor = Box(44);
     readonly CheckBox _cLabels = new() { Content = "등고값(계곡선)", FontSize = 11.5, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 2, 14, 2) };
-    readonly CheckBox _stations = new() { Content = "측점", FontSize = 11.5, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 2, 0, 2) };
+    readonly CheckBox _stations = new() { Content = "측점 부지", FontSize = 11.5, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 2, 8, 2) };
+    readonly CheckBox _stationsR = new() { Content = "측점 진입도로", FontSize = 11.5, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 2, 0, 2) };
     readonly StackPanel _planOpts = new();
     string _optsLast = "";
     readonly Button _make = new() { Content = "작성하기", Height = 34, Margin = new Thickness(0, 12, 0, 6), FontSize = 13 };
@@ -210,7 +211,7 @@ internal sealed class SheetBookPanel : UserControl
         _cMinor.ToolTip = "모든 지형의 등고선 간격(도면설정 «3. 공통»과 같은 값)"; _cMajor.ToolTip = "굵은 등고선 간격 — 주곡선의 배수";
         Field(_planOpts, "등고선 간격", cc, null);
         var tg = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(80, 0, 0, 0) };
-        tg.Children.Add(_cLabels); tg.Children.Add(_stations);
+        tg.Children.Add(_cLabels); tg.Children.Add(_stations); tg.Children.Add(_stationsR);
         _planOpts.Children.Add(tg);
         // (화면에 안 붙임)
         foreach (var t in new[] { _rot, _cMinor, _cMajor })
@@ -219,7 +220,7 @@ internal sealed class SheetBookPanel : UserControl
             t.LostKeyboardFocus += (_, e) => { if (ReferenceEquals(e.NewFocus, _make)) { _optsLast = OptsKey(); return; } OptsMaybe(); };
             t.KeyDown += (_, e) => { if (e.Key == System.Windows.Input.Key.Enter) OptsMaybe(); };
         }
-        _cLabels.Click += (_, __) => OptsMaybe(); _stations.Click += (_, __) => OptsMaybe();
+        _cLabels.Click += (_, __) => OptsMaybe(); _stations.Click += (_, __) => OptsMaybe(); _stationsR.Click += (_, __) => OptsMaybe();
         foreach (var t in new[] { _project, _prefix, _noPrefix, _noStart, _date }) t.TextChanged += (_, __) => Changed();
         Update();
     }
@@ -227,7 +228,7 @@ internal sealed class SheetBookPanel : UserControl
     void Changed() { if (_loading) return; Update(); Edited?.Invoke(); }
 
     static bool Num(TextBox t, out double v) => double.TryParse(t.Text.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out v) && double.IsFinite(v);
-    string OptsKey() => string.Join("|", _rot.Text.Trim(), _cMinor.Text.Trim(), _cMajor.Text.Trim(), _cLabels.IsChecked == true, _stations.IsChecked == true);
+    string OptsKey() => string.Join("|", _rot.Text.Trim(), _cMinor.Text.Trim(), _cMajor.Text.Trim(), _cLabels.IsChecked == true, _stations.IsChecked == true, _stationsR.IsChecked == true);
 
     /// <summary>값이 바뀌었고 맞는 값이면 알림(틀린 값이면 칸을 빨갛게 · 안 보냄).</summary>
     void OptsMaybe()
@@ -268,7 +269,7 @@ internal sealed class SheetBookPanel : UserControl
             _dateAuto = Today(); _date.Text = v.Date.Length > 0 ? v.Date : _dateAuto;
             int si = Array.IndexOf(PlanScales, v.PlanScale); _planScale.SelectedIndex = si >= 0 ? si : 0;
             _rot.Text = v.PlanRot.ToString("0.###", CultureInfo.InvariantCulture); _cMinor.Text = v.CMinor.ToString("0.###", CultureInfo.InvariantCulture); _cMajor.Text = v.CMajor.ToString("0.###", CultureInfo.InvariantCulture);
-            _cLabels.IsChecked = v.ContourLabels; _stations.IsChecked = v.Stations;
+            _cLabels.IsChecked = v.ContourLabels; _stations.IsChecked = v.StationsSite; _stationsR.IsChecked = v.StationsRoad;
             _optsLast = OptsKey();
             foreach (var k in Kinds) { _on[k].IsChecked = v.On[k]; _title[k].Text = v.Titles[k]; }
         }
@@ -284,7 +285,7 @@ internal sealed class SheetBookPanel : UserControl
             NoStart = int.TryParse(_noStart.Text.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out int n) && n >= 0 ? n : 1,
             PlanScale = PlanScales[Math.Clamp(_planScale.SelectedIndex, 0, PlanScales.Length - 1)],
             PlanRot = Num(_rot, out double rot) ? Math.IEEERemainder(rot, 360) : 0,
-            ContourLabels = _cLabels.IsChecked == true, Stations = _stations.IsChecked == true,
+            ContourLabels = _cLabels.IsChecked == true, StationsSite = _stations.IsChecked == true, StationsRoad = _stationsR.IsChecked == true,
             CMinor = Num(_cMinor, out double cmi) && cmi > 0 ? cmi : 1, CMajor = Num(_cMajor, out double cma) && cma > 0 ? cma : 5,
         };
         foreach (var k in Kinds) { v.On[k] = _on[k].IsChecked == true; v.Titles[k] = _title[k].Text.Trim().Length > 0 ? _title[k].Text.Trim() : DefaultTitle(k); }

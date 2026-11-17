@@ -366,7 +366,7 @@ internal static class ExcavDiagram
                 T(bx, by, lb, 10, mag);
             }
         }
-        else T(PX(bx0) - 4, PY(sh.ZBottom) + 16, "기초부만 판다", 10, mag);
+        // ★[JACK 1117 «애니메이션의 ~한다 글 다 지워»] 도랑의 «기초부만 판다» 글 없앰
 
         // 이름
         var info = WallSection.Of(spec.Table.Kind);

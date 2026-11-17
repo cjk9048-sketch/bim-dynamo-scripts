@@ -13,7 +13,7 @@ namespace DH.Grading.Civil.Commands;
 /// <summary>★★★[v110 · 계획_v110.md 3.4 · JACK 1028 «진입도로 — 인프라웍스처럼»] 진입도로 명령.
 /// <para>DHROAD = 폴리선(또는 Civil 노선) → `DH도로_N`(곡선) · 바탕 종단 · 계획 종단 자동 초안 · 종단뷰 → 실시간 미리보기 + 도킹창.
 /// 계획 종단의 PVI를 끌어 옮기면(또는 노선 IP · 창 값) 바로 다시 계산한다. 도면에는 노선 · 종단 · 종단뷰만 생긴다(정지면은 [확정] — 다음 판).</para></summary>
-public class RoadCommand
+public partial class RoadCommand
 {
     /// <summary>★★[v113.3 · JACK 1105 «진입도로 생성을 누르면 진입도로 창이 뜨고, 창에 도로 그리기랑 폴리선 선택 — 별도 팝업은 만들지 말고 · 기존 진입도로 창 버튼은 없애»]
     /// [진입도로 생성] = 진입도로 도킹창을 연다(창 맨 위 [도로 경로 그리기] · [폴리선 선택] — 창에 보이는 값으로 새 도로).</summary>

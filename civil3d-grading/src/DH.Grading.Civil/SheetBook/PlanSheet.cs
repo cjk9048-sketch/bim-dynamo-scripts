@@ -125,19 +125,30 @@ internal static class PlanSheet
     }
 
     /// <summary>★[v112.5 · JACK 1104 «측점들 껐다 켰다»] 평면의 측점 레이어 — 검토선 · 측점 글 · Civil 검토선(SampleLine) · 그 라벨.</summary>
-    static HashSet<ObjectId> StationLayers(Database db, Transaction tr, List<SheetBookBuilder.ModelItem> idx)
+    /// <remarks>★[JACK 1117] 부지 · 진입도로 따로 — 레이어 이름 «DH도로…» = 진입도로, Civil 검토선은 달린 노선(<see cref="RoadBuilder.IsOurs"/>)으로 가름. 한 레이어에 둘이 섞이면 부지 쪽.</remarks>
+    static (HashSet<ObjectId> Site, HashSet<ObjectId> Road) StationLayers(Database db, Transaction tr, List<SheetBookBuilder.ModelItem> idx)
     {
-        var o = new HashSet<ObjectId>();
+        var o = new HashSet<ObjectId>(); var road = new HashSet<ObjectId>(); var siteSl = new HashSet<ObjectId>();
         var lt = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
         foreach (ObjectId lid in lt)
         {
             string n = ((LayerTableRecord)tr.GetObject(lid, OpenMode.ForRead)).Name;
-            if ((n.Contains("검토선") || n.Contains("측점")) && !n.Contains("체인") && !n.Contains("숨김")) o.Add(lid);   // ★[v112.6] 숨김 검토선(횡단용)은 늘 얼린 채 — 측점 켜기로 풀지 않음
+            if ((n.Contains("검토선") || n.Contains("측점")) && !n.Contains("체인") && !n.Contains("숨김")) { o.Add(lid); if (n.StartsWith(RoadBuilder.AlignBase, StringComparison.Ordinal)) road.Add(lid); }   // ★[v112.6] 숨김 검토선(횡단용)은 늘 얼린 채 — 측점 켜기로 풀지 않음
         }
         foreach (var it in idx)
-            try { if (tr.GetObject(it.Id, OpenMode.ForRead) is Entity e && e.GetType().Name.StartsWith("SampleLine", StringComparison.Ordinal)) o.Add(it.LayerId); } catch { }
+            try
+            {
+                if (tr.GetObject(it.Id, OpenMode.ForRead) is not CivilDb.SampleLine sl) continue;
+                o.Add(it.LayerId);
+                bool isRoad = tr.GetObject(sl.GroupId, OpenMode.ForRead) is CivilDb.SampleLineGroup g
+                    && tr.GetObject(g.ParentAlignmentId, OpenMode.ForRead) is CivilDb.Alignment al && RoadBuilder.IsOurs(al);
+                if (isRoad) road.Add(it.LayerId); else siteSl.Add(it.LayerId);
+            }
+            catch { }
+        road.ExceptWith(siteSl);
         o.Remove(db.LayerZero); o.Remove(db.Clayer);
-        return o;
+        o.ExceptWith(road); road.Remove(db.LayerZero); road.Remove(db.Clayer);
+        return (o, road);
     }
 
     /// <summary>범위 · 축척 · 얼림 · 범례 · 토공량(읽기만 · 면을 안 바꿈) — 범위가 없으면 null.</summary>
@@ -185,7 +196,7 @@ internal static class PlanSheet
             string LName(ObjectId l) => ((LayerTableRecord)tr.GetObject(l, OpenMode.ForRead)).Name;
             var mixed = inSheetWin.Where(l => !fz.Contains(l)).Select(LName)
                 .Concat(inSheetWin.Where(l => fz.Contains(l) && (l == db.LayerZero || l == db.Clayer)).Select(l => LName(l) + "(현재/0)")).ToList();
-            if (!inp.Stations) foreach (var l in StationLayers(db, tr, idx)) fz.Add(l);   // ★[v112.5] 측점 끔
+            { var (stS, stR) = StationLayers(db, tr, idx); if (!inp.StationsSite) fz.UnionWith(stS); if (!inp.StationsRoad) fz.UnionWith(stR); }   // ★[v112.5] 측점 끔
             fz.Remove(db.LayerZero); fz.Remove(db.Clayer);
             p.Freeze = fz.ToList();
             p.FreezeNames = p.Freeze.Select(LName).ToList();
@@ -385,7 +396,7 @@ internal static class PlanSheet
         if (wasLocked) vp.Locked = false;
         vp.TwistAngle = TwistSign * rot;
         if (wasLocked) vp.Locked = true;
-        log.AppendLine($"■ 평면 꾸미기(실시간) — 기울기 {inp.PlanRot:0.###}° · 등고값 {(inp.ContourLabels ? "켬" : "끔")} · 측점 {(inp.Stations ? "켬" : "끔")}");
+        log.AppendLine($"■ 평면 꾸미기(실시간) — 기울기 {inp.PlanRot:0.###}° · 등고값 {(inp.ContourLabels ? "켬" : "끔")} · 측점 부지 {(inp.StationsSite ? "켬" : "끔")} · 진입도로 {(inp.StationsRoad ? "켬" : "끔")}");
         Overlays(db, tr, ps, vp, inp, log, warns);
         // 돌린 범위가 뷰포트를 넘나(축척은 그대로) — 넘치면 알림
         try
@@ -483,9 +494,10 @@ internal static class PlanSheet
             surfLayers.ExceptWith(groundLayers);
             surfLayers.Remove(db.LayerZero); surfLayers.Remove(db.Clayer);
             if (surfLayers.Count > 0) vp.FreezeLayersInViewport(surfLayers.GetEnumerator());
-            var st = StationLayers(db, tr, idx);
-            if (st.Count > 0) { if (inp.Stations) vp.ThawLayersInViewport(st.GetEnumerator()); else vp.FreezeLayersInViewport(st.GetEnumerator()); }
-            log.AppendLine($"  평면 얼림 — 설계 지표면 {surfLayers.Count}층 · 측점 {st.Count}층 {(inp.Stations ? "켬" : "끔")}");
+            var (stS, stR) = StationLayers(db, tr, idx);
+            if (stS.Count > 0) { if (inp.StationsSite) vp.ThawLayersInViewport(stS.GetEnumerator()); else vp.FreezeLayersInViewport(stS.GetEnumerator()); }
+            if (stR.Count > 0) { if (inp.StationsRoad) vp.ThawLayersInViewport(stR.GetEnumerator()); else vp.FreezeLayersInViewport(stR.GetEnumerator()); }
+            log.AppendLine($"  평면 얼림 — 설계 지표면 {surfLayers.Count}층 · 측점 부지 {stS.Count}층 {(inp.StationsSite ? "켬" : "끔")} · 진입도로 {stR.Count}층 {(inp.StationsRoad ? "켬" : "끔")}");
         }
         catch (System.Exception exZ) { warns.Add("평면 얼림 못 함 — " + exZ.Message); }
 

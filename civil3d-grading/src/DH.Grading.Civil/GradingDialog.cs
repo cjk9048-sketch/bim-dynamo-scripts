@@ -222,7 +222,7 @@ public sealed class GradingDialog : Window
     /// 하드코딩 0.05였을 때는 하한을 낮추는 순간 <b>거짓 안내</b>가 됐다.</para></summary>
     private static TextBlock MakeSlopeNote() => new()
     {
-        Text = $"※ 구배 0(~{GradingSettings.MinSlope:0.###} 미만) 입력은 {GradingSettings.MinSlope:0.###}(수직 옹벽)로 처리됩니다.",
+        Text = $"구배 {GradingSettings.MinSlope:0.###} 미만 → {GradingSettings.MinSlope:0.###}(수직 옹벽)",   // ★[JACK 1117 «당구장 표시 글 지워»] ※ · 문장체 뺌(빨간 경고는 남김)
         FontSize = 11,
         Foreground = DhBrand.Warn,
         TextWrapping = TextWrapping.Wrap,

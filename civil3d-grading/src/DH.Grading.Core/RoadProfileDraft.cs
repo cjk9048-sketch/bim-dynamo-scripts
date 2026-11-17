@@ -122,6 +122,33 @@ public static class RoadProfileDraft
         return (res, added);
     }
 
+    /// <summary>★[JACK 1117 «종단 직접 그리기 — 구간 선정이 다 끝나면 PVI 간격 설정에 맞춰서 해당 간격대로 PVI 및 측점이 생기게»] 꺾은선의 직선마다 그 시작에서 <paramref name="len"/>마다 PVI를 더함 —
+    /// 그 직선 위 높이라 모양 그대로. 직선 끝과 <paramref name="gap"/>보다 가까우면 안 넣음 · <paramref name="keep"/>가 거짓인 측점(도로 없는 자리)도 안 넣음. 돌려줌 = 측점 차례 목록 · 더한 수.</summary>
+    public static (List<(double S, double Z)> Pvi, int Added) Densify(IReadOnlyList<(double S, double Z)> pvi, double len, double gap = double.NaN, Func<double, bool>? keep = null)
+    {
+        var res = new List<(double S, double Z)>();
+        if (pvi.Count == 0) return (res, 0);
+        len = double.IsFinite(len) ? Math.Max(1.0, len) : 20;   // 1 m 아래는 안 받음(AddStations와 같음)
+        if (!(gap >= 0)) gap = Math.Min(len / 4, 2.5);
+        gap = Math.Max(gap, 1e-6);
+        int added = 0;
+        res.Add(pvi[0]);
+        for (int i = 1; i < pvi.Count; i++)
+        {
+            var (s0, z0) = pvi[i - 1]; var (s1, z1) = pvi[i];
+            double ds = s1 - s0;
+            for (long k = 1; ds > 0 && k * len < ds - gap; k++)
+            {
+                double st = s0 + k * len;
+                if (keep != null && !keep(st)) continue;
+                res.Add((st, z0 + (z1 - z0) * (k * len) / ds));
+                added++;
+            }
+            res.Add(pvi[i]);
+        }
+        return (res, added);
+    }
+
     /// <summary>PVI 꺾은선의 측점 s 높이(직선 보간 · 범위 밖은 끝값).</summary>
     public static double At(IReadOnlyList<(double S, double Z)> pvi, double s)
     {

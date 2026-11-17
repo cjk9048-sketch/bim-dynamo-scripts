@@ -78,7 +78,7 @@ internal static class SheetBookPalette
     internal static SheetBookPanel.Values ToValues(SheetBookInput i, Autodesk.AutoCAD.DatabaseServices.Database? db = null)
     {
         var v = new SheetBookPanel.Values { Project = i.Project, Prefix = i.Prefix, NoPrefix = i.NoPrefix, NoStart = i.NoStart, Date = i.Date, PlanScale = i.PlanScale,
-                                            PlanRot = i.PlanRot, ContourLabels = i.ContourLabels, Stations = i.Stations };
+                                            PlanRot = i.PlanRot, ContourLabels = i.ContourLabels, StationsSite = i.StationsSite, StationsRoad = i.StationsRoad };
         if (db != null) try { (v.CMinor, v.CMajor) = ContourInterval.Read(db); } catch { }
         foreach (var k in Kinds) { v.On[k] = i.On[k]; v.Titles[k] = i.Titles[k]; }
         return v;
@@ -87,7 +87,7 @@ internal static class SheetBookPalette
     internal static SheetBookInput FromValues(SheetBookPanel.Values v)
     {
         var i = new SheetBookInput { Project = v.Project, Prefix = v.Prefix, NoPrefix = v.NoPrefix, NoStart = v.NoStart, Date = v.Date, PlanScale = v.PlanScale,
-                                     PlanRot = v.PlanRot, ContourLabels = v.ContourLabels, Stations = v.Stations };
+                                     PlanRot = v.PlanRot, ContourLabels = v.ContourLabels, StationsSite = v.StationsSite, StationsRoad = v.StationsRoad };
         foreach (var k in Kinds) { i.On[k] = v.On[k]; i.Titles[k] = v.Titles[k]; }
         return i;
     }
@@ -122,7 +122,7 @@ internal static class SheetBookPalette
         if (doc == null || _panel == null) return;
         var inp = FromValues(_panel.Collect());
         // ★[v112.6] 평면 꾸미기 값은 도면 기록이 정본(별도 창 PlanOptsWindow가 적음) — 도면화 창 칸 값으로 덮지 않음
-        try { var saved = SheetBookInput.Read(doc.Database); inp.PlanRot = saved.PlanRot; inp.ContourLabels = saved.ContourLabels; inp.Stations = saved.Stations; } catch { }
+        try { var saved = SheetBookInput.Read(doc.Database); inp.PlanRot = saved.PlanRot; inp.ContourLabels = saved.ContourLabels; inp.StationsSite = saved.StationsSite; inp.StationsRoad = saved.StationsRoad; } catch { }
         SheetBookCommand.Pending[doc] = inp;
         PickSession.Send(doc, "DHSHEETMAKE");
     }

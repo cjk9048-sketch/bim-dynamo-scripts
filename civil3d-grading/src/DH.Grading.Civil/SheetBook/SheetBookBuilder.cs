@@ -54,7 +54,7 @@ internal sealed class SheetBookInput
     public double PlanScale;   // 0 = 자동
     /// <summary>★[v112.5 · JACK 1104] 평면 꾸미기 — 도면 기울기(도 · 반시계 +) · 계곡선 등고값 · 측점 보이기.</summary>
     public double PlanRot;
-    public bool ContourLabels = true, Stations = true;
+    public bool ContourLabels = true, StationsSite = true, StationsRoad = true;
     public readonly Dictionary<Kind, bool> On = Kinds.ToDictionary(k => k, _ => true);
     public readonly Dictionary<Kind, string> Titles = Kinds.ToDictionary(k => k, DefaultTitle);
 
@@ -62,7 +62,7 @@ internal sealed class SheetBookInput
     {
         var l = new List<string> { "project=" + Esc(Project), "prefix=" + Esc(Prefix), "noprefix=" + Esc(NoPrefix), "nostart=" + NoStart.ToString(CultureInfo.InvariantCulture),
                                    "date=" + Esc(Date), "planscale=" + PlanScale.ToString(CultureInfo.InvariantCulture),
-                                   "planrot=" + PlanRot.ToString("R", CultureInfo.InvariantCulture), "contourlabels=" + (ContourLabels ? 1 : 0), "stations=" + (Stations ? 1 : 0) };
+                                   "planrot=" + PlanRot.ToString("R", CultureInfo.InvariantCulture), "contourlabels=" + (ContourLabels ? 1 : 0), "stations=" + (StationsSite && StationsRoad ? 1 : 0), "stationssite=" + (StationsSite ? 1 : 0), "stationsroad=" + (StationsRoad ? 1 : 0) };
         foreach (var k in Kinds) { l.Add($"on.{Code(k)}={(On[k] ? 1 : 0)}"); l.Add($"title.{Code(k)}=" + Esc(Titles[k])); }
         return string.Join("\n", l);
     }
@@ -86,7 +86,9 @@ internal sealed class SheetBookInput
                 case "planscale": if (double.TryParse(v, NumberStyles.Float, CultureInfo.InvariantCulture, out double d) && d >= 0) r.PlanScale = d; break;
                 case "planrot": if (double.TryParse(v, NumberStyles.Float, CultureInfo.InvariantCulture, out double pr) && double.IsFinite(pr)) r.PlanRot = Math.IEEERemainder(pr, 360); break;
                 case "contourlabels": r.ContourLabels = v.Trim() != "0"; break;
-                case "stations": r.Stations = v.Trim() != "0"; break;
+                case "stations": r.StationsSite = r.StationsRoad = v.Trim() != "0"; break;   // 옛 값 = 둘 다(뒤에 새 열쇠가 오면 덮음)
+                case "stationssite": r.StationsSite = v.Trim() != "0"; break;
+                case "stationsroad": r.StationsRoad = v.Trim() != "0"; break;
                 default:
                     if (k.StartsWith("on.") && FromCode(k.Substring(3)) is Kind ko) r.On[ko] = v.Trim() != "0";
                     else if (k.StartsWith("title.") && FromCode(k.Substring(6)) is Kind kt) r.Titles[kt] = v;

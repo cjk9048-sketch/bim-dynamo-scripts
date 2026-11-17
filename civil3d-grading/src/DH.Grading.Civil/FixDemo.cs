@@ -109,7 +109,11 @@ internal sealed partial class FixDemoView : Border
         ["qtyConst4"] = (4.6, "할증률 P — 지상부 중량 W₁ · (1+P)"),
         ["qtyConst5"] = (4.6, "지상부 할증 — 지상부 발생량(㎥)에 곱함"),
         ["qtyMake"] = (5.2, "만들기 — 토공 수량 엑셀 → 시트 5장"),
-        ["xqty"] = (1.0, "수량표 항목 — 고른 것마다 어디의 길이를 재는지 · 꺼짐 = 표에 –"),   // ★미리보기(StaticKeys) — XqMask
+        // ★[JACK 1117 «수량표 항목 넷 — 별도 애니메이션 · 산출방법 포함»] 체크마다 제 장면(FixDemoXsecQty.cs) · 꺼진 항목은 오른쪽 위 «꺼짐»(XqMask)
+        ["xqClear"] = (7.4, "벌개재근 — 공사 범위 안 임상도 숲만 → 나무 · 뿌리 제거 → 가로 길이"),
+        ["xqStrip"] = (7.0, "표토제거 — 공사 범위 전체 겉흙 걷기 → 가로 길이"),
+        ["xqSmooth"] = (8.4, "면고르기 — 마감 사면 다듬기 → 빗길이(소단 포함)"),
+        ["xqSeed"] = (8.6, "식생공법 — 마감 사면에 씨앗 뿜어 붙이기 → 풀 · 길이 = 면고르기"),
     };
 
     /// <summary>현재 장면 키.</summary>
@@ -119,11 +123,11 @@ internal sealed partial class FixDemoView : Border
     public bool Playing => _tm.IsEnabled || _held;   // ★[v117.18.1] 끝 그림에서 멈춘 터파기 장면도 «도는 중»(마우스가 칸 안에서 움직일 때 처음부터 다시 돌지 않게)
     bool _held;
     /// <summary>★[JACK 1116 «수치를 직접 기입하는 곳은 애니메이션이 아니라 미리보기 뷰»] 미리보기 장면 키 — Play(key)가 타이머 없이 완성 그림을 바로 그려 멈춤 · 값이 바뀌면 패널이 Redraw() 호출(장면은 지금 값을 읽어 그림). 새 수치 칸 장면은 여기에 키만 추가.</summary>
-    public static readonly HashSet<string> StaticKeys = new() { "blend", "roadAlign", "roadXsec", "roadPave", "roadSlope", "exSlopeVal", "profVal", "qtyDeep", "qtyDensity", "qtyDbh", "qtyRoot", "qtyHeight", "qtyConst", "qtyConst0", "qtyConst1", "qtyConst2", "qtyConst3", "qtyConst4", "qtyConst5", "xqty" };
+    public static readonly HashSet<string> StaticKeys = new() { "blend", "roadAlign", "roadXsec", "roadPave", "roadSlope", "exSlopeVal", "profVal", "qtyDeep", "qtyDensity", "qtyDbh", "qtyRoot", "qtyHeight", "qtyConst", "qtyConst0", "qtyConst1", "qtyConst2", "qtyConst3", "qtyConst4", "qtyConst5" };
     /// <summary>미리보기 장면이 떠 있으면 새 값으로 다시 그림(없으면 아무 일 없음).</summary>
     public void Redraw()
     {
-        if (!_played || !StaticKeys.Contains(_key)) return;
+        if (!_played || !(StaticKeys.Contains(_key) || (IsXqKey(_key) && !_tm.IsEnabled))) return;   // ★[JACK 1117] 수량표 항목 장면 — 끝 그림에서 체크를 바꾸면 «꺼짐» 표시만 다시
         try { Draw(_key, Spec[_key].Period - 0.01); } catch { }
     }
     /// <summary>★[v117.18.1 · JACK 1116] 한 번만 돌고 끝 그림에서 멈추는 장면 — 전부.</summary>
@@ -359,7 +363,10 @@ internal sealed partial class FixDemoView : Border
             case "sbTabsAll": SbTabsAll(t); break;
             case "qtyFacility": QtyFacility(t); break;
             case "qtyDeep": QtyDeep(t); break;
-            case "xqty": XsecQtyScene(); break;
+            case "xqClear": XqClear(t); break;
+            case "xqStrip": XqStrip(t); break;
+            case "xqSmooth": XqSmooth(t); break;
+            case "xqSeed": XqSeed(t); break;
             case "qtyForestArea": QtyForestArea(t); break;
             case "qtyDensity": QtyDensity(t); break;
             case "qtyDbh": QtyDbh(t); break;

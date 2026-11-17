@@ -32,10 +32,11 @@ internal static class ClearingQuantity
             NetTopologySuite.Geometries.Geometry? fp; string pn;
             using (var tr = db.TransactionManager.StartTransaction()) { fp = PlanSheet.PlanArea(db, tr, NtsSupport.Factory(), out pn); tr.Commit(); }
             if (fp == null || fp.IsEmpty) return ClearingResult.None("공사 범위 없음 → 벌개제근 못 셈");
-            string cs = KoreaCs.Read(db);
-            int? epsg = KoreaCs.ResolveEpsgFromCode(cs);
-            var belt = epsg.HasValue ? ShapefileWriter.Belt(epsg.Value) : null;
-            if (belt == null) return ClearingResult.None("도면 좌표계 모름 → 벌개제근 못 셈");
+            // ★[JACK 1117 «벌개재근 임상도 못 읽음 원인»] 도면 좌표계만 보던 것을 다른 기능(서버 지표면 · 지적도 · 3D)과 같게 — 도면 좌표계가 없으면 [기타 설정] 원점
+            int epsg = Commands.ImportGisCommand.ResolveEpsg(db, out string csNote);
+            log.AppendLine("  벌개제근 좌표계: " + csNote);
+            var belt = ShapefileWriter.Belt(epsg);
+            if (belt == null) return ClearingResult.None($"좌표계 EPSG:{epsg} 못 씀 → 벌개제근 못 셈");
             int cm = belt.Value.cm; double fn = belt.Value.fn;
             (double X, double Y) FromDwg(double x, double y) { var ll = KoreaTm.ToLonLat(x, y, cm, fn); return KoreaTm.UtmkFromLonLat(ll.Lon, ll.Lat); }
             (double X, double Y) ToDwg(double x, double y) { var ll = KoreaTm.UtmkToLonLat(x, y); var p = KoreaTm.FromLonLat(ll.Lon, ll.Lat, cm, fn); return (p.E, p.N); }

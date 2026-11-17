@@ -193,12 +193,6 @@ internal sealed class ExcavPanel : UserControl
             Visibility = Visibility.Collapsed,
         };
         secDig.Children.Add(_slopeHint);
-        secDig.Children.Add(new TextBlock
-        {
-            Text = "※ 사면형상은 터파기에서 직각만 씁니다 — 라운드·소단·옹벽형태는 여기 없습니다.",
-            FontSize = 11, Foreground = DhBrand.Sub, TextWrapping = TextWrapping.Wrap,
-            Margin = new Thickness(0, 0, 0, 4),
-        });
         // ══ ★★[JACK 0910] <b>만들기는 값을 다 정한 뒤에</b> — 정지 창과 같은 차례 ══
         //   <para>종전엔 이 단추가 <c>2. 대상</c> 안에 있어서, 터파기선을 찍자마자 누르게 되고
         //   <b>굴착 구배는 옛 값인 채로</b> 파였다. 순서를 바꾸면 그 실수가 안 생긴다:
@@ -250,12 +244,6 @@ internal sealed class ExcavPanel : UserControl
         _wallNote = new TextBlock { Text = "가시설 체크 중 — 전체가 가시설", FontSize = 11, Foreground = DhBrand.Sub, Margin = new Thickness(0, 0, 0, 6), Visibility = Visibility.Collapsed };
         secWall.Children.Add(_wallNote);
         secWall.Children.Add(wRow);
-        secWall.Children.Add(new TextBlock
-        {
-            Text = "※ 가시설엔 소단·대소단·옹벽형태가 없습니다 — 흙막이는 벽체 하나로 섭니다.",
-            FontSize = 11, Foreground = DhBrand.Sub, TextWrapping = TextWrapping.Wrap,
-            Margin = new Thickness(0, 0, 0, 4),
-        });
 
         // ★[v117.18 · JACK 1116 «초기화가 없어»] 맨 아래 — 터파기 결과 전부 지움(터파기선 · 원지반 · 계획지표면은 남김)
         _reset = DhBrand.CautionButton("터파기 초기화", "터파기 지표면 · 기록 · 가시설 구간을 지웁니다. 터파기선 · 원지반 · 계획지표면은 남습니다.");

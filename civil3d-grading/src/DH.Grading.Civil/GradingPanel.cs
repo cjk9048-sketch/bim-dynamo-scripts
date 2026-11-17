@@ -547,12 +547,6 @@ internal sealed class GradingPanel : UserControl
         secFix.Children.Add(cRow);
         _defer.Checked += (_, __) => SetDefer(true);
         _defer.Unchecked += (_, __) => SetDefer(false);
-        secFix.Children.Add(new TextBlock
-        {
-            Text = "※ 정지면을 먼저 만들어야 고칠 사면이 생깁니다.",
-            FontSize = 11, Foreground = DhBrand.Sub, TextWrapping = TextWrapping.Wrap,
-            Margin = new Thickness(0, 0, 0, 4),
-        });
 
         // ── ★[v111.10 · JACK 1103 «UI에 버튼이 있으니 필요 없음»] ■ 도면([종단도] [횡단도] + 옛 면 알림)은 없앰 — 리본 [계획지표면] 패널 [종단도] · [횡단도] 그대로 ──
         // ── ★[v111.10 · 계획_초기화.md 3.5 · JACK 1103 «창마다 초기화 단추 = 주황»] [계획지표면 초기화] — 창 맨 끝 얇은 줄 아래 ──

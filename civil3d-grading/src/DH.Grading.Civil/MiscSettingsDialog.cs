@@ -58,13 +58,6 @@ public sealed class MiscSettingsDialog : Window
         _coordSys.SelectedIndex = idx >= 0 ? idx : 0;               // 기본 중부(5186)
         root.Children.Add(_coordSys);
 
-        root.Children.Add(new TextBlock
-        {
-            Text = "※ 좌표계를 바꾸면 이미 가져온 등고선·지적도가 맞지 않게 됩니다 —"
-                 + " 그때는 저장할 때 지울지 물어봅니다.",
-            FontSize = 11, Foreground = DhBrand.Sub, TextWrapping = TextWrapping.Wrap,
-            Margin = new Thickness(0, 0, 0, 4),
-        });
 
         // ── 2. 표시 ────────────────────────────────────────────────────────
         GradingDialog.AddSection(root, "2. 표시", "만든 뒤에 도면에 무엇을 남길지");

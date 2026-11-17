@@ -17,8 +17,10 @@ internal sealed class PlanOptsWindow : Window
     static bool _hooked;
 
     readonly TextBox _rot = Box(56), _cMinor = Box(44), _cMajor = Box(44);
+    readonly RotDial _dial = new();
     readonly CheckBox _cLabels = new() { Content = "등고값(계곡선)", FontSize = 11.5, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 2, 14, 2) };
-    readonly CheckBox _stations = new() { Content = "측점", FontSize = 11.5, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 2, 0, 2) };
+    readonly CheckBox _stations = new() { Content = "측점 부지", FontSize = 11.5, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 2, 8, 2) };
+    readonly CheckBox _stationsR = new() { Content = "측점 진입도로", FontSize = 11.5, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 2, 0, 2) };
     readonly TextBlock _state = new() { FontSize = 11, Foreground = DhBrand.Sub, Margin = new Thickness(0, 8, 0, 0), TextWrapping = TextWrapping.Wrap };
     bool _loading;
     string _last = "";
@@ -89,12 +91,18 @@ internal sealed class PlanOptsWindow : Window
             return r;
         }
         TextBlock Sub(string t, double left = 0) => new() { Text = t, FontSize = 11, Foreground = DhBrand.Sub, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(left, 0, 4, 0) };
-        Row("도면 기울기", _rot, Sub("°", 4));
+        var rr = Row("도면 기울기", _rot, Sub("°", 4));
+        // ★[JACK 1117 «시계 원판에서 방향침을 드래그하면서 직관적으로»] 원판 — 끄는 동안 숫자 칸만 · 놓으면 적용 · 숫자를 치면 바늘이 따라감
+        _dial.Margin = new Thickness(10, 0, 0, 0);
+        rr.Children.Add(_dial);
+        _dial.Changing += v => _rot.Text = v.ToString("0.###", CultureInfo.InvariantCulture);
+        _dial.Committed += v => { _rot.Text = v.ToString("0.###", CultureInfo.InvariantCulture); Apply(); };
+        _rot.TextChanged += (_, __) => { if (Num(_rot, out double d)) _dial.Value = System.Math.IEEERemainder(d, 360); };
         _rot.ToolTip = "평면도를 돌릴 각도(반시계 +) — 방위표도 함께 돎";
         Row("등고선 간격", Sub("주곡선"), _cMinor, Sub("계곡선", 10), _cMajor, Sub("m", 4));
         _cMinor.ToolTip = "모든 지형의 등고선 간격(도면설정 «3. 공통»과 같은 값)"; _cMajor.ToolTip = "굵은 등고선 간격 — 주곡선의 배수";
         var tg = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(80, 0, 0, 0) };
-        tg.Children.Add(_cLabels); tg.Children.Add(_stations);
+        tg.Children.Add(_cLabels); tg.Children.Add(_stations); tg.Children.Add(_stationsR);
         root.Children.Add(tg);
         root.Children.Add(_state);
         Content = root;
@@ -104,11 +112,11 @@ internal sealed class PlanOptsWindow : Window
             t.LostKeyboardFocus += (_, __) => Apply();
             t.KeyDown += (_, e) => { if (e.Key == System.Windows.Input.Key.Enter) Apply(); };
         }
-        _cLabels.Click += (_, __) => Apply(); _stations.Click += (_, __) => Apply();
+        _cLabels.Click += (_, __) => Apply(); _stations.Click += (_, __) => Apply(); _stationsR.Click += (_, __) => Apply();
     }
 
     static bool Num(TextBox t, out double v) => double.TryParse(t.Text.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out v) && double.IsFinite(v);
-    string Key() => string.Join("|", _rot.Text.Trim(), _cMinor.Text.Trim(), _cMajor.Text.Trim(), _cLabels.IsChecked == true, _stations.IsChecked == true);
+    string Key() => string.Join("|", _rot.Text.Trim(), _cMinor.Text.Trim(), _cMajor.Text.Trim(), _cLabels.IsChecked == true, _stations.IsChecked == true, _stationsR.IsChecked == true);
 
     void LoadFrom(Database db)
     {
@@ -119,7 +127,7 @@ internal sealed class PlanOptsWindow : Window
             var (mi, ma) = ContourInterval.Read(db);
             _rot.Text = inp.PlanRot.ToString("0.###", CultureInfo.InvariantCulture);
             _cMinor.Text = mi.ToString("0.###", CultureInfo.InvariantCulture); _cMajor.Text = ma.ToString("0.###", CultureInfo.InvariantCulture);
-            _cLabels.IsChecked = inp.ContourLabels; _stations.IsChecked = inp.Stations;
+            _cLabels.IsChecked = inp.ContourLabels; _stations.IsChecked = inp.StationsSite; _stationsR.IsChecked = inp.StationsRoad;
             _last = Key();
             _state.Text = "";
         }
@@ -142,7 +150,7 @@ internal sealed class PlanOptsWindow : Window
         if (busy.Length > 0) { _state.Text = $"{busy} 명령 중 — 끝난 뒤 다시"; return; }
         _last = k;
         var inp = SheetBookInput.Read(doc.Database);
-        inp.PlanRot = System.Math.IEEERemainder(rot, 360); inp.ContourLabels = _cLabels.IsChecked == true; inp.Stations = _stations.IsChecked == true;
+        inp.PlanRot = System.Math.IEEERemainder(rot, 360); inp.ContourLabels = _cLabels.IsChecked == true; inp.StationsSite = _stations.IsChecked == true; inp.StationsRoad = _stationsR.IsChecked == true;
         SheetBookCommand.Pending[doc] = inp;
         SheetBookCommand.PendingContour[doc] = (mi, ma);
         _state.Text = "";
