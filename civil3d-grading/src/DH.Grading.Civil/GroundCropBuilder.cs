@@ -53,6 +53,8 @@ internal static class GroundCropBuilder
         public int HeightBits; public double HeightMax;
         public readonly List<string> NotGrown = new();
         public readonly List<string> Skipped = new();
+        /// <summary>★[JACK 1117] 정의대로 다시 짓기만으로 바뀐 면(자르기 전 단계 · 알림 글).</summary>
+        public readonly List<string> Drift = new();
     }
 
     /// <summary>면 하나(읽기 패스).</summary>
@@ -76,6 +78,12 @@ internal static class GroundCropBuilder
         public int Removed;
         public long RebuildMs;
         public string Rebuilt = "";
+        /// <summary>★[JACK 1117] 정의대로 다시 짓기(자르기 전) — 걸린 시간 · 그것만으로 바뀐 안쪽(지문 · 표본 높이 점 수 · 최대).</summary>
+        public long PreMs;
+        public string HashPre = "";
+        public bool DriftTri;
+        public int DriftN;
+        public double DriftMax;
     }
 
     /// <summary>지난 자르기 기록 — 상자 · 면마다 넣은 띠 · 처음 자르기 전 범위.</summary>
@@ -541,6 +549,41 @@ internal static class GroundCropBuilder
             {
                 try
                 {
+                    // ★★[JACK 1117 «튜토리얼 DXF 원지반 → 자르기 되돌림 · 안쪽 세모 · 표본 높이 0.89 m»] <b>먼저 정의대로 다시 짓고(띠 없이) 그 꼴을 앞 상태로 삼는다.</b>
+                    //   면의 지금 삼각망이 제 정의를 Rebuild()한 것과 다를 수 있다 — 붙이면서 지은 원지반(등고선 + 평탄부 최소화 → 표고점, v117.18.16까지 안 다시 지음):
+                    //   화면 없는 Civil 실측(tut_ch1.dxf) 띠 없이 다시 짓기만으로 세모 248,283 → 249,841 · 안쪽 세모 772개 바뀜 · 띠를 넣어도 안쪽은 그 꼴 그대로.
+                    //   그래서 확인이 «자르기가 바꾼 것»과 «다시 짓기가 바꾼 것»을 못 갈라 되돌렸다(물려도 삼각망은 다시 지은 꼴로 남음 — 같은 실측).
+                    //   다시 짓기로 바뀐 만큼은 숨기지 않고 알린다(R.Drift · 명령창 · 로그). 자르기 확인(지문 비트 같음 · 1 nm)은 그대로.
+                    using (var t0 = db.TransactionManager.StartTransaction())
+                    {
+                        foreach (var s in order.Where(s => s.Tris != null))
+                        {
+                            var rw = System.Diagnostics.Stopwatch.StartNew();
+                            try { ((CivilDb.Surface)t0.GetObject(s.Id, OpenMode.ForWrite)).Rebuild(); }
+                            catch (Exception rex) { throw new InvalidOperationException($"«{s.Name}» 정의대로 다시 짓기 실패 — {rex.Message}", rex); }
+                            s.PreMs = rw.ElapsedMilliseconds;
+                        }
+                        t0.Commit();
+                    }
+                    using (var tb = db.TransactionManager.StartTransaction())
+                    {
+                        foreach (var s in work.Where(s => s.Tris != null))
+                        {
+                            var ts = (CivilDb.TinSurface)tb.GetObject(s.Id, OpenMode.ForRead);
+                            string h = GroundCrop.InsideHash(PureWithWallsBuilder.ReadTris(ts, out _), s.HashBox);
+                            var z = Heights(ts, dBox);
+                            var hd = HeightDiff(s.Heights0, z);
+                            s.DriftTri = h != s.Hash0;
+                            s.DriftN = hd.Max > HeightEps ? hd.N : 0;
+                            s.DriftMax = hd.Max > HeightEps ? hd.Max : 0;
+                            if (s.DriftTri || s.DriftN > 0)
+                                R.Drift.Add(string.Format(ci, "«{0}»{1}", s.Name, s.DriftN > 0 ? $" 표본 높이 {s.DriftN}/{GridN * GridN}점 최대 {s.DriftMax:0.000} m" : " 세모만"));
+                            s.HashPre = s.Hash0;
+                            s.Hash0 = h;
+                            s.Heights0 = z;
+                        }
+                        tb.Commit();
+                    }
                     using (var t1 = db.TransactionManager.StartTransaction())
                     {
                         foreach (var s in work.Where(s => s.Target))
@@ -614,12 +657,25 @@ internal static class GroundCropBuilder
             }
             long msCrop = sw.ElapsedMilliseconds;
             string per = string.Join(" · ", order.Select(s => s.Tris == null ? $"{s.Name}(체적면 {s.Rebuilt} {s.RebuildMs} ms)"
-                                                       : string.Format(ci, "{0} {1:N0}→{2:N0}({3:F2} s{4}{5})", s.Name, s.Tri0, s.Tri1, s.RebuildMs / 1000.0, s.Dep ? " · 딸린 면" : $" · 띠 {s.NewBands.Count} · 뺌 {s.Removed}", s.Rebuilt == "OK" ? "" : " · " + s.Rebuilt)));
+                                                       : string.Format(ci, "{0} {1:N0}→{2:N0}({3:F2} s · 정의대로 {6:F2} s{7}{4}{5})", s.Name, s.Tri0, s.Tri1, s.RebuildMs / 1000.0, s.Dep ? " · 딸린 면" : $" · 띠 {s.NewBands.Count} · 뺌 {s.Removed}", s.Rebuilt == "OK" ? "" : " · " + s.Rebuilt,
+                                                                       s.PreMs / 1000.0, s.DriftTri || s.DriftN > 0 ? string.Format(ci, " 바뀜(세모 {0} · 표본 {1}점 최대 {2:E2} m)", s.DriftTri ? "다름" : "같음", s.DriftN, s.DriftMax) : " 그대로")));
+            string drift = R.Drift.Count > 0 ? "자르기 전 정의대로 다시 지음 — " + string.Join(" · ", R.Drift) : "";
             if (fail.Length > 0)
             {
                 R.RolledBack = true;
-                R.Why = fail;
-                R.Line = $"\n■ DHCROP 되돌림 — {fail} · 상자 {box.Text} · 면 {work.Count}: {per} · 넣기~확인 {msCrop} ms(바깥 트랜잭션 물림 — 모든 면 그대로)";
+                // ★[JACK 1117] 정의대로 다시 짓기로 바뀐 면은 물린 뒤 다시 잰다 — 물려도 다시 지은 삼각망이 남는다(화면 없는 Civil 실측) · 남았으면 숨기지 않고 알림
+                var kept = new List<string>();
+                if (R.Drift.Count > 0)
+                    try
+                    {
+                        using var trK = db.TransactionManager.StartTransaction();
+                        foreach (var s in work.Where(s => s.DriftTri && !s.Id.IsErased))
+                            if (trK.GetObject(s.Id, OpenMode.ForRead) is CivilDb.TinSurface tk && GroundCrop.InsideHash(PureWithWallsBuilder.ReadTris(tk, out _), s.HashBox) != s.HashPre) kept.Add(s.Name);
+                        trK.Commit();
+                    }
+                    catch (Exception kx) { kept.Add("못 잼 " + kx.Message); }
+                R.Why = fail + (drift.Length > 0 ? " · " + drift : "") + (kept.Count > 0 ? " · ⚠물려도 다시 지은 삼각망이 남음(" + string.Join(" · ", kept) + ")" : "");
+                R.Line = $"\n■ DHCROP 되돌림 — {R.Why} · 상자 {box.Text} · 면 {work.Count}: {per} · 넣기~확인 {msCrop} ms(바깥 트랜잭션 물림{(kept.Count > 0 ? "" : " — 모든 면 그대로")})";
                 try { DiagLog.AppendCarry(R.Line + "\n"); } catch { }
                 return R;
             }
@@ -663,7 +719,7 @@ internal static class GroundCropBuilder
             R.Ok = true;
             R.Ms = all.ElapsedMilliseconds;
             int tgt = work.Count(s => s.Target);
-            R.Done = $"면 {tgt}개 자름" + (R.Chain > 0 ? $" · 붙여넣기 · 체적면 {R.Chain}개는 다음 명령(DHCROPDEPS)에서 다시 지음" : "")
+            R.Done = $"면 {tgt}개 자름" + (drift.Length > 0 ? " · " + drift : "") + (R.Chain > 0 ? $" · 붙여넣기 · 체적면 {R.Chain}개는 다음 명령(DHCROPDEPS)에서 다시 지음" : "")
                    + (R.FinalNote.Length > 0 ? (R.FinalNote.StartsWith("⚠") ? " · ⚠최종지표면 못 다시 지음 — 진입도로 창 [업데이트]" : " · 최종지표면 다시 지음") : "");
             R.Line = string.Format(ci, "\n■ DHCROP v2 — 상자 {0} · 설계 자리 D(+5 m) {1} · 면 {2}: {3} · 손 안 댐 {4}(상자 안) · 사람 면 {5} · 안쪽 지문 같음 {6}/{7} · 표본 높이 바뀐 면 {8}(끝자리만 다른 점 {16} · 최대 {17:E1} m) · 구식 {9}{10}{11}{12}{13} · 넣기~확인 {14} ms · 합 {15:F1} s",
                 box.Text, need.IsNone ? "없음" : "통과", work.Count, per, R.Untouched, R.Users, R.SameInside, R.Checked, R.HeightDiff, R.Stale,

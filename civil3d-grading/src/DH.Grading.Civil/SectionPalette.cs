@@ -59,6 +59,41 @@ public static class SectionPalette
     {
         try { if (Site.Ps != null && Site.Ps.Visible) Site.Panel?.Refresh(hasPlan); } catch { }
     }
+
+    // ══ ★★[JACK 1117 «도면설정의 종단 · 횡단 축척 · 배치 등을 종횡단도 도킹 팝업에»] [설정 적용] — 옛 도면설정 [저장]과 같은 길(명령 안 · 문서 잠김) ══
+    private static System.Action<AcDoc>? _pendingSheet;
+
+    /// <summary>창이 값을 담아 두고 <c>DHSECSHEETAPPLY</c>를 보냄 — 명령이 꺼내 씀(한 번만).</summary>
+    internal static void QueueSheet(AcDoc doc, System.Action<AcDoc> act)
+    {
+        _pendingSheet = act;
+        PickSession.Send(doc, "DHSECSHEETAPPLY");
+    }
+
+    /// <summary>종횡단도 창 [설정 적용] — 바꾼 값 저장 → 그려 둔 종단도 · 횡단도 다시(<see cref="Commands.SheetSettingsCommand.Saved"/>).</summary>
+    [CommandMethod("DHSECSHEETAPPLY")]
+    public static void ApplySheet()
+    {
+        var act = _pendingSheet; _pendingSheet = null;
+        var doc = AcadApp.DocumentManager.MdiActiveDocument;
+        try { if (doc != null && act != null) act(doc); }
+        catch (System.Exception ex) { try { doc?.Editor?.WriteMessage("\n[종횡단도] 설정 적용 실패 — " + ex.Message); } catch { } }
+        finally { ReloadSheets(); }
+    }
+
+    /// <summary>두 창의 설정 칸을 도면 값으로 다시(설정 적용 뒤 — 측점 간격은 두 창이 같은 값).</summary>
+    internal static void ReloadSheets()
+    {
+        foreach (var h in new[] { Site, RoadH })
+            try { h.Panel?.LoadSheet(true); h.Panel?.LoadBench(); } catch { }
+    }
+
+    /// <summary>층따기 저장 뒤 — 두 창 층따기 칸만 다시(고치는 중인 설정 칸은 그대로).</summary>
+    internal static void ReloadBench()
+    {
+        foreach (var h in new[] { Site, RoadH })
+            try { h.Panel?.LoadBench(); } catch { }
+    }
 }
 
 /// <summary>종횡단도 창 안 — 맨 위 예시 칸 · 1. 종단도 · 2. 횡단도(한 번에 한 칸만 펼침).</summary>
@@ -83,7 +118,7 @@ internal sealed class SectionPanel : UserControl
                                   pad: new Thickness(0, 0, 0, 6));
         head.Background = Brushes.Transparent;
 
-        var demo = new FixDemoView("단추에 마우스 → 예시", "pfProfile") { Margin = new Thickness(0, 0, 0, 8), HorizontalAlignment = HorizontalAlignment.Left };
+        var demo = new FixDemoView("단추에 마우스 → 예시", "pfProfile") { Margin = new Thickness(0, 0, 0, 8), HorizontalAlignment = HorizontalAlignment.Left, BenchRoad = road };
         static FrameworkElement? HeadOf(TextBlock badge) => (badge.Parent as FrameworkElement)?.Parent as FrameworkElement;   // 요약칸 → 머리 줄 → 머리
         void Hook(FrameworkElement? fe, string key) { if (fe == null) return; fe.MouseEnter += (_, __) => demo.Play(key); fe.MouseLeave += (_, __) => demo.Idle(); }
 
@@ -115,6 +150,12 @@ internal sealed class SectionPanel : UserControl
             sec1.Children.Add(rowUp);
             _updBtn = AddRoad(rowUp, demo, "지표면 업데이트", "DHROADUPDATE", "roadProfile", "지표면 · 종단도 · 횡단도 한꺼번에 다시 · 고친 것 있으면 빨강 깜박");
             _needRoad.Remove(_updBtn);   // 켜고 끄기 = 할 일 있음(ShowRoadSession)
+            // ★★[JACK 1117] 옛 도면설정 «2. 진입도로» 종단도 축척 H · V + 측점 간격(부지와 같은 값)
+            sec1.Children.Add(SubHead("종단도 설정"));
+            (_rH, _rV) = SetComboHV(sec1, "종단도 축척");
+            _rH.ToolTip = HTip; _rV.ToolTip = VTip;
+            _xi = SetBox(sec1, "측점 간격 m", XiTip);
+            AddApply(sec1);
         }
         else
         {
@@ -127,6 +168,16 @@ internal sealed class SectionPanel : UserControl
             Add(row1b, demo, "전후 측점 추가", "DHSTATIONFB", "pfFb", true, "노선 위 클릭 → 횡단만 (전)(후) 두 장", gate: "prof");   // ★[JACK 1116] «측점 전후» → «전후 측점 추가»
             Add(row1b, demo, "측점 지우기", "DHSTATIONDEL", "pfDel", true, "측점 근처 클릭 → 수동 측점 삭제 · 횡단도 같이", gate: "prof");
             Add(row1b, demo, "시점↔종점", "DHPROFILEREV", "pfRev", false, "종단 방향 뒤집기 · 다시 누르면 처음", gate: "prof");
+            // ★★[JACK 1117] 옛 도면설정 «1. 계획지표면» 종단 값 + 측점 간격(진입도로와 같은 값)
+            sec1.Children.Add(SubHead("종단도 설정"));
+            (_sH, _sV) = SetComboHV(sec1, "종단도 축척");
+            _sH.ToolTip = HTip; _sV.ToolTip = VTip;
+            _xi = SetBox(sec1, "측점 간격 m", XiTip);
+            var gbl = new string[GradingSettings.GroundBreakLabels.Length];
+            for (int i = 0; i < gbl.Length; i++) gbl[i] = $"{GradingSettings.GroundBreakLabels[i]} ({GradingSettings.GroundBreakValues[i]:0.00} m)";
+            _sGb = SetCombo(sec1, "원지반 굴곡", gbl,
+                "원지반선이 실제 땅에서 최대 몇 m 벗어나도 되나 = 토공량 최대 높이오차\n정밀 = 측점 · 횡단도 늘어남 · 단순 = 직선 몇 개(산지에서 토공 틀어짐)");
+            AddApply(sec1);
         }
 
         // ── 2. 횡단도 ──
@@ -137,20 +188,42 @@ internal sealed class SectionPanel : UserControl
         if (road)
         {
             AddRoad(row2, demo, "횡단도 생성", "DHROADXSEC", "xsView", "측점마다 횡단면도 · 자리 클릭 (Enter = 지난 자리) · 종단도 먼저", primary: true);
+            // ★★[JACK 1117] 옛 [횡단뷰 수정](= 도면설정 창) → 그 값(진입도로 횡단도 축척 · 배치)을 이 자리에 바로
             sec2.Children.Add(SubHead("횡단도 수정"));
-            var row2r = new WrapPanel { Margin = new Thickness(0, 0, 0, 6) };
-            sec2.Children.Add(row2r);
-            AddRoad(row2r, demo, "횡단뷰 수정", "DHSHEETSET", "xsView", "도면 설정 — 횡단도 축척 · 측점 간격 · 배치");
+            _rXs = SetCombo(sec2, "횡단도 축척", GradingSettings.XsecScaleLabels,
+                "자동 — 배치한 칸에 가장 크게 들어가는 표준 축척 · 고정하면 그 값(넘쳐도 그대로 · 로그로 알림)\n부지 횡단도 축척과 따로");
+            _rLay = SetCombo(sec2, "횡단도 배치", GradingSettings.XsecLayoutLabels, LayoutTip + "\n부지 횡단도 배치와 따로");
+            AddApply(sec2);
+            AddBench(sec2, demo);
         }
         else
         {
             // ★[v117.18.3 · JACK 1116 «횡단도 생성 초록색 버튼 · 그 아래 소제목 횡단도 수정 · 횡단뷰 수정 단추 → 도면설정 팝업»]
             Add(row2, demo, "횡단도 생성", "DHXVIEW", "xsView", true, "종단도 측점대로 횡단면도 · 자리 클릭 · 종단도 먼저", primary: true, gate: "prof");
+            // ★★[JACK 1117] 옛 [횡단뷰 수정](= 도면설정 창) → 그 값(횡단도 축척 · 배치 · 단면검토선)을 이 자리에 바로
             sec2.Children.Add(SubHead("횡단도 수정"));
-            var row2b = new WrapPanel { Margin = new Thickness(0, 0, 0, 6) };
-            sec2.Children.Add(row2b);
-            Add(row2b, demo, "횡단뷰 수정", "DHSHEETSET", "xsView", false, "도면 설정 — 횡단도 축척 · 측점 간격 · 배치", gate: "xsec");
+            _sXs = SetCombo(sec2, "횡단도 축척", GradingSettings.XsecScaleLabels,
+                "자동 — 배치한 칸에 가장 크게 들어가는 표준 축척 · 고정하면 그 값(넘쳐도 그대로 · 로그로 알림)");
+            _sLay = SetCombo(sec2, "횡단도 배치", GradingSettings.XsecLayoutLabels, LayoutTip);
+            _sSl = SetCombo(sec2, "검토선 축척", GradingSettings.ProfileScaleLabels,
+                "평면도 단면검토선 측점 글씨 크기(종이 2.5mm) · 자동 = 도면 축척 · 종단도 축척과 따로");
+            // 단면검토선 폭 — 자동 / 수동(수동일 때만 좌 · 우 칸)
+            var wrow = new WrapPanel { Margin = new Thickness(2, 0, 0, 4) };
+            wrow.Children.Add(new TextBlock { Text = "검토선 폭", Width = LabelW, FontSize = 11, Foreground = DhBrand.Sub, VerticalAlignment = VerticalAlignment.Center });
+            _sAuto = new RadioButton { Content = "자동", GroupName = "DhSecXsecW", Margin = new Thickness(0, 0, 10, 0), VerticalAlignment = VerticalAlignment.Center, Foreground = DhBrand.Ink,
+                                       ToolTip = "정지 결과에서 잼 — 사면 끝까지 + 여유 5m · 5m 단위 · 좌우 같은 폭" };
+            _sMan = new RadioButton { Content = "수동", GroupName = "DhSecXsecW", Margin = new Thickness(0, 0, 10, 0), VerticalAlignment = VerticalAlignment.Center, Foreground = DhBrand.Ink };
+            _sAuto.Checked += (_, __) => { SyncWidth(); SheetEdited(); };
+            _sMan.Checked += (_, __) => { SyncWidth(); SheetEdited(); };
+            wrow.Children.Add(_sAuto); wrow.Children.Add(_sMan);
+            sec2.Children.Add(wrow);
+            var lr = new WrapPanel { Margin = new Thickness(LabelW + 2, 0, 0, 0) };
+            sec2.Children.Add(lr);
+            _sL = SetBox(lr, "좌 m", "단면검토선 왼쪽 길이(수동)");
+            _sR = SetBox(lr, "우 m", "단면검토선 오른쪽 길이(수동)");
+            AddApply(sec2);
             AddXq(sec2, demo);
+            AddBench(sec2, demo);
         }
 
         // ── 배치 — 예시는 맨 위 고정 ──
@@ -199,6 +272,7 @@ internal sealed class SectionPanel : UserControl
     {
         bool same = ReferenceEquals(s, _rs);
         _rs = s;
+        if (DocName() != _sheetDoc) { LoadSheet(false); LoadBench(); }   // ★[JACK 1117] 도면이 바뀌면 설정 칸도 그 도면 값
         _loading = true;
         try
         {
@@ -303,6 +377,406 @@ internal sealed class SectionPanel : UserControl
         catch (System.Exception ex) { try { AcadApp.DocumentManager.MdiActiveDocument?.Editor?.WriteMessage("\n[진입도로] 저장 실패 — " + ex.Message); } catch { } }
     }
 
+    // ══ ★★[JACK 1117 «도면설정의 종단도 · 횡단도 축척 · 배치 등을 종횡단도 도킹 팝업에 — 계획지표면도 마찬가지»] 설정 칸(옛 도면설정 값 · 같은 저장 자리) ══
+    //   칸을 고치면 [설정 적용]이 빨강 깜박 → 누르면 DHSECSHEETAPPLY(명령 안) = 옛 [저장]과 같은 길(바뀐 칸만 세션 값 → SheetSettingsCommand.Saved: 도면에 저장 · 그려 둔 종단도 · 횡단도 다시)
+    //   무거운 다시 그리기라 칸마다 바로 하지 않음(메모 «무거운 재작성은 단추로»)
+    const double LabelW = 84;
+    const string HTip = "H(가로) — 자동: 도곽에 가장 크게 들어가는 표준 축척(1:1000보다 작게는 안 함 · 길면 여러 장)\n고르면 그 축척(길면 여러 장)";
+    const string VTip = "V(세로) — 자동: 그래프 자리를 가장 많이 채우는 표준 축척(가로의 1~10배 과장)\nH와 같게 = 수직과장 없음";
+    const string XiTip = "No.0 · No.1 … 사이 거리 — 횡단도는 측점마다 · 종단 밴드 측점 이름 · 진입도로 주측점 PVI가 이 간격을 따름 · 꺾이는 곳(+측점)은 따로 더함\n부지 · 진입도로 같은 값";
+    const string LayoutTip = "한 장(A1)에 몇 개 = 칸 크기\n축척이 자동이면 배치가 사실상 축척을 정함 — 촘촘할수록 그림이 작아짐";
+    private ComboBox? _sH, _sV, _sGb, _sXs, _sLay, _sSl, _rH, _rV, _rXs, _rLay;
+    private RadioButton? _sAuto, _sMan;
+    private TextBox? _sL, _sR, _xi;
+    private readonly List<Button> _apply = new();
+    private readonly List<TextBlock> _applyMsg = new();
+    private readonly Dictionary<Control, string> _snap = new();   // 불러온 때 칸 상태 — 바뀐 칸만 적용
+    private bool _sheetLoading, _sheetDirty;
+    private string _sheetDoc = "";
+
+    private static string DocName() { try { return AcadApp.DocumentManager.MdiActiveDocument?.Name ?? ""; } catch { return ""; } }
+    private static string State(Control c) => c switch
+    {
+        ComboBox cb => cb.SelectedIndex.ToString(System.Globalization.CultureInfo.InvariantCulture),
+        TextBox tb => tb.Text.Trim(),
+        RadioButton rb => rb.IsChecked == true ? "1" : "0",
+        _ => "",
+    };
+    private bool Changed(Control? c) => c != null && (!_snap.TryGetValue(c, out var s0) || s0 != State(c));
+    private IEnumerable<Control> SheetCtrls()
+    {
+        foreach (Control? c in new Control?[] { _sH, _sV, _sGb, _sXs, _sLay, _sSl, _sAuto, _sL, _sR, _xi, _rH, _rV, _rXs, _rLay })
+            if (c != null) yield return c;
+    }
+
+    private ComboBox NewCombo(string[] items, double w)
+    {
+        var cb = new ComboBox { Width = w, Height = 26, VerticalContentAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0) };
+        foreach (var s in items) cb.Items.Add(s);
+        cb.SelectionChanged += (_, __) => SheetEdited();
+        return cb;
+    }
+
+    /// <summary>이름 + 콤보 한 줄.</summary>
+    private ComboBox SetCombo(Panel parent, string label, string[] items, string tip)
+    {
+        var row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(2, 0, 0, 4) };
+        row.Children.Add(new TextBlock { Text = label, Width = LabelW, FontSize = 11, Foreground = DhBrand.Sub, VerticalAlignment = VerticalAlignment.Center });
+        var cb = NewCombo(items, 200);
+        cb.ToolTip = tip;
+        row.Children.Add(cb);
+        parent.Children.Add(row);
+        return cb;
+    }
+
+    /// <summary>이름 + «H [▼] V [▼]» 한 줄 — H = [자동, 사다리] · V = [자동, H와 같게, 사다리].</summary>
+    private (ComboBox H, ComboBox V) SetComboHV(Panel parent, string label)
+    {
+        var row = new WrapPanel { Margin = new Thickness(2, 0, 0, 4) };
+        row.Children.Add(new TextBlock { Text = label, Width = LabelW, FontSize = 11, Foreground = DhBrand.Sub, VerticalAlignment = VerticalAlignment.Center });
+        ComboBox One(string tag, string[] items)
+        {
+            row.Children.Add(new TextBlock { Text = tag, Width = 12, FontSize = 11, Foreground = DhBrand.Sub, VerticalAlignment = VerticalAlignment.Center });
+            var cb = NewCombo(items, 112);
+            row.Children.Add(cb);
+            return cb;
+        }
+        var h = One("H", GradingSettings.ProfileScaleLabels);
+        var v = One("V", GradingSettings.ProfileScaleVLabels);
+        parent.Children.Add(row);
+        return (h, v);
+    }
+
+    /// <summary>이름 + 숫자 칸(진입도로 값 칸과 같은 꼴).</summary>
+    private TextBox SetBox(Panel parent, string label, string tip)
+    {
+        var cell = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(2, 0, 10, 4) };
+        cell.Children.Add(new TextBlock { Text = label, FontSize = 11, Foreground = DhBrand.Sub, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 4, 0) });
+        var tb = new TextBox
+        {
+            Width = 48, Height = 26, Padding = new Thickness(2, 0, 2, 0), ToolTip = tip,
+            VerticalContentAlignment = VerticalAlignment.Center, HorizontalContentAlignment = HorizontalAlignment.Center,
+        };
+        tb.TextChanged += (_, __) => SheetEdited();
+        cell.Children.Add(tb);
+        parent.Children.Add(cell);
+        return tb;
+    }
+
+    /// <summary>[설정 적용] + 짧은 빨간 글(틀린 값).</summary>
+    private void AddApply(Panel parent)
+    {
+        var row = new WrapPanel { Margin = new Thickness(0, 2, 0, 6) };
+        var b = new Button
+        {
+            Content = "설정 적용", MinWidth = 96, Height = 30, Margin = new Thickness(0, 0, 8, 0), IsEnabled = false,
+            ToolTip = "바꾼 값 저장 → 그려 둔 종단도 · 횡단도 다시 그림 · 없으면 다음 생성부터 · 바꾼 값 있으면 빨강 깜박",
+        };
+        ToolTipService.SetShowOnDisabled(b, true);
+        b.Click += (_, __) => ApplySheet();
+        var msg = new TextBlock { FontSize = 11, Foreground = DhBrand.Warn, VerticalAlignment = VerticalAlignment.Center, TextWrapping = TextWrapping.Wrap, MaxWidth = 250 };
+        row.Children.Add(b); row.Children.Add(msg);
+        parent.Children.Add(row);
+        _apply.Add(b); _applyMsg.Add(msg);
+    }
+
+    private void SyncWidth()
+    {
+        bool man = _sMan?.IsChecked == true;
+        if (_sL != null) _sL.IsEnabled = man;
+        if (_sR != null) _sR.IsEnabled = man;
+    }
+
+    private void SheetEdited()
+    {
+        if (_sheetLoading) return;
+        foreach (var m in _applyMsg) m.Text = "";
+        SetDirty(SheetCtrls().Any(Changed));
+    }
+
+    private void SetDirty(bool d)
+    {
+        _sheetDirty = d;
+        foreach (var b in _apply) { b.IsEnabled = d; RoadPanel.UpdateLook(b, d); }
+    }
+
+    private static int IdxOf(double[] a, double v) { for (int i = 0; i < a.Length; i++) if (System.Math.Abs(a[i] - v) < 1e-9) return i; return -1; }
+    private static int LayIdx(int v) => System.Math.Clamp(v, 0, GradingSettings.XsecLayoutLabels.Length - 1);
+
+    /// <summary>칸 = 이 도면 값(옛 도면설정 창을 열 때와 같은 값) · force 아니면 고치는 중(같은 도면)엔 그대로.</summary>
+    internal void LoadSheet(bool force)
+    {
+        if (_xi == null) return;
+        try
+        {
+            var doc = AcadApp.DocumentManager.MdiActiveDocument;
+            if (doc == null) return;
+            string name = DocName();
+            if (!force && _sheetDirty && name == _sheetDoc) return;
+            _sheetDoc = name;
+            GradingSettings.SyncToDocument(doc);   // 도면이 바뀌었으면 그 도면 기록(DHSHEETSET과 같은 규칙)
+            var inv = System.Globalization.CultureInfo.InvariantCulture;
+            var psv = GradingSettings.ProfileScaleValues;
+            _sheetLoading = true;
+            _xi.Text = GradingSettings.XsecInterval.ToString("0.###", inv);
+            if (!_road)
+            {
+                _sH!.SelectedIndex = GradingSettings.ProfileScaleIndex();
+                _sV!.SelectedIndex = GradingSettings.ProfileScaleVIndex(GradingSettings.ProfileScaleV);
+                _sGb!.SelectedIndex = GradingSettings.GroundBreakStep();
+                _sXs!.SelectedIndex = GradingSettings.XsecScaleIndex();
+                _sLay!.SelectedIndex = LayIdx(GradingSettings.XsecLayout);
+                _sSl!.SelectedIndex = GradingSettings.SectionLineScaleIndex();
+                if (GradingSettings.XsecWidthAuto) _sAuto!.IsChecked = true; else _sMan!.IsChecked = true;
+                _sL!.Text = GradingSettings.XsecLeft.ToString("0.###", inv);
+                _sR!.Text = GradingSettings.XsecRight.ToString("0.###", inv);
+                SyncWidth();
+            }
+            else
+            {
+                var db = doc.Database;
+                var (_, rx0) = RoadDrawingSettings.Read(db);
+                // ★[v113.1] 판 2 기록이 없으면(옛 도면) 지금 그리는 축척(옛 규칙) · 열린 진입도로가 그린 H — 옛 도면설정 창과 같은 값
+                double drawnH = RoadSession.Of(doc) is RoadSession road ? road.Design.SheetScale : 0;
+                var st = RoadSheets.Setting(db, "", drawnH);
+                double rh0 = st.Plan.PinH, rv0 = st.V2 ? st.Plan.PinV : DH.Grading.Core.ProfileScaleFit.SameAsH;
+                while (_rH!.Items.Count > psv.Length) _rH.Items.RemoveAt(_rH.Items.Count - 1);
+                int hi = IdxOf(psv, rh0);
+                // ★[설치 전 검토 M3] 사다리 밖 축척(사용자 주석 축척 등) = 맨 끝 «(지금)» 칸 — 안 건드리면 그 값 그대로
+                if (rh0 > 0 && hi < 0) { _rH.Items.Add($"1:{rh0:0.##} (지금)"); hi = _rH.Items.Count - 1; }
+                _rH.SelectedIndex = System.Math.Max(0, hi);
+                _rV!.SelectedIndex = GradingSettings.ProfileScaleVIndex(rv0);
+                _rXs!.SelectedIndex = System.Math.Max(0, IdxOf(psv, rx0));
+                _rLay!.SelectedIndex = LayIdx(GradingSettings.XsecLayoutRoad);
+            }
+            _snap.Clear();
+            foreach (var c in SheetCtrls()) _snap[c] = State(c);
+            foreach (var m in _applyMsg) m.Text = "";
+        }
+        catch { return; }
+        finally { _sheetLoading = false; }
+        SetDirty(false);
+    }
+
+    /// <summary>[설정 적용] — 칸 검사(틀리면 빨간 짧은 글) → 바뀐 칸만 담아 명령으로(옛 [저장]과 같은 길).</summary>
+    private void ApplySheet()
+    {
+        var doc = AcadApp.DocumentManager.MdiActiveDocument;
+        if (doc == null || _xi == null) return;
+        static bool Num(TextBox? b, out double v)
+        {
+            v = 0;
+            return b != null && double.TryParse(b.Text.Trim().Replace(',', '.'), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out v) && double.IsFinite(v);
+        }
+        double xl = 0, xr = 0;
+        string? bad = !Num(_xi, out double xi) || xi <= 0 ? "측점 간격 = 0보다 큰 수"
+                    : !_road && (!Num(_sL, out xl) || !Num(_sR, out xr) || xl < 0 || xr < 0) ? "검토선 폭 = 0 이상 수"
+                    : !_road && xl + xr < 0.5 ? "검토선 폭 좌+우 0.5 m 이상"
+                    : null;
+        if (bad != null) { foreach (var m in _applyMsg) m.Text = bad; return; }
+
+        double[] psv = GradingSettings.ProfileScaleValues, pvv = GradingSettings.ProfileScaleVValues;
+        double Ps(ComboBox c) => psv[System.Math.Clamp(c.SelectedIndex, 0, psv.Length - 1)];
+        double Pv(ComboBox c) => pvv[System.Math.Clamp(c.SelectedIndex, 0, pvv.Length - 1)];
+        bool cXi = Changed(_xi);
+        System.Action<AcDoc> act;
+        if (!_road)
+        {
+            bool cH = Changed(_sH), cV = Changed(_sV), cGb = Changed(_sGb), cXs = Changed(_sXs), cLay = Changed(_sLay), cSl = Changed(_sSl),
+                 cAuto = Changed(_sAuto), cL = Changed(_sL), cR = Changed(_sR);
+            double h = Ps(_sH!), v = Pv(_sV!), xs = Ps(_sXs!), sl = Ps(_sSl!);
+            double gb = GradingSettings.GroundBreakValues[System.Math.Clamp(_sGb!.SelectedIndex, 0, GradingSettings.GroundBreakValues.Length - 1)];
+            int lay = LayIdx(_sLay!.SelectedIndex);
+            bool auto = _sAuto!.IsChecked == true;
+            act = d =>
+            {
+                GradingSettings.SyncToDocument(d);
+                var (rp0, rx0) = RoadDrawingSettings.Read(d.Database);
+                int lay0 = GradingSettings.XsecLayout, layR0 = GradingSettings.XsecLayoutRoad;
+                if (cXi) GradingSettings.XsecInterval = xi;
+                if (cAuto)
+                {
+                    GradingSettings.XsecWidthAuto = auto;
+                    GradingSettings.SaveUserPrefInt("XsecWidthAuto", auto ? 1 : 0);   // ★[검토 0908 · 심각] 재시작해도 남게 — 키 하나만
+                }
+                if (cL) GradingSettings.XsecLeft = xl;
+                if (cR) GradingSettings.XsecRight = xr;
+                if (cLay) GradingSettings.XsecLayout = lay;
+                if (cGb) GradingSettings.GroundBreakTolZ = gb;
+                if (cH) GradingSettings.ProfileScale = h;
+                if (cV) GradingSettings.ProfileScaleV = v;
+                if (cH || cV) GradingSettings.ProfileLegacy = false;   // ★[설치 전 검토 M4] H · V를 바꾼 때만 옛 규칙 끔
+                if (cSl) GradingSettings.SectionLineScale = sl;
+                if (cXs) GradingSettings.XsecScale = xs;
+                Commands.SheetSettingsCommand.Saved(d, rp0, rx0, rp0, rx0, lay0, layR0);
+            };
+        }
+        else
+        {
+            bool cH = Changed(_rH), cV = Changed(_rV), cXs = Changed(_rXs), cLay = Changed(_rLay);
+            double h = _rH!.SelectedIndex < psv.Length ? Ps(_rH) : double.NaN, v = Pv(_rV!), xs = Ps(_rXs!);
+            int lay = LayIdx(_rLay!.SelectedIndex);
+            act = d =>
+            {
+                GradingSettings.SyncToDocument(d);
+                var db = d.Database;
+                var (rp0, rx0) = RoadDrawingSettings.Read(db);
+                int lay0 = GradingSettings.XsecLayout, layR0 = GradingSettings.XsecLayoutRoad;
+                double drawnH = RoadSession.Of(d) is RoadSession road ? road.Design.SheetScale : 0;
+                var st = RoadSheets.Setting(db, "", drawnH);
+                double rh0 = st.Plan.PinH, rv0 = st.V2 ? st.Plan.PinV : DH.Grading.Core.ProfileScaleFit.SameAsH;
+                if (cXi) GradingSettings.XsecInterval = xi;
+                if (cLay) GradingSettings.XsecLayoutRoad = lay;
+                double h1 = cH && double.IsFinite(h) ? h : rh0, v1 = cV ? v : rv0;   // «(지금)» 칸 = 그 값 그대로
+                Commands.SheetSettingsCommand.SavedRoadVH(d, st.V2, rh0, rv0, h1, v1);
+                Commands.SheetSettingsCommand.Saved(d, rp0, rx0, rp0, cXs ? xs : rx0, lay0, layR0);
+            };
+        }
+        SetDirty(false);   // 명령이 끝나면 ReloadSheets가 도면 값으로 다시 채움
+        SectionPalette.QueueSheet(doc, act);
+    }
+
+    // ══ ★★[JACK 1117 «층따기는 도면설정에 넣지 말고 부지 종횡단도 · 진입도로 종횡단도에 · 값 애니메이션 · 같은 것 · 바탕만 부지 / 진입도로»] ══
+    //   저장 = 옛 도면설정과 같은 자리(XsecQtyOptions.WriteBench — DH_XSECQTYOPT · 부지 · 진입도로 한 값) · 수량표 항목 체크처럼 바로 저장 · 다음 [횡단도 생성]부터
+    private CheckBox? _benchOn;
+    private readonly List<TextBox> _benchBoxes = new();   // 높이 · 폭 · 기준 1:n · 배수 %
+    private readonly Dictionary<TextBox, string> _benchShown = new();
+    private TextBlock? _benchMsg;
+    private bool _benchLoading;
+    private FixDemoView? _benchDemo;
+
+    private void AddBench(StackPanel sec, FixDemoView demo)
+    {
+        _benchDemo = demo;
+        sec.Children.Add(SubHead("층따기"));
+        var box = new StackPanel { Margin = new Thickness(2, 0, 0, 6), Background = Brushes.Transparent };
+        _benchOn = new CheckBox
+        {
+            Content = "층따기", Margin = new Thickness(0, 0, 0, 4), Foreground = DhBrand.Ink,
+            ToolTip = "성토 아래 원지반이 기준 경사보다 급한 곳에 계단 파기 · 그 단면적을 수량표 «층따기»에 · 다음 횡단도 생성부터 · KDS 44 30 00",
+        };
+        _benchOn.Click += (_, __) => { SyncBenchBoxes(); demo.BenchOnV = _benchOn.IsChecked == true; demo.Redraw(); CommitBench(); };
+        _benchOn.MouseEnter += (_, __) => { demo.BenchOnV = _benchOn.IsChecked == true; demo.Play("benchChk"); };
+        _benchOn.MouseLeave += (_, __) => demo.Idle();
+        box.Children.Add(_benchOn);
+        var wp = new WrapPanel();
+        foreach (var (label, tip) in new[]
+        {
+            ("높이 최소 m", "턱 높이 최소 · 토사 0.5 · 암반 0.4"),
+            ("폭 최소 m", "디딤 폭 최소 · 장비 작업 3.0"),
+            ("기준 경사 1:", "원지반이 이보다 급하면 층따기 · 기본 1:4"),
+            ("배수 경사 %", "디딤을 바깥으로 내림 · 3~5 %"),
+        })
+        {
+            var cell = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 10, 4), Background = Brushes.Transparent };
+            cell.Children.Add(new TextBlock { Text = label, FontSize = 11, Foreground = DhBrand.Sub, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 4, 0) });
+            var tb = new TextBox
+            {
+                Width = 44, Height = 26, Padding = new Thickness(2, 0, 2, 0), ToolTip = tip,
+                VerticalContentAlignment = VerticalAlignment.Center, HorizontalContentAlignment = HorizontalAlignment.Center,
+            };
+            ToolTipService.SetShowOnDisabled(tb, true);
+            tb.KeyDown += (_, e) => { if (e.Key == System.Windows.Input.Key.Enter) CommitBench(); };
+            tb.LostKeyboardFocus += (_, __) => CommitBench();
+            // ★[JACK 1116 «수치 칸은 미리보기 뷰»] 치는 대로 계단 그림(타이머 없음)
+            tb.TextChanged += (_, __) => { if (_benchLoading) return; if (_benchMsg != null) _benchMsg.Text = ""; if (BenchTyped(out var sp, out string _w)) { demo.BenchV = sp; demo.Redraw(); } };
+            tb.GotKeyboardFocus += (_, __) => { BenchToDemo(demo); demo.Play("benchVal"); };
+            cell.MouseEnter += (_, __) => { BenchToDemo(demo); demo.Play("benchVal"); };
+            cell.MouseLeave += (_, __) => demo.Idle();
+            wp.Children.Add(cell);
+            _benchBoxes.Add(tb);
+        }
+        box.Children.Add(wp);
+        _benchMsg = new TextBlock { FontSize = 11, Foreground = DhBrand.Warn, TextWrapping = TextWrapping.Wrap };
+        box.Children.Add(_benchMsg);
+        sec.Children.Add(box);
+        LoadBench();
+    }
+
+    private void SyncBenchBoxes() { bool on = _benchOn?.IsChecked == true; foreach (var tb in _benchBoxes) tb.IsEnabled = on; }
+
+    private void BenchToDemo(FixDemoView demo)
+    {
+        demo.BenchOnV = _benchOn?.IsChecked == true;
+        if (BenchTyped(out var sp, out _)) demo.BenchV = sp;
+    }
+
+    /// <summary>칸 = 도면 값(XsecQtyOptions — 부지 · 진입도로 같은 값).</summary>
+    internal void LoadBench()
+    {
+        if (_benchOn == null) return;
+        try
+        {
+            var doc = AcadApp.DocumentManager.MdiActiveDocument;
+            var (m, _, sp) = doc != null ? XsecQtyOptions.Read(doc.Database) : (XsecQtyOptions.Default, 0.25, DH.Grading.Core.BenchSpec.Soil);
+            if (_benchBoxes.Any(b => b.IsKeyboardFocusWithin)) return;   // 치는 중이면 그대로
+            var inv = System.Globalization.CultureInfo.InvariantCulture;
+            _benchLoading = true;
+            _benchOn.IsChecked = (m & XsecQtyOptions.Bench) != 0;
+            var vals = new[] { sp.HMin, sp.WMin, 1.0 / sp.Grade, sp.Drain * 100 };
+            for (int i = 0; i < _benchBoxes.Count; i++) { _benchBoxes[i].Text = vals[i].ToString("0.###", inv); _benchShown[_benchBoxes[i]] = _benchBoxes[i].Text; }
+            if (_benchMsg != null) _benchMsg.Text = "";
+            SyncBenchBoxes();
+            if (_benchDemo != null) { _benchDemo.BenchOnV = _benchOn.IsChecked == true; _benchDemo.BenchV = sp; }
+        }
+        catch { }
+        finally { _benchLoading = false; }
+    }
+
+    /// <summary>칸 값 → 층따기 값 · 안 고친 칸은 도면 값 그대로(1/n 되돌림 오차로 안 바꾼 값이 바뀌지 않게) · 틀리면 거짓 + 짧은 까닭.</summary>
+    private bool BenchTyped(out DH.Grading.Core.BenchSpec sp, out string why)
+    {
+        var doc = AcadApp.DocumentManager.MdiActiveDocument;
+        var sp0 = doc != null ? XsecQtyOptions.Read(doc.Database).Spec : DH.Grading.Core.BenchSpec.Soil;
+        sp = sp0; why = "";
+        var cur = new[] { sp0.HMin, sp0.WMin, 1.0 / sp0.Grade, sp0.Drain * 100 };
+        for (int i = 0; i < _benchBoxes.Count && i < 4; i++)
+        {
+            var tb = _benchBoxes[i];
+            if (_benchShown.TryGetValue(tb, out var w0) && tb.Text.Trim() == w0) continue;
+            if (!double.TryParse(tb.Text.Trim().Replace(',', '.'), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double v) || !double.IsFinite(v) || v < 0)
+            { why = "숫자를 넣으세요"; return false; }
+            cur[i] = v;
+        }
+        double bh = cur[0], bw = cur[1], bn = cur[2], bd = cur[3];
+        // 옛 도면설정 창과 같은 범위
+        why = bh < 0.1 || bh > 2 ? "높이 최소 0.1 ~ 2 m" : bw < 0.3 || bw > 10 ? "폭 최소 0.3 ~ 10 m"
+            : bn < 0.5 || bn > 20 ? "기준 경사 1:0.5 ~ 1:20" : bd < 0 || bd > 20 || bd / 100 >= 1.0 / bn ? "배수 경사 0 ~ 20 % (기준 경사보다 완만하게)" : "";
+        if (why.Length > 0) return false;
+        bool same = true;
+        for (int i = 0; i < _benchBoxes.Count && i < 4; i++) if (!(_benchShown.TryGetValue(_benchBoxes[i], out var w1) && _benchBoxes[i].Text.Trim() == w1)) same = false;
+        sp = same ? sp0 : new DH.Grading.Core.BenchSpec(1.0 / bn, bh, bw, bd / 100);
+        return true;
+    }
+
+    /// <summary>바로 저장(바뀌었을 때만) — 옛 도면설정 [저장]의 SavedBench와 같은 자리 · 다음 [횡단도 생성]부터.</summary>
+    private void CommitBench()
+    {
+        if (_benchLoading || _benchOn == null) return;
+        var doc = AcadApp.DocumentManager.MdiActiveDocument;
+        if (doc == null) return;
+        try
+        {
+            bool busy = false;
+            try { busy = !string.IsNullOrEmpty(doc.CommandInProgress); } catch { }
+            if (busy) { LoadBench(); return; }   // 명령 중엔 안 씀 → 도면 값으로
+            var (m0, _, sp0) = XsecQtyOptions.Read(doc.Database);
+            bool on0 = (m0 & XsecQtyOptions.Bench) != 0, on = _benchOn.IsChecked == true;
+            var sp = sp0;
+            if (on)
+            {
+                if (!BenchTyped(out sp, out string why)) { if (_benchMsg != null) _benchMsg.Text = why; return; }
+            }
+            if (_benchMsg != null) _benchMsg.Text = "";
+            if (on == on0 && sp == sp0) return;
+            using (doc.LockDocument()) XsecQtyOptions.WriteBench(doc.Database, on, sp);
+            doc.Editor.WriteMessage("\n[층따기] " + (on ? "켬" : "끔") + " — 다음 [횡단도 생성]부터 반영");
+            foreach (var tb in _benchBoxes) _benchShown[tb] = tb.Text.Trim();
+            SectionPalette.ReloadBench();   // 두 창(부지 · 진입도로) 같은 값
+        }
+        catch (System.Exception ex) { try { doc.Editor.WriteMessage("\n[층따기] 저장 실패 — " + ex.Message); } catch { } }
+    }
+
     private void OnPick() => Refresh(null);
 
     // ★[JACK 1116 «수량표 항목»] 횡단 수량표 오른쪽 칸 중 잴 것 — 도면에 저장(XsecQtyOptions) · 다음 [횡단도 생성]부터 반영 · 꺼진 항목은 표에 –
@@ -311,7 +785,7 @@ internal sealed class SectionPanel : UserControl
     private static readonly (string Name, int Bit)[] XqItems =
     {
         ("벌개재근", XsecQtyOptions.Clear), ("표토제거", XsecQtyOptions.Strip), ("면고르기", XsecQtyOptions.Smooth),
-        ("식생공법", XsecQtyOptions.Seed),   // 층따기 = 도면 설정 창(DHSHEETSET)
+        ("식생공법", XsecQtyOptions.Seed),   // 층따기 = 아래 «층따기» 칸(AddBench — 켬/끔 + 값)
     };
 
     private int XqMaskNow() { int m = 0; for (int i = 0; i < _xq.Count; i++) if (_xq[i].IsChecked == true) m |= XqItems[i].Bit; return m; }
@@ -329,7 +803,7 @@ internal sealed class SectionPanel : UserControl
             cb.MouseLeave += (_, __) => demo.Idle();
             _xq.Add(cb); box.Children.Add(cb);
         }
-        box.ToolTip = "횡단 수량표 오른쪽 칸 · 끄면 안 재고 표에 – · 다음 횡단도 생성부터 · 층따기는 도면 설정에서";
+        box.ToolTip = "횡단 수량표 오른쪽 칸 · 끄면 안 재고 표에 – · 다음 횡단도 생성부터 · 층따기는 아래";
         sec.Children.Add(box);
         LoadXq();
     }
@@ -388,6 +862,8 @@ internal sealed class SectionPanel : UserControl
     /// <summary>계획지표면이 없거나 찍는 중이면 계획면 단추를 끈다(리본 규칙 그대로 · 진입도로 단추는 안 끔).</summary>
     internal void Refresh(bool? hasPlan)
     {
+        LoadSheet(false);
+        LoadBench();
         if (_road) return;
         LoadXq();
         try

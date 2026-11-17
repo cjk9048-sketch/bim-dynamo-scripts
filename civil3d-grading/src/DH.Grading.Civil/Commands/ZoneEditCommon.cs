@@ -1171,7 +1171,10 @@ internal static class ZoneEditCommon
                     string part3 = partArc.TryGetValue(key, out var pv3)
                         ? $" 〈구간 {GradingGeometry.SpanOf(pv3.T0, pv3.T1, GradingGeometry.CumLen2D(lineRef.TryGetValue(key, out var r3) ? r3 : boundary)[^1]):0.#}m〉"
                         : $" 〈전체 {pickSpan:0.#}m〉";
-                    var spo = new PromptKeywordOptions($"\n제원 {spec3}{part3} (Enter=적용)");
+                    var spo = new PromptKeywordOptions($"\n제원 {spec3}{part3} (Enter=생성)");
+                    // ★[JACK 1117 «마우스 선택창에 생성도 있어야 — Enter · Space 말고는 안 보여 헷갈림»] 맨 앞에 [생성(G)] = Enter와 같음 · 기본값
+                    spo.Keywords.Add("G", "G", "생성(G)");
+                    spo.Keywords.Default = "G";
                     spo.Keywords.Add("H", "H", "단높이(H)");
                     if (!wallMode) spo.Keywords.Add("R", "R", "사면구배(R)");
                     spo.Keywords.Add("T", "T", "소단길이(T)");
@@ -1181,6 +1184,7 @@ internal static class ZoneEditCommon
                     if (spr.Status == PromptStatus.None) { finishedByEnter = true; break; }
                     if (spr.Status == PromptStatus.Cancel) { goBack = true; break; }
                     string kw = (spr.StringResult ?? "").Trim().ToUpperInvariant();
+                    if (kw == "G" || kw.Length == 0) { finishedByEnter = true; break; }   // ★[JACK 1117] [생성(G)] = Enter
                     if (kw == "H")
                     {
                         var h2 = AskPositive(ed, "단높이 (m)", optH, 0.2, 15.0);

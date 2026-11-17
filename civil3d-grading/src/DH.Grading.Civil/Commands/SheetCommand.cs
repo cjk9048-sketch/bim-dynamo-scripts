@@ -395,7 +395,7 @@ public static class SheetCommand
                 ? (plan.FromAuto
                    ? $" · ⚠자동으로 고른 축척 {DH.Grading.Core.ProfileScaleFit.ScaleText(scale, scaleV)}에서도 이 장이 자리를 넘칩니다"
                    : plan.PinH > 0 || plan.PinV > 0
-                   ? $" · ⚠고정 축척 {DH.Grading.Core.ProfileScaleFit.ScaleText(scale, scaleV)}으로는 한 장에 안 들어갑니다(도면설정에서 '자동'으로 두면 맞춰집니다)"
+                   ? $" · ⚠고정 축척 {DH.Grading.Core.ProfileScaleFit.ScaleText(scale, scaleV)}으로는 한 장에 안 들어갑니다(종횡단도 창 [종단도 설정]에서 '자동' → 맞춰짐)"
                    : " · ⚠한 장을 넘침")
                 : "");
     }

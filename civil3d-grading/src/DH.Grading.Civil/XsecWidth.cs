@@ -58,7 +58,7 @@ internal static class XsecWidth
             GradingSettings.SaveUserPrefInt("XsecWidthAuto", 0);
             string msg = $"절단선 폭이 좌{GradingSettings.XsecLeft:0.#}/우{GradingSettings.XsecRight:0.#}m로"
                        + " <b>서로 다르게</b> 맞춰져 있어 자동을 켜지 않았습니다"
-                       + " — 자동은 좌우를 같은 값으로 만듭니다. [도면 설정]에서 언제든 자동으로 바꿀 수 있습니다.";
+                       + " — 자동은 좌우 같은 값. [횡단도 수정]에서 자동으로 바꾸기";
             log?.AppendLine("  " + msg);
             try { Autodesk.AutoCAD.ApplicationServices.Application.DocumentManager.MdiActiveDocument?.Editor?.WriteMessage("\n[횡단] " + msg); } catch { }
             return (GradingSettings.XsecLeft, GradingSettings.XsecRight);
@@ -100,7 +100,7 @@ internal static class XsecWidth
                     .MdiActiveDocument?.Editor?.WriteMessage(
                         $"\n[횡단] ⚠절단선 폭이 좌우 {w:0.#}m로 잡혔습니다({WarnWideM:0.#}m 초과)"
                       + " — 사면이 길면 정상이지만 횡단 축척이 작아집니다."
-                      + " 도면설정에서 <수동>으로 바꾸면 원하는 폭을 쓸 수 있습니다.");
+                      + " [횡단도 수정]에서 <수동> → 원하는 폭");
             }
             catch { }
         return (w, w);

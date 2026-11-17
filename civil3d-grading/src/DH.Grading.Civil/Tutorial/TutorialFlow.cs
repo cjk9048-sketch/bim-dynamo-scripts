@@ -27,7 +27,7 @@ internal static class TutorialFlow
 
     internal enum Step
     {
-        Ground, Search, Pick, Send, Importing, Dxf,                         // 1 원지반 가져오기
+        Ground, Search, Pick, Send, Importing, Dxf, Crop,                   // 1 원지반 가져오기
         Draw, Elev, Panel, PickPlan, PickGround, Slope, Build, Wall,       // 2 계획부지 생성
         ExDraw, ExElev, ExPanel, ExPick, ExShore, ExBuild,                 // 3 터파기 생성
         SecPanel, Prof, Xsec, Qty,                                         // 4 종횡단도 생성(틀만)
@@ -42,21 +42,22 @@ internal static class TutorialFlow
     /// <param name="SlopeChanged">2단원: 절토 · 성토 구배 칸 하나를 바꿨나.</param>
     /// <param name="Wall">2단원: [옹벽 변환]으로 옹벽 구간이 늘었나.</param>
     /// <param name="Shore">3단원: 터파기 창 [가시설] 체크.</param>
+    /// <param name="Cropped">★[JACK 1117] 1단원 2부: [원지형 자르기]가 잘라 남겼나(도면 자르기 기록).</param>
     internal readonly record struct Facts(
         bool Ground, bool Importing, bool MapOpen, int PageSub, bool Dxf,
         bool Boundary, bool Elev, bool PanelOpen, bool PlanPicked, bool GroundPicked, bool Grade, bool Fits = true,
         Chapter Ch = Chapter.Site, bool SlopeChanged = true, bool Wall = false,
         bool ExBoundary = false, bool ExElev = false, bool ExPanelOpen = false, bool ExPicked = false, bool Shore = false, bool ExSurf = false,
-        bool SecOpen = false, bool Prof = false, bool Xsec = false, bool QtyFile = false);
+        bool SecOpen = false, bool Prof = false, bool Xsec = false, bool QtyFile = false, bool Cropped = false);
 
-    internal static int Total(Chapter c) => c switch { Chapter.Ground => 5, Chapter.Site => 7, Chapter.Excav => 4, _ => 4 };
+    internal static int Total(Chapter c) => c switch { Chapter.Ground => 6, Chapter.Site => 7, Chapter.Excav => 4, _ => 4 };
 
     internal static Step Derive(Facts f)
     {
         switch (f.Ch)
         {
             case Chapter.Ground:
-                if (f.Ground) return Step.Done;
+                if (f.Ground) return f.Dxf && !f.Cropped ? Step.Crop : Step.Done;   // ★[JACK 1117] DXF 원지반 뒤 = 원지형 자르기
                 if (f.Importing) return Step.Importing;
                 if (f.Dxf) return Step.Dxf;
                 if (!f.MapOpen) return Step.Ground;
@@ -90,7 +91,7 @@ internal static class TutorialFlow
     /// <summary>단원 안 번호(1부터). 1단원 «만드는 중»은 DXF 부분이면 5 · 2단원 창 열기는 정지면이 있으면 7.</summary>
     internal static int Num(Step s, bool dxf = false, bool graded = false) => s switch
     {
-        Step.Ground => 1, Step.Search => 2, Step.Pick => 3, Step.Send => 4, Step.Importing => dxf ? 5 : 4, Step.Dxf => 5,
+        Step.Ground => 1, Step.Search => 2, Step.Pick => 3, Step.Send => 4, Step.Importing => dxf ? 5 : 4, Step.Dxf => 5, Step.Crop => 6,
         Step.Draw => 1, Step.Elev => 2, Step.Panel => graded ? 7 : 3, Step.PickPlan => 3, Step.PickGround => 4, Step.Slope => 5, Step.Build => 6, Step.Wall => 7,
         Step.ExDraw => 1, Step.ExElev => 1, Step.ExPanel => 2, Step.ExPick => 2, Step.ExShore => 3, Step.ExBuild => 4,
         Step.SecPanel => 1, Step.Prof => 2, Step.Xsec => 3, Step.Qty => 4,
@@ -112,6 +113,7 @@ internal static class TutorialFlow
         Step.Send => "[이 범위 가져오기] → 원지반 만들기",
         Step.Importing => "원지반 만드는 중 → 잠시 기다리기",
         Step.Dxf => "[원지반 가져오기] ▼ → [수치지도 DXF] → tut_ch1.dxf [열기] → 원지반 만들기",
+        Step.Crop => "[기타] → [원지형 자르기] → 노란 점선 모서리 두 곳 클릭 → 쓸 땅만 남기기",
         Step.Draw => (guide ? "노란 점선 따라" : "노란 점선 안에") + " 닫힌 폴리선(PLINE → 마지막 C) → 계획 경계",
         Step.Elev => "선 클릭 → Ctrl+1 → «고도» 칸 입력 → 계획 높이",
         Step.Panel => "[계획부지 생성] → 계획부지 창 열기",
@@ -146,6 +148,7 @@ internal static class TutorialFlow
     internal const string NoteNoZ = "고도값 누락됨 → 선 고도 넣고 다시 선택";
     internal const string NoteWallFail = "옹벽 안 바뀜 → 소단선 클릭 → Enter";
     internal const string NoteNoGuide = "그려 둔 선 없음 → 노란 점선 안에 그리기";
+    internal const string NoteCropFail = "안 잘림 → 노란 점선 모서리 두 곳 다시 클릭";
 
     // ── 알림 한 줄(단계 글 아래 주황) ──
     internal const string NoteNet = "사내망 연결 필요 → VPN 확인";

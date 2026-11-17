@@ -151,13 +151,14 @@ internal sealed class Tut
     bool _netChecking;
     bool? _net;
     string? _note, _drawNote;
-    bool _importing, _importEnded, _contourEnded, _buildEnded, _exBuildEnded, _wallEnded;
+    bool _importing, _importEnded, _contourEnded, _buildEnded, _exBuildEnded, _wallEnded, _cropEnded;
     int _pageSub = 1;
     bool _pageAck, _pageDead;
     string _pageSent = "";
     // ── 1단원: 서버 지표면(1부) → 수치지도 DXF(2부)
     bool _part2;
     int _groundCount, _groundBase = -1;
+    bool _fCropped;
     // ── 도면 사실 — 명령 중에는 지난 값(명령 한복판에 트랜잭션을 안 연다)
     bool _fGround, _fGrade, _fBoundary, _fElev, _fFits = true, _fitCache = true, _fExSurf, _fExBoundary, _fExElev;
     string _fitSig = "";
@@ -226,6 +227,8 @@ internal sealed class Tut
     }
 
     static bool IsDraw(Step s) => TutorialFlow.IsDraw(s);
+    /// <summary>노란 점선을 띄우는 단계 — 따라 그리기 · 원지형 자르기(두 모서리 자리).</summary>
+    static bool HasHint(Step s) => IsDraw(s) || s == Step.Crop;
 
     // ── 사건 ──────────────────────────────────────────────────────────────
     static bool IsImport(string n) => n is "DHCONTOURBOX" or "DHNGII" or "DHGNDCONTOUR";
@@ -247,6 +250,7 @@ internal sealed class Tut
         else if (n == PickCommands.CmdBuild) _buildEnded = true;
         else if (n == PickCommands.CmdExcavBuild) _exBuildEnded = true;
         else if (n == "DHWALL") { _wallRan = true; _wallEnded = true; }
+        else if (n == "DHCROP") _cropEnded = true;
         Kick();
     }
 
@@ -257,7 +261,7 @@ internal sealed class Tut
 
     void OnModified(object? s, ObjectEventArgs e)
     {
-        if (_step is Step.Importing or Step.Ground or Step.Search or Step.Pick or Step.Send or Step.Dxf) return;
+        if (_step is Step.Importing or Step.Ground or Step.Search or Step.Pick or Step.Send or Step.Dxf or Step.Crop) return;
         try
         {
             var id = e.DBObject.ObjectId;
@@ -426,7 +430,7 @@ internal sealed class Tut
                 Grade: _fGrade, Fits: _fFits, Ch: _ch, SlopeChanged: _slopeSeen, Wall: _fWall,
                 ExBoundary: _fExBoundary, ExElev: _fExElev, ExPanelOpen: exPanel != null,
                 ExPicked: PickSession.Peek(_doc, PickSession.KeyExcav) != null,
-                Shore: exPanel?.WallCheck.IsChecked == true, ExSurf: _fExSurf);
+                Shore: exPanel?.WallCheck.IsChecked == true, ExSurf: _fExSurf, Cropped: _fCropped);
             var s = TutorialFlow.Derive(f);
             // 1단원: 서버 지표면이 됐으면 2부(수치지도 DXF)로 — DXF가 없으면 그대로 끝
             if (_ch == Chapter.Ground && s == Step.Done && !_part2 && TutorialData.DxfFile != null)
@@ -441,6 +445,7 @@ internal sealed class Tut
             if (_buildEnded && quiet) { _buildEnded = false; if (!_fGrade) evNote = TutorialFlow.NoteGradeFail; }
             if (_exBuildEnded && quiet) { _exBuildEnded = false; if (!_fExSurf) evNote = TutorialFlow.NoteExFail; }
             if (_wallEnded && quiet) { _wallEnded = false; if (!_fWall) evNote = TutorialFlow.NoteWallFail; }
+            if (_cropEnded && quiet) { _cropEnded = false; if (s == Step.Crop) evNote = TutorialFlow.NoteCropFail; }
 
             if (s != _step)
             {
@@ -452,8 +457,8 @@ internal sealed class Tut
                 else if (TutorialFlow.IsExPanel(old) && s == Step.ExPanel) _note = TutorialFlow.NoteExPanelClosed;
                 else if (old is Step.Elev or Step.Panel or Step.PickPlan or Step.PickGround or Step.Slope or Step.Build && s == Step.Draw) _note = TutorialFlow.NoteLineLost;
                 if (_balloon != null) _balloon.Dragged = false;
-                if (IsDraw(old) && !IsDraw(s)) { _hintWanted = false; _hintEraseWanted = true; }
-                if (IsDraw(s)) { _hintWanted = true; _hintEraseWanted = false; }
+                if (HasHint(old) && !HasHint(s)) { _hintWanted = false; _hintEraseWanted = true; }
+                if (HasHint(s)) { _hintWanted = true; _hintEraseWanted = false; }
                 if (s == Step.Done && _ch == Chapter.Ground && _part2 && TutorialData.DxfFile == null) _note = TutorialFlow.NoteNoDxf;
                 Log($"{old} → {s}");
             }
@@ -474,6 +479,7 @@ internal sealed class Tut
             _groundCount = CountGrounds(tr);
             if (_groundBase < 0) _groundBase = _groundCount;
             _fGround = _groundCount > _groundBase;
+            _fCropped = !GroundCropBuilder.ReadBox(_db).IsNone;   // ★[JACK 1117] 잘라 남긴 기록(잘됐을 때만 씀 · 새 도면이라 앞 기록 없음)
             tr.Commit();
             return;
         }
@@ -485,6 +491,22 @@ internal sealed class Tut
         if (_ch == Chapter.Site) ReadSite(tr, surf);
         else if (_ch == Chapter.Excav) ReadExcav(tr);
         tr.Commit();
+    }
+
+    /// <summary>가장 새 원지반(원지반 · 원지반_N 중 핸들이 가장 큰 것) — 1단원 2부 DXF 원지반.</summary>
+    ObjectId NewestGround(Transaction tr)
+    {
+        ObjectId best = ObjectId.Null;
+        try
+        {
+            string b = ImportGisCommand.GroundSurfaceName;
+            foreach (ObjectId sid in Autodesk.Civil.ApplicationServices.CivilApplication.ActiveDocument.GetSurfaceIds())
+                if (!sid.IsErased && tr.GetObject(sid, OpenMode.ForRead) is Autodesk.Civil.DatabaseServices.Surface s
+                    && (s.Name == b || (s.Name.StartsWith(b + "_") && int.TryParse(s.Name.Substring(b.Length + 1), out _)))
+                    && (best.IsNull || sid.Handle.Value > best.Handle.Value)) best = sid;
+        }
+        catch { }
+        return best;
     }
 
     int CountGrounds(Transaction tr)
@@ -714,7 +736,7 @@ internal sealed class Tut
         try
         {
             if (_hintEraseWanted) { EraseHints(); _hintEraseWanted = false; }
-            if (_hintWanted && _hints.Count == 0 && IsDraw(_step)) DrawHints();
+            if (_hintWanted && _hints.Count == 0 && HasHint(_step)) DrawHints();
         }
         catch (System.Exception ex) { Log("점선 표시 실패 — " + ex.Message); _hintWanted = false; }
     }
@@ -741,7 +763,7 @@ internal sealed class Tut
         }
         catch { }
         var ms = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(_db), OpenMode.ForWrite);
-        var guide = _step == Step.ExDraw ? _exGuide : _planGuide;
+        var guide = _step == Step.ExDraw ? _exGuide : _step == Step.Crop ? ObjectId.Null : _planGuide;
         Polyline? shape = null;
         if (!guide.IsNull && tr.GetObject(guide, OpenMode.ForWrite) is Polyline g)
         {
@@ -773,6 +795,15 @@ internal sealed class Tut
     /// <summary>그려 둔 선이 없을 때 점선 네모(가운데 x · y · 반폭 x · y). 못 정하면 null.</summary>
     (double, double, double, double)? HintRect(Transaction tr)
     {
+        if (_step == Step.Crop)
+        {
+            // ★[JACK 1117] 원지형 자르기 — 방금 만든(가장 새) 원지반 가운데 60 % 네모
+            var nid = NewestGround(tr);
+            if (nid.IsNull || tr.GetObject(nid, OpenMode.ForRead) is not Autodesk.Civil.DatabaseServices.Surface ns) return null;
+            var ng = ns.GetGeneralProperties();
+            double w = ng.MaximumCoordinateX - ng.MinimumCoordinateX, h = ng.MaximumCoordinateY - ng.MinimumCoordinateY;
+            return ((ng.MinimumCoordinateX + ng.MaximumCoordinateX) / 2, (ng.MinimumCoordinateY + ng.MaximumCoordinateY) / 2, w * 0.3, h * 0.3);
+        }
         if (_step == Step.ExDraw)
         {
             if (_planPoly == null) { _hintNote = TutorialFlow.NoteNoGuide; return null; }
@@ -917,6 +948,7 @@ internal sealed class Tut
         string? ribText = s switch
         {
             Step.Ground or Step.Dxf => "원지반\n가져오기",
+            Step.Crop => "원지형\n자르기",
             Step.Panel or Step.ExPanel => "계획부지\n생성",
             _ => null,
         };

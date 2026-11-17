@@ -23,25 +23,19 @@ public sealed class SheetSettingsCommand
         // [도면 전환 0803] 도면이 바뀌었으면 그 도면이 저장한 값을 보여준다(정지옵션과 같은 규칙).
         GradingSettings.SyncToDocument(doc);
 
-        var (rp0, rx0) = RoadDrawingSettings.Read(doc.Database);
-        int lay0 = GradingSettings.XsecLayout, layR0 = GradingSettings.XsecLayoutRoad;
+        // ★★[JACK 1117 «도면설정엔 노리선 · 배경지도 화질 · 도곽만»] 종단 · 횡단 축척 · 배치 · 측점 간격 · 검토선 · 원지반 굴곡 · 층따기 = 종횡단도 창(SectionPanel [설정 적용] → DHSECSHEETAPPLY → 아래 Saved · SavedRoadVH · 층따기는 바로 저장)
+        //   여기 값은 종단도 · 횡단도 모양을 안 바꿈 → [저장]이 종단 · 횡단을 다시 그리지 않음(배경지도 화질은 도면 기록에만)
         var (cm0, cM0) = ContourInterval.Read(doc.Database);
-        // ★[v113.1] 진입도로 종단 H · V — 판 2 기록이 없으면(옛 도면) 지금 그리는 축척(옛 규칙)을 고정 H로 · V = H와 같게(그대로 [저장]하면 같은 그림)
-        //   ★[설치 전 검토 5] 진입도로가 열려 있으면 그 도로가 그린 H(옛 설정은 부지 축척을 안 따름 — 그린 H 그대로 다시 그림)
-        double drawnH = RoadSession.Of(doc) is RoadSession road ? road.Design.SheetScale : 0;
-        var rs = RoadSheets.Setting(doc.Database, "", drawnH);
-        double rh0 = rs.Plan.PinH, rv0 = rs.V2 ? rs.Plan.PinV : DH.Grading.Core.ProfileScaleFit.SameAsH;
         bool nori0 = NoriSetting.IsOn(doc.Database);
-        var (xqMask0, _, bench0) = XsecQtyOptions.Read(doc.Database);
-        bool benchOn0 = (xqMask0 & XsecQtyOptions.Bench) != 0;
-        var dlg = new SheetDialog("저장", rp0, rx0, cm0, cM0, rh0, rv0, nori0, benchOn0, bench0);
+        double bm0 = GradingSettings.BasemapRes;
+        var dlg = new SheetDialog("저장", cm0, cM0, nori0);
         AcadApp.ShowModalWindow(dlg);
         if (dlg.DialogResult != true) return;
         SavedNori(doc, nori0, dlg.NoriDraw);
-        SavedBench(doc, benchOn0, bench0, dlg.BenchOn, dlg.Bench);
         SavedContour(doc, cm0, cM0, dlg.ContourMinor, dlg.ContourMajor);
-        SavedRoadVH(doc, rs.V2, rh0, rv0, dlg.RoadH, dlg.RoadV);
-        Saved(doc, rp0, rx0, dlg.RoadProfileScale, dlg.RoadXsecScale, lay0, layR0);
+        SheetPrefs.TryPin(doc.Database, "저장");   // 배경지도 화질(DH_SHEETPREFS · 같으면 안 씀)
+        if (System.Math.Abs(GradingSettings.BasemapRes - bm0) > 1e-9)
+            doc.Editor.WriteMessage("\n[도면 설정] 배경지도 화질 " + GradingSettings.BasemapRes.ToString("0.##") + " m/픽셀 — 다음 [위성지도]부터");
     }
 
     /// <summary>★[JACK 1116 «층따기»] [저장] 뒤 — 바뀌었을 때만 도면에 적는다(다음 [횡단도 생성]부터 반영). 창 없이 시험이 같은 길을 부른다.</summary>

@@ -709,6 +709,24 @@ public sealed class ImportGisCommand
             }
             tr.Commit();
 
+            // ★★[JACK 1117 «튜토리얼 DXF 원지반 → 원지형 자르기 되돌림»] 정의를 다 붙인 뒤 <b>한 번 다시 짓는다</b>.
+            //   붙이면서 지은 삼각망(등고선 + 평탄부 최소화 → 표고점 더함)은 같은 정의를 Rebuild()로 지은 것과 다르다 —
+            //   화면 없는 Civil 실측(tut_ch1.dxf): 세모 248,283 → 249,841 · 점 124,245 → 125,024 · 안쪽 세모 772개 바뀜.
+            //   다시 짓지 않으면 다음 재작성(원지형 자르기 · [재작성])이 정의를 안 바꿔도 땅을 바꾼다 — 자르기 확인이 이것을 잡아 되돌렸다.
+            //   실패해도 면은 산다(물림 · 로그만).
+            string rbNote = "";
+            try
+            {
+                using var trR = db.TransactionManager.StartTransaction();
+                ((TinSurface)trR.GetObject(surfId, OpenMode.ForWrite)).Rebuild();
+                trR.Commit();
+            }
+            catch (System.Exception rex)
+            {
+                rbNote = " · ⚠다시 짓기 실패";
+                try { DiagLog.Append("\n■ 원지반 다시 짓기 실패(지은 그대로 둠) — " + rex.Message + "\n"); } catch { }
+            }
+
             int pts = 0, tris = 0;
             try
             {
@@ -719,7 +737,7 @@ public sealed class ImportGisCommand
                 trS.Commit();
             }
             catch { }
-            return $"'{useName}' 지표면 생성(점 {pts}·삼각형 {tris}){spotNote}";
+            return $"'{useName}' 지표면 생성(점 {pts}·삼각형 {tris}){spotNote}{rbNote}";
         }
         catch (System.Exception ex)
         {

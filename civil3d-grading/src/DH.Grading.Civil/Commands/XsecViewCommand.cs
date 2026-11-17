@@ -674,7 +674,7 @@ public sealed partial class XsecViewCommand
         if (ghRight <= 0 && ghBelow <= 0)
             log.AppendLine($"  ⚠표가 칸에 안 들어간다 — 표 {tableHmm:F0}mm({fold.BodyRows + 1}줄)"
                          + $" > 칸에 남는 높이 {roomH:F0}mm(배치 {cols}×{rows})"
-                         + " → 배치를 성기게(2×2 이하) 하거나 도면설정에서 축척을 고정하세요");
+                         + " → 배치를 성기게(2×2 이하) 또는 [횡단도 수정]에서 축척 고정");
         else if (tableHmm > roomH)
             log.AppendLine($"  표가 칸 높이를 넘어 오른쪽 배치는 못 쓴다 — 표 {tableHmm:F0}mm > {roomH:F0}mm(아래로 내린다)");
         X9($"자리 셈 — 오른쪽 {gwRight:F0}×{ghRight:F0} · 아래 {gwBelow:F0}×{ghBelow:F0}mm");
@@ -818,14 +818,14 @@ public sealed partial class XsecViewCommand
         if (bundleHmm > roomHmm + 1e-6)
             log.AppendLine($"  ⚠<b>표까지 합치면 칸을 넘는다</b> — 덩어리 {bundleHmm:F1}mm > 자리 {roomHmm:F1}mm"
                          + $" (표 {tableHmm:F1}mm · {(tableRight ? "오른쪽" : "아래")} 배치)"
-                         + " — 배치를 줄이거나(도면설정) 축척을 낮추세요");
+                         + " — [횡단도 수정]에서 배치 줄이기 또는 축척 낮추기");
         log.AppendLine($"  뷰 실측 — 가장 큰 것 {mv.W:F1}×{mv.H:F1}m ({mv.N}개 잼) · 칸 그림 자리 {fitW:F1}×{fitH:F1}m"
                      + $" · 가운데로 옮긴 것 {nMoved}개"
                      + (mv.W > fitW || mv.H > fitH
                         ? $"  ⚠넘친다(가로 {mv.W / System.Math.Max(fitW, 1e-9):F2}배 · 세로 {mv.H / System.Math.Max(fitH, 1e-9):F2}배)"
                           + (fixedScale
                              ? (t != null && t.Kept
-                                ? $" — 그린 축척 1:{scale:F0}을 지켰기 때문이다(다시 고르면 1:{autoScale:F0}). 도면설정 진입도로 횡단도 축척을 고정했다가 자동으로 되돌리면 다시 고른다."
+                                ? $" — 그린 축척 1:{scale:F0}을 지켰기 때문이다(다시 고르면 1:{autoScale:F0}). 진입도로 [횡단도 수정] 축척을 고정했다가 자동으로 되돌리면 다시 고름"
                                 : $" — 축척을 1:{scale:F0}으로 <b>고정</b>하셨기 때문이다. 자동이면 1:{autoScale:F0}이 된다.")
                              : " — 사다리 끝까지 맞는 값이 없다")
                         : mv.W < fitW * WarnFill && mv.H < fitH * WarnFill
@@ -992,7 +992,8 @@ public sealed partial class XsecViewCommand
             {
                 tr.Commit();
                 log?.AppendLine($"  옹벽 단면 — 안 그림({why})");
-                return WallSectionDraw.IsOff(why) ? "옹벽 단면은 [옹벽 터파기]를 켜고 [종단도]를 그리면 넣습니다" : $"⚠옹벽 단면 못 넣음 — {why}";
+                // ★[v117.18.17] 터파기 꺼짐이어도 종단이 단면 기록을 적는다 — 없음(줄 0)은 말 안 함 · 꺼짐 기록 없음 = 그 전 판 종단
+                return why == WallSectionDraw.WhyNone ? "" : WallSectionDraw.IsOff(why) ? "옹벽 단면은 [종단도]를 다시 그리면 넣습니다" : $"⚠옹벽 단면 못 넣음 — {why}";
             }
             var ms = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForWrite);
             var L = WallSectionDraw.XsecLayers(db, tr, dash);

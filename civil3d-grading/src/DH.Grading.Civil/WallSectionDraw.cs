@@ -95,17 +95,29 @@ internal static class WallSectionDraw
     }
 
     internal const string WhyOff = "옹벽 터파기 꺼짐", WhyNoAlignRec = "옹벽 터파기 기록 없음";
-    /// <summary>안 그린 까닭이 «터파기를 안 켬»인가(안내 한 줄) — 그 밖(못 지음 · 단면 기록 없음 등)은 ⚠로 말한다(설치 전 검토 낮음 9 — «단면 기록 없음»도 «기록 없음»에 걸렸다).</summary>
+    /// <summary>★[v117.18.17] 터파기 꺼짐 · 단면 기록은 있는데 줄 0(종단 정지면에 옹벽 없음) — 아무 말 안 함.</summary>
+    internal const string WhyNone = "옹벽 없음";
+    /// <summary>안 그린 까닭이 «터파기를 안 켬»인가(안내 한 줄) — 그 밖(못 지음 · 단면 기록 없음 등)은 ⚠로 말한다(설치 전 검토 낮음 9 — «단면 기록 없음»도 «기록 없음»에 걸렸다).
+    /// ★[v117.18.17] 꺼짐이어도 종단이 단면 기록을 적으므로 <see cref="WhyOff"/>는 «꺼짐 단면 기록 없음»(그 전 판 종단 · 못 셈)이다.</summary>
     internal static bool IsOff(string why) => why == WhyOff || why == WhyNoAlignRec;
 
-    /// <summary>선형 기록 → 터파기면 → 단면 기록. 없으면 null + 까닭(터파기 꺼짐 · 못 지음 · 옛 면).</summary>
+    /// <summary>선형 기록 → 터파기면 → 단면 기록. ★[v117.18.17 · JACK 1117 «뒷채움 터파기를 클릭하든 안 하든 옹벽 모양은 나와야»] 터파기 꺼짐이면
+    /// 선형에 적힌 단면만 기록(<see cref="WallExcavBuilder.ReadSectionsOnly"/> — 켬과 같은 단면 함수). 없으면 null + 까닭(꺼짐 옛 종단 · 옹벽 없음 · 못 지음 · 옛 면).</summary>
     internal static WallExcav.SecRecord? RecordFor(Database db, Transaction tr, DBObject al, out string why)
     {
         why = "";
         var r = WallExcavBuilder.ReadAlign(tr, al);
         if (r == null) { why = WhyNoAlignRec; return null; }
+        if (r.Value.State == WallExcavBuilder.State.Off)
+        {
+            var so = WallExcavBuilder.ReadSectionsOnly(tr, al, out bool has, out why);
+            if (!has) { why = WhyOff; return null; }
+            if (so == null) return null;
+            if (so.Lines.Count == 0) { why = WhyNone; return null; }
+            return so;
+        }
         if (r.Value.State != WallExcavBuilder.State.Built || r.Value.Handle.Length == 0)
-        { why = r.Value.State == WallExcavBuilder.State.Off ? WhyOff : "옹벽 터파기면을 못 지음"; return null; }
+        { why = "옹벽 터파기면을 못 지음"; return null; }
         ObjectId sid = ObjectId.Null;
         try { sid = db.GetObjectId(false, new Handle(System.Convert.ToInt64(r.Value.Handle, 16)), 0); } catch { }
         if (sid.IsNull || sid.IsErased) { why = "옹벽 터파기면이 없다"; return null; }

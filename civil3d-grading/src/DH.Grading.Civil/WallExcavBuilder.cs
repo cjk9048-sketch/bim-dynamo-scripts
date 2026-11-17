@@ -45,6 +45,10 @@ internal static class WallExcavBuilder
         public bool BackReused;
         /// <summary>터파기면에 배면 기록(수량용)을 적었나.</summary>
         public bool BackRec;
+        /// <summary>★[v117.18.17 · JACK 1117 «뒷채움 터파기를 클릭하든 안 하든 옹벽 모양은 나와야»] 터파기 꺼짐일 때 단면만 — 켬과 같은 바닥 줄 · 단면 함수(<see cref="SectionsOnly"/>).
+        /// null = 못 셈 · 줄 0 = 옹벽 없음. <see cref="SectionsHead"/> = 그때 도장 머리(횡단이 «바뀜»을 견줌).</summary>
+        public WallExcav.SecRecord? Sections;
+        public string SectionsHead = "";
         public bool HasWarn => State == State.Failed || Why.Length > 0 || BackState == State.Failed;
         public string StatusText => (State switch
         {
@@ -211,6 +215,50 @@ internal static class WallExcavBuilder
         if (d.Contains(AlignKey)) { var old = tr.GetObject(d.GetAt(AlignKey), OpenMode.ForWrite); old.Erase(); }
         d.SetAt(AlignKey, xr);
         tr.AddNewlyCreatedDBObject(xr, true);
+        // ★[v117.18.17 · JACK 1117] 터파기 꺼짐 — 단면만 기록(종단 · 횡단 옹벽 단면이 읽는다). 켬 · 못 지음이면 지운다(켬은 터파기면의 DH_WALLSEC를 읽는다)
+        foreach (var k in new[] { SecOnlyKey, SecOnlyHeadKey })
+            if (d.Contains(k)) tr.GetObject(d.GetAt(k), OpenMode.ForWrite).Erase();
+        if (r.State == State.Off && r.Sections != null)
+        {
+            using var rb = WallListStore.BufferOf(WallExcav.EncodeRecord(r.Sections));
+            var xs = new Xrecord { Data = rb };
+            d.SetAt(SecOnlyKey, xs);
+            tr.AddNewlyCreatedDBObject(xs, true);
+            var xh = new Xrecord { Data = new ResultBuffer(new TypedValue((int)DxfCode.Text, r.SectionsHead ?? "")) };
+            d.SetAt(SecOnlyHeadKey, xh);
+            tr.AddNewlyCreatedDBObject(xh, true);
+        }
+    }
+
+    /// <summary>★[v117.18.17] 선형 확장사전 — 터파기 꺼짐일 때의 단면 기록(<see cref="Result.Sections"/>) · 그때 도장 머리.</summary>
+    const string SecOnlyKey = "DH_PROFWALLSEC", SecOnlyHeadKey = "DH_PROFWALLSECH";
+
+    /// <summary>터파기 꺼짐 단면 기록 — 기록이 없으면(옛 종단 · 못 셈) <paramref name="has"/> 거짓. 있는데 못 읽으면 null + 까닭.</summary>
+    internal static WallExcav.SecRecord? ReadSectionsOnly(Transaction tr, DBObject al, out bool has, out string why)
+    {
+        has = false; why = "";
+        try
+        {
+            if (al.ExtensionDictionary.IsNull || tr.GetObject(al.ExtensionDictionary, OpenMode.ForRead) is not DBDictionary d || !d.Contains(SecOnlyKey)) return null;
+            has = true;
+            if (tr.GetObject(d.GetAt(SecOnlyKey), OpenMode.ForRead) is not Xrecord xr) { why = "단면 기록이 XRecord가 아니다"; return null; }
+            var vals = WallListStore.ValsOf(xr.Data, out why);
+            if (vals == null) return null;
+            return WallExcav.TryDecodeRecord(vals, out var rec, out why) ? rec : null;
+        }
+        catch (System.Exception ex) { why = $"단면 기록을 못 읽었다 {ex.GetType().Name}: {ex.Message}"; return null; }
+    }
+
+    static string ReadSectionsHead(Transaction tr, DBObject al)
+    {
+        try
+        {
+            if (al.ExtensionDictionary.IsNull || tr.GetObject(al.ExtensionDictionary, OpenMode.ForRead) is not DBDictionary d || !d.Contains(SecOnlyHeadKey)) return "";
+            if (tr.GetObject(d.GetAt(SecOnlyHeadKey), OpenMode.ForRead) is not Xrecord xr || xr.Data == null) return "";
+            var a = xr.Data.AsArray();
+            return a.Length > 0 && a[0].Value is string s ? s : "";
+        }
+        catch { return ""; }
     }
 
     internal static (string Handle, string Stamp, State State, string Why)? ReadAlign(Transaction tr, DBObject al)
@@ -300,6 +348,7 @@ internal static class WallExcavBuilder
             var rec = ReadAlign(tr, al);
             var recB = ReadAlignBack(tr, al);
             bool ourProfile = PureWithWallsBuilder.ReadAlign(tr, al) != null;
+            string secHead = ReadSectionsHead(tr, al);
             tr.Commit();
             if (rec == null)
             {
@@ -312,6 +361,8 @@ internal static class WallExcavBuilder
             if (r.State == State.Off)
             {
                 if (s.On) { say("옹벽 터파기를 켠 뒤 종단을 다시 안 그렸습니다 — [종단도]를 먼저 다시 그리세요."); return false; }
+                // ★[v117.18.17] 꺼짐 단면 기록은 종단 때 것 — 형식 · 표 · 정지면이 바뀌었으면 알린다(멈추지는 않음)
+                if (secHead.Length > 0 && secHead != now) say("⚠옹벽 단면 형식 · 정지면이 종단을 그린 뒤 바뀌었습니다 — 옹벽 단면은 [종단도]를 다시 그리면 맞춰집니다.");
                 return true;
             }
             if (!s.On) { say("옹벽 터파기를 끈 뒤 종단을 다시 안 그렸습니다 — [종단도]를 먼저 다시 그리세요."); return false; }
@@ -588,6 +639,50 @@ internal static class WallExcavBuilder
         return secs.Select(x => x.S).ToList();
     }
 
+    /// <summary>★[v117.18.17 · JACK 1117] 터파기 꺼짐 — 면은 안 짓고 단면 기록만 세운다. 켬(<see cref="EnsureCore"/>)과 같은 길:
+    /// 정지면_DH에서 잰 바닥 줄(<see cref="CollectBottoms"/> · 이번 종단 옹벽 <paramref name="pure"/>) → <see cref="SectionizeAll"/> → <see cref="WallExcav.RecordOf"/>(같은 공통값).
+    /// 켬과 다른 점 하나: 켬은 터파기 조각을 지은 줄만 적는다(조각 못 지은 줄은 빠짐) — 여기는 단면을 세운 줄 전부. 못 세면 null(까닭은 로그).</summary>
+    static WallExcav.SecRecord? SectionsOnly(Database db, ObjectId groundId, PureWithWallsBuilder.Result? pure, WallExcav.Settings st, StringBuilder log, out string head)
+    {
+        head = "";
+        try
+        {
+            var notes = new System.Collections.Generic.List<string>();
+            var (tCut, tFill) = TablesOf(db, st, notes);
+            var civ = Autodesk.Civil.ApplicationServices.CivilApplication.ActiveDocument;
+            using var tr = db.TransactionManager.StartTransaction();
+            var (planIds, planNms) = Commands.WallCompositeCommand.Candidates(civ, tr, Commands.WallCompositeCommand.PlanName, groundId);
+            if (planIds.Count != 1)
+            {
+                tr.Commit();
+                log.AppendLine($"  옹벽 단면(터파기 꺼짐) — 정지면_DH를 하나로 못 잡아 단면 없음({(planIds.Count == 0 ? "없음" : string.Join(",", planNms))})");
+                return null;
+            }
+            var sTin = (TinSurface)tr.GetObject(planIds[0], OpenMode.ForRead);
+            head = HeadOf(st, WallExcav.TablesPrint(tCut, tFill), planIds[0].Handle.ToString(), Commands.WallCompositeCommand.CompositeNonce(tr, sTin), groundId.IsNull ? "" : groundId.Handle.ToString());
+            var sC = new CachedGroundSurface(sTin);
+            System.Func<double, double, double?> mAt = (x, y) => sC.TryGetElevation(x, y, out double z) ? z : (double?)null;
+            var mn = new WallExcav.MeasureNote();
+            var stepLog = new System.Collections.Generic.List<string>();
+            var (bottoms, benchBelow, nFaces, bundles) = CollectBottoms(db, tr, pure?.Walls, mAt, notes, mn, new StringBuilder(), stepLog);
+            var secNote = new WallExcav.SecNote();
+            var secs = SectionizeAll(bottoms, benchBelow, tCut, tFill, st, notes, secNote);
+            if (secNote.Warn) notes.Add("단면 — " + secNote.Text);
+            tr.Commit();
+            var rec = WallExcav.RecordOf(secs.Select(x => x.S), st.Margin, st.Common(0.01), k => k == st.CutKind ? tCut : tFill);
+            log.AppendLine($"  옹벽 단면(터파기 꺼짐 · 단면만) — 앞면 선 {nFaces}줄({string.Join(" · ", stepLog)}{(bundles != null ? $" · 번들 구역 {bundles.Count}" : "")}) · 바닥 줄 {bottoms.Count}"
+                         + $" · 단면 기록 {rec.Lines.Count}줄 {rec.Lines.Sum(l => l.Pts.Count)}점"
+                         + (secs.Count > 0 ? " · " + string.Join(" · ", secs.GroupBy(x => (x.S.Up, x.S.Kind)).Select(g => $"{(g.Key.Up ? "절토" : "성토")} {g.Key.Kind} {g.Count()}줄")) : "")
+                         + (notes.Count > 0 ? " · ⚠" + string.Join(" · ", notes) : ""));
+            return rec;
+        }
+        catch (System.Exception ex)
+        {
+            log.AppendLine($"  옹벽 단면(터파기 꺼짐) — ⚠못 세움({ex.GetType().Name}: {ex.Message})");
+            return null;
+        }
+    }
+
     private static Result EnsureCore(Database db, ObjectId groundId, PureWithWallsBuilder.Result? pure, StringBuilder log)
     {
         var R = new Result();
@@ -601,6 +696,7 @@ internal static class WallExcavBuilder
             R.State = State.Off;
             R.Stamp = HeadOf(st, "", "", "", "");
             log.AppendLine("  옹벽 터파기 — 꺼짐");
+            R.Sections = SectionsOnly(db, groundId, pure, st, log, out R.SectionsHead);
             return R;
         }
         ObjectId made = ObjectId.Null;
