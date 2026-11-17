@@ -185,9 +185,16 @@ public sealed class NgiiCommand
         }
     }
 
+    /// <summary>★[튜토리얼] 다음 한 번 파일 창의 처음 자리(튜토리얼 DXF) · 화면 없는 시험의 파일 목록.</summary>
+    internal static string? PresetFile;
+    internal static List<string>? FilesForTest;
+
     /// <summary>DXF를 <b>여러 개</b> 고른다.</summary>
     private static List<string> AskFiles(Document doc)
     {
+        // ★[튜토리얼 · JACK 1117] 화면 없는 시험 = 창 없이 이 파일들 · 튜토리얼 = 창을 그 파일 자리에서 열기(한 번 쓰고 비움)
+        if (FilesForTest != null) { var t = FilesForTest; FilesForTest = null; return t; }
+        string? pre = PresetFile; PresetFile = null;
         var dlg = new Microsoft.Win32.OpenFileDialog
         {
             Title = "수치지도 DXF 선택 (여러 개 고를 수 있습니다)",
@@ -195,6 +202,7 @@ public sealed class NgiiCommand
             Multiselect = true,
             CheckFileExists = true,
         };
+        try { if (!string.IsNullOrEmpty(pre) && System.IO.File.Exists(pre)) { dlg.InitialDirectory = System.IO.Path.GetDirectoryName(pre); dlg.FileName = System.IO.Path.GetFileName(pre); } } catch { }
         bool? ok;
         try { ok = dlg.ShowDialog(); }
         catch { ok = false; }

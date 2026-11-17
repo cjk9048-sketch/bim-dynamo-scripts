@@ -60,9 +60,12 @@ public static partial class RoadRing
     }
 
     /// <summary>고리(버퍼) 좌표 — 바깥 고리 + 구멍 · 0.5 m 이하로 촘촘히(닫는 점 없음).</summary>
-    static List<List<Coordinate>> Rings(Deck d, double dist)
+    static List<List<Coordinate>> Rings(Deck d, double dist, bool nearVert = false)
     {
-        var bp = new BufferParameters { JoinStyle = JoinStyle.Round, QuadrantSegments = 12 };
+        // ★[JACK 1117 «진입도로 1:0.01»] 거의 수직 사면이면 둥근 모서리 현을 촘촘히 — 12 / 사분원은 반경 4.25 m에서 현이 호 안쪽 9 mm(1:0.01 사면에선 높이 0.9 m) ·
+        //   데이라잇이 그 현과 mm 안에서 나란히 가 바늘(1117 rvert ⑫ 실측). 현 안쪽 ≤ 1 mm가 되게(사분원 90개까지 — 반경 25 m에서 0.95 mm) · 그 밖은 종전 12(비트 같음)
+        int qs = nearVert && dist > 1e-3 ? Math.Clamp((int)Math.Ceiling(Math.PI / 2 / (2 * Math.Acos(Math.Max(-1, 1 - 0.001 / dist)))), 12, 90) : 12;
+        var bp = new BufferParameters { JoinStyle = JoinStyle.Round, QuadrantSegments = qs };
         var g = BufferOp.Buffer(d.Poly, dist, bp);
         var outp = new List<List<Coordinate>>();
         for (int gi = 0; gi < g.NumGeometries; gi++)
@@ -125,9 +128,10 @@ public static partial class RoadRing
         bool corr = Corridor;
         var creases = new List<Crease>();
         int ringNo = 0;
+        bool nearVert = ev.PcA[0].Tail > NearVertTail || ev.PfA[0].Tail > NearVertTail;
         foreach (var (dist, info) in levels)
         {
-            foreach (var ring in Rings(d, dist))
+            foreach (var ring in Rings(d, dist, nearVert))
             {
                 ringNo++;
                 int n = ring.Count;

@@ -69,7 +69,8 @@ internal sealed class RoadSession
         try
         {
             var b = build ? RoadRing.Build(inp) : RoadRing.Preview(inp, 1.0);
-            for (int k = 0; k < 2 && b.Ok && b.ReachHit; k++) { inp.Reach *= 1.6; b = build ? RoadRing.Build(inp) : RoadRing.Preview(inp, 1.0); }
+            // ★[JACK 1117 «옹벽 변환 거절 · 바늘 13»] 범위 끝(데이라잇 못 찾음)에서 잘린 둘레가 바늘을 내 Civil 맞춤을 못 넘으면 b.Ok = false — 그래도 넓혀 다시(옛: 지은 면만 넓힘 → 큰 성토 도로가 범위 40 m 실패로 끝나 옛 엔진 · 옹벽 변환 거절)
+            for (int k = 0; k < 2 && b.ReachHit; k++) { inp.Reach *= 1.6; b = build ? RoadRing.Build(inp) : RoadRing.Preview(inp, 1.0); }
             used = inp.Reach;
             return b;
         }

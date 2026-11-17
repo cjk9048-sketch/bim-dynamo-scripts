@@ -51,8 +51,21 @@ public static partial class RoadRing
         // 1) 후보 마디 — 바뀐 자리 · 원천 거리가 소단 ± (격자 칸 + 0.5 m) 안 · 이어 받는 원뿔은 다 후보
         double pad = g.Cell + 0.5;
         var cand = new List<int>();
+        // ★[JACK 1117 «진입도로 1:0.01»] 거의 수직 사면 — 사면 띠(면 폭 5 cm)가 미리보기 격자(1 m)보다 좁아 소단 곁 마디가 도로 면 · 땅 마디뿐인 자리는 후보가 없어 소단을 빠뜨렸다
+        //   (1117 rvert 실측 ⑨ 86.5 % · ⑦ 96.4 %) → 도로 둘레에서 사면 마디 가장 먼 거리 + 여유 안 마디는 종류와 상관없이 후보(셈은 칸마다 Is로 다시 함) · n ≥ 0.1은 종전 그대로
+        double nearFlat = double.NaN;
+        if (ev.PcA[0].Tail > NearVertTail || ev.PfA[0].Tail > NearVertTail)
+        {
+            nearFlat = 0;
+            // ★[설치 전 검토 MED] 거의 수직인 쪽(절 = 종류 2 · 4 / 성 = 3)의 사면 마디만 — 다른 쪽이 완만하면 그 먼 데이라잇까지 후보가 되어 칸마다 셈이 몇 분 걸렸다
+            bool vC = ev.PcA[0].Tail > NearVertTail, vF = ev.PfA[0].Tail > NearVertTail;
+            for (int k = 0; k < g.P.Length; k++) if (g.Keep[k] && ((vC && g.P[k].Kind is 2 or 4) || (vF && g.P[k].Kind == 3))) nearFlat = Math.Max(nearFlat, g.P[k].DNear);
+            nearFlat += pad;
+        }
         for (int k = 0; k < g.P.Length; k++)
         {
+            // ★[검토 MED] 버린 마디(짓지 않는 따로 떨어진 사면 조각)는 빼고 — 도로 면 · 땅 마디(종류 0 · 1)는 그대로 후보
+            if (double.IsFinite(nearFlat) && g.P[k].DNear <= nearFlat && (g.Keep[k] || g.P[k].Kind is 0 or 1)) { cand.Add(k); continue; }
             if (!g.Keep[k]) continue;
             var q = g.P[k]; if (q.Kind is not (2 or 3 or 4)) continue;
             bool cut = q.Kind != 3; var w = cut ? q.WHi : q.WLo;

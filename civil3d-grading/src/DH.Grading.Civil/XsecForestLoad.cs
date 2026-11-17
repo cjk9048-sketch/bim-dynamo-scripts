@@ -13,10 +13,12 @@ internal static class XsecForestLoad
         why = "";
         try
         {
-            string cs = KoreaCs.Read(db);
-            int? epsg = KoreaCs.ResolveEpsgFromCode(cs);
-            var belt = epsg.HasValue ? ShapefileWriter.Belt(epsg.Value) : null;
-            if (belt == null) { why = "도면 좌표계 모름"; return null; }
+            // ★[JACK 1117 «튜토리얼.dwg 횡단에 임상도 못 읽음 · 3D는 나무 나옴»] 횡단 벌개도 3D · 지적도 · 서버 지표면과 같은 좌표계 찾기 —
+            //   도면 좌표계가 없으면 [기타 설정] 원점(옛 = 도면 좌표계만 봐서 지정 안 된 도면은 늘 «좌표계 모름»)
+            int epsg = Commands.ImportGisCommand.ResolveEpsg(db, out string csNote);
+            log?.AppendLine("  횡단 벌개 좌표계: " + csNote);
+            var belt = ShapefileWriter.Belt(epsg);
+            if (belt == null) { why = $"좌표계 EPSG:{epsg} 못 씀"; return null; }
             int cm = belt.Value.cm; double fn = belt.Value.fn;
             (double X, double Y) FromDwg(double x, double y) { var ll = KoreaTm.ToLonLat(x, y, cm, fn); return KoreaTm.UtmkFromLonLat(ll.Lon, ll.Lat); }
             (double X, double Y) ToDwg(double x, double y) { var ll = KoreaTm.UtmkToLonLat(x, y); var p = KoreaTm.FromLonLat(ll.Lon, ll.Lat, cm, fn); return (p.E, p.N); }

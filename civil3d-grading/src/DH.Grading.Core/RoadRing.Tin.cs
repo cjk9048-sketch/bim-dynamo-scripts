@@ -55,7 +55,7 @@ public static partial class RoadRing
         long tRegion = sw.ElapsedMilliseconds, tLines = tRegion, tTri = tRegion;
         var tris = new List<WallDaylight.Tri>();
         string tnote = "";
-        LineSet? ls = null;
+        LineSet? ls = null; int ktLines = 0, ktPts = 0;
         var splits = new Dictionary<(double, double), OnB>();
         if (S != null && S.Area > 1e-6)
         {
@@ -64,11 +64,14 @@ public static partial class RoadRing
             ls = BuildLines(ev, maxDist + 1.0);
             // ★[v117.17.1] 다른 무리 벽 단면 수직면 — 위 · 아래 끊김선 띠(벽 단면 없는 도로는 시간 0)
             WallFaceLines(ev, f, ls);
+            // ★[v117.18.13 · JACK 1117 «급한 굽이 안쪽 깨짐»] 다른 무리 원천의 소단 꺾임선(급한 굽이 도로만 — 그 밖은 시간 0 · 비트 같음)
+            (ktLines, ktPts) = OtherKinkLines(ev, f, ls, maxDist + 1.0);
             // ★[v117.17 · JACK 1116] 끊김선이 데이라잇 현을 지나는 자리 = 선 위 Φ = 0 점을 사면 자리 둘레에(정확한 데이라잇일 때)
             //   [검토 L-5] 둘레가 바뀌면 그릴 데이라잇도 새 둘레로(그린 선 ↔ 세모 둘레 5 cm 안 어긋남 없게)
             if (ExactDaylight) { S = DaylightOnLines(ev, S, ls, tags, out int nDl); b.Count.DlOnLines = nDl; if (nDl > 0) b.Daylight = DaylightRuns(ev, S, onB); }
             tLines = sw.ElapsedMilliseconds;
-            var slope = TriangulateSlope(ev, S, onB, ls, out var benchPieces, out splits, out tnote);
+            DebugTags?.Invoke(tags);
+            var slope = TriangulateSlope(ev, S, onB, ls, out var benchPieces, out splits, out tnote, tags);
             tTri = sw.ElapsedMilliseconds;
             if (slope == null) { b.Note = $"고리 면 못 지음 — {tnote} · {rnote}"; return b; }
             tris.AddRange(slope);
@@ -193,6 +196,7 @@ public static partial class RoadRing
         }
         b.Ok = true;
         b.Note = $"고리 면 — 세모 {tris.Count:N0} · 넓이 {b.Area:N0} ㎡ · 소단/사면 꺾임선 {b.Lines.Count} · 주름선 {ls?.CreaseChains ?? 0}(점 {ls?.CreasePts ?? 0} · 이어진 바뀜이라 뺀 후보 {ls?.CreaseRejected ?? 0} · 골 따라 끼운 점 {ls?.CreaseFollow ?? 0} · 골 벗어나 끊음 {ls?.CreaseCut ?? 0}) · 선 높이 맞춤 점 {ls?.LineZPts ?? 0} · 부채 경계선 {ls?.FanLines ?? 0} · 보조 고리 선 {ls?.HelperLines ?? 0} · 벽 면 띠 {ls?.WallFaces ?? 0}(점 {ls?.WallFacePts ?? 0} · 띠 곁 주름선 끊음 {ls?.WallFacePruned ?? 0}) · 스냅 {ls?.Snapped ?? 0}(되돌림 {ls?.SnapRevert ?? 0} · 0.5 m 넘음 {ls?.SnapBig ?? 0}) · 꺾임 거리로 옮긴 고리 점 {ls?.Projected ?? 0} · {tnote} · {rnote}"
+                 + (ktLines > 0 ? $" · 다른 무리 꺾임선 {ktLines}(점 {ktPts})" : "")
                  + $" · 다듬기: T자 나눔 {tj} · 구멍 {holes} · 0.1 mm 쌍 {merged} · 바늘 접음 {folded} · 뒤집음 {flipped}"
                  + (lastFold + lastNudge > 0 ? $" · ⚠급한 굽이 바늘 마지막 고침: 5 cm 접음 {lastFold} · 꼭짓점 0.4 mm 옮김 {lastNudge}" : "")
                  + (zoneFail.Length > 0 ? $" · ⚠첫 구역 맞춤 못 함({zoneFail}) — 마무리로 넘김" : "")
@@ -460,6 +464,10 @@ public static partial class RoadRing
 
     /// <summary>[하네스 전용 계측] Civil 맞춤 단계마다 바늘 · 쌍 · 세 세모 변 수 — null이면 아무것도 안 함(출하 DLL 밖에서 못 건드리게 internal).</summary>
     internal static Action<string>? DebugRing;
+    /// <summary>[하네스 전용 계측] 자른 끊김선 조각(원래 선 · 좌표) · 매달린 끝 늘임 — 바늘 · 부채 원인 계측.</summary>
+    internal static Action<List<(Bl Src, Coordinate[] Cs)>, List<Coordinate[]>, List<Coordinate[]>>? DebugPieces;
+    /// <summary>[하네스 전용 계측] 사면 자리 둘레 점 출처 꼬리표(0.1 mm 키) — 바늘 원인 계측.</summary>
+    internal static Action<Dictionary<(long, long), string>>? DebugTags;
     /// <summary>★[v117.17 · JACK 1116 «남은 것 모두»] [하네스 전용 계측] 이 자리(절대 좌표)를 덮는 세모를 단계마다 찍음(<see cref="DebugRing"/>와 함께) — 실오라기가 어느 단계에서 생기나.</summary>
     internal static (double X, double Y)? DebugProbe;
     /// <summary>★[v117.17] [하네스 전용 계측] 세모 무게중심 셈 차 &gt; 2 cm 인 세모 수 · 최대 — 단계마다(<see cref="DebugRing"/>가 있을 때만).</summary>
@@ -546,8 +554,11 @@ public static partial class RoadRing
         for (int i = 1; i < p.Count; i++)
         {
             double dd = Math.Sqrt(Sq(p[i].X - o[^1].X) + Sq(p[i].Y - o[^1].Y));
-            if (dd >= tol || !(gate(p[i]) && gate(o[^1]))) { o.Add(p[i]); continue; }
-            if (i == p.Count - 1) { if (o.Count >= 2) o[^1] = p[i]; else o.Add(p[i]); }   // 끝점은 지킴(앞 점을 끝점으로 바꿈)
+            if (dd >= tol) { o.Add(p[i]); continue; }
+            // ★[v117.18.13 · 바늘 원인 계측] 지킬 점(골점 · 선 끝) 곁 표본점도 합침 — 전엔 두 점이 다 뺄 수 있어야 해서 골점 2.6 ~ 8 mm 곁 고리 표본점이 남아 바늘 밑변이 됐다(1116 굽이 범위 6)
+            if (i < p.Count - 1 && gate(p[i])) continue;   // 이 점(표본)을 뺌
+            if (o.Count >= 2 && gate(o[^1])) { o[^1] = p[i]; continue; }   // 앞 점(표본)을 이 점(지킬 점 · 끝점)으로 바꿈
+            o.Add(p[i]);
         }
         return o;
     }
@@ -574,7 +585,7 @@ public static partial class RoadRing
     }
 
     /// <summary>사면 자리 세모 — 끊김선을 S로 자르고(끝 = S 둘레) · 매달린 끝은 3 m 안 가장 가까운 선/둘레로 늘이고 · 0.1 mm 마디 넣기 · Polygonizer 면 · 면마다 제약 들로네 · 높이 · 다듬기.</summary>
-    static List<WallDaylight.Tri>? TriangulateSlope(Evaluator ev, Geometry S, Dictionary<(double, double), OnB> onB, LineSet ls, out List<RoadGrade.TierLine> benchOut, out Dictionary<(double, double), OnB> splits, out string note)
+    static List<WallDaylight.Tri>? TriangulateSlope(Evaluator ev, Geometry S, Dictionary<(double, double), OnB> onB, LineSet ls, out List<RoadGrade.TierLine> benchOut, out Dictionary<(double, double), OnB> splits, out string note, Dictionary<(long, long), string>? tags = null)
     {
         note = ""; benchOut = new(); splits = new();
         var splitsL = splits;
@@ -618,7 +629,7 @@ public static partial class RoadRing
         // 끊김선을 S로 자름
         var pieces = new List<(LineString L, Bl Src)>();
         // ★[v117.18.11 · 검토 M] 점 합침이 지우면 안 되는 점 — 선 끝점(다른 선이 T자로 닿는 자리)과 두 줄 이상이 함께 쓰는 꼭짓점(0.1 mm 키)
-        var thinKeep = new HashSet<(long, long)>();
+        var thinKeep = new HashSet<(long, long)>(); int rimTrim = 0, rimSnap = 0, ktTrim = 0, ktDrop = 0; string ktFail = "";
         if (ev.D.Sharp.Count > 0)
         {
             var seen = new Dictionary<(long, long), int>();
@@ -640,16 +651,104 @@ public static partial class RoadRing
             Geometry cut;
             try { cut = S.Intersection(ln); } catch { return; }
             for (int i = 0; i < cut.NumGeometries; i++)
-                if (cut.GetGeometryN(i) is LineString l && l.Length > 1e-4) pieces.Add((l, bl));
+                if (cut.GetGeometryN(i) is LineString l && l.Length > 1e-4) pieces.Add((ev.D.Sharp.Count > 0 ? TrimRimEnds(l) : l, bl));
+        }
+        // ★[v117.18.13 · JACK 1116 «소단이 뭉개져» · 바늘 원인 계측] 자른 끝(선 ∩ 사면 자리 둘레 = 데이라잇 건넘점)도 2 cm 점 합침(ThinNear)을 받게 — ThinNear는 자르기 앞이라
+        //   자르기가 새로 만든 끝점은 몰랐다: 고리 표본점(0.5 m마다 · 뜻 없음)이 건넘점 0.1 ~ 20 mm 곁에 남아 그 짧은 변 + 데이라잇 점으로 바늘(1116 계측: 급한 굽이 범위 바늘 268 중
+        //   보조선 끝 ~120 · 소단선 끝 ~13). 끝 곁 속 점이 2 cm 안 · 굽이 범위 · 지킬 점(thinKeep) 아님 · 그 점을 빼도 선 높이가 셈과 3 mm 안(선 높이 맞춤 기준)이면 뺌 — 끝점(둘레 위)은 그대로.
+        LineString TrimRimEnds(LineString l)
+        {
+            var cs = l.Coordinates.ToList();
+            bool Fit(Coordinate a, Coordinate b)
+            {
+                double za = Z(a.X, a.Y), zb = Z(b.X, b.Y);
+                for (int k = 1; k <= 7; k++)
+                {
+                    double t = k / 8.0; var pe = ev.Eval(a.X + (b.X - a.X) * t, a.Y + (b.Y - a.Y) * t);
+                    if (!double.IsFinite(pe.Z) || Math.Abs(pe.Z - (za + (zb - za) * t)) > 0.003) return false;
+                }
+                return true;
+            }
+            for (int end = 0; end < 2; end++)
+                while (cs.Count >= 3)
+                {
+                    var e = end == 0 ? cs[0] : cs[^1]; var nb = end == 0 ? cs[1] : cs[^2]; var nn = end == 0 ? cs[2] : cs[^3];
+                    if (Sq(e.X - nb.X) + Sq(e.Y - nb.Y) >= ThinTol * ThinTol || !OnSb(e.X, e.Y) || thinKeep.Contains(Key(nb.X, nb.Y)) || !InSharpZone(ev, nb) || !Fit(nn, e)) break;
+                    cs.RemoveAt(end == 0 ? 1 : cs.Count - 2); rimTrim++;
+                }
+            // 끝(데이라잇 건넘점)이 칸 변 데이라잇 점(Φ = 0 표본) 2 cm 곁이면 끝을 그 점으로 — 둘레에 건넘점을 못 넣은 자리(데이라잇과 거의 나란한 선 등)에서 그 둘이 짧은 둘레 변(바늘 밑변)을 만들었다
+            if (tags != null)
+                for (int end = 0; end < 2 && cs.Count >= 2; end++)
+                {
+                    var e = end == 0 ? cs[0] : cs[^1]; var nb = end == 0 ? cs[1] : cs[^2];
+                    if (!OnSb(e.X, e.Y) || !InSharpZone(ev, e)) continue;
+                    Coordinate? best = null; double bd = ThinTol * ThinTol;
+                    foreach (var (ax, ay, cx, cy) in sbIdx.Query(new Envelope(e.X - ThinTol, e.X + ThinTol, e.Y - ThinTol, e.Y + ThinTol)))
+                        foreach (var (vx, vy) in new[] { (ax, ay), (cx, cy) })
+                        {
+                            double dd = Sq(vx - e.X) + Sq(vy - e.Y);
+                            if (dd < bd && dd > 1e-14 && tags.TryGetValue(Key(vx, vy), out var tg) && tg == "칸변") { bd = dd; best = new Coordinate(vx, vy); }
+                        }
+                    if (best == null || !InSharpZone(ev, best) || !Fit(nb, best) || !Sp.Covers(gf.CreateLineString(new[] { nb, best }))) continue;
+                    if (end == 0) cs[0] = best; else cs[^1] = best;
+                    rimSnap++;
+                }
+            return gf.CreateLineString(cs.ToArray());
         }
         // 선 점 높이(원래 점) — 키로
         foreach (var bl in ls.Benches.Concat(ls.Creases)) foreach (var p in bl.Pts) zAt.TryAdd(Key(p.X, p.Y), p.Z);
         foreach (var bl in ls.Benches) Clip(bl);
         foreach (var bl in ls.Creases) Clip(bl);
+        // ★[v117.18.13] 다른 무리 꺾임선(OtherKinkLines) 끝 = 무리 경계 — 늘이지 않고 끝 꼬리를 그 줄이 다른 선과 만나는 가장 바깥 교점까지 자름(매달린 선 없음 · 남은 꼬리는 면 짓기에서 어차피 빠짐)
+        if (ev.D.Sharp.Count > 0 && pieces.Any(q => q.Src.K == KtMark))
+        {
+            var keepPieces = pieces.ToList();
+            try
+            {
+                // 둘레(데이라잇) 2 cm 안은 뺌 — 둘레와 나란히 붙은 꺾임선이 둘레 곁 바늘을 만들고 그 바늘 떼기(DropRimNeedles)가 둘레 변을 원지반 변 위로 옮겨 경계 높이가 0.12 mm 떴다(S270 헤어핀 R10 계측)
+                var Sin = NetTopologySuite.Geometries.Prepared.PreparedGeometryFactory.Prepare(S.Buffer(-ThinTol));
+                for (int i = pieces.Count - 1; i >= 0; i--)
+                {
+                    if (pieces[i].Src.K != KtMark || Sin.ContainsProperly(pieces[i].L)) continue;
+                    var src = pieces[i].Src; var cut = Sin.Geometry.Intersection(pieces[i].L);
+                    pieces.RemoveAt(i);
+                    for (int g = 0; g < cut.NumGeometries; g++) if (cut.GetGeometryN(g) is LineString l2 && l2.Length > 1e-3) pieces.Add((l2, src));
+                }
+                // ★[검토 LOW5] 끝 꼬리 자르기를 남은 조각끼리 되풀이 — 꺾임선 B가 A와만 만나 빠지면 A의 끝(그 교점)이 매달려 3 m 늘임을 받았다 · 빠지는 것이 없을 때까지(남은 조각 지금 모양으로 교점을 셈)
+                for (int pass = 0; pass < 8; pass++)
+                {
+                    var kIdx = new NetTopologySuite.Index.Strtree.STRtree<int>();
+                    for (int i = 0; i < pieces.Count; i++) kIdx.Insert(pieces[i].L.EnvelopeInternal, i);
+                    kIdx.Build();
+                    var cur = pieces.Select(q => q.L).ToList(); var drop = new List<int>();
+                    for (int i = 0; i < pieces.Count; i++)
+                    {
+                        if (pieces[i].Src.K != KtMark) continue;
+                        var L = cur[i]; var lil = new NetTopologySuite.LinearReferencing.LengthIndexedLine(L);
+                        double lo = double.PositiveInfinity, hi = double.NegativeInfinity;
+                        foreach (int j in kIdx.Query(L.EnvelopeInternal))
+                        {
+                            if (j == i || !L.Intersects(cur[j])) continue;
+                            foreach (var c in L.Intersection(cur[j]).Coordinates) { double t = lil.Project(c); lo = Math.Min(lo, t); hi = Math.Max(hi, t); }
+                        }
+                        // 사면 자리 둘레(데이라잇)에는 닿지 않게 — 둘레에 새 마디가 생기면 둘레 변이 원지반 변을 속에서 건너 경계 높이가 0.12 mm 떴다(S270 헤어핀 R10 계측) · 다른 선과의 가장 바깥 교점까지만
+                        if (!(hi - lo > 1e-4)) { drop.Add(i); ktDrop++; continue; }
+                        if (lo > 1e-9 || hi < L.Length - 1e-9) { pieces[i] = ((LineString)lil.ExtractLine(lo, hi), pieces[i].Src); ktTrim++; }
+                    }
+                    for (int q = drop.Count - 1; q >= 0; q--) pieces.RemoveAt(drop[q]);
+                    if (drop.Count == 0) break;
+                }
+            }
+            catch (Exception exK)
+            {
+                // ★[검토 LOW6] 꺾임선 손질이 기하 예외를 내면 꺾임선만 빼고 면은 그대로 지음(예외가 면 짓기를 통째로 멈춰 옛 엔진으로 물러서지 않게) — 까닭은 Note에
+                pieces.Clear(); pieces.AddRange(keepPieces.Where(q => q.Src.K != KtMark)); ktFail = exK.GetType().Name;
+            }
+        }
         // 매달린 끝 — S 둘레 · 다른 선 위가 아니면 늘임
         var allLines = pieces.Select(p => (Geometry)p.L).ToList();
         var extra = new List<LineString>();
-        int ext = 0, noExt = 0;
+        int ext = 0, noExt = 0, extSnap = 0;
         var idx = new NetTopologySuite.Index.Strtree.STRtree<int>();
         for (int i = 0; i < pieces.Count; i++) idx.Insert(pieces[i].L.EnvelopeInternal, i);
         idx.Build();
@@ -683,6 +782,16 @@ public static partial class RoadRing
                     foreach (var g in allLines) foreach (var c in g.Coordinates) { double dd = Math.Sqrt(Sq(c.X - end.X) + Sq(c.Y - end.Y)); if (dd > 1e-6 && dd < Math.Min(best, 3.0) && !cs.Any(q => q.Equals2D(c))) { best = dd; hit = c; } }
                 }
                 if (hit == null) { noExt++; continue; }
+                // ★[v117.18.13 · 바늘 원인 계측] 늘임이 닿는 자리 2 cm 곁에 그 선(또는 둘레)의 꼭짓점이 있으면 그 꼭짓점으로 — 닿는 점이 새 마디가 되어 꼭짓점과 mm 짧은 변(바늘 밑변 · 1116 굽이 범위 ~7)
+                if (ev.D.Sharp.Count > 0 && InSharpZone(ev, hit))
+                {
+                    Coordinate? hv = null; double hd = ThinTol * ThinTol; var h0 = hit;
+                    void Try(double vx, double vy) { double dd = Sq(vx - h0.X) + Sq(vy - h0.Y); if (dd < hd && dd > 1e-14 && Sq(vx - end.X) + Sq(vy - end.Y) > 1e-12) { hd = dd; hv = new Coordinate(vx, vy); } }
+                    var env = new Envelope(hit.X - ThinTol, hit.X + ThinTol, hit.Y - ThinTol, hit.Y + ThinTol);
+                    foreach (int j in idx.Query(env)) if (j != i) foreach (var c in pieces[j].L.Coordinates) Try(c.X, c.Y);
+                    foreach (var (ax, ay, cx, cy) in sbIdx.Query(env)) { Try(ax, ay); Try(cx, cy); }
+                    if (hv != null && InSharpZone(ev, hv)) { hit = hv; extSnap++; }
+                }
                 // ★[v117.17 · JACK 1116 «남은 것 모두»] 늘임 선도 0.25 m마다 점(높이 = 셈) — 두 점 늘임(최대 3 m)은 끊김선이라 그 사이를 곧게 이어
                 //   굽은 사면을 가로질렀다(1116 계측: S236 ⑫ 곡률 중심 곁 2.07 m 늘임 · 무게중심 차 161 mm · 가파른 세모 8.35 — 다듬기 · 맞춤 뒤집기는 끊김선 곁이라 못 고침)
                 double el = Math.Sqrt(Sq(hit.X - end.X) + Sq(hit.Y - end.Y)); int en = Math.Max(1, (int)Math.Ceiling(el / 0.25));
@@ -690,6 +799,7 @@ public static partial class RoadRing
             }
         }
         ls.Extended = ext; ls.NoExtend = noExt;
+        DebugPieces?.Invoke(pieces.Select(p => (p.Src, p.L.Coordinates)).ToList(), extra.Select(x => x.Coordinates).ToList(), Enumerable.Range(0, Sb.NumGeometries).Select(i => Sb.GetGeometryN(i).Coordinates).ToList());
         // 마디 넣기(0.1 mm)
         var geoms = pieces.Select(p => (Geometry)p.L).Concat(extra).Append(Sb).ToArray();
         Geometry noded;
@@ -977,7 +1087,7 @@ public static partial class RoadRing
             }
             if (tl.Pts.Count >= 2) benchOut.Add(tl);
         }
-        note = $"면 {faceIn:N0}(넓이 {faceArea:N0} ㎡) · 매달린 끝 늘임 {ext}(못 늘임 {noExt}) · 매달린 선 {dangles} · 끊긴 변 {cutE} · 다듬기 점 {inserted}({msRefine} ms) · 맞춤 뒤집기 {ddtFlips}({msDdt} ms)(남은 차 최대 {resid * 1000:F1} mm @{residAt})";
+        note = $"면 {faceIn:N0}(넓이 {faceArea:N0} ㎡) · 매달린 끝 늘임 {ext}(못 늘임 {noExt})" + (rimTrim + rimSnap + extSnap > 0 ? $" · 데이라잇 끝 곁 2 cm 점 뺌 {rimTrim} · 끝을 칸 변 점으로 {rimSnap} · 늘임 끝을 꼭짓점으로 {extSnap}" : "") + (ktTrim + ktDrop > 0 ? $" · 꺾임선 끝 꼬리 자름 {ktTrim}(통째 뺌 {ktDrop})" : "") + (ktFail.Length > 0 ? $" · ⚠다른 무리 꺾임선 손질 못 함({ktFail}) — 꺾임선 없이 지음" : "") + $" · 매달린 선 {dangles} · 끊긴 변 {cutE} · 다듬기 점 {inserted}({msRefine} ms) · 맞춤 뒤집기 {ddtFlips}({msDdt} ms)(남은 차 최대 {resid * 1000:F1} mm @{residAt})";
         if (resid > 0.02) note += " · ⚠남은 차 2 cm 넘음";
         return tris;
     }

@@ -153,5 +153,106 @@ static class QtyXlsxCheck
             finally { try { File.Delete(p2); } catch { } }
         }
         finally { try { File.Delete(path); } catch { } }
+        LandCheck(check0);
+    }
+
+    // ── S301 LR ★[용지조서 · JACK 1117] 편입용지조서 엑셀 — 만든 필지(가상 지번 · 가상 주소 · 만든 좌표)와 만든 공사 범위
+    static void LandCheck(Action<string, bool, string> check)
+    {
+        Console.WriteLine("\n== S301 LR 용지조서(소재지 · 지목 줄 · 소유 구분 · 편입 면적 · 시트) ==");
+        bool Near(double a, double b) => Math.Abs(a - b) <= 0.051;
+        var gf = new NetTopologySuite.Geometries.GeometryFactory();
+        NetTopologySuite.Geometries.LinearRing R(double a0, double b0, double a1, double b1)
+            => gf.CreateLinearRing(new[] { new NetTopologySuite.Geometries.Coordinate(a0, b0), new(a1, b0), new(a1, b1), new(a0, b1), new(a0, b0) });
+        NetTopologySuite.Geometries.Polygon Box(double x0, double y0, double x1, double y1, params (double, double, double, double)[] holes)
+            => gf.CreatePolygon(R(x0, y0, x1, y1), holes.Select(h => R(h.Item1, h.Item2, h.Item3, h.Item4)).ToArray());
+        // ① 소재지 · 지목 줄 · 소유 구분
+        check("S301 LR① 소재지 — 끝 지번 떼고 마지막 시 · 군 · 구 뒤", LandReport.PlaceOf("가상도 가상군 가상면 가상리 12-3", "") == "가상면 가상리"
+              && LandReport.PlaceOf("가상시 가상구 가상동 산5-1", "") == "가상동" && LandReport.PlaceOf("가상특별시 가상읍 나무리 산 7", "") == "가상읍 나무리"
+              && LandReport.PlaceOf("", "9999912345199990001") == "법정동 9999912345" && LandReport.PlaceOf("", "") == "소재지 모름",
+              LandReport.PlaceOf("가상도 가상군 가상면 가상리 12-3", ""));
+        check("S301 LR① 지목 부호 → 집계 줄(코드 차례) · 모름 = 미지번", LandReport.RowOf("전") == "전" && LandReport.RowOf("과") == "과수원" && LandReport.RowOf("장") == "공장"
+              && LandReport.RowOf("원") == "유원지" && LandReport.RowOf("잡") == "잡종지" && LandReport.RowOf("") == "미지번" && LandReport.RowOf("?") == "미지번" && LandReport.JimokRows.Length == 28, "");
+        check("S301 LR① 소유 구분 — 국유지 = 국유 · 시·도유지 · 군유지 = 공유 · 사유 · 혼합 · 모름",
+              LandReport.OwnOf("pub", "국유지") == LandOwn.State && LandReport.OwnOf("pub", "시·도유지") == LandOwn.Public && LandReport.OwnOf("pub", "군유지 외 1") == LandOwn.Public
+              && LandReport.OwnOf("pri", "개인") == LandOwn.Private && LandReport.OwnOf("mix", "개인 외 1") == LandOwn.Mixed && LandReport.OwnOf("unk", "") == LandOwn.Unknown, "");
+        // ② 만든 필지 — 공사 범위 (5,-5)~(25,10)
+        var fp = Box(5, -5, 25, 10);
+        var ps = new List<LandParcel>
+        {
+            new() { Pnu = "9999912345100010000", Jibun = "1", Jimok = "전", Addr = "가상도 가상군 가상면 가상리 1", Kind = "pub", CodeText = "국유지", Ledger = 101, Shape = Box(0, 0, 10, 10) },          // 편입 50
+            new() { Pnu = "9999912345100020001", Jibun = "2-1", Jimok = "답", Addr = "가상도 가상군 가상면 가상리 2-1", Kind = "pub", CodeText = "시·도유지", Ledger = 90, Shape = Box(10, 0, 20, 10) },  // 100 → 지적 90
+            new() { Pnu = "9999912346200030000", Jibun = "산3", Jimok = "임", Addr = "가상도 가상군 가상면 나무리 산3", Kind = "pri", CodeText = "개인", Shape = Box(20, 0, 30, 10, (21, 1, 22, 2)) },   // 50 − 구멍 1 = 49 · 지적 = 도면 99
+            new() { Pnu = "9999912345100040000", Jibun = "4", Jimok = "대", Addr = "가상도 가상군 가상면 가상리 4", Kind = "pri", CodeText = "개인", Ledger = 50, Shape = Box(40, 0, 50, 10) },        // 밖
+            new() { Pnu = "9999912346100050000", Jibun = "5", Jimok = "전", Addr = "가상도 가상군 가상면 나무리 5", Kind = "pri", CodeText = "개인", Ledger = 50, Shape = Box(25, 0, 35, 10) },        // 변만 닿음
+            new() { Pnu = "9999912346100070000", Jibun = "7", Jimok = "", Addr = "가상도 가상군 가상면 나무리 7", Kind = "mix", CodeText = "개인 외 1",
+                    Shape = gf.CreateMultiPolygon(new[] { Box(6, -4, 8, -2), Box(100, 100, 101, 101) }) },                                                                                    // 4 · 지적 5
+            new() { Pnu = "9999912346100080000", Jibun = "8", Jimok = "전", Addr = "가상도 가상군 가상면 나무리 8", Kind = "unk" },                                                                    // 면 없음
+        };
+        var m = LandReport.Build(ps, fp, "가상사업");
+        string Seq(IEnumerable<LandRow> rs) => string.Join(",", rs.Select(r => $"{r.No}:{r.Jibun}:{r.Occupied}/{r.Area}"));
+        check("S301 LR② 줄 — 겹친 필지만 · 소재지 · 지번 차례(산 뒤) · 편입 · 지적",
+              Seq(m.Rows) == "1:1:50/101,2:2-1:90/90,3:7:4/5,4:산3:49/99" && m.Rows[0].Place == "가상면 가상리" && m.Rows[3].Place == "가상면 나무리", Seq(m.Rows));
+        check("S301 LR② 셈 — 받은 7 · 면 없음 1 · 대장 없음 2 · 지적까지 줄임 1 · 소재지 둘", m.Parcels == 7 && m.NoShape == 1 && m.NoLedger == 2 && m.Clamped == 1 && m.Places.SequenceEqual(new[] { "가상면 가상리", "가상면 나무리" }),
+              $"{m.Parcels}/{m.NoShape}/{m.NoLedger}/{m.Clamped}");
+        // ③ 엑셀
+        string? keep = Environment.GetEnvironmentVariable("LANDXLSX_KEEP");   // 눈으로 볼 때만
+        if (!string.IsNullOrEmpty(keep)) LandReportXlsx.Write(m, keep);
+        string path = Path.Combine(Path.GetTempPath(), "dh_land_" + Guid.NewGuid().ToString("N") + ".xlsx");
+        try
+        {
+            LandReportXlsx.Write(m, path);
+            using var wb = new XLWorkbook(path);
+            check("S301 LR③ 시트 넷 — 표지 · 리별집계 · 소유자별집계 · 영구점용", wb.Worksheets.Select(w => w.Name).SequenceEqual(new[] { "표지", "리별집계", "소유자별집계", "영구점용" }), string.Join(",", wb.Worksheets.Select(w => w.Name)));
+            double D(IXLCell c) { var v = c.Value; return v.IsNumber ? v.GetNumber() : double.NaN; }
+            var cv = wb.Worksheet("표지");
+            check("S301 LR③ 표지 — A15:H15 한 칸 · 제목", cv.Cell("A15").GetString() == "용 지 조 서" && cv.MergedRanges.Any(r => r.RangeAddress.ToString() == "A15:H15") && cv.Cell("A15").Style.Font.FontSize == 20, "");
+            var pl = wb.Worksheet("리별집계");
+            // 줄: 5 계 · 6 전 · 7 답 · 10 임야 · 34 미지번 / 열: B~D 계 · E~G 가상리 · H~J 나무리 · K 비고
+            check("S301 LR④ 리별집계 머리 — 제목 · 리 이름 · 필지/면적 · 비고 · 사업명",
+                  pl.Cell("A1").GetString() == "리별집계표(영구점용)" && pl.Cell("E3").GetString() == "가상면 가상리" && pl.Cell("H3").GetString() == "가상면 나무리"
+                  && pl.Cell("E4").GetString() == "필지" && pl.Cell("G4").GetString() == "면적(㎡)" && pl.Cell("K2").GetString() == "비 고" && pl.Cell("E2").GetString() == "가상사업 영구점용"
+                  && pl.MergedRanges.Any(r => r.RangeAddress.ToString() == "E2:J2") && pl.Cell("A6").GetString() == "전" && pl.Cell("A34").GetString() == "미지번", "");
+            check("S301 LR④ 리별집계 값 — 계 4/193 · 가상리 2/140 · 나무리 2/53 · 전 1/50 · 답 90 · 임야 나무리 49 · 미지번 4",
+                  D(pl.Cell("B5")) == 4 && Near(D(pl.Cell("D5")), 193) && D(pl.Cell("E5")) == 2 && Near(D(pl.Cell("G5")), 140) && D(pl.Cell("H5")) == 2 && Near(D(pl.Cell("J5")), 53)
+                  && D(pl.Cell("B6")) == 1 && Near(D(pl.Cell("G6")), 50) && D(pl.Cell("H6")) == 0 && Near(D(pl.Cell("G7")), 90) && Near(D(pl.Cell("J10")), 49) && D(pl.Cell("G10")) == 0
+                  && Near(D(pl.Cell("J34")), 4) && pl.Cell("C6").GetString() == "/",
+                  $"{D(pl.Cell("B5"))}/{D(pl.Cell("D5"))} {D(pl.Cell("G5"))} {D(pl.Cell("J5"))}");
+            var po = wb.Worksheet("소유자별집계");
+            check("S301 LR⑤ 소유자별집계 머리 — 국유지 · 공유지 · 사유지 · 비고",
+                  po.Cell("A1").GetString() == "소유자별집계표(영구점용)" && po.Cell("E3").GetString().Replace(" ", "") == "국유지" && po.Cell("H3").GetString().Replace(" ", "") == "공유지"
+                  && po.Cell("K3").GetString().Replace(" ", "") == "사유지" && po.Cell("N3").GetString() == "비고" && po.Cell("A2").GetString().StartsWith("가상사업 영구점용"), "");
+            check("S301 LR⑤ 소유자별집계 값 — 계 국 1/50 · 공 1/90 · 사 1/49 · 미지번 혼합 1(국공사에 안 넣음)",
+                  D(po.Cell("B5")) == 4 && Near(D(po.Cell("D5")), 193) && D(po.Cell("E5")) == 1 && Near(D(po.Cell("G5")), 50) && D(po.Cell("H5")) == 1 && Near(D(po.Cell("J5")), 90)
+                  && D(po.Cell("K5")) == 1 && Near(D(po.Cell("M5")), 49) && Near(D(po.Cell("G6")), 50) && Near(D(po.Cell("J7")), 90) && Near(D(po.Cell("M10")), 49)
+                  && D(po.Cell("B34")) == 1 && D(po.Cell("E34")) == 0 && D(po.Cell("K34")) == 0 && po.Cell("N34").GetString() == "혼합1" && po.Cell("N5").GetString() == "혼합1",
+                  $"{D(po.Cell("E5"))}/{D(po.Cell("G5"))} {D(po.Cell("H5"))}/{D(po.Cell("J5"))} {D(po.Cell("K5"))}/{D(po.Cell("M5"))} [{po.Cell("N34").GetString()}]");
+            var dt = wb.Worksheet("영구점용");
+            check("S301 LR⑥ 영구점용 머리 — 일련번호 · 지적면적 · 기간점용 · 영구점용 · 소유자 성명/주소 · 관계인",
+                  dt.Cell("A1").GetString() == "편입용지조서" && dt.Cell("B2").GetString() == "영구점용" && dt.Cell("A3").GetString() == "일련번호" && dt.Cell("E3").GetString().StartsWith("지적면적")
+                  && dt.Cell("F3").GetString().StartsWith("기간점용") && dt.Cell("G3").GetString().StartsWith("영구점용") && dt.Cell("J3").GetString() == "소유자" && dt.Cell("J4").GetString() == "성명"
+                  && dt.Cell("K4").GetString() == "주소" && dt.Cell("L3").GetString() == "관계인" && dt.MergedRanges.Any(r => r.RangeAddress.ToString() == "H3:I3"), "");
+            // 줄: 5 가상리 머리 · 6 1 · 7 2-1 · 8 나무리 머리 · 9 7 · 10 산3 · 11 계
+            check("S301 LR⑥ 영구점용 줄 — 소재지 머리(굵게) · 번호 · 지번 글 · 지목 · 지적 · 편입 · 성명/주소/기간점용 빈칸 · 비고 소유 구분 · 계",
+                  dt.Cell("B5").GetString() == "가상면 가상리" && dt.Cell("B5").Style.Font.Bold && D(dt.Cell("A6")) == 1 && dt.Cell("C6").GetString() == "1" && dt.Cell("D6").GetString() == "전"
+                  && Near(D(dt.Cell("E6")), 101) && Near(D(dt.Cell("G6")), 50) && dt.Cell("N6").GetString() == "국유" && dt.Cell("N7").GetString() == "공유"
+                  && dt.Cell("B8").GetString() == "가상면 나무리" && dt.Cell("C9").GetString() == "7" && dt.Cell("N9").GetString() == "혼합" && dt.Cell("C10").GetString() == "산3" && dt.Cell("N10").GetString() == "사유"
+                  && dt.Cell("J6").IsEmpty() && dt.Cell("K6").IsEmpty() && dt.Cell("F6").IsEmpty() && dt.Cell("B11").GetString() == "계" && Near(D(dt.Cell("G11")), 193)
+                  && dt.Cell("G6").Style.NumberFormat.Format == "#,##0.0" && dt.Cell("C6").Style.NumberFormat.Format == "@",
+                  $"{dt.Cell("B5").GetString()} {dt.Cell("C9").GetString()} {D(dt.Cell("G11"))}");
+            var ps2 = dt.PageSetup;
+            check("S301 LR⑥ 인쇄 · 틀 — A4 세로 72% · 1~4줄 반복 · 4줄 고정 · 열 너비(양식)",
+                  ps2.PaperSize == XLPaperSize.A4Paper && ps2.PageOrientation == XLPageOrientation.Portrait && ps2.Scale == 72 && ps2.FirstRowToRepeatAtTop == 1 && ps2.LastRowToRepeatAtTop == 4
+                  && dt.SheetView.SplitRow == 4 && Math.Abs(dt.Column("K").Width - 20.62) < 0.01 && Math.Abs(pl.Column("A").Width - 10.38) < 0.01 && po.PageSetup.Scale == 86,
+                  $"{ps2.Scale} {ps2.FirstRowToRepeatAtTop}-{ps2.LastRowToRepeatAtTop} split {dt.SheetView.SplitRow}");
+            // 가상 값만 — 글 칸 전부가 고정 머리 글이나 만든 값(양식 파일 자료가 섞이지 않았나)
+            var fixedText = new HashSet<string> { "용 지 조 서", "리별집계표(영구점용)", "소유자별집계표(영구점용)", "편입용지조서", "영구점용", "구분", "구 분", "계", "비 고", "비고", "필지", "필  지", "/", "면적(㎡)", "면 적(㎡)",
+                "국    유    지", "공  유  지", "사    유    지", "일련번호", "소재지", "지번", "지목", "지적면적\n(㎡)", "기간점용\n면적(㎡)", "영구점용\n면적(㎡)", "실제이용상황", "소유자", "관계인", "성명", "주소",
+                "국유", "공유", "사유", "혼합", "모름", "혼합1", "1", "2-1", "7", "산3", "전", "답", "임", "", "가상사업 영구점용", "가상사업 영구점용 ", "가상면 가상리", "가상면 나무리" };
+            fixedText.UnionWith(LandReport.JimokRows); fixedText.Add("미지번");
+            var odd = wb.Worksheets.SelectMany(w => w.CellsUsed()).Where(c => c.Value.IsText && !fixedText.Contains(c.GetString())).Select(c => c.Worksheet.Name + "!" + c.Address + "=" + c.GetString()).ToList();
+            check("S301 LR⑦ 글 칸은 고정 머리 · 만든 값뿐", odd.Count == 0, string.Join(" | ", odd.Take(5)));
+        }
+        finally { try { File.Delete(path); } catch { } }
     }
 }

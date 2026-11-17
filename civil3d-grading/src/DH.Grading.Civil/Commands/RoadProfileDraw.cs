@@ -125,6 +125,8 @@ public partial class RoadCommand
                         if (kw == "U")
                         {
                             if (pts.Count > 0) pts.RemoveAt(pts.Count - 1);
+                            // ★[JACK 1117] 자동으로 넣은 다음 장 시점을 지웠으면 그 짝인 앞 장 끝도 함께(한 번 U = 장 끝 점 하나 되돌림)
+                            if (pts.Count > 0 && pts[^1].Kind == DrawKind.SheetEnd) pts.RemoveAt(pts.Count - 1);
                             ed.WriteMessage($"\n{tag} 점 하나 되돌림 · 남은 점 {pts.Count}개");
                             Show(pts.Count == 0 ? ka : pts[^1].Kind == DrawKind.SheetEnd ? pts[^1].Sheet + 1 : pts[^1].Sheet);
                             continue;
@@ -148,7 +150,9 @@ public partial class RoadCommand
                                 st = bound[k]; z = last.Z + gp / 100 * (st - last.S);
                                 if (st <= last.S + PviGap) { ed.WriteMessage($"\n{tag} ⚠장 끝과 너무 가까움 → 되돌리기(U)"); continue; }
                                 pts.Add((st, z, k, DrawKind.SheetEnd));
-                                ed.WriteMessage($"\n{tag} 장 끝에서 멈춤 · 측점 {st:F2} m · 표고 {z:F3} m · 경사 {gp:0.##} %{Over(gp / 100, maxG)} → 다음 장 시점 클릭");
+                                // ★[JACK 1117 «다음 장 시점은 앞 장 마지막 자리를 알아서 찍은 상태로»] 다음 장 시점 = 같은 점 자동
+                                pts.Add((st, z, k + 1, DrawKind.SheetStart));
+                                ed.WriteMessage($"\n{tag} 장 끝에서 멈춤 · 측점 {st:F2} m · 표고 {z:F3} m · 경사 {gp:0.##} %{Over(gp / 100, maxG)} → 다음 장({k + 2}/{sh.Count}) 이어서 · 다음 점");
                                 Show(k + 1);
                                 continue;
                             }
@@ -210,7 +214,9 @@ public partial class RoadCommand
                     pts.Add((cs, cz, k, kind));
                     if (kind == DrawKind.SheetEnd)
                     {
-                        ed.WriteMessage($"\n{tag} 장 끝 · 측점 {cs:F2} m · 표고 {cz:F3} m · 경사 {g * 100:0.##} %{Over(g, maxG)} → 다음 장 시점 클릭");
+                        // ★[JACK 1117] 다음 장 시점 = 같은 점 자동(다시 안 찍음)
+                        pts.Add((cs, cz, k + 1, DrawKind.SheetStart));
+                        ed.WriteMessage($"\n{tag} 장 끝 · 측점 {cs:F2} m · 표고 {cz:F3} m · 경사 {g * 100:0.##} %{Over(g, maxG)} → 다음 장({k + 2}/{sh.Count}) 이어서 · 다음 점");
                         Show(k + 1);
                     }
                     else ed.WriteMessage($"\n{tag} 점 {pts.Count} · 측점 {cs:F2} m · 표고 {cz:F3} m · 경사 {g * 100:0.##} %{Over(g, maxG)}");

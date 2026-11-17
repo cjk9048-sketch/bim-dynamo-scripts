@@ -209,6 +209,8 @@ internal sealed class TutGlow : Window
 internal sealed class TutSpot : Adorner
 {
     internal readonly FrameworkElement Target;
+    /// <summary>★[1117 단원] 뚫을 자리 여럿(합친 네모) — 예: 절토 · 성토 구배 칸 둘.</summary>
+    internal readonly IReadOnlyList<FrameworkElement> Targets;
     readonly int _num;
     readonly Brush _dim = new SolidColorBrush(Color.FromArgb(0x9E, 0x0A, 0x0E, 0x16));
     readonly Pen _ring;
@@ -216,9 +218,10 @@ internal sealed class TutSpot : Adorner
     readonly System.Windows.Threading.DispatcherTimer _tick;
     Rect? _last;
 
-    internal TutSpot(UIElement root, FrameworkElement target, int num) : base(root)
+    internal TutSpot(UIElement root, IReadOnlyList<FrameworkElement> targets, int num) : base(root)
     {
-        Target = target;
+        Targets = targets;
+        Target = targets[0];
         _num = num;
         _dim.Freeze();
         _badge.Freeze();
@@ -236,27 +239,38 @@ internal sealed class TutSpot : Adorner
     /// <summary>뚫을 자리(덮개 좌표) — 단추가 안 보이면 null(전부 덮음).</summary>
     internal Rect? Hole()
     {
-        try
+        Rect? u = null;
+        foreach (var t in Targets)
         {
-            if (!Target.IsVisible || Target.ActualWidth < 1) return null;
-            var r = Target.TransformToAncestor(AdornedElement).TransformBounds(new Rect(Target.RenderSize));
-            r.Inflate(5, 5);
-            return r;
+            try
+            {
+                if (!t.IsVisible || t.ActualWidth < 1) continue;
+                var r = t.TransformToAncestor(AdornedElement).TransformBounds(new Rect(t.RenderSize));
+                u = u is Rect a ? Rect.Union(a, r) : r;
+            }
+            catch { }
         }
-        catch { return null; }
+        if (u is Rect h) { h.Inflate(5, 5); return h; }
+        return null;
     }
 
     /// <summary>뚫은 자리의 화면 위치(DIP) — 말풍선을 그 옆에 둔다. 못 재면 null.</summary>
     internal Rect? HoleOnScreen()
     {
-        try
+        Rect? u = null;
+        foreach (var t in Targets)
         {
-            if (!Target.IsVisible || PresentationSource.FromVisual(Target) == null) return null;
-            var p = Target.PointToScreen(new Point(0, 0));
-            var dpi = VisualTreeHelper.GetDpi(Target);
-            return new Rect(p.X / dpi.DpiScaleX, p.Y / dpi.DpiScaleY, Target.ActualWidth, Target.ActualHeight);
+            try
+            {
+                if (!t.IsVisible || PresentationSource.FromVisual(t) == null) continue;
+                var p = t.PointToScreen(new Point(0, 0));
+                var dpi = VisualTreeHelper.GetDpi(t);
+                var r = new Rect(p.X / dpi.DpiScaleX, p.Y / dpi.DpiScaleY, t.ActualWidth, t.ActualHeight);
+                u = u is Rect a ? Rect.Union(a, r) : r;
+            }
+            catch { }
         }
-        catch { return null; }
+        return u;
     }
 
     protected override void OnRender(DrawingContext dc)

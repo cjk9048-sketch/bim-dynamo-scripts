@@ -69,6 +69,9 @@ public static partial class RoadRing
     /// <summary>둘레 위 점 — 둘레 변 번호 · 변 위 비율.</summary>
     public readonly record struct OnB(int Seg, double U);
 
+    /// <summary>★[JACK 1117 «진입도로 1:0.01»] 거의 수직 사면 — 그 쪽 사면 꼬리 기울기 1/n이 이 값 넘음(n &lt; 0.1 · 전엔 못 넣던 값) · 데이라잇을 꺾임에서 떼는 거리 상한 · 발을 도로 둘레 점으로 넣는 띠 · 발 사이 최소 간격(m).</summary>
+    const double NearVertTail = 10, PushOff = 0.005, FootBand = 0.05, FootGap = 0.01;
+
     /// <summary>사면 자리 S(도로 면 밖 · 바뀐 자리 · 도로 면에 이어진 것) — 마칭 스퀘어(안 = Keep 마디 전부 = 도로 면 + 절 · 성 · 부딪힘) → 도로 면 다각형을 정확히 뺌(★v116.2 — 칸보다 가는 사면 띠도 잡음).
     /// 칸 변 위 = 안(도로 면 또는 Φ &gt; 0) 이분(데이라잇) · 안장 = 칸 가운데 · 도로 둘레 5 mm 안 데이라잇 점 = 둘레 위 점.
     /// 둘레 위 이웃 두 점 사이에는 둘레 꼭짓점을 끼워 S가 도로 둘레를 그대로 따름(도로 면 세모와 맞물림 — 둘레 위 점은 도로 면 세모를 나눠 맞춤).
@@ -154,24 +157,95 @@ public static partial class RoadRing
         var Bd = ev.D.B; int m = Bd.Count; int nBreak = 0, nBv = 0;
         var bVerts = new HashSet<(double, double)>(Bd.Select(q => (q.X, q.Y)));
         bool IsOnB(Coordinate c, out OnB ob) => onBLocal.TryGetValue((c.X, c.Y), out ob);
-        int nSnapB = 0, nSnapKeep = 0, nCurve = 0, nChord = 0;
+        int nSnapB = 0, nSnapKeep = 0, nCurve = 0, nChord = 0, nPush = 0, nFoot = 0, nFootDrop = 0;
+        // ★[검토 LOW9] 발(<see cref="FootBand"/> — 거의 수직 사면만)로 넣은 둘레 위 점 — 뒤에 같은 둘레 변에 오는 올림 · 빼기 교점과 FootGap 안이면 0.1 mm 안은 그 발 자리로 합치고 그 밖은 발을 뺌(짧은 변 · 0.1 mm 쌍 없게)
+        var feet = new HashSet<(double, double)>();
+        (double X, double Y)? NearFoot(int sg, double u, double la, double tol)
+        {
+            foreach (var fk in feet) if (onBLocal.TryGetValue(fk, out var fo) && fo.Seg == sg && Math.Abs(fo.U - u) * la < tol) return fk;
+            return null;
+        }
+        // ★[JACK 1117 «진입도로 1:0.01 진행»] 거의 수직 사면(그 쪽 1:n · n < 0.1 — 전엔 못 넣던 값) 데이라잇 점 둘:
+        //   ① 꺾임(도로 가장자리 · 사면 위 · 아래 끝)에 떼는 거리 안으로 붙으면 그 꺾임에서 그만큼 떼어 냄(원천 거리 방향 · 꺾임의 그 점 쪽 · 높이는 뒤에서 그 자리 원지반 — 둘레 Z = 원지반 그대로).
+        //      떼는 거리 = min(PushOff, 그 단면 가장 짧은 사면 · 소단 폭 ÷ 4) — 평면 어긋남 ≤ 그 값(그 띠만 1:n보다 덜 가파름).
+        //   ② 도로 가장자리 FootBand 안이면 그 점의 발을 도로 둘레 점으로(도로 면 세모를 나눔) — 곧은 도로 변이 한 변(⑩ 100 m)이면 가는 띠 세모가 그 끝 꼭짓점 부채(바늘)가 됨.
+        //   까닭(1117 rvert 실측): 1:0.01이면 높이 2 cm 성토 띠 폭이 0.2 mm — 0.1 mm 마디 · Civil 바늘 문턱(0.125 mm)과 같은 크기라 그 띠의 세모가 바늘(⑩ 바늘 804 · ⑦ ⑫ ⑭ 고리 면 실패).
+        //   n ≥ 0.1(전부터 받던 값)은 안 탐 — 비트 같음.
+        bool PushOffBreak(Coordinate[] ring, int k)
+        {
+            if (!(ev.PcA[0].Tail > NearVertTail || ev.PfA[0].Tail > NearVertTail)) return false;   // 종전 구배는 셈도 안 함(셈 수까지 같게)
+            var c = ring[k]; var p = ev.Eval(c.X, c.Y);
+            if (p.Kind == 1 || !double.IsFinite(p.G) || !double.IsFinite(p.Lo) || !double.IsFinite(p.Hi)) return false;
+            bool cut = Math.Abs(p.G - p.Hi) <= Math.Abs(p.Lo - p.G);
+            var w = cut ? p.WHi : p.WLo; var pa = cut ? ev.PcA : ev.PfA;
+            if (!(pa[0].Tail > NearVertTail) || w.Src < 0 || w.Prof < 0 || w.Prof >= pa.Length || !double.IsFinite(w.Dist)) return false;
+            var E = pa[w.Prof].E; double push = PushOff;
+            for (int i = 1; i < E.Count; i++) if (E[i].D - E[i - 1].D > 1e-9) push = Math.Min(push, (E[i].D - E[i - 1].D) / 4);
+            double off = double.MaxValue, at = 0;
+            foreach (var e in E) if (Math.Abs(w.Dist - e.D) < Math.Abs(off)) { off = w.Dist - e.D; at = e.D; }
+            bool moved = false;
+            if (Math.Abs(off) < push)
+            {
+                double target = at + (off < 0 && at > 0 ? -push : push);
+                var (gx, gy) = ev.SourceGrad(w.Src, c.X, c.Y);
+                if (double.IsFinite(gx) && double.IsFinite(gy))
+                {
+                    double nx = c.X + gx * (target - w.Dist), ny = c.Y + gy * (target - w.Dist);
+                    var q = ev.Eval(nx, ny); var wq = cut ? q.WHi : q.WLo;
+                    if (q.Kind != 1 && double.IsFinite(q.G) && double.IsFinite(wq.Dist) && Math.Abs(wq.Dist - at) >= 0.5 * push)   // 섞인 발 · 모서리에서 거리가 안 따라오면 그대로 둠
+                    {
+                        c = ring[k] = new Coordinate(nx, ny); moved = true;
+                        if (k == 0) ring[^1] = ring[0]; else if (k == ring.Length - 1) ring[0] = ring[k];   // 닫는 점 함께
+                    }
+                }
+            }
+            var (dn, foot, sg) = ev.NearestFoot(c.X, c.Y);
+            if (sg >= 0 && dn > 0 && dn < FootBand && !onBLocal.ContainsKey((foot.X, foot.Y)))
+            {
+                int kk = (sg + 1) % m; double l2 = Sq(Bd[kk].X - Bd[sg].X) + Sq(Bd[kk].Y - Bd[sg].Y), la = Math.Sqrt(l2);
+                double u = l2 < 1e-24 ? 0 : Math.Clamp(((c.X - Bd[sg].X) * (Bd[kk].X - Bd[sg].X) + (c.Y - Bd[sg].Y) * (Bd[kk].Y - Bd[sg].Y)) / l2, 0, 1);
+                // 둘레 꼭짓점 · 다른 발과 FootGap 안이면 안 넣음(짧은 변 · 0.1 mm 쌍이 되지 않게)
+                if (u * la >= FootGap && (1 - u) * la >= FootGap && !onBLocal.Any(kv => kv.Value.Seg == sg && Math.Abs(kv.Value.U - u) * la < FootGap))
+                { onBLocal[(foot.X, foot.Y)] = new OnB(sg, u); feet.Add((foot.X, foot.Y)); nFoot++; }
+            }
+            return moved;
+        }
+        // ★[v117.18.13 · JACK 1116 «소단이 뭉개져» · 바늘 원인 계측] 급한 굽이 범위 칸 변 데이라잇 점 2 cm 합침(<see cref="ThinTol"/> — 끊김선 점 합침과 같은 값) —
+        //   데이라잇이 0.25 m 칸 마디 곁을 지나면 그 마디에서 만나는 두 칸 변 위 Φ = 0 점이 mm 안에 붙어 그 짧은 변이 바늘 밑변이 됐다(1116 계측: 급한 굽이 범위 바늘 중 54 · 둘레 2 cm 안 쌍 113 중 칸 변끼리).
+        //   두 점 다 정확한 Φ = 0 점(칸 변 이분)이라 하나를 빼도 둘레는 데이라잇 위 — 빠진 자리 현 어긋남 ≤ 2 cm 현의 처짐. 굽이 없는 도로 · 범위 밖은 그대로(비트 같음).
+        var gridPts = ev.D.Sharp.Count > 0 ? new HashSet<(double, double)>(edgePt.Values.Select(c => (c.X, c.Y))) : null;
+        int nGridThin = 0, nGridThinUndo = 0; bool noThin = false;
+        Coordinate[] ThinGrid(Coordinate[] ring0)
+        {
+            if (gridPts == null || noThin || ring0.Length < 5) return (Coordinate[])ring0.Clone();
+            bool Thin(Coordinate a, Coordinate b) => gridPts.Contains((a.X, a.Y)) && gridPts.Contains((b.X, b.Y)) && Sq(a.X - b.X) + Sq(a.Y - b.Y) < ThinTol * ThinTol && InSharpZone(ev, a) && InSharpZone(ev, b);
+            // 이웃이 도로 둘레 곁(5 mm 안 — 아래 다시 짓기가 둘레로 올림)이면 안 뺌: 둘레 위 점에 닿는 변은 원지반 변 건넘점을 안 끼워 그 변 속 교점이 원지반에서 뜬다(S270 헤어핀 R10 0.12 mm)
+            bool NearRim(Coordinate c) { var (dn, _, sg) = ev.NearestFoot(c.X, c.Y); return sg >= 0 && dn < 0.006; }
+            var o = new List<Coordinate>();
+            for (int k = 0; k + 1 < ring0.Length; k++) if (o.Count == 0 || !Thin(o[^1], ring0[k]) || NearRim(o[^1]) || NearRim(ring0[k + 1])) o.Add(ring0[k]);
+            while (o.Count > 3 && Thin(o[^1], o[0]) && !NearRim(o[^2]) && !NearRim(o[0])) o.RemoveAt(o.Count - 1);
+            if (o.Count < 4 || o.Count == ring0.Length - 1) return (Coordinate[])ring0.Clone();
+            nGridThin += ring0.Length - 1 - o.Count;
+            o.Add(new Coordinate(o[0].X, o[0].Y)); return o.ToArray();
+        }
         List<Coordinate> Rebuild(Coordinate[] ring0)
         {
             // 도로 둘레 5 mm 안 데이라잇 점 = 도로 가장자리가 땅과 거의 같은 높이인 자리(사면 높이 ≤ 약 3 mm) → 둘레 위로 올림(1 mm 안이면 둘레 꼭짓점 그대로)
             //   0.25 m 칸 줄이 둘레 볼록 꼭짓점을 질러 도로 면과 사면 사이에 빈틈(0.07 ~ 0.14 ㎡ · 1109 V 굽이 실측)을 만들던 것을 막는다.
-            var ring = (Coordinate[])ring0.Clone();
-            for (int k = 0; k < ring.Length; k++)
+            var ring = ThinGrid(ring0);
+            // ★[검토 LOW8] 닫는 점(= 첫 점)은 따로 안 셈 — 첫 점을 떼고(PushOffBreak) 닫는 점을 다시 재면 올림이 달라 처음 ≠ 끝(≤ 5 mm 변 하나 더)이 됐다 · 끝에서 첫 점으로 맞춤
+            for (int k = 0; k + 1 < ring.Length; k++)
             {
                 var c = ring[k]; if (IsOnB(c, out _) || bVerts.Contains((c.X, c.Y))) continue;
                 var (dn, foot, sg) = ev.NearestFoot(c.X, c.Y);
-                if (sg < 0 || dn >= 0.005) continue;
+                if (sg < 0 || dn >= 0.005) { if (PushOffBreak(ring, k)) nPush++; continue; }
                 // ★[v117.16 · 계획 5단계] 둘레로 올림은 그 둘레 점이 땅 위(|도로 면 − 원지반| ≤ 0.1 mm)일 때만 — 아니면 데이라잇 점 그대로(경계 Z = 원지반 지킴)
                 if (ExactDaylight && ev.Ground != null)
                 {
                     int k0 = (sg + 1) % m; double lv = Sq(Bd[k0].X - Bd[sg].X) + Sq(Bd[k0].Y - Bd[sg].Y);
                     double uu = lv < 1e-24 ? 0 : Math.Clamp(((c.X - Bd[sg].X) * (Bd[k0].X - Bd[sg].X) + (c.Y - Bd[sg].Y) * (Bd[k0].Y - Bd[sg].Y)) / lv, 0, 1);
                     double zr = Bd[sg].Z + (Bd[k0].Z - Bd[sg].Z) * uu;
-                    if (!ev.Ground.TryGetElevation(foot.X, foot.Y, out double gr) || Math.Abs(zr - gr) > 1e-4) { nSnapKeep++; continue; }
+                    if (!ev.Ground.TryGetElevation(foot.X, foot.Y, out double gr) || Math.Abs(zr - gr) > 1e-4) { nSnapKeep++; if (PushOffBreak(ring, k)) nPush++; continue; }
                 }
                 int kk = (sg + 1) % m; double l2 = Sq(Bd[kk].X - Bd[sg].X) + Sq(Bd[kk].Y - Bd[sg].Y);
                 double u = l2 < 1e-24 ? 0 : Math.Clamp(((c.X - Bd[sg].X) * (Bd[kk].X - Bd[sg].X) + (c.Y - Bd[sg].Y) * (Bd[kk].Y - Bd[sg].Y)) / l2, 0, 1);
@@ -180,8 +254,15 @@ public static partial class RoadRing
                 if (u * la < 0.001) { nc = new Coordinate(Bd[sg].X, Bd[sg].Y); ob = new OnB(sg, 0); }
                 else if ((1 - u) * la < 0.001) { nc = new Coordinate(Bd[kk].X, Bd[kk].Y); ob = new OnB(kk, 0); }
                 else { nc = new Coordinate(foot.X, foot.Y); ob = new OnB(sg, u); }
+                if (ob.U > 0 && ob.U < 1 && NearFoot(sg, u, la, FootGap) is { } fk)
+                {
+                    if (Sq(fk.X - nc.X) + Sq(fk.Y - nc.Y) < 1e-8) { nc = new Coordinate(fk.X, fk.Y); ob = onBLocal[fk]; }   // 0.1 mm 안 — 그 발 자리로 합침
+                    else { onBLocal.Remove(fk); nFootDrop++; }
+                    feet.Remove(fk);
+                }
                 onBLocal[(nc.X, nc.Y)] = ob; ring[k] = nc; nSnapB++;
             }
+            ring[^1] = ring[0];
             var o = new List<Coordinate>();
             for (int k = 0; k + 1 < ring.Length; k++)
             {
@@ -204,7 +285,7 @@ public static partial class RoadRing
                     if (g.T * l < 1e-4 || (1 - g.T) * l < 1e-4) continue;
                     var cg = new Coordinate(a.X + (b.X - a.X) * g.T, a.Y + (b.Y - a.Y) * g.T);
                     // ★★[v117.16 · 계획 5단계] 현이 아니라 원지반 변 위의 Φ = 0 자리 — 그 변 위 점은 원지반 세모 둘이 나눠 가져 경계 변이 원지반 세모 안에서만 곧게 감(|P0 − G| = 0)
-                    if (ExactDaylight && !g.Vertex && CurveOnEdge(g, cg, out var cc)) { o.Add(cc); Tag(cc, "원지반변"); nCurve++; }
+                    if (ExactDaylight && !g.Vertex && CurveOnEdge(ev, g, cg, out var cc)) { o.Add(cc); Tag(cc, "원지반변"); nCurve++; }
                     else { o.Add(cg); Tag(cg, "원지반변(현)"); nChord++; }
                     nBreak++;
                 }
@@ -213,33 +294,6 @@ public static partial class RoadRing
             var o2 = new List<Coordinate>(); foreach (var c in o) if (o2.Count == 0 || Sq(o2[^1].X - c.X) + Sq(o2[^1].Y - c.Y) > 1e-14) o2.Add(c);
             if (!o2[0].Equals2D(o2[^1])) o2.Add(new Coordinate(o2[0].X, o2[0].Y));
             return o2;
-        }
-        // 원지반 변(g.Ax,Ay → Bx,By) 위에서 현 건넘점 곁의 Φ = 0 자리 — 건넘점에서 양쪽으로 넓혀 부호가 바뀌는 칸(±0.1 m 안)을 잡고 0.1 µm까지 이분 · 못 잡으면 거짓(현 그대로)
-        double PhiAt(double x, double y) { var p = ev.Eval(x, y); return p.Kind == 1 ? 1 : Evaluator.Phi(p); }
-        bool CurveOnEdge(GroundBreak g, Coordinate c0, out Coordinate cc)
-        {
-            cc = c0;
-            double ex = g.Bx - g.Ax, ey = g.By - g.Ay, el = Math.Sqrt(ex * ex + ey * ey); if (el < 1e-9) return false;
-            double u0 = ((c0.X - g.Ax) * ex + (c0.Y - g.Ay) * ey) / (el * el);
-            double f0 = PhiAt(g.Ax + ex * u0, g.Ay + ey * u0); if (!double.IsFinite(f0)) return false;
-            if (Math.Abs(f0) <= 1e-7) { cc = new Coordinate(g.Ax + ex * u0, g.Ay + ey * u0); return true; }
-            double ua = u0, fa = f0, ub = double.NaN;
-            for (double st = 1e-4; st <= 0.1 + 1e-12 && double.IsNaN(ub); st *= 2)
-                foreach (int sgn in new[] { 1, -1 })
-                {
-                    double u = Math.Clamp(u0 + sgn * st / el, 0, 1), fu = PhiAt(g.Ax + ex * u, g.Ay + ey * u);
-                    if (double.IsFinite(fu) && (fu > 0) != (f0 > 0)) { ub = u; break; }
-                }
-            if (double.IsNaN(ub)) return false;
-            double lo2 = ua, hi2 = ub;
-            for (int it = 0; it < 50 && Math.Abs(hi2 - lo2) * el > 1e-7; it++)
-            {
-                double um = (lo2 + hi2) / 2, fm = PhiAt(g.Ax + ex * um, g.Ay + ey * um);
-                if ((fm > 0) == (fa > 0)) lo2 = um; else hi2 = um;
-            }
-            double uf = (lo2 + hi2) / 2;
-            cc = new Coordinate(g.Ax + ex * uf, g.Ay + ey * uf);
-            return true;
         }
         var rPolys = new List<Polygon>();
         for (int gi = 0; gi < Sg.NumGeometries; gi++)
@@ -250,10 +304,21 @@ public static partial class RoadRing
             var holes = new List<LinearRing>();
             for (int h = 0; h < pg.NumInteriorRings; h++) { var hr = Rebuild(pg.GetInteriorRingN(h).Coordinates); if (hr.Count >= 4) holes.Add(gf.CreateLinearRing(hr.ToArray())); }
             var np = gf.CreatePolygon(gf.CreateLinearRing(sh.ToArray()), holes.ToArray());
+            if (!np.IsValid && gridPts != null && !noThin)
+            {
+                // 칸 변 점 합침이 고리를 무효로 만들면(자기 교차 등) 이 조각은 합치지 않고 다시
+                noThin = true;
+                var sh2 = Rebuild(pg.ExteriorRing.Coordinates); var holes2 = new List<LinearRing>();
+                for (int h = 0; h < pg.NumInteriorRings; h++) { var hr = Rebuild(pg.GetInteriorRingN(h).Coordinates); if (hr.Count >= 4) holes2.Add(gf.CreateLinearRing(hr.ToArray())); }
+                noThin = false; nGridThinUndo++;
+                if (sh2.Count >= 4) np = gf.CreatePolygon(gf.CreateLinearRing(sh2.ToArray()), holes2.ToArray());
+            }
             if (!np.IsValid) note = $"도로 면 ∪ 사면 다각형 무효({new NetTopologySuite.Operation.Valid.IsValidOp(np).ValidationError?.Message})";
             rPolys.Add(np);
         }
         // 도로 면 빼기 — 둘레 위 점(5 mm 안 올림)을 도로 면 둘레에도 끼워 겹치는 변이 좌표까지 같게(빼기 뒤 실오라기 없음)
+        Geometry DeckAug()
+        {
         var bySegB = new Dictionary<int, List<(double U, Coordinate C)>>();
         foreach (var kv in onBLocal)
         {
@@ -267,13 +332,18 @@ public static partial class RoadRing
             if (bySegB.TryGetValue(v, out var l)) foreach (var q in l.OrderBy(q => q.U)) dcs.Add(q.C);
         }
         dcs.Add(new Coordinate(dcs[0].X, dcs[0].Y));
-        var deckAug = gf.CreatePolygon(dcs.ToArray());
+        return gf.CreatePolygon(dcs.ToArray());
+        }
+        var deckAug = DeckAug();
         // ★[v116.2 설치 전 검토 M1] 조각을 먼저 합침 — 대각으로만 닿던 두 조각이 5 mm 올림 · 둘레 꼭짓점 끼움으로 같은 도로 변을 나눠 가지면 겹친 MultiPolygon(무효)이 되어 빼기가 깨진다
         if (rPolys.Count == 0) { note = "사면 자리 다각형 없음(둘레 다시 짓기 뒤)"; return null; }
         Geometry Rg;
         try { Rg = rPolys.Count == 1 ? rPolys[0] : NetTopologySuite.Operation.Union.UnaryUnionOp.Union(rPolys.Cast<Geometry>().ToList()); }
         catch (Exception ex) { note = $"사면 자리 조각 합치기 실패({ex.GetType().Name})"; return null; }   // ★[v116.3 검토 L5] 부르는 쪽이 옛 엔진으로 물러섬(까닭 한 줄)
-        Geometry Sd;
+        Geometry Sd = null!;
+        int nCross = 0;
+        for (int pass = 0; pass < 2; pass++)
+        {
         try { Sd = Rg.Difference(deckAug); }
         catch
         {
@@ -281,7 +351,7 @@ public static partial class RoadRing
             catch (Exception ex) { note = $"도로 면 빼기 실패({ex.GetType().Name})"; return null; }
         }
         // 빼기가 새로 만든 점(사면 자리 줄이 도로 면 모서리를 질러 생긴 교점)도 둘레 위 점으로
-        int nCross = 0;
+        var cross = new List<((double, double) K, OnB B)>(); var dropF = new List<(double, double)>();
         foreach (var c in Sd.Coordinates)
         {
             if (onBLocal.ContainsKey((c.X, c.Y)) || bVerts.Contains((c.X, c.Y))) continue;
@@ -289,7 +359,17 @@ public static partial class RoadRing
             if (sg < 0 || dn > 1e-6) continue;
             int kk = (sg + 1) % m; double l2 = Sq(Bd[kk].X - Bd[sg].X) + Sq(Bd[kk].Y - Bd[sg].Y);
             double u = l2 < 1e-24 ? 0 : Math.Clamp(((c.X - Bd[sg].X) * (Bd[kk].X - Bd[sg].X) + (c.Y - Bd[sg].Y) * (Bd[kk].Y - Bd[sg].Y)) / l2, 0, 1);
-            onBLocal[(c.X, c.Y)] = new OnB(sg, u); nCross++;
+            cross.Add(((c.X, c.Y), new OnB(sg, u)));
+            // ★[검토 LOW9] 빼기 교점이 발과 FootGap 안 — 발을 빼고 한 번 더 뺌(교점 자리는 빼기가 정함 · 발은 덤으로 넣은 점)
+            if (pass == 0 && u > 0 && u < 1 && NearFoot(sg, u, Math.Sqrt(l2), FootGap) is { } fk) dropF.Add(fk);
+        }
+        if (dropF.Count > 0)
+        {
+            foreach (var fk in dropF.Distinct()) { onBLocal.Remove(fk); feet.Remove(fk); nFootDrop++; }
+            deckAug = DeckAug(); continue;
+        }
+        foreach (var (k2, b2) in cross) { onBLocal[k2] = b2; nCross++; }
+        break;
         }
         var outPolys = new List<Polygon>(); int nTiny = 0, nIsle = 0;
         for (int gi = 0; gi < Sd.NumGeometries; gi++)
@@ -324,10 +404,59 @@ public static partial class RoadRing
         foreach (var kv in onBLocal) onB[kv.Key] = kv.Value;
         Geometry R = outPolys.Count == 1 ? outPolys[0] : gf.CreateMultiPolygon(outPolys.ToArray());
         note = (note.Length > 0 ? "⚠" + note + " · " : "") + $"사면 자리 {outPolys.Count}개 · 넓이 {R.Area:F0} ㎡ · 둘레 점 {R.NumPoints} · 도로 둘레 위 점 {onBLocal.Count}(5 mm 안 올림 {nSnapB} · 빼기 교점 {nCross}) · 끼운 둘레 꼭짓점 {nBv} · 바탕 건넘점 {nBreak}"
-            + $" · 원지반 변 위 Φ=0 {nCurve}(현 {nChord}) · 둘레 올림 안 함 {nSnapKeep}" + (nIsle > 0 ? $" · 1 ㎡ 아래 땅 섬 메움 {nIsle}" : "") + (nTiny > 0 ? $" · ⚠1 cm² 아래 조각 {nTiny}" : "") + (gb == null ? " · ⚠바탕이 꺾임을 못 물음" : "");
+            + $" · 원지반 변 위 Φ=0 {nCurve}(현 {nChord}) · 둘레 올림 안 함 {nSnapKeep}" + (nPush + nFoot > 0 ? $" · 수직 사면 꺾임에서 뗌 {nPush} · 도로 둘레 발 {nFoot}" + (nFootDrop > 0 ? $"(곁 점과 1 cm 안이라 뺌 {nFootDrop})" : "") : "") + (nIsle > 0 ? $" · 1 ㎡ 아래 땅 섬 메움 {nIsle}" : "") + (nGridThin > 0 ? $" · 급한 굽이 칸 변 데이라잇 2 cm 점 합침 {nGridThin}" + (nGridThinUndo > 0 ? $"(무효라 되돌린 조각 {nGridThinUndo})" : "") : "") + (nTiny > 0 ? $" · ⚠1 cm² 아래 조각 {nTiny}" : "") + (gb == null ? " · ⚠바탕이 꺾임을 못 물음" : "");
         return R;
     }
 
+    // 원지반 변(g.Ax,Ay → Bx,By) 위에서 현 건넘점 곁의 Φ = 0 자리 — 건넘점에서 양쪽으로 넓혀 부호가 바뀌는 칸(±0.1 m 안)을 잡고 0.1 µm까지 이분 · 못 잡으면 거짓(현 그대로)
+    static bool CurveOnEdge(Evaluator ev, GroundBreak g, Coordinate c0, out Coordinate cc)
+    {
+        double PhiAt(double x, double y) { var p = ev.Eval(x, y); return p.Kind == 1 ? 1 : Evaluator.Phi(p); }
+        cc = c0;
+        double ex = g.Bx - g.Ax, ey = g.By - g.Ay, el = Math.Sqrt(ex * ex + ey * ey); if (el < 1e-9) return false;
+        double u0 = ((c0.X - g.Ax) * ex + (c0.Y - g.Ay) * ey) / (el * el);
+        double f0 = PhiAt(g.Ax + ex * u0, g.Ay + ey * u0); if (!double.IsFinite(f0)) return false;
+        if (Math.Abs(f0) <= 1e-7) { cc = new Coordinate(g.Ax + ex * u0, g.Ay + ey * u0); return true; }
+        double ua = u0, fa = f0, ub = double.NaN;
+        for (double st = 1e-4; st <= 0.1 + 1e-12 && double.IsNaN(ub); st *= 2)
+            foreach (int sgn in new[] { 1, -1 })
+            {
+                double u = Math.Clamp(u0 + sgn * st / el, 0, 1), fu = PhiAt(g.Ax + ex * u, g.Ay + ey * u);
+                if (double.IsFinite(fu) && (fu > 0) != (f0 > 0)) { ub = u; break; }
+            }
+        if (double.IsNaN(ub)) return false;
+        double lo2 = ua, hi2 = ub;
+        for (int it = 0; it < 50 && Math.Abs(hi2 - lo2) * el > 1e-7; it++)
+        {
+            double um = (lo2 + hi2) / 2, fm = PhiAt(g.Ax + ex * um, g.Ay + ey * um);
+            if ((fm > 0) == (fa > 0)) lo2 = um; else hi2 = um;
+        }
+        double uf = (lo2 + hi2) / 2;
+        cc = new Coordinate(g.Ax + ex * uf, g.Ay + ey * uf);
+        return true;
+    }
+
+    /// <summary>★[검토 MED2] 꺾은선 위 자리 — 토막 q의 비율 t 점에서 선 따라 s m(+ 끝 쪽 · − 첫 쪽 · 토막 끝을 넘으면 다음 토막으로) · 그 토막 · 토막 위 비율 · 선 안인가(선 끝 너머면 거짓).</summary>
+    static (double X, double Y, int J, double T, bool In) Along(List<Point3> P, int q, double t, double s)
+    {
+        double L(int j) => Math.Sqrt(Sq(P[j + 1].X - P[j].X) + Sq(P[j + 1].Y - P[j].Y));
+        (double, double, int, double, bool) At(int j, double u) => (P[j].X + (P[j + 1].X - P[j].X) * u, P[j].Y + (P[j + 1].Y - P[j].Y) * u, j, u, true);
+        double lq = L(q), tq = t + s / lq;
+        if (tq >= 0 && tq <= 1) return At(q, tq);
+        if (tq > 1)
+        {
+            double rem = (tq - 1) * lq;
+            for (int j = q + 1; j + 1 < P.Count; j++) { double lj = L(j); if (lj < 1e-12) continue; if (rem <= lj) return At(j, rem / lj); rem -= lj; }
+        }
+        else
+        {
+            double rem = -tq * lq;
+            for (int j = q - 1; j >= 0; j--) { double lj = L(j); if (lj < 1e-12) continue; if (rem <= lj) return At(j, 1 - rem / lj); rem -= lj; }
+        }
+        return (double.NaN, double.NaN, q, double.NaN, false);
+    }
+    /// <summary>★[JACK 1117] 선 위 Φ = 0 넓혀 찾기 — 칸(0.25 m) 대각 · 걸음.</summary>
+    const double DlScan = 0.36, DlScanStep = 0.025;
     /// <summary>★★[v117.17 · JACK 1116 «남은 것 모두»] 끊김선(소단 · 주름선)이 데이라잇 현(칸 변 점 사이 곧은 변)을 지나는 자리 — 그 선 위 Φ = 0 점을 사면 자리 둘레에 넣음.
     /// 데이라잇은 설계면 꺾임(소단 아랫선 등)을 지날 때 꺾이는데 현은 그 모서리를 질러 간다 → 선 ∩ 현 점은 땅 높이(경계 Z = 원지반)인데 셈은 땅과 1 ~ 2 cm 달라
     /// 8 cm 세모가 기울기 1.23(1116 계측: S236 ③ 헤어핀 소단 아랫선 끝 · 셈 61.705 · 땅 61.721). 선 위 이분(0.1 µm)으로 그 점 P를 찾아 둘레가 P를 지나게 함:
@@ -337,6 +466,7 @@ public static partial class RoadRing
     {
         n = 0;
         if (ev.Ground == null) return S;
+        var gb = ev.Ground as IGroundBreaks; var brk = new List<GroundBreak>();
         var gf = new GeometryFactory();
         var polys = new List<Polygon>();
         for (int gi = 0; gi < S.NumGeometries; gi++) if (S.GetGeometryN(gi) is Polygon pg) polys.Add(pg);
@@ -353,10 +483,29 @@ public static partial class RoadRing
         static bool Inside(in Pt p) { double ph = Evaluator.Phi(p); return p.Kind == 1 || (p.Kind is >= 2 and <= 4 && double.IsFinite(ph) && ph > 0); }
         bool OnRim(double x, double y) { var (dn, _, sg) = ev.NearestFoot(x, y); return sg >= 0 && dn <= 1e-6; }
         // 현 속에 넣을 점(현 k · 현 위 비율) · 현 끝 바꿀 점(고리 r · 꼭짓점 v) · 넣은 뒤 확인할 (고리 · 선 토막 · P)
-        var add = new Dictionary<(int R, int K), List<(double U, Coordinate C)>>();
-        var repl = new Dictionary<(int R, int V), Coordinate>();
-        var checks = new List<(int R, double X0, double Y0, double X1, double Y1, Coordinate P)>();
-        foreach (var bl in ls.Benches.Concat(ls.Creases))
+        //   ★[검토 MED1 · MED2] 넣는 점마다 번호(Id) — 다각형이 무효 · 확인 실패면 그 점만 빼고(나머지는 그대로) · 선 점 옮김(moves)은 받은 점만 · 맨 끝에
+        var add = new Dictionary<(int R, int K), List<(double U, Coordinate C, int Id)>>();
+        var repl = new Dictionary<(int R, int V), (Coordinate C, int Id)>();
+        var checks = new List<(int R, double X0, double Y0, double X1, double Y1, Coordinate P, int Id)>();
+        var moves = new List<(Bl L, int I, double X, double Y, int Id)>();
+        int nIns = 0;
+        // ★[검토 MED1] 선 둘 넘게 함께 가진 점(T자 · 주름 끝)은 안 옮김 — 옮기면 다른 선 끝이 매달림
+        var vtxUse = new Dictionary<(double, double), int>();
+        foreach (var bl in ls.Benches.Concat(ls.Creases)) foreach (var key in bl.Pts.Select(q => (q.X, q.Y)).Distinct()) vtxUse[key] = vtxUse.GetValueOrDefault(key) + 1;
+        // ★[v117.18.13] 끝을 P로 바꾸면 이웃 두 현이 원지반 변을 새로 건너는가(그 속 교점은 경계 높이 = 원지반을 못 지킴 — S270 헤어핀 R10 교점 0.12 mm) — 건너면 바꾸지 않고 끼움(종전 길)
+        var gbr = ev.Ground as IGroundBreaks; var gbl = new List<GroundBreak>();
+        bool NewBreak(int r, int v, double px, double py)
+        {
+            if (gbr == null) return false;
+            int nk = rings[r].Length - 1; var pv = rings[r][(v - 1 + nk) % nk]; var nx = rings[r][(v + 1) % nk];
+            foreach (var (ax, ay, bx, by) in new[] { (pv.X, pv.Y, px, py), (px, py, nx.X, nx.Y) })
+            {
+                gbl.Clear(); gbr.Breaks(ax, ay, bx, by, gbl);
+                if (gbl.Any(g => g.T > 1e-9 && g.T < 1 - 1e-9)) return true;
+            }
+            return false;
+        }
+        foreach (var bl in ls.Benches.Concat(ls.Creases).Where(l => l.K != KtMark))   // ★[v117.18.13] 다른 무리 꺾임선은 둘레 2 cm 안을 안 감(면 짓기에서 뺌) — 둘레 점을 넣거나 옮기지 않음(S270 헤어핀 R10 교점 0.12 mm)
             for (int q = 0; q + 1 < bl.Pts.Count; q++)
             {
                 var p0 = bl.Pts[q]; var p1 = bl.Pts[q + 1];
@@ -373,24 +522,64 @@ public static partial class RoadRing
                     // 선 위 ±0.1 m 안에서 안 → 밖으로 바뀌는 자리(선 끝이 현 위에서 멈췄으면 그 방향으로 곧게 늘여 봄 — 끝은 매달린 끝 늘임이 둘레까지 이음)
                     double w = 0.1 / ll, ta = t - w, tb = t + w;
                     bool ia = Inside(ev.Eval(p0.X + lx * ta, p0.Y + ly * ta)), ib = Inside(ev.Eval(p0.X + lx * tb, p0.Y + ly * tb));
-                    if (ia == ib) continue;
-                    double lo = ia ? ta : tb, hi = ia ? tb : ta;
-                    for (int it = 0; it < 50 && Math.Abs(hi - lo) * ll > 1e-7; it++) { double tm = (lo + hi) / 2; if (Inside(ev.Eval(p0.X + lx * tm, p0.Y + ly * tm))) lo = tm; else hi = tm; }
-                    double tf = (lo + hi) / 2, px = p0.X + lx * tf, py = p0.Y + ly * tf;
+                    double lo = ia ? ta : tb, hi = ia ? tb : ta;   // lo = 안 · hi = 밖
+                    // ★[JACK 1117 «고를 선 높이 = 면»] ±0.1 m에 Φ = 0이 없으면 칸 대각(DlScan) 안까지 2.5 cm씩 넓혀 가장 가까운 바뀜 — 소단선이 땅과 비슷한 기울기로 만나면
+                    //   (소단 윗선 · 땅 기울기 차 0.14) 현이 모서리를 질러 간 차 2 cm가 선 따라 13 cm가 돼 ±0.1 m 밖이었다(현장 덤프 A 성 우 K2 끝 (288.34, 161.92) · 셈 − 땅 21.7 mm 계측)
+                    //   ★[검토 MED2] 넓혀 찾기는 먼저 선 위로(토막 [0, 1]을 넘으면 다음 토막으로 · 선 끝 너머로는 안 감) — 토막을 곧게 늘인 자리는 굽은 소단선을 mm 비껴 바늘 ·
+                    //   선 위에서 못 찾으면(선이 꺾인 점을 돌아 0.36 m 안에 바뀜이 없음 · 선 끝) 그 토막을 곧게 늘여(옛 셈) — 안 하면 1:0.01 도로 끝 모서리 소단 윗선이 데이라잇 점을 잃어
+                    //   선 높이가 셈과 0.95 m 어긋났다(rvert ② 계측 · 선 위로만 찾으면 그 자리 넷을 못 찾음)
+                    double px, py; int pj = q;
+                    if (ia == ib)
+                    {
+                        bool far = false; double slo = 0, shi = 0; bool onLine = true;
+                        (double X, double Y, int J, double T, bool In) At(double sv) => onLine ? Along(bl.Pts, q, t, sv) : (p0.X + lx * (t + sv / ll), p0.Y + ly * (t + sv / ll), q, t + sv / ll, true);
+                        for (int pass = 0; pass < 2 && !far; pass++)
+                        {
+                            onLine = pass == 0;
+                            for (double s = 0.1 + DlScanStep; s <= DlScan + 1e-9 && !far; s += DlScanStep)
+                                foreach (int sg in new[] { 1, -1 })
+                                {
+                                    double s1 = sg * s, s0 = sg * (s - DlScanStep);   // s0까지는 ia와 같음
+                                    var q1 = At(s1); if (!q1.In) continue;
+                                    if (Inside(ev.Eval(q1.X, q1.Y)) == ia) continue;
+                                    slo = ia ? s0 : s1; shi = ia ? s1 : s0; far = true; break;
+                                }
+                        }
+                        if (!far) continue;
+                        for (int it = 0; it < 50 && Math.Abs(shi - slo) > 1e-7; it++) { double sm = (slo + shi) / 2; var qm = At(sm); if (Inside(ev.Eval(qm.X, qm.Y))) slo = sm; else shi = sm; }
+                        var qf = At((slo + shi) / 2); px = qf.X; py = qf.Y; pj = qf.J;
+                    }
+                    else
+                    {
+                        for (int it = 0; it < 50 && Math.Abs(hi - lo) * ll > 1e-7; it++) { double tm = (lo + hi) / 2; if (Inside(ev.Eval(p0.X + lx * tm, p0.Y + ly * tm))) lo = tm; else hi = tm; }
+                        double tf = (lo + hi) / 2; px = p0.X + lx * tf; py = p0.Y + ly * tf;
+                    }
+                    int id = nIns;
                     // [검토 L-3] 0.1 mm 마디 자리 원지반이 없으면(바탕 끝) 안 넣음 — 경계 Z = 원지반을 못 지킴
                     if (!ev.Ground.TryGetElevation(Snap4(px), Snap4(py), out _)) continue;
                     double el2 = ex * ex + ey * ey, uu = ((px - a.X) * ex + (py - a.Y) * ey) / el2, off = Math.Abs((px - a.X) * ey - (py - a.Y) * ex) / Math.Sqrt(el2);
                     if (dbgP) DebugRing!($"[선 데이라잇 진단] 선 ({p0.X % 1000:F3},{p0.Y % 1000:F3})–({p1.X % 1000:F3},{p1.Y % 1000:F3}) 현 ({a.X % 1000:F3},{a.Y % 1000:F3})–({b.X % 1000:F3},{b.Y % 1000:F3}) X t {t:F4} u {u:F4} · Φ=0 ({px % 1000:F4},{py % 1000:F4}) uu {uu:F4} 현에서 {off * 1000:F1} mm");
-                    // 현에서 5 cm 넘게 떨어지면(다른 자리) 안 넣음 · 현 위면(0.1 µm) 그대로
-                    if (off > 0.05 || off < 1e-7) continue;
+                    // ★[JACK 1117] 현에서 DlScan 넘게 떨어지면(다른 자리) 안 넣음 · 현 위면(0.1 µm) 그대로 — 옛 5 cm는 선이 현을 비스듬히 지나며 모서리를 질러 간 자리(5.4 ~ 7.5 cm · 현장 덤프 A 소단선 끝 셋 · 셈 − 땅 22 ~ 28 mm)를 막았다(P는 선 위 바뀜 곁이라 다른 자리가 아님)
+                    if (off > DlScan || off < 1e-7) continue;
                     // [검토 L-4] 현 끝 0.25 mm 안 = 그 끝 점(칸 변 Φ = 0 점)이 이미 그 자리 — 그대로(0.1 mm 마디 넣기가 합쳐 쌍 · 바늘이 되지 않게)
                     if (Sq(px - a.X) + Sq(py - a.Y) < 6.25e-8 || Sq(px - b.X) + Sq(py - b.Y) < 6.25e-8) continue;
-                    if (uu > 0 && uu < 1)
+                    // ★[v117.18.13 · 바늘 원인 계측] 급한 굽이 범위 — P가 현 끝 칸 변 점(Φ = 0 표본 · 뜻 없음) 2 cm 안이면 끼우지 않고 그 끝을 P로 바꿈(둘 다 Φ = 0 · 끝과 P 사이 짧은 변이 바늘 밑변이 됐다 — 1116 계측 굽이 범위 바늘 중 ~20)
+                    bool toEnd = false;
+                    if (ev.D.Sharp.Count > 0 && tags != null && uu > 0 && uu < 1)
+                    {
+                        int nk = rings[r].Length - 1, v = Sq(px - a.X) + Sq(py - a.Y) <= Sq(px - b.X) + Sq(py - b.Y) ? k : (k + 1) % nk;
+                        var cv = rings[r][v];
+                        if (Sq(px - cv.X) + Sq(py - cv.Y) < ThinTol * ThinTol && tags.TryGetValue(((long)Math.Round(cv.X * 1e4), (long)Math.Round(cv.Y * 1e4)), out var tg) && tg == "칸변"
+                            && !OnRim(cv.X, cv.Y) && !repl.ContainsKey((r, v)) && InSharpZone(ev, cv) && !NewBreak(r, v, px, py))
+                        { repl[(r, v)] = (new Coordinate(px, py), id); toEnd = true; }
+                    }
+                    if (toEnd) { }
+                    else if (uu > 0 && uu < 1)
                     {
                         // [검토 MED-1] 선이 지나는 현 k의 발이 현 속이면 늘 그 현에(이웃 현에 넣으면 X가 그대로 남았다)
                         var lst = add.TryGetValue((r, k), out var l0) ? l0 : add[(r, k)] = new();
                         if (lst.Any(v => Sq(v.C.X - px) + Sq(v.C.Y - py) < 1e-12)) continue;   // 선 꺾은 점에서 두 토막이 같은 자리를 찾음
-                        lst.Add((uu, new Coordinate(px, py)));
+                        lst.Add((uu, new Coordinate(px, py), id));
                     }
                     else
                     {
@@ -398,26 +587,52 @@ public static partial class RoadRing
                         int nk = rings[r].Length - 1, v = uu >= 1 ? (k + 1) % nk : k;
                         var cv = rings[r][v];
                         if (OnRim(cv.X, cv.Y) || repl.ContainsKey((r, v)) || Sq(px - cv.X) + Sq(py - cv.Y) > 0.05 * 0.05) continue;
-                        repl[(r, v)] = new Coordinate(px, py);
+                        repl[(r, v)] = (new Coordinate(px, py), id);
                     }
-                    checks.Add((r, p0.X, p0.Y, p1.X, p1.Y, new Coordinate(px, py)));
+                    nIns++;
+                    checks.Add((r, p0.X, p0.Y, p1.X, p1.Y, new Coordinate(px, py), id));
+                    if (pj != q) checks.Add((r, bl.Pts[pj].X, bl.Pts[pj].Y, bl.Pts[pj + 1].X, bl.Pts[pj + 1].Y, new Coordinate(px, py), id));
+                    // P 곁 선 점 옮김 후보(맨 끝에 받은 점만 — 아래 설명)
+                    foreach (int vi in new[] { pj, pj + 1 })
+                        if (Sq(bl.Pts[vi].X - px) + Sq(bl.Pts[vi].Y - py) < FootGap * FootGap) { moves.Add((bl, vi, px, py, id)); break; }
                 }
             }
         if (add.Count == 0 && repl.Count == 0) return S;
-        Coordinate[] Ring(int r)
+        Coordinate[] Ring(int r, HashSet<int> drop)
         {
             var cs = rings[r]; int nk = cs.Length - 1; var o = new List<Coordinate>();
             for (int k = 0; k < nk; k++)
             {
-                var c0 = repl.TryGetValue((r, k), out var rc) ? rc : cs[k];
+                var c0 = repl.TryGetValue((r, k), out var rc) && !drop.Contains(rc.Id) ? rc.C : cs[k];
                 if (o.Count == 0 || Sq(o[^1].X - c0.X) + Sq(o[^1].Y - c0.Y) > 1e-12) o.Add(c0);
-                if (add.TryGetValue((r, k), out var l)) foreach (var (_, c) in l.OrderBy(v => v.U)) if (Sq(o[^1].X - c.X) + Sq(o[^1].Y - c.Y) > 1e-12) o.Add(c);
+                if (add.TryGetValue((r, k), out var l)) foreach (var (_, c, ci) in l.OrderBy(v => v.U)) if (!drop.Contains(ci) && Sq(o[^1].X - c.X) + Sq(o[^1].Y - c.Y) > 1e-12) o.Add(c);
             }
             if (Sq(o[^1].X - o[0].X) + Sq(o[^1].Y - o[0].Y) <= 1e-12) o.RemoveAt(o.Count - 1);
+            // ★[JACK 1117] 넣은 · 바꾼 점 곁 새 변이 원지반 세모 변을 건너면 그 자리 Φ = 0 점도 넣음(<see cref="SlopeRegion"/>의 현 다듬기와 같은 법) — 안 넣으면 경계 변이
+            //   원지반 세모 둘을 곧게 질러 |P0 − G|가 0.1 mm를 넘었다(S270 헤어핀 R7 · R15 교점 0.13 ~ 0.21 mm 계측 · 현에서 5 cm 넘게 떨어진 P를 받은 뒤)
+            if (gb != null)
+            {
+                bool New(Coordinate c) => add.Any(kv => kv.Key.R == r && kv.Value.Any(v => !drop.Contains(v.Id) && v.C.Equals2D(c))) || repl.Any(kv => kv.Key.R == r && !drop.Contains(kv.Value.Id) && kv.Value.C.Equals2D(c));
+                var o3 = new List<Coordinate>();
+                for (int i = 0; i < o.Count; i++)
+                {
+                    var a = o[i]; var b = o[(i + 1) % o.Count]; o3.Add(a);
+                    if (!New(a) && !New(b)) continue;
+                    brk.Clear(); gb.Breaks(a.X, a.Y, b.X, b.Y, brk);
+                    double l = Math.Sqrt(Sq(b.X - a.X) + Sq(b.Y - a.Y));
+                    foreach (var g in brk)
+                    {
+                        if (g.T * l < 1e-4 || (1 - g.T) * l < 1e-4) continue;
+                        var cg = new Coordinate(a.X + (b.X - a.X) * g.T, a.Y + (b.Y - a.Y) * g.T);
+                        o3.Add(!g.Vertex && CurveOnEdge(ev, g, cg, out var cc) ? cc : cg);
+                    }
+                }
+                o = o3;
+            }
             o.Add(new Coordinate(o[0].X, o[0].Y)); return o.ToArray();
         }
         // [검토 MED-1] 넣은 뒤 — 선 토막이 새 둘레와 P 곁 0.2 m 안에서 P 말고는 안 만남(옛 현 위 X가 남지 않음)
-        static bool OnlyP(Coordinate[] ring, (int R, double X0, double Y0, double X1, double Y1, Coordinate P) c)
+        static bool OnlyP(Coordinate[] ring, (int R, double X0, double Y0, double X1, double Y1, Coordinate P, int Id) c)
         {
             double lx = c.X1 - c.X0, ly = c.Y1 - c.Y0;
             for (int k = 0; k + 1 < ring.Length; k++)
@@ -431,39 +646,63 @@ public static partial class RoadRing
             }
             return true;
         }
-        var outP = new List<Polygon>();
+        var outP = new List<Polygon>(); var okIds = new HashSet<int>();
         for (int pi = 0; pi < polys.Count; pi++)
         {
             var mine = ringOf.Select((v, i) => (v, i)).Where(z => z.v.P == pi).Select(z => z.i).ToList();
-            int got = mine.Sum(r => add.Where(kv => kv.Key.R == r).Sum(kv => kv.Value.Count) + repl.Count(kv => kv.Key.R == r));
-            if (got == 0) { outP.Add(polys[pi]); continue; }
-            Dictionary<int, Coordinate[]> built; Polygon np;
-            try
+            var ids = new SortedSet<int>(mine.SelectMany(r => add.Where(kv => kv.Key.R == r).SelectMany(kv => kv.Value.Select(v => v.Id)).Concat(repl.Where(kv => kv.Key.R == r).Select(kv => kv.Value.Id))));
+            if (ids.Count == 0) { outP.Add(polys[pi]); continue; }
+            Polygon? Try(HashSet<int> drop)
             {
-                built = mine.ToDictionary(r => r, Ring);
-                np = gf.CreatePolygon(gf.CreateLinearRing(built[mine.First(r => ringOf[r].H < 0)]), mine.Where(r => ringOf[r].H >= 0).Select(r => gf.CreateLinearRing(built[r])).ToArray());
+                try
+                {
+                    var built = mine.ToDictionary(r => r, r => Ring(r, drop));
+                    var np = gf.CreatePolygon(gf.CreateLinearRing(built[mine.First(r => ringOf[r].H < 0)]), mine.Where(r => ringOf[r].H >= 0).Select(r => gf.CreateLinearRing(built[r])).ToArray());
+                    return np.IsValid && checks.Where(c => built.ContainsKey(c.R) && !drop.Contains(c.Id)).All(c => OnlyP(built[c.R], c)) ? np : null;
+                }
+                catch { return null; }   // 고리가 세 점 아래로 줄어듦 등
             }
-            catch { outP.Add(polys[pi]); continue; }   // 고리가 세 점 아래로 줄어듦 등 — 그 조각 그대로
-            bool ok = np.IsValid && checks.Where(c => built.ContainsKey(c.R)).All(c => OnlyP(built[c.R], c));
-            if (ok)
+            var dropped = new HashSet<int>();
+            var got = Try(dropped);
+            if (got == null)
             {
-                outP.Add(np); n += got;
-                if (tags != null)
-                    foreach (var r in mine)
-                    {
-                        foreach (var kv in add) if (kv.Key.R == r) foreach (var (_, c) in kv.Value) tags[((long)Math.Round(c.X * 1e4), (long)Math.Round(c.Y * 1e4))] = "선 데이라잇";
-                        foreach (var kv in repl) if (kv.Key.R == r) tags[((long)Math.Round(kv.Value.X * 1e4), (long)Math.Round(kv.Value.Y * 1e4))] = "선 데이라잇";
-                    }
+                // ★[검토 MED2] 한꺼번에 무효 · 확인 실패 — 점마다 하나씩 더해 보며 무효를 만드는 점만 뺌(옛: 그 조각의 선 위 데이라잇 점 전부 버림)
+                dropped = new HashSet<int>(ids);
+                foreach (int id in ids) { dropped.Remove(id); var g2 = Try(dropped); if (g2 == null) dropped.Add(id); else got = g2; }
+                if (DebugRing != null) DebugRing($"[선 데이라잇 진단] 조각 {pi} — 한꺼번에 무효 · 뺀 점 {dropped.Count}/{ids.Count}");
             }
-            else
-            {
-                if (DebugRing != null) DebugRing($"[선 데이라잇 진단] 조각 {pi} 그대로({got}점) — 유효 {np.IsValid} · {new NetTopologySuite.Operation.Valid.IsValidOp(np).ValidationError?.Message}");
-                outP.Add(polys[pi]);
-            }
+            if (got == null) { outP.Add(polys[pi]); continue; }
+            outP.Add(got);
+            foreach (int id in ids) if (!dropped.Contains(id)) { okIds.Add(id); n++; }
+            if (tags != null)
+                foreach (var r in mine)
+                {
+                    foreach (var kv in add) if (kv.Key.R == r) foreach (var (_, c, ci) in kv.Value) if (!dropped.Contains(ci)) tags[((long)Math.Round(c.X * 1e4), (long)Math.Round(c.Y * 1e4))] = "선 데이라잇";
+                    foreach (var kv in repl) if (kv.Key.R == r && !dropped.Contains(kv.Value.Id)) tags[((long)Math.Round(kv.Value.C.X * 1e4), (long)Math.Round(kv.Value.C.Y * 1e4))] = "선 데이라잇";
+                }
         }
         Geometry res = outP.Count == 1 ? outP[0] : gf.CreateMultiPolygon(outP.ToArray());
         // [검토 L-2] 합친 사면 자리가 무효면(조각끼리 겹침) 처음 것 그대로
         if (!res.IsValid) { n = 0; return S; }
+        // ★[JACK 1117] P 곁(FootGap 안) 선 점은 P로 옮김 — 받은 점만(★[검토 MED1] 둘레를 안 바꾼 조각 · 뺀 점의 선은 그대로) · 선 둘 넘게 함께 가진 점은 안 옮김 ·
+        //   이웃 토막 높이가 셈과 3 mm 안일 때만(<see cref="RefineLineZ"/>와 같은 잣대) — 안 옮기면 그 점 · P · 현 끝이 바늘 세모(현장 덤프 A 선 점 ↔ P 2.4 · 5.1 mm 계측)
+        foreach (var (bl, vi, px, py, id) in moves)
+        {
+            if (!okIds.Contains(id)) continue;
+            var v = bl.Pts[vi]; if (Sq(v.X - px) + Sq(v.Y - py) >= FootGap * FootGap || vtxUse.GetValueOrDefault((v.X, v.Y)) >= 2) continue;
+            var nv = new Point3(px, py, ev.Eval(px, py).Z);
+            bool SegOk(Point3 a, Point3 c)
+            {
+                for (int k = 1; k <= 7; k++)
+                {
+                    double tt = k / 8.0; var pe = ev.Eval(a.X + (c.X - a.X) * tt, a.Y + (c.Y - a.Y) * tt);
+                    if (double.IsFinite(pe.Z) && pe.Kind != 1 && Math.Abs(pe.Z - (a.Z + (c.Z - a.Z) * tt)) > 0.003) return false;
+                }
+                return true;
+            }
+            if ((vi > 0 && !SegOk(bl.Pts[vi - 1], nv)) || (vi + 1 < bl.Pts.Count && !SegOk(nv, bl.Pts[vi + 1]))) continue;
+            bl.Pts[vi] = nv;
+        }
         return res;
     }
 

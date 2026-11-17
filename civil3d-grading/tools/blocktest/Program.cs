@@ -123,6 +123,14 @@ if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "bendflat")
 if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "rjack") { RoadRingJack.Run(); return 0; }
 // ★[v117.18.12 · JACK 1116 «꺾임 소단 전이»] BLOCKTEST_ONLY=rtrans — 급한 굽이 안쪽 소단 전이(단차 ↔ 전이 · 소단선 턱 · 소단 기울기 상한 · 단마다 한 줄 변환 · 못 하면 단차)
 if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "rtrans") { RoadRingTransition.Run(); return Environment.ExitCode; }
+// ★[JACK 1117 «진입도로 1:0.01 진행»] BLOCKTEST_ONLY=rvert — 고리 엔진(S236) 같은 경우들을 절 · 성토 1:0.01(거의 수직)로(BLOCKTEST_RVERT = 다른 n)
+if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "rvert")
+{
+    RoadRingCheck.SlopeN = double.Parse(Environment.GetEnvironmentVariable("BLOCKTEST_RVERT") ?? "0.01", System.Globalization.CultureInfo.InvariantCulture);
+    RoadRingCheck.Run((n, ok, d) => Check(n.Replace("S236 RR", $"S236V 1:{RoadRingCheck.SlopeN}"), ok, d));
+    Console.WriteLine(fails == 0 ? "\n== 전부 통과 ==" : $"\n== 실패 {fails}건 ==");
+    return fails == 0 ? 0 : 1;
+}
 // ★[v116] BLOCKTEST_ONLY=ring — 고리 엔진(S236)만
 if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "ring")
 {

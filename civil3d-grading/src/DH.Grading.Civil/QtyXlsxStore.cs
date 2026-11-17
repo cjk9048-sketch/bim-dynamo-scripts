@@ -15,12 +15,15 @@ internal sealed class QtyXlsxInput
     /// <summary>수고 직접 입력(m) — NaN = 임상도 면적가중평균.</summary>
     public double Height = double.NaN;
     public double KRoot = 1.3, F = 0.5, W0 = 0.8, P = 0.5, KForm = 0.5, Surcharge = 1.3;
+    /// <summary>★[용지조서 · JACK 1117] 체크 = 수량산출서와 함께 «도면이름_용지조서.xlsx»도 만듦.</summary>
+    public bool Land;
 
     string ToText() => string.Join("\n", new[]
     {
         "facility=" + Facility.Replace("\n", " "), "deep=" + DeepLimit.ToString("R", Ic), "density=" + Density.ToString("R", Ic), "dbh=" + Dbh.ToString("R", Ic),
         "root=" + Root.ToString("R", Ic), "height=" + (double.IsNaN(Height) ? "" : Height.ToString("R", Ic)), "kroot=" + KRoot.ToString("R", Ic), "f=" + F.ToString("R", Ic),
         "w0=" + W0.ToString("R", Ic), "p=" + P.ToString("R", Ic), "kform=" + KForm.ToString("R", Ic), "sur=" + Surcharge.ToString("R", Ic),
+        "land=" + (Land ? "1" : "0"),
     });
 
     static QtyXlsxInput FromText(string t)
@@ -45,6 +48,7 @@ internal sealed class QtyXlsxInput
                 case "p": if (ok && d >= 0) r.P = d; break;
                 case "kform": if (ok && d > 0) r.KForm = d; break;
                 case "sur": if (ok && d > 0) r.Surcharge = d; break;
+                case "land": r.Land = v.Trim() == "1"; break;
             }
         }
         return r;

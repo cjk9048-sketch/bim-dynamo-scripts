@@ -1001,10 +1001,10 @@ public sealed class RibbonApp : IExtensionApplication
             tab.Panels.Add(new RibbonPanel { Source = pMisc });
             pMisc.Items.Add(Spacer());
             // ★[튜토리얼 · JACK 1117 «게임처럼 따라 하기 · 리본 단추로만 시작»] 새 빈 도면 → 원지반 가져오기 → 계획부지 생성
-            var btnTut = MakeButton("튜토리얼", "DHTUTORIAL ", "새 빈 도면에서 원지반 가져오기부터 계획부지 생성까지 따라 하기", "계획부지");
+            var btnTut = MakeButton("튜토리얼", "DHTUTORIAL ", "단원 고르기 → 원지반 가져오기 · 계획부지 생성 · 터파기 생성 따라 하기", "계획부지");
             btnTut.ToolTip = MakeTip("튜토리얼 (DHTUTORIAL)",
-                "**새 빈 도면**(중부원점)에서 차례대로 따라 하기 — 지금 도면은 그대로\n" +
-                "서버 지표면(대모산) → 계획 경계 그리기 → 고도 → 계획부지 생성\n" +
+                "**단원 고르기** → 1 원지반 가져오기 · 2 계획부지 생성 · 3 터파기 생성\n" +
+                "늘 새 도면 · 자료 사본에서 — 지금 도면은 그대로\n" +
                 "· 누를 곳만 밝게 · 하면 다음 단계로 · [그만두기]로 끝", null);
             pMisc.Items.Add(btnTut);
             pMisc.Items.Add(Spacer());

@@ -568,7 +568,9 @@ public static partial class RoadRing
             sec = (-1, 0, 0, 0);
             double lo = double.NegativeInfinity, hi = double.PositiveInfinity;
             Win wl = new() { V = lo, Src = -1 }, wh = new() { V = hi, Src = -1 };
-            bool needRelay = false;
+            // ★[v117.18.13 · rconv 남은 차] 이어 받는 원뿔은 «가려진 후보가 마지막 lo · hi를 넘을 때»만 — 전엔 가려진 후보를 만난 그때의 lo · hi와 견줘(칸 차례 탓)
+            //   칸 경계를 따라 곧은 줄로 원뿔이 켜졌다 꺼져 2 m 턱이 생겼다(1117 계측 현장 덤프 A + 옹벽 51–91: 꼭짓점 91 이어 받는 원뿔 55.06 ↔ 꼭짓점 원뿔 53.12 · x = 245.45 · y = 117.1 · 121.1 곧은 줄)
+            double blkLo = double.NegativeInfinity, blkHi = double.PositiveInfinity;
             // 가장 가까운 둘레(두 시점 셈의 둘째 쪽이면 못 박은 발)
             var (dn, sn, segn) = fSeg >= 0 ? (fD, fT, fSeg) : _grid.Nearest(x, y, Reach);
             pt.DNear = dn; pt.SegNear = segn; pt.SigNear = segn >= 0 ? SigSeg(segn, sn) : double.NaN;
@@ -625,7 +627,7 @@ public static partial class RoadRing
                         if (l1 > lo || h1 < hi)
                         {
                             double fx = _bx[j] + t * vx, fy = _by[j] + t * vy;
-                            if (Blocked(fx, fy, x, y, j, -1)) needRelay = true;
+                            if (Blocked(fx, fy, x, y, j, -1)) { if (l1 > blkLo) blkLo = l1; if (h1 < blkHi) blkHi = h1; }
                             else
                             {
                                 if (l1 > lo) { lo = l1; wl = new Win { V = l1, Src = j, Sigma = SigSeg(j, t), Dist = dd, Prof = p }; }
@@ -647,7 +649,7 @@ public static partial class RoadRing
                         if (own) { double f = Phi(D.BSide[j], p, _cum[j], r, _bs[j], tau == 0); if (f > 0) { l1 -= f * Math.Max(0, l1 - vLo); h1 += f * Math.Max(0, vHi - h1); } }
                         if (l1 > lo || h1 < hi)
                         {
-                            if (Blocked(_bx[j], _by[j], x, y, -1, j)) needRelay = true;
+                            if (Blocked(_bx[j], _by[j], x, y, -1, j)) { if (l1 > blkLo) blkLo = l1; if (h1 < blkHi) blkHi = h1; }
                             else
                             {
                                 if (l1 > lo) { lo = l1; wl = new Win { V = l1, Src = _m + j, Sigma = _cum[j], Dist = r, Prof = p }; }
@@ -657,7 +659,7 @@ public static partial class RoadRing
                     }
                 }
             }, (zmax, zmin, dmin) => zmax - FminF(dmin) <= lo && zmin + FminC(dmin) >= hi);
-            if (needRelay)
+            if (blkLo > lo || blkHi < hi)
             {
                 for (int k = 0; k < _relays.Count; k++)
                 {

@@ -179,6 +179,9 @@ public static partial class RoadRing
         public readonly List<(double X, double Y, int Why)> Misses = new();
     }
 
+    /// <summary>★[JACK 1117] 노리선을 안 그리는 옹벽 문턱(1:n · n 이하) — 부지 <see cref="GradingParams.WallGateSlope"/>와 같은 값.</summary>
+    const double TickWallGate = 0.05;
+
     public static List<(Point3 A, Point3 B)> Ticks(Built b, double shortSp = 1.0, double longSp = 5.0, bool longOnly = false, TickStats? st = null)
     {
         var o = new List<(Point3, Point3)>();
@@ -251,6 +254,9 @@ public static partial class RoadRing
         foreach (var (pts, isCut, kLine, fromDay) in runs)
         {
             var prof = isCut ? ev.Pc : ev.Pf; double sg = isCut ? -1 : 1;
+            // ★[JACK 1117 «진입도로 1:0.01»] 그 쪽 구배가 옹벽 문턱(1:0.05 — 부지 GradingParams.WallGateSlope와 같은 값) 이하면 노리선 없음 — 부지 정지와 같은 관례(옹벽 면엔 노리선 안 그림).
+            //   1:0.01은 면 폭 5 cm라 아래 «면 끝» 문턱(5 · 10 cm)이 면 안에 못 들어 빗금이 소단을 가로질러 1.05 m로 그어졌다(1117 rvert 실측 — 모든 경우 가장 긴 빗금 1.05 m).
+            if (prof.Tail >= 1 / TickWallGate - 1e-9) continue;
             // 면 종류 — 절토 = 2 · 부딪힘 4(절토가 이겨 지은 면 = 절토 사면 · 선도 절토 쪽으로 남 — 설치 전 검토 M) · 성토 = 3
             bool Want(byte k) => isCut ? k is 2 or 4 : k == 3;
             // 단면 — 한 단 폭 · 높이 · 소단 있나. 소단이 있으면 면마다 끝(꺾임)이 정해짐 · 성토는 마지막 꺾임 너머(꼬리)는 땅까지 · 절토는 원천 쪽으로 가니 늘 끝이 있음

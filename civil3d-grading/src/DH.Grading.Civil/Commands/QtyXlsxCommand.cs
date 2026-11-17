@@ -72,13 +72,90 @@ public sealed class QtyXlsxCommand
         if (err.Length > 0) { ed.WriteMessage("\n[수량산출서] " + err); return; }
         ed.WriteMessage("\n[수량산출서] 저장: " + xlsx);
         if (!SelfCheckLog.Headless) try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(xlsx) { UseShellExecute = true }); } catch { }
+        if (inp.Land)
+        {
+            try { MakeLand(doc, inp, dwg); }
+            catch (System.Exception ex) { ed.WriteMessage("\n[용지조서] 못 만듦 — " + ex.Message); try { DiagLog.Append("\n[용지조서] " + ex); } catch { } }
+        }
+    }
+
+    /// <summary>★[용지조서 · JACK 1117] 도면의 [지적도] 필지 ∩ 공사 범위(<see cref="PlanSheet.PlanArea"/> = 정지 경계 ∪ 진입도로 면 자리 — 벌개제근과 같은 범위) → «도면이름_용지조서.xlsx».</summary>
+    static void MakeLand(Document doc, QtyXlsxInput inp, string dwg)
+    {
+        var ed = doc.Editor; var db = doc.Database;
+        var gf = NtsSupport.Factory();
+        List<LandParcel> parcels; NetTopologySuite.Geometries.Geometry? fp; string fpNote;
+        using (var tr = db.TransactionManager.StartTransaction())
+        {
+            parcels = ReadParcels(db, tr, gf);
+            fp = parcels.Count > 0 ? PlanSheet.PlanArea(db, tr, gf, out fpNote) : null;
+            tr.Commit();
+        }
+        if (parcels.Count == 0) { ed.WriteMessage("\n[용지조서] 지적도 없음 → [지적도] 먼저"); return; }
+        if (fp == null || fp.IsEmpty) { ed.WriteMessage("\n[용지조서] 공사 범위 없음 → 계획부지 · 진입도로 먼저"); return; }
+        var m = LandReport.Build(parcels, fp, inp.Facility.Trim());
+        if (m.Rows.Count == 0) { ed.WriteMessage($"\n[용지조서] 공사 범위 안 필지 없음(지적 {m.Parcels}필지) → 지적도 범위 확인"); return; }
+
+        string path = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(dwg)!, System.IO.Path.GetFileNameWithoutExtension(dwg) + "_용지조서.xlsx");
+        if (!SelfCheckLog.Headless && System.IO.File.Exists(path) && MessageBox.Show("같은 이름 파일이 있음 → 덮어쓰기?\n" + System.IO.Path.GetFileName(path), "용지조서", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
+        string err = Save(() => LandReportXlsx.Write(m, path));
+        if (err.Length > 0) { ed.WriteMessage("\n[용지조서] " + err); return; }
+        ed.WriteMessage($"\n[용지조서] 저장: {path} · {m.Rows.Count}필지 · 영구점용 {LandReport.R1(m.Rows.Sum(r => r.Occupied)):N1}㎡"
+            + (m.NoLedger > 0 ? $" · 대장면적 없음 {m.NoLedger} → 도면 면적" : "")
+            + (m.Clamped > 0 ? $" · 편입 > 지적 {m.Clamped} → 지적면적까지" : "")
+            + (m.NoShape > 0 ? $" · 면 못 읽음 {m.NoShape}" : ""));
+        if (!SelfCheckLog.Headless) try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(path) { UseShellExecute = true }); } catch { }
+    }
+
+    /// <summary>[지적도] 필지 선(DH_PARCEL 바깥 고리 · 구멍) → PNU마다 면 하나(조각 여럿이면 다중 면). 속성 = 도면에 적힌 값(지번 · 지목 · 소유 구분 · 대장면적 · 주소).</summary>
+    static List<LandParcel> ReadParcels(Database db, Transaction tr, NetTopologySuite.Geometries.GeometryFactory gf)
+    {
+        var layers = new HashSet<string>(ImportGisCommand.ParcelLayers, System.StringComparer.OrdinalIgnoreCase);
+        var by = new Dictionary<string, (ParcelXData.Info Info, SortedDictionary<int, (List<NetTopologySuite.Geometries.LinearRing> Shells, List<NetTopologySuite.Geometries.LinearRing> Holes)> Pieces)>(System.StringComparer.Ordinal);
+        var ms = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForRead);
+        foreach (ObjectId id in ms)
+        {
+            if (!id.ObjectClass.IsDerivedFrom(Autodesk.AutoCAD.Runtime.RXObject.GetClass(typeof(Polyline)))) continue;
+            if (tr.GetObject(id, OpenMode.ForRead) is not Polyline pl || !layers.Contains(pl.Layer)) continue;
+            var x = ParcelXData.Read(pl);
+            if (x == null || (x.Role != "outer" && x.Role != "hole") || pl.NumberOfVertices < 3) continue;
+            var cs = new List<NetTopologySuite.Geometries.Coordinate>();
+            for (int i = 0; i < pl.NumberOfVertices; i++) { var q = pl.GetPoint2dAt(i); cs.Add(new NetTopologySuite.Geometries.Coordinate(q.X, q.Y)); }
+            if (!cs[0].Equals2D(cs[^1])) cs.Add(cs[0].Copy());
+            if (cs.Count < 4) continue;
+            NetTopologySuite.Geometries.LinearRing ring;
+            try { ring = gf.CreateLinearRing(cs.ToArray()); } catch { continue; }
+            string key = x.Pnu.Length > 0 ? x.Pnu : "#" + x.Jibun + "|" + x.Addr;
+            if (!by.TryGetValue(key, out var e)) by[key] = e = (x, new());
+            if (!e.Pieces.TryGetValue(x.Piece, out var pc)) e.Pieces[x.Piece] = pc = (new(), new());
+            (x.Role == "outer" ? pc.Shells : pc.Holes).Add(ring);
+        }
+        var res = new List<LandParcel>();
+        foreach (var (info, pieces) in by.Values)
+        {
+            var polys = new List<NetTopologySuite.Geometries.Polygon>();
+            foreach (var (shells, holes) in pieces.Values)
+                foreach (var sh in shells)
+                {
+                    var shPoly = gf.CreatePolygon(sh);
+                    polys.Add(gf.CreatePolygon(sh, holes.Where(h => shells.Count == 1 || shPoly.Contains(h)).ToArray()));
+                }
+            res.Add(new LandParcel
+            {
+                Pnu = info.Pnu, Jibun = info.Jibun, Jimok = info.Jimok, Addr = info.Addr, Kind = info.Kind, CodeText = info.CodeText, Ledger = info.Ledger,
+                Shape = polys.Count == 0 ? null : polys.Count == 1 ? polys[0] : gf.CreateMultiPolygon(polys.ToArray()),
+            });
+        }
+        return res;
     }
 
     /// <summary>엑셀 쓰기 — ClosedXML 어셈블리는 이 메서드 안에서만 풀린다(못 불러와도 호출한 쪽은 산다).</summary>
+    internal static string Save(QtyReportModel model, string xlsx) => Save(() => QtyReportXlsx.Write(model, xlsx));
+
     [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
-    internal static string Save(QtyReportModel model, string xlsx)
+    static string Save(System.Action write)
     {
-        try { QtyReportXlsx.Write(model, xlsx); return ""; }
+        try { write(); return ""; }
         catch (System.IO.FileNotFoundException ex) when (ex.FileName != null && !ex.FileName.EndsWith(".xlsx", System.StringComparison.OrdinalIgnoreCase)) { return "엑셀 라이브러리 못 불러옴(" + ex.FileName + ") → 설치 다시"; }
         catch (System.IO.FileLoadException ex) { return "엑셀 라이브러리 못 불러옴(" + ex.FileName + ") → 설치 다시"; }
         catch (System.TypeLoadException ex) { return "엑셀 라이브러리 못 불러옴(" + ex.TypeName + ") → 설치 다시"; }

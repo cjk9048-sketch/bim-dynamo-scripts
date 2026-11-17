@@ -8,6 +8,8 @@ using DH.Grading.Core;
 static class RoadRingCheck
 {
     const double OX = 200000, OY = 550000;
+    /// <summary>★[JACK 1117 «수직으로 구현하려면 0.01»] null = 기본(절 1.5 · 성 1.8) · 값 = 절 · 성토 모두 1:n(BLOCKTEST_ONLY=rvert).</summary>
+    internal static double? SlopeN;
 
     sealed class G : IGroundSurface
     {
@@ -21,7 +23,9 @@ static class RoadRingCheck
     {
         var X = new double[pts.Count]; var Y = new double[pts.Count]; var Z = new double[pts.Count]; double s = 0;
         for (int i = 0; i < pts.Count; i++) { if (i > 0) s += Math.Sqrt(Math.Pow(pts[i].X - pts[i - 1].X, 2) + Math.Pow(pts[i].Y - pts[i - 1].Y, 2)); X[i] = pts[i].X + OX; Y[i] = pts[i].Y + OY; Z[i] = z0 - grade * s; }
-        return new RoadGrade.Input { X = X, Y = Y, Z = Z, Base = new G(ground), Reach = reach, Cell = 0.5 };
+        var inp = new RoadGrade.Input { X = X, Y = Y, Z = Z, Base = new G(ground), Reach = reach, Cell = 0.5 };
+        if (SlopeN is double sn) { inp.Cut.Slope = sn; inp.Fill.Slope = sn; }   // ★[JACK 1117 «0.01 진행»] rvert — 절 · 성토 1:n 바꿔 같은 경우를 다시 돎
+        return inp;
     }
     static List<(double X, double Y)> Line((double X, double Y) p0, double ang, double L) => Enumerable.Range(0, (int)L + 1).Select(i => (p0.X + Math.Cos(ang) * i, p0.Y + Math.Sin(ang) * i)).ToList();
     static List<(double X, double Y)> Arc((double X, double Y) c, double R, double a0, double a1) { int n = Math.Max(2, (int)(Math.Abs(a1 - a0) * R)); return Enumerable.Range(0, n + 1).Select(i => (c.X + R * Math.Cos(a0 + (a1 - a0) * i / n), c.Y + R * Math.Sin(a0 + (a1 - a0) * i / n))).ToList(); }
@@ -209,6 +213,27 @@ static class RoadRingCheck
             // 품질(범용 개선방향 §6) — 사면 세모 무게중심에서 설계면(E2)과 삼각망 차 · 매달린 선
             {
                 double rmax = 0, aAll = 0, aOver = 0; string rAt = "";
+                // ★[JACK 1117 rvert] 거의 수직 사면은 평면 1 mm 어긋남이 높이 10 cm — 높이 차 대신 평면 어긋남도 잼(무게중심에서 이긴 원천 방향 ±10 cm 안 «셈 높이가 삼각망 높이와 1 cm 안»인 가장 가까운 자리까지 거리)
+                double pmax = 0, pOver = 0; string pAt = "";
+                double PlanErr(double cx, double cy, double zt, in RoadRing.Pt pe)
+                {
+                    var w = pe.Kind == 3 ? pe.WLo : pe.WHi; var (gx, gy) = b.Ev.SourceGrad(w.Src, cx, cy);
+                    if (!double.IsFinite(gx)) return double.PositiveInfinity;
+                    // 원천 방향 ±10 cm를 0.5 mm마다 — «셈 − 삼각망»이 1 cm 안이거나 부호가 바뀌는(면이 그 높이를 지나는) 가장 가까운 자리
+                    double best = double.PositiveInfinity;
+                    foreach (int sg in new[] { 1, -1 })
+                    {
+                        double prev = double.NaN;
+                        for (double t = 0; t <= 0.1 + 1e-12 && t < best; t += 0.0005)
+                        {
+                            var q = b.Ev.Eval(cx + gx * t * sg, cy + gy * t * sg); if (!double.IsFinite(q.Z)) { prev = double.NaN; continue; }
+                            double f = q.Z - zt;
+                            if (Math.Abs(f) <= 0.01 || double.IsFinite(prev) && Math.Sign(f) != Math.Sign(prev)) { best = t; break; }
+                            prev = f;
+                        }
+                    }
+                    return best;
+                }
                 var conf = new HashSet<(int, int)>();
                 for (int k = 0; k < b.Grid.P.Length; k++) if (b.Grid.P[k].Kind == 4) { int gi = k % b.Grid.W, gj = k / b.Grid.W; for (int u = -8; u <= 8; u++) for (int v = -8; v <= 8; v++) conf.Add((gi + u, gj + v)); }
                 int skipped = 0;
@@ -219,6 +244,7 @@ static class RoadRingCheck
                     var pe = b.Ev.Eval(cx, cy); if (pe.Kind is not (2 or 3 or 4) || !double.IsFinite(pe.Z)) continue;
                     double ar = Math.Abs((t.B.X - t.A.X) * (t.C.Y - t.A.Y) - (t.B.Y - t.A.Y) * (t.C.X - t.A.X)) / 2;
                     double dz = Math.Abs(zt - pe.Z); aAll += ar; if (dz > 0.01) aOver += ar;
+                    if (SlopeN != null && dz > 0.01) { double pl = PlanErr(cx, cy, zt, pe); if (pl > 0.005) pOver += ar; if (dz <= 0.05) pl = 0; /* 높이 5 cm 안은 종전 관문 안(평평한 소단은 평면 거리가 뜻 없음) */ if (pl > pmax || diag && double.IsInfinity(pl) && ar > 0.001) { pmax = pl; pAt = $"({cx - OX:F2}, {cy - OY:F2})"; if (diag) { string V(Point3 p) { var q = b.Ev.Eval(p.X, p.Y); return $"({p.X - OX:F4}, {p.Y - OY:F4}) z {p.Z:F3} 셈 {q.Z:F3} 종류 {q.Kind} G {q.G:F3}"; } Console.WriteLine($"   [평면 진단 {tag}] 넓이 {ar:F4} · 셈 {pe.Z:F3} 종류 {pe.Kind} · 삼각망 {zt:F3} — {V(t.A)} | {V(t.B)} | {V(t.C)}"); } } }
                     if (dz > rmax)
                     {
                         rmax = dz; rAt = $"({cx - OX:F2}, {cy - OY:F2})";
@@ -231,6 +257,10 @@ static class RoadRingCheck
                 }
                 var mDang = System.Text.RegularExpressions.Regex.Match(b.Note, @"매달린 선 (\d+)");
                 int dang = mDang.Success ? int.Parse(mDang.Groups[1].Value) : -1;
+                if (SlopeN != null)
+                    Check($" {tag} 품질(수직 사면 = 평면) — 높이 5 cm 넘는 세모의 평면 어긋남 최대 2 cm 안 · 높이 1 cm · 평면 5 mm 둘 다 넘는 넓이 1 % 안 · 매달린 선 0", pmax <= 0.02 && pOver <= 0.01 * aAll && dang == 0,
+                        $"평면 최대 {pmax * 1000:F1} mm @{pAt} · 둘 다 넘는 넓이 {pOver:F2}/{aAll:F0} ㎡ · (높이로는 최대 {rmax * 1000:F1} mm @{rAt} · 1 cm 넘는 넓이 {aOver:F1} ㎡) · 매달린 선 {dang}");
+                else
                 Check($" {tag} 품질 — 설계면↔삼각망 최대 5 cm 안 · 1 cm 넘는 넓이 1 % 안 · 매달린 선 0", rmax <= 0.05 && aOver <= 0.01 * aAll && dang == 0,
                     $"최대 {rmax * 1000:F1} mm @{rAt} · 1 cm 넘는 넓이 {aOver:F1}/{aAll:F0} ㎡ · 매달린 선 {dang}" + (skipped > 0 ? $" · ⚠알려진 빈틈: 부딪힘(옹벽 필요) 2 m 곁 세모 {skipped}개 뺌 — 수직면 레일 아직 없음" : ""));
             }
@@ -276,6 +306,9 @@ static class RoadRingCheck
             }
             var tst = new RoadRing.TickStats();
             var ticks = RoadRing.Ticks(b, 1.0, 5.0, false, tst);
+            bool wallLike = SlopeN is double sw && sw <= 0.05;   // ★[JACK 1117 rvert] 옹벽 문턱(1:0.05) 이하 = 부지처럼 노리선 없음
+            if (wallLike) Check($" {tag} 노리선 0(1:{SlopeN} ≤ 옹벽 문턱 1:0.05 — 부지 관례)", ticks.Count == 0, $"노리선 {ticks.Count}");
+            else
             Check($" {tag} 노리선", !b.Lines.Any(l => l.Role == RoadGrade.LineRole.Crest) || ticks.Count > 0, $"노리선 {ticks.Count}");
             // ★[v116.5 · 설치 전 검토 L] 빠진 빗금 — 윗선 점에서 못 그은 비율(윗선 끝 · 골을 따라 돈 토막 · 땅에 붙은 실 같은 면만 — JACK 도로 5 %) · 미리보기(1 m 격자 · 긴 빗금만)도 도로 면 안 지남
             {
@@ -285,6 +318,8 @@ static class RoadRingCheck
                 var pv = RoadRing.Preview(inp);
                 var tkp = pv.Ok ? RoadRing.Ticks(pv, 1.0, 5.0, true) : new();
                 int pvDeck = tkp.Count(t => Enumerable.Range(2, 8).Any(k => pv.Ev.OnDeck(t.A.X + (t.B.X - t.A.X) * k / 10.0, t.A.Y + (t.B.Y - t.A.Y) * k / 10.0, out _)));
+                if (wallLike) Check($" {tag} 미리보기 노리선 0(옹벽 문턱 이하)", tkp.Count == 0, $"미리보기 {tkp.Count}");
+                else
                 Check($" {tag} 노리선 빠짐 10 % 안 · 미리보기 도로 면 안 지남", miss <= 0.10 && pvDeck == 0 && (!pv.Ok || tkp.Count > 0 || ticks.Count == 0),
                     $"윗선 점(부딪힘 밖) {shotsN} 중 못 그음 {missN}({miss:P1}) · 부딪힘 자리 {tst.ConflictShots} 중 {tst.ConflictMiss} · 모두 못 그음 {tst.CrestMiss}( — 면 아님 {tst.Misses.Count(q => q.Why == 0)} · 20 cm 아래 {tst.Misses.Count(q => q.Why == 1)} · 윗선과 나란 {tst.Misses.Count(q => q.Why == 2)}) · 데이라잇에서 {tst.DayDrawn} · 미리보기 {tkp.Count}(도로 면 지남 {pvDeck})");
                 if (Environment.GetEnvironmentVariable("BLOCKTEST_RRDIAG") == "1") foreach (var q in tst.Misses) Console.WriteLine($"   [못 그음 {tag}] ({q.X - OX:F2}, {q.Y - OY:F2}) 까닭 {q.Why}");

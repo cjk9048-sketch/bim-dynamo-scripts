@@ -9,7 +9,7 @@ namespace DH.Grading.Core;
 /// 위 줄 · 아래 줄을 닫힌 띠 하나로(매달린 끝 없음 · 높이 = 셈). 벽 단면이 없는 도로는 아무것도 안 함(시간 0).</para></summary>
 public static partial class RoadRing
 {
-    const double ThinChord = 1.0, WfStep = 0.1, WfEps = 0.002, WfSeed = 0.4, WfMinH = 0.01, WfMinW = 0.002, WfClear = 0.01;
+    const double WfStairTol = 0.005, ThinChord = 1.0, WfStep = 0.1, WfEps = 0.002, WfSeed = 0.4, WfMinH = 0.01, WfMinW = 0.002, WfClear = 0.01;
 
     /// <summary>줄에서 일직선 속 점 빼기(Douglas–Peucker · 평면 0.5 mm · 높이 2 mm · 남긴 점 사이 ≤ <see cref="ThinChord"/> m — 긴 현이 벽 위 뜀 한쪽만 읽지 않게) — 끝점은 남김 · 돌려줌 = 남길 점 표시.</summary>
     static bool[] ThinKeep(Evaluator ev, List<(double X, double Y)> l)
@@ -94,16 +94,64 @@ public static partial class RoadRing
             if (double.IsFinite(hx) && double.IsFinite(hy)) { double d2 = w2.Dist + WfEps; px += hx * (A - d2); py += hy * (A - d2); gx = hx; gy = hy; }
             return true;
         }
-        // 아래 끝 — 위 끝에서 기울기 쪽으로 같은 무리가 이 벽 면에서 지는 자리(끝까지 이기면 B)
-        (double X, double Y) Lower(double px, double py, double gx, double gy, int want, int p, double A, double B)
+        // 위 · 아래 끝 — 옮긴 자리에서 기울기 쪽 줄(−2 mm ~ 면 폭 + 1 cm)을 따라 높이가 벽처럼 바뀌는(기울기 > 벽 기울기 1/MinSlope의 절반) 첫 토막(높이 1 cm 넘게)의 시작 · 끝.
+        //   원천(어느 원뿔 · 변이 이겼나)으로 가르면 굽이 꼭짓점이 촘촘한 자리에서 꼭대기가 같은 이웃 원뿔 · 변이 µm 토막으로 번갈아 이겨 면 시작 · 끝을 잘못 잡았다
+        //   (1117 계측 현장 덤프 A + 옹벽 51–91: 아래 줄이 면 꼭대기에 남아 80 mm · 현장 덤프 B: 4 cm 아래에서 끊겨 0.39 m). 높이만 보면 원천과 상관없음.
+        ((double X, double Y) U, (double X, double Y) L, double W) Ends(double px, double py, double gx, double gy, int want, int p, double A, double B)
         {
-            double W = B - A;
-            bool Low(double s) { var pt = ev.Eval(px + gx * s, py + gy * s); return Fam(pt, want, p, A + s - 1e-3, A + s + 1e-3, out _); }
-            if (Low(W)) return (px + gx * W, py + gy * W);
-            double lo = -WfEps, hi = W;
-            for (int it = 0; it < 30 && hi - lo > 1e-7; it++) { double s = (lo + hi) / 2; if (Low(s)) lo = s; else hi = s; }
-            double sf = Math.Max(WfMinW, lo);   // 띠 폭 최소 2 mm(0.1 mm 마디 넣기 · Civil 바늘 0.125 mm에 안 걸리게 — 그 사이 셈은 다음 원천 면 그대로)
-            return (px + gx * sf, py + gy * sf);
+            double W = B - A, thr = 0.5 / Math.Clamp(ev.D.MinSlope, 0.001, 0.2);
+            // [검토 LOW7] 0.5 mm 걸음 훑기는 짝마다 옛 이분보다 셈이 많지만 면 짓기 전체 셈의 1 % 아래(1117 계측 현장 덤프 A + 옹벽: 2 mm 걸음(+ 5 mm 턱 판정) + 이분으로 바꿔도 전체 셈 −0.6 % · 선 단계 −4 %) —
+            //   그 판으로는 1 ~ 2 mm 계단 칸을 다르게 갈라 남은 차가 47 → 117 mm · 99 → 344 mm로 나빠져 0.5 mm 그대로 둠
+            const double h = 0.0005, dl = 1e-5;
+            double Zs(double s) => ev.Eval(px + gx * s, py + gy * s).Z;
+            bool Steep(double s) { double a = Zs(s), b = Zs(s + dl); return double.IsFinite(a) && double.IsFinite(b) && Math.Abs(b - a) > thr * dl; }
+            double Edge(double a, double b, bool steep) { for (int it = 0; it < 24 && b - a > 1e-7; it++) { double m = (a + b) / 2; if (Steep(m) == steep) b = m; else a = m; } return b; }   // [a, b] 안 Steep = steep이 처음 되는 자리
+            // ★[v117.18.13 · rconv 남은 차 계측] 벽 면 계단 — 굽이 꼭짓점 원뿔 · 이어 받는 원뿔이 저마다 같은 단 벽 면을 가져 면이 «턱 몇 cm · 그 사이 평평한 칸 2 mm ~ 2 cm»인 계단이 된다
+            //   (1117 계측 현장 덤프 A + 옹벽 51–91 (240.24, 126.46): 8 mm 폭 안 턱 넷 · 18 cm / 현장 덤프 B (240.57, 125.73): 큰 턱 0.73 m(7.5 mm 폭) 뒤 1 ~ 2 cm 칸 셋 · 턱 3 ~ 5 cm).
+            //   첫 토막에서 끝내면 아래 줄이 계단 중턱에 남아 아래 세모가 나머지 턱을 건넜다(남은 차 97 mm). 다음 토막을 이어 셀 때는 ① 사이 칸이 «같은 단 벽 위 소단»(이긴 원천 거리 ≤ 면 끝 B · 같은 단면 · 같은 쪽 —
+            //   이웃 원뿔의 같은 벽) ② 이은 면(위 끝 → 새 아래 끝 곧은 줄)에서 계단이 벗어난 평면 거리(높이 차 ÷ 이은 면 기울기)가 <see cref="WfStairTol"/>(5 mm) 안일 때만 —
+            //   큰 턱 뒤 긴 낮은 계단까지 이으면 곧은 줄이 큰 턱을 눕혀 0.59 m 어긋났다(같은 계측). 잇지 못한 나머지 턱(턱마다 3 ~ 5 cm)은 이 띠 밖 — 턱마다 끊김선은 아직 없음(밝힘).
+            static bool Up(in Pt e, int want, int p, double A, double B) { var w = WinOf(e, want); return SideOf(e) == want && w.Src >= 0 && w.Prof == p && w.Dist <= B + 1e-3 && w.Dist >= A - WfSeed - 0.05; }
+            var zs = new List<(double S, double Z)>(); var ends = new List<double>();
+            double su = double.NaN, prev = -WfEps, zPrev = Zs(prev); bool inRun = false;
+            for (double s = prev + h; s <= W + 0.11 + 1e-12; s += h)
+            {
+                var e = ev.Eval(px + gx * s, py + gy * s); double z = e.Z;
+                bool st = double.IsFinite(z) && double.IsFinite(zPrev) && Math.Abs(z - zPrev) > thr * h * 0.5;   // 0.5 mm 칸 안에 벽 기울기가 반 넘게
+                if (double.IsNaN(su))
+                {
+                    if (s > W + 0.01 + 1e-12) break;   // 새 면은 면 폭 + 1 cm 안에서만 시작
+                    if (st) { su = Steep(prev) ? prev : Edge(prev, s, true); inRun = true; zs.Add((su, Zs(su))); }
+                }
+                else if (inRun) { if (!st) { ends.Add(Steep(prev) ? Edge(prev, s, false) : prev); inRun = false; } }
+                else if (st) inRun = true;   // 같은 단 벽 위 소단 다음 턱
+                else if (!Up(e, want, p, A, B))
+                {
+                    if (Math.Abs(zs[0].Z - Zs(ends[^1])) >= WfMinH) break;
+                    su = double.NaN; ends.Clear(); zs.Clear();   // 1 cm 안 되는 토막 — 다음 토막
+                }
+                if (!double.IsNaN(su)) zs.Add((s, z));
+                prev = s; zPrev = z;
+            }
+            double sl = double.NaN, firstEnd = double.NaN;
+            if (!double.IsNaN(su))
+            {
+                if (inRun) ends.Add(prev);
+                firstEnd = sl = ends[0];
+                double zt = zs[0].Z;
+                for (int r = 1; r < ends.Count; r++)
+                {
+                    double e = ends[r], ze = Zs(e), dev = 0;
+                    double gch = Math.Abs(ze - zt) / Math.Max(e - su, 1e-9);   // 이은 면 기울기 — 어긋남을 평면 거리로(높이 차 ÷ 기울기)
+                    foreach (var (s0, z0) in zs) if (s0 > su && s0 < e) dev = Math.Max(dev, Math.Abs(z0 - (zt + (ze - zt) * (s0 - su) / (e - su))) / gch);
+                    if (dev > WfStairTol) break;
+                    sl = e;
+                }
+                if (Math.Abs(zt - Zs(sl)) < WfMinH) sl = firstEnd;
+            }
+            if (double.IsNaN(su)) { su = 0; sl = 0; firstEnd = 0; }   // 벽 면 없음 → 높이 0 → 짝 안 됨
+            sl = Math.Max(su + WfMinW, sl);   // 띠 폭 최소 2 mm(종전 값 · 0.1 mm 마디 넣기 · Civil 바늘 0.125 mm에서 멀게 — 그 사이 셈은 다음 원천 면 그대로 · [검토 LOW7] 0.5 mm와 남은 차 같음 1117 계측)
+            return ((px + gx * su, py + gy * su), (px + gx * sl, py + gy * sl), Math.Max(WfMinW, firstEnd - su));   // 폭 = 첫 토막(제 무리 벽 면이 통째로 이겼나 견줌)
         }
         int chains = 0, pts = 0, chainNo = 0;
         var strips = new List<Bl>();
@@ -126,11 +174,11 @@ public static partial class RoadRing
                 var fwd = new List<((double X, double Y) U, (double X, double Y) L)>(); var bwd = new List<((double X, double Y) U, (double X, double Y) L)>();
                 bool Pair(double ux, double uy, double ugx, double ugy, List<((double, double), (double, double))> o)
                 {
-                    var lp = Lower(ux, uy, ugx, ugy, want, p, A, B);
-                    double zu = ev.Eval(ux, uy).Z, zl = ev.Eval(lp.X, lp.Y).Z;
+                    var (up, lp, wd) = Ends(ux, uy, ugx, ugy, want, p, A, B);
+                    double zu = ev.Eval(up.X, up.Y).Z, zl = ev.Eval(lp.X, lp.Y).Z;
                     if (!double.IsFinite(zu) || !double.IsFinite(zl) || Math.Abs(zu - zl) < WfMinH) return false;   // 벽 면이 안 보임(높이 1 cm 아래)
-                    if (ownFace && Sq(lp.X - ux) + Sq(lp.Y - uy) > Sq(B - A - 1e-3)) return false;   // 제 무리 벽 면이 통째로 이김 = 고리 선이 이미 둘 다 있음
-                    o.Add(((ux, uy), lp)); Mark(want, p, fi, ux, uy, pass); return true;
+                    if (ownFace && wd > B - A - 1e-3) return false;   // 제 무리 벽 면이 통째로 이김 = 고리 선이 이미 둘 다 있음
+                    o.Add((up, lp)); Mark(want, p, fi, ux, uy, pass); return true;
                 }
                 if (!Pair(px, py, gx, gy, fwd)) continue;
                 foreach (int sgn in new[] { 1, -1 })

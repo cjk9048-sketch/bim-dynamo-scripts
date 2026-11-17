@@ -178,8 +178,8 @@ internal sealed class RoadPanel : UserControl
         Row(("줄눈 간격 m", d => d.JointGap, (d, v) => d.JointGap = v, 1, 2, 20));
 
         _host = Plain(secSet, "사면", "절토 · 성토 구배(1:n) · 단높이 · 소단폭", true, "roadSlope");
-        Row(("절토 1:", d => d.CutSlope, (d, v) => d.CutSlope = v, 1, 0.1, 10), ("단높이", d => d.CutBenchH, (d, v) => d.CutBenchH = v, 1, 0.5, 50), ("소단", d => d.CutBenchW, (d, v) => d.CutBenchW = v, 1, 0, 10));
-        Row(("성토 1:", d => d.FillSlope, (d, v) => d.FillSlope = v, 1, 0.1, 10), ("단높이", d => d.FillBenchH, (d, v) => d.FillBenchH = v, 1, 0.5, 50), ("소단", d => d.FillBenchW, (d, v) => d.FillBenchW = v, 1, 0, 10));
+        Row(("절토 1:", d => d.CutSlope, (d, v) => d.CutSlope = v, 1, 0.01, 10), ("단높이", d => d.CutBenchH, (d, v) => d.CutBenchH = v, 1, 0.5, 50), ("소단", d => d.CutBenchW, (d, v) => d.CutBenchW = v, 1, 0, 10));
+        Row(("성토 1:", d => d.FillSlope, (d, v) => d.FillSlope = v, 1, 0.01, 10), ("단높이", d => d.FillBenchH, (d, v) => d.FillBenchH = v, 1, 0.5, 50), ("소단", d => d.FillBenchW, (d, v) => d.FillBenchW = v, 1, 0, 10));
         // ★[v117.18.12 · JACK 1116 «꺾임 소단: 단차 / 전이»] 급한 굽이 안쪽 소단 — 도로마다 · 기본 단차 · 바꾸면 «지표면 업데이트 필요»(지문) · 애니메이션 없음
         {
             var bRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(2, 2, 0, 6), ToolTip = "급한 굽이 안쪽 소단 — 단차: 다리마다 수평 · 모퉁이 턱 / 전이: 두 다리 높이를 이어 기울게 · 못 하면 단차" };

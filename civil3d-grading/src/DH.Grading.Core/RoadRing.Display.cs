@@ -10,7 +10,7 @@ namespace DH.Grading.Core;
 /// 짓는 선을 이긴 원천 등치선으로 모두 다시 긋기(1109)는 면이 깨져 되돌림 — 그래서 표시만.</summary>
 public static partial class RoadRing
 {
-    public sealed class DisplayStats { public int Pts, Dropped, Kept, AddedLines, AddedPts, OutlinePts, Snapped, Bridged; public double AddedLen, BridgedLen; public long Ms; public readonly List<string> BridgeNotes = new();
+    public sealed class DisplayStats { public int Pts, Dropped, Kept, AddedLines, AddedPts, OutlinePts, Snapped, Bridged, BendJoins, EdgeLines; public double AddedLen, BridgedLen; public long Ms; public readonly List<string> BridgeNotes = new();
         /// <summary>★[v117.18.4 · JACK 1116 «꺾임 구간 검토 목록»] 급한 꺾임(<see cref="Deck.Sharp"/> — 안쪽 반경 &lt; 첫 단 거리 + 여유)마다 한 줄 — «꺾임 n · 성 K1 — 단차 H m · 사면 1:n · 소단 폭 x m · 배수 ⚠고임» · 이을 짝이 없으면 «이음 못 함» 한 줄.</summary>
         public readonly List<string> Review = new(); }
 
@@ -22,13 +22,26 @@ public static partial class RoadRing
         if (b?.Ev == null) { o.AddRange(lines); return o; }
         var ev = b.Ev; int m = ev.D.B.Count;
         // ★[v117.18.12 · JACK 1116 «꺾임 소단 전이»] 전이를 못 한 굽이(단차 그대로)마다 한 줄
-        foreach (var t in ev.Trans) if (!t.Ok && (t.Tiers.Count > 0 || t.Why.Length > 0)) st.Review.Add($"꺾임 {t.No + 1} · 전이 못 함({t.Why}) → 단차");
+        foreach (var t in ev.Trans)
+        {
+            if (!t.Ok && (t.Tiers.Count > 0 || t.Why.Length > 0)) { st.Review.Add($"꺾임 {t.No + 1} · 전이 못 함({t.Why}) → 단차"); continue; }
+            // ★[v117.18.13 · JACK 1117 «단마다 따로»] 일부 단만 전이 — 쪽마다 처음 못 한 단부터 단차
+            if (!t.Ok) continue;
+            if (t.CutFailK > 0 && t.Tiers.Any(q => q.Cut)) st.Review.Add($"꺾임 {t.No + 1} · 절토 {t.CutFailK}단부터 전이 못 함({t.CutWhy}) → 단차");
+            if (t.FillFailK > 0 && t.Tiers.Any(q => !q.Cut)) st.Review.Add($"꺾임 {t.No + 1} · 성토 {t.FillFailK}단부터 전이 못 함({t.FillWhy}) → 단차");
+        }
         double[] Br(Prof p) { var l = new List<double>(); for (int i = 1; i < p.E.Count; i++) l.Add(p.E[i].D); return l.ToArray(); }
         // ★[v117.16] 단면마다(변환 옹벽 변형 단면 — 그 점을 이긴 원천의 단면 꺾임으로 잼)
         var bcA = ev.PcA.Select(Br).ToArray(); var bfA = ev.PfA.Select(Br).ToArray();
         // ① 거짓 조각 빼기 — 단 번호와 상관없이(1단 사면 끝 선 K = 0도) · 도로 가장자리 점은 도로 면 위(Kind 1) · 원천 거리 ≈ 0이라 남음
+        // ★[JACK 1117 «도로 끝선은 정확하게» · Capture_2026_1117_120033] 도로 끝선 — 짓는 선의 0단 윗선(<see cref="EdgeCrest"/>)은 «바깥 5 cm가 성토»인 둘레 점만이라
+        //   절토 · 땅 높이 구간에서 끊겼다(현장 덤프 A 좌 측점 11 ~ 159 한 줄 · 우 3 ~ 161 + 185 ~ 187 두 줄 — 쪽마다 둘레 188.3 m 중 144.6 · 163.4 m 계측). 그림 · 고르기용은 쪽마다 도로 면 둘레(Deck.B) 그대로 한 줄로 바꿈
+        //   (높이 = 둘레 점 높이 · 측점 = 둘레 측점 · 짓는 선 · 노리선 짝은 그대로).
+        bool IsEdge(RoadGrade.TierLine tl) => tl.K == 0 && tl.Role == RoadGrade.LineRole.Crest && !tl.Cut && tl.WallNo == 0 && !tl.Cross && !tl.DisplayOnly
+            && tl.Pts.All(p => { var (dn, _, sg) = ev.NearestFoot(p.X, p.Y); return sg >= 0 && dn <= 1e-6; });
         foreach (var tl in lines)
         {
+            if (IsEdge(tl)) continue;
             if (tl.Role == RoadGrade.LineRole.Wall || tl.Cross || tl.WallNo != 0 || tl.DisplayOnly || tl.Pts.Count < 2) { o.Add(tl); continue; }
             RoadGrade.TierLine? cur = null;
             foreach (var p in tl.Pts)
@@ -53,6 +66,8 @@ public static partial class RoadRing
             }
             if (cur != null && cur.Pts.Count >= 2) o.Add(cur);
         }
+        { var el = EdgeLines(ev.D); o.AddRange(el); st.EdgeLines = el.Count; }
+        JoinBendCreases(ev, o, st);
         if (!addBench) { st.Ms = sw.ElapsedMilliseconds; return o; }
         // ② 빠진 소단 턱 더하기 — 소단 자리 테두리(0.25 m 칸 계단)를 이긴 원천 거리 = 그 소단 안 · 밖 끝으로 다듬음
         var ba = BenchArea(b);
@@ -143,6 +158,61 @@ public static partial class RoadRing
         BridgeCorners(ev, o, st);
         st.Ms = sw.ElapsedMilliseconds;
         return o;
+    }
+
+    /// <summary>★[JACK 1117 «도로 끝선은 정확하게»] 도로 끝선 — 쪽(±1)마다 도로 면 둘레(<see cref="Deck.B"/>)의 그 쪽 점이 이어진 토막 하나(닫힌 둘레를 돌아 이음) · 높이 = 둘레 점 · 측점 = 둘레 측점.
+    /// 성토 0단 윗선(고르기 · 그림)과 같은 열쇠(성 · 0단 · 윗선 · 단면 0).</summary>
+    static List<RoadGrade.TierLine> EdgeLines(Deck d)
+    {
+        var o = new List<RoadGrade.TierLine>(); int m = d.B.Count; if (m < 2) return o;
+        int start = -1; for (int i = 0; i < m; i++) if (d.BSide[i] != d.BSide[(i - 1 + m) % m]) { start = i; break; }
+        if (start < 0) return o;   // 둘레 전체가 한 쪽(마구리 없음) — 끝선을 못 나눔
+        RoadGrade.TierLine? cur = null;
+        for (int c = 0; c < m; c++)
+        {
+            int i = (start + c) % m; int sd = d.BSide[i];
+            if (cur != null && cur.Side != sd) { if (cur.Pts.Count >= 2) o.Add(cur); cur = null; }
+            if (sd == 0) continue;
+            cur ??= new RoadGrade.TierLine { Cut = false, Side = sd, K = 0, Role = RoadGrade.LineRole.Crest };
+            cur.Pts.Add((d.B[i].X, d.B[i].Y, d.B[i].Z, d.BS[i]));
+        }
+        if (cur != null && cur.Pts.Count >= 2) o.Add(cur);
+        return o;
+    }
+
+    /// <summary>★[JACK 1117 «단마다 한 줄 · 한 번 클릭»] 급한 굽이 안 주름 맞닿음 잇기 — 짓는 선은 주름점(이긴 원천이 한 다리 발 → 다른 다리 발로 뜀)에서 끊고 그 점을 두 조각이 함께 가짐.
+    /// 전이(<see cref="Deck.Trans"/>)를 켜면 굽이 안쪽 소단이 축에서 이어져 소단선 두 조각이 축 주름점에서 맞닿는데 측점은 다리 따라 뛴다(현장 덤프 A 성 좌 K1: 86.7 → 62.5 · 126.1 → 112.4 계측) —
+    /// 고를 선 잇기(<see cref="RoadGrade.PickLines"/>)는 측점이 <see cref="RoadGrade.PickJump"/> m 넘게 뛰면 다른 다리로 보고 안 이어 한 단이 3줄이 됐다(단차 판은 같은 굽이를 이음선 <see cref="BridgeCorners"/>로 이음).
+    /// 그래서 같은 열쇠(절/성 · 쪽 · 단 · 역할 · 단면) 조각의 끝이 같은 점(1 mm · 높이 1 mm)이고 그 점이 두 끝 측점 모두에서 같은 급한 굽이 범위(<see cref="Deck.SharpZone"/>)이면 한 줄로 이음(점 · 측점 그대로 — 그림 같음).</summary>
+    static void JoinBendCreases(Evaluator ev, List<RoadGrade.TierLine> o, DisplayStats st)
+    {
+        if (ev.D.Sharp.Count == 0) return;
+        bool Can(RoadGrade.TierLine l) => l.Role != RoadGrade.LineRole.Wall && !l.Cross && l.WallNo == 0 && !l.DisplayOnly && !l.Jog && l.Side != 0 && l.Pts.Count >= 2;
+        for (bool again = true; again;)
+        {
+            again = false;
+            for (int i = 0; i < o.Count && !again; i++)
+            {
+                var A = o[i]; if (!Can(A)) continue;
+                for (int j = i + 1; j < o.Count && !again; j++)
+                {
+                    var B = o[j]; if (!Can(B) || A.Cut != B.Cut || A.Side != B.Side || A.K != B.K || A.Role != B.Role || A.Prof != B.Prof) continue;
+                    foreach (bool aEnd in new[] { true, false })
+                        foreach (bool bEnd in new[] { false, true })
+                        {
+                            if (again) break;
+                            var a = aEnd ? A.Pts[^1] : A.Pts[0]; var b = bEnd ? B.Pts[^1] : B.Pts[0];
+                            if (Sq(a.X - b.X) + Sq(a.Y - b.Y) > RoadGrade.PickTouch * RoadGrade.PickTouch || !(Math.Abs(a.Z - b.Z) <= 1e-3)) continue;
+                            if (!(Math.Abs(a.S - b.S) > RoadGrade.PickJump)) continue;   // 측점이 이어지면 고를 선 잇기가 이음
+                            int na = BendNo(ev, a, A.K); if (na < 0 || na != BendNo(ev, b, B.K)) continue;
+                            var pa = aEnd ? A.Pts : Enumerable.Reverse(A.Pts).ToList(); var pb = bEnd ? Enumerable.Reverse(B.Pts).ToList() : B.Pts;
+                            var nt = new RoadGrade.TierLine { Cut = A.Cut, Side = A.Side, K = A.K, Role = A.Role, Prof = A.Prof };
+                            nt.Pts.AddRange(pa); nt.Pts.AddRange(pb.Skip(1));
+                            o[i] = nt; o.RemoveAt(j); st.BendJoins++; again = true;
+                        }
+                }
+            }
+        }
     }
 
     const double BridgeMax = 16.0, BridgeOpen = 0.3, BridgeStep = 0.5, BridgeGround = 4.5;   // 걸음(0.25 m)마다 높이 차 상한 — 면 기울기 1:n(≤ 0.14) · 벽 면 아닌 절벽 거름

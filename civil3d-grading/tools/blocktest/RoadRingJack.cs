@@ -123,7 +123,32 @@ static class RoadRingJack
         var sw = System.Diagnostics.Stopwatch.StartNew();
         var prbE = Environment.GetEnvironmentVariable("BLOCKTEST_RRPROBE");   // "x,y" (1000 m 격자 안 좌표) — 그 점 세모 · 변 출처 로그
         if (!string.IsNullOrEmpty(prbE)) { var pq = prbE.Split(','); double bx0_ = Math.Floor(inp.X[0] / 1000) * 1000, by0_ = Math.Floor(inp.Y[0] / 1000) * 1000; RoadRing.DebugProbe = (bx0_ + double.Parse(pq[0], System.Globalization.CultureInfo.InvariantCulture), by0_ + double.Parse(pq[1], System.Globalization.CultureInfo.InvariantCulture)); RoadRing.DebugRing = s => { if (s.Contains("[자리")) Console.WriteLine("   " + s); }; }
-        var b = RoadRing.Build(inp); RoadRing.DebugRing = null; RoadRing.DebugProbe = null;
+        // [계측] BLOCKTEST_RRDUMP = 폴더 — 끊김선 조각(lines.txt) · 지은 세모(tris.txt) 덤프(바늘 · 부채 원인 오프라인 분석)
+        var dumpDir = Environment.GetEnvironmentVariable("BLOCKTEST_RRDUMP");
+        if (!string.IsNullOrEmpty(dumpDir))
+        {
+            Directory.CreateDirectory(dumpDir);
+            RoadRing.DebugPieces = (pcs, ext, sb) =>
+            {
+                using var w = new StreamWriter(Path.Combine(dumpDir, "lines.txt"));
+                foreach (var (src, cs) in pcs)
+                {
+                    w.WriteLine($"L {(src.Crease ? "C" : "B")} {src.Role} {src.K} {src.Prof} {(src.Cut ? 1 : 0)} {src.Pts.Count} " + string.Join(" ", cs.Select(c => string.Format(ci, "{0:R},{1:R}", c.X, c.Y))));
+                }
+                foreach (var cs in ext) w.WriteLine("E " + string.Join(" ", cs.Select(c => string.Format(ci, "{0:R},{1:R}", c.X, c.Y))));
+                foreach (var cs in sb) w.WriteLine("S " + string.Join(" ", cs.Select(c => string.Format(ci, "{0:R},{1:R}", c.X, c.Y))));
+            };
+        }
+        if (!string.IsNullOrEmpty(dumpDir)) RoadRing.DebugTags = tg => { using var w = new StreamWriter(Path.Combine(dumpDir, "tags.txt")); foreach (var kv in tg) w.WriteLine($"{kv.Key.Item1} {kv.Key.Item2} {kv.Value.Replace(' ', '_')}"); };
+        var b = RoadRing.Build(inp); RoadRing.DebugRing = null; RoadRing.DebugProbe = null; RoadRing.DebugPieces = null; RoadRing.DebugTags = null;
+        if (!string.IsNullOrEmpty(dumpDir))
+        {
+            using var w = new StreamWriter(Path.Combine(dumpDir, "tris.txt"));
+            int Zone(double x, double y) { var (dn, _, sg) = b.Ev.NearestFoot(x, y); return sg < 0 ? -1 : b.Deck.SharpZone(b.Deck.BS[sg], 1); }   // 급한 굽이 범위(1단 · 무게중심 가장 가까운 둘레 발)
+            foreach (var t in b.Tris) w.WriteLine(string.Format(ci, "{0:R} {1:R} {2:R} {3:R} {4:R} {5:R} {6:R} {7:R} {8:R} {9}", t.A.X, t.A.Y, t.A.Z, t.B.X, t.B.Y, t.B.Z, t.C.X, t.C.Y, t.C.Z, Zone((t.A.X + t.B.X + t.C.X) / 3, (t.A.Y + t.B.Y + t.C.Y) / 3)));
+            using var w2 = new StreamWriter(Path.Combine(dumpDir, "deck.txt"));
+            foreach (var q in b.Deck.B) w2.WriteLine(string.Format(ci, "{0:R} {1:R} {2:R}", q.X, q.Y, q.Z));
+        }
         Console.WriteLine($"[RJ] 짓기 {sw.ElapsedMilliseconds} ms · ok {b.Ok} · 세모 {b.Tris.Count} · 선 {b.Lines.Count}");
         Console.WriteLine("  " + b.Note.Substring(0, Math.Min(b.Note.Length, 900)));
         if (!b.Ok)

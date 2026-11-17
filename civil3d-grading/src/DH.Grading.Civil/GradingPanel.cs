@@ -1463,6 +1463,10 @@ internal sealed class GradingPanel : UserControl
     internal Button PickGroundButton => _pickGround;
     internal Button BuildButton => _build;
     internal void ShowMakeTab() { if (!_tabFix) return; _tabFix = false; _showMake?.Invoke(); }
+    internal void ShowFixTab() { if (_tabFix) return; _tabFix = true; _showMake?.Invoke(); }
+    internal TextBox SlopeCutBox => _cutS;
+    internal TextBox SlopeFillBox => _fillS;
+    internal Button ToWallButton => _toWall;
 
     // ── ★[JACK 1112] 맨 위 설명 칸 ──────────────────────────────────────
     /// <summary>맨 위 칸에 하나만 보인다 — "demo" · "cut" · "fill" · "excav".</summary>

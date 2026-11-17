@@ -114,6 +114,9 @@ public static class ExcavPalette
     }
 
     /// <summary>바깥에서 값이 바뀌었다 — 창을 다시 채운다.</summary>
+    /// <summary>★[튜토리얼 · JACK 1117] 떠 있는 창의 알맹이 — 닫혀 있으면 null.</summary>
+    internal static ExcavPanel? OpenPanel { get { try { return _ps != null && _ps.Visible ? _panel : null; } catch { return null; } } }
+
     internal static void Refresh()
     {
         try { if (_ps != null && _ps.Visible) _panel?.SyncTo(AcadApp.DocumentManager.MdiActiveDocument); }

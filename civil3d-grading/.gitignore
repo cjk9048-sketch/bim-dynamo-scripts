@@ -54,3 +54,6 @@ DH_세션*.txt.tmp
 
 # ★[v112.0 · 계획_도면화.md Q1 · JACK 1103] 기본 도곽 DWG(K-water)는 공개 저장소에 안 올림 — 다른 사업 글이 박혀 있다 · 설치 때 참고자료에서 해시 확인 후 복사(배포/설치.ps1 ③)
 **/Contents/Frames/*.dwg
+
+# ★[튜토리얼 · JACK 1117] 튜토리얼 자료(현장 도면 · 수치지도 사본) — 설치 번들에만 · 공개 저장소에 절대 안 올림
+**/DH.Grading.bundle/Contents/Tutorial/

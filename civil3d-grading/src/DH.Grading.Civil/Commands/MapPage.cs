@@ -145,7 +145,7 @@ internal static class MapPage
   // ★★[튜토리얼 · JACK 1117] CAD가 'tut:{on,…}'으로 켜면 — 어둡게 덮고 할 곳만 뚫는다(클릭도 그 자리만).
   //   작은 단계: 1 검색 칸 → 2 지도(모서리 두 곳) → 3 [이 범위 가져오기] · 0 보내는 중(덮개 걷음). 바뀌면 CAD에 'sub'로 알린다.
   //   Leaflet이 안 와도 살아 있어야 한다(그래서 여기 — 아래 return 앞).
-  var TS={on:false,found:false,sending:false,t:[],base:2,total:10,skip:'',quit:'',sub:-1,el:null,sig:''};
+  var TS={on:false,found:false,sending:false,t:[],base:2,total:10,skip:'',quit:'',sub:-1,el:null,sig:'',min:0,small:''};
   function tutPost(ev,x){ if(!EMBED) return; var o={kind:'tut',ev:ev}; if(x) for(var k in x) o[k]=x[k];
     try{ window.chrome.webview.postMessage(JSON.stringify(o)); }catch(e){} }
   function tutDom(){
@@ -167,13 +167,14 @@ internal static class MapPage
     TS.el={d:d,g:g,b:b}; return TS.el;
   }
   function tutHide(){ if(!TS.el) return; TS.el.d.forEach(function(x){x.style.display='none';}); TS.el.g.style.display='none'; TS.el.b.style.display='none'; }
-  function tutBalloon(idx){
-    var el=tutDom(), b=el.b, sig=idx+'|'+TS.t.join('|');
+  function tutBalloon(idx,note){
+    var el=tutDom(), b=el.b, sig=idx+'|'+(note||'')+'|'+TS.t.join('|');
     if(TS.sig===sig) return; TS.sig=sig;
     b.innerHTML='';
     var top=document.createElement('div'), n=document.createElement('span'); n.className='n';
     n.textContent=(TS.base+idx-1)+' / '+TS.total; top.appendChild(n);
     top.appendChild(document.createTextNode(TS.t[idx-1]||'')); b.appendChild(top);
+    if(note){ var nt=document.createElement('div'); nt.style.cssText='color:#ffb020;margin-top:5px;font-size:13px'; nt.textContent=note; b.appendChild(nt); }
     var r=document.createElement('div'); r.className='r';
     if(idx===1&&TS.skip){ var s=document.createElement('button'); s.textContent=TS.skip;
       s.addEventListener('click',function(){ TS.found=true; tutTick(); }); r.appendChild(s); }
@@ -183,7 +184,11 @@ internal static class MapPage
   }
   function tutTick(){
     if(!TS.on){ tutHide(); TS.sub=-1; return; }
-    var idx=TS.sending?0:(box?3:((TS.found||p1)?2:1));
+    // ★[JACK 1117 «너무 작게 가져와서 에러»] 고른 범위가 TS.min(m)보다 작으면 3으로 안 넘어간다 — 말풍선에 «범위 작음»
+    var small=false;
+    if(box&&TS.min>0){ var kLon=111320*Math.cos((box.minLat+box.maxLat)/2*Math.PI/180);
+      small=((box.maxLon-box.minLon)*kLon<TS.min)||((box.maxLat-box.minLat)*111320<TS.min); }
+    var idx=TS.sending?0:((box&&!small)?3:((TS.found||p1||box)?2:1));
     if(idx!==TS.sub){ TS.sub=idx; tutPost('sub',{n:idx}); }
     if(idx===0){ tutHide(); return; }
     var ids=idx===1?['srow','slist']:(idx===2?['map']:['send']);
@@ -197,7 +202,7 @@ internal static class MapPage
     function put(x,l,t,w,h){ x.style.display='block'; x.style.left=l+'px'; x.style.top=t+'px'; x.style.width=Math.max(0,w)+'px'; x.style.height=Math.max(0,h)+'px'; }
     put(d[0],0,0,W,T0); put(d[1],0,B0,W,H-B0); put(d[2],0,T0,L0,B0-T0); put(d[3],R0,T0,W-R0,B0-T0);
     put(el.g,L0,T0,R0-L0,B0-T0);
-    tutBalloon(idx);
+    tutBalloon(idx,(idx===2&&small)?TS.small:'');
     var b=el.b; b.style.display='block';
     var bw=b.offsetWidth,bh=b.offsetHeight,bl,bt;
     if(idx===2){ bl=L0+12; bt=T0+12; }
@@ -211,10 +216,10 @@ internal static class MapPage
       var o=null; try{ o=JSON.parse(m.substring(4)); }catch(e){}
       if(!o) return;
       TS.on=!!o.on; if(o.t) TS.t=o.t; if(o.base) TS.base=o.base; if(o.total) TS.total=o.total;
-      if(o.skip) TS.skip=o.skip; if(o.quit) TS.quit=o.quit; TS.sig=''; TS.sub=-1;
+      if(o.skip) TS.skip=o.skip; if(o.quit) TS.quit=o.quit; if(o.min) TS.min=o.min; if(o.small) TS.small=o.small; TS.sig=''; TS.sub=-1;
       tutTick(); tutPost('ack');
     });
-    document.addEventListener('keydown',function(e){ if(TS.on&&e.key==='Escape') tutPost('quit'); });
+    document.addEventListener('keydown',function(e){ if(TS.on&&e.key==='Escape'&&!p1) tutPost('quit'); });   // 첫 점 뒤 Esc = 찍기 취소(튜토리얼은 그대로)
     setInterval(tutTick,250);
     tutPost('ready');
   }
@@ -319,9 +324,43 @@ internal static class MapPage
   var mapDiv=document.getElementById('map');
   function pickOn(v){ if(mapDiv) mapDiv.classList.toggle('pick', !!v); }
   pickOn(true);
+  // ★[JACK 1117] 첫 점 뒤엔 박스가 마우스를 따라다닌다 — 가로·세로·면적이 같이 바뀐다.
+  var lblW=null,lblH=null,lblA=null;
+  var lcss=document.createElement('style');
+  lcss.textContent='.bxl{background:rgba(31,36,48,.88);color:#fff;border:1px solid #ffb020;border-radius:4px;padding:1px 6px;font-size:12px;font-weight:bold;white-space:nowrap;width:auto!important;height:auto!important;line-height:1.4;pointer-events:none}';
+  document.head.appendChild(lcss);
+  function lblSet(m,ll,txt){
+    if(!m) m=L.marker(ll,{interactive:false,keyboard:false,icon:L.divIcon({className:'bxl',html:txt,iconSize:null})}).addTo(map);
+    else { m.setLatLng(ll); m.getElement().innerHTML=txt; }
+    return m;
+  }
+  function lblClear(){
+    [lblW,lblH,lblA].forEach(function(m){ if(m) map.removeLayer(m); });
+    lblW=lblH=lblA=null;
+  }
+  function fmtArea(a){ return a>=10000 ? (a/10000).toFixed(2)+' ha' : Math.round(a).toLocaleString()+' ㎡'; }
+  function drawLive(b){
+    var nw=b.getNorthWest(), ne=b.getNorthEast(), se=b.getSouthEast();
+    var w=map.distance(nw,ne), h=map.distance(ne,se);
+    if(rect) rect.setBounds(b);
+    else rect=L.rectangle(b,{color:'#ffb020',weight:2,fillOpacity:0.08,interactive:false}).addTo(map);
+    lblW=lblSet(lblW,L.latLng(b.getNorth(),b.getCenter().lng),Math.round(w).toLocaleString()+' m');
+    lblH=lblSet(lblH,L.latLng(b.getCenter().lat,b.getEast()),Math.round(h).toLocaleString()+' m');
+    lblA=lblSet(lblA,b.getCenter(),fmtArea(w*h));
+    return {w:w,h:h};
+  }
+  map.on('mousemove',function(e){
+    if(quit||p1===null) return;
+    var s=drawLive(L.latLngBounds(p1,e.latlng));
+    info.textContent=Math.round(s.w)+'m × '+Math.round(s.h)+'m · 클릭하면 확정';
+  });
+  function cancelFirst(){ if(p1!==null){ reset(); info.textContent='범위 없음'; } }
+  map.on('contextmenu',cancelFirst);
+  document.addEventListener('keydown',function(e){ if(e.key==='Escape') cancelFirst(); });
   function reset(){
     if(rect){map.removeLayer(rect);rect=null;}
     if(mark){map.removeLayer(mark);mark=null;}
+    lblClear();
     p1=null;box=null;send.disabled=true;info.textContent='범위 없음';
     pickOn(true);
   }
@@ -333,12 +372,11 @@ internal static class MapPage
       reset();
       p1=e.latlng;
       mark=L.circleMarker(p1,{radius:5,color:'#ffb020'}).addTo(map);
-      info.textContent='반대쪽 모서리 클릭';
+      info.textContent='마우스를 움직여 크기 보기 · 클릭 확정 · Esc 취소';
       return;
     }
     var b=L.latLngBounds(p1,e.latlng);
-    if(rect) map.removeLayer(rect);
-    rect=L.rectangle(b,{color:'#ffb020',weight:2,fillOpacity:0.08}).addTo(map);
+    drawLive(b);                  // 확정 — 마지막 마우스 위치 그대로, 길이 표시는 남긴다
     if(mark){map.removeLayer(mark);mark=null;}
     box={minLon:b.getWest(),minLat:b.getSouth(),maxLon:b.getEast(),maxLat:b.getNorth()};
     // 대략 크기(m) — 사람이 ""이만하면 되겠다""를 눈으로 재게.

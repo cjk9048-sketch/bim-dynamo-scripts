@@ -64,6 +64,7 @@ internal sealed class QtyXlsxPanel : UserControl
 {
     readonly TextBox _fac = new() { Height = 26, VerticalContentAlignment = VerticalAlignment.Center, ToolTip = "시트 «1)시설명» · 인쇄 머리글" };
     readonly List<(string Key, TextBox Box)> _num = new();
+    readonly CheckBox _land = new() { Content = "용지조서", Margin = new Thickness(0, 6, 0, 0), ToolTip = "체크 → 도면이름_용지조서.xlsx도 만듦\n필지 = [지적도] · 편입 = 필지 ∩ 공사 범위(정지 경계 + 진입도로)" };   // ★[용지조서 · JACK 1117]
     readonly TextBlock _st = new() { Margin = new Thickness(0, 6, 0, 0), TextWrapping = TextWrapping.Wrap, FontSize = 11, Foreground = DhBrand.Sub };
     string _status = "";
     QtyForest _pf = new(); double _pdeep = 4.5;   // 미리보기 값 - 칸이 틀리면 칸마다 마지막 올바른 값 그대로
@@ -104,6 +105,7 @@ internal sealed class QtyXlsxPanel : UserControl
         DockPanel.SetDock(top, Dock.Top); deck.Children.Add(top);
         var bottom = new StackPanel { Margin = new Thickness(10, 0, 10, 8) };
         DockPanel.SetDock(bottom, Dock.Bottom);
+        bottom.Children.Add(_land);
         bottom.Children.Add(_st);
         var (ok, _) = DhBrand.FooterButtons("만들기");
         ok.Margin = new Thickness(0, 8, 0, 0); ok.HorizontalAlignment = HorizontalAlignment.Left;
@@ -145,6 +147,7 @@ internal sealed class QtyXlsxPanel : UserControl
     internal void Load(QtyXlsxInput inp, string status)
     {
         _fac.Text = inp.Facility;
+        _land.IsChecked = inp.Land;
         foreach (var (key, box) in _num)
         {
             double v = key switch
@@ -163,7 +166,7 @@ internal sealed class QtyXlsxPanel : UserControl
     /// <summary>칸 값 검사 → 값 묶음(틀리면 알림 글 + null).</summary>
     internal QtyXlsxInput? Collect()
     {
-        var r = new QtyXlsxInput { Facility = _fac.Text.Trim() };
+        var r = new QtyXlsxInput { Facility = _fac.Text.Trim(), Land = _land.IsChecked == true };
         foreach (var (key, box) in _num)
         {
             string t = box.Text.Trim().Replace(',', '.');

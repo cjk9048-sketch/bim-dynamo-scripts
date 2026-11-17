@@ -66,7 +66,8 @@ static class RoadRingTransition
                         double ds = Math.Sqrt(Sq(run[i].X - run[i - 1].X) + Sq(run[i].Y - run[i - 1].Y)), dz = Math.Abs(run[i].Z - run[i - 1].Z);
                         jump = Math.Max(jump, dz);
                         double ex = dz - cap * ds - 1e-4;
-                        if (ex > 0) acc += ex; else { step = Math.Max(step, acc); acc = 0; }
+                        if (ex > 0) { acc += ex; if (acc > 0.02 && Environment.GetEnvironmentVariable("BLOCKTEST_RTWALK") == "1") { var fz = ev.NearestFoot(run[i].X, run[i].Y); var e2 = ev.Eval(run[i].X, run[i].Y); Console.WriteLine($"[RTW] 턱 누적 {acc:F3} @({run[i].X:F2},{run[i].Y:F2}) dz {run[i].Z - run[i - 1].Z:F4}/{ds:F3} · 측점 {(fz.Item3 >= 0 ? d.BS[fz.Item3] : double.NaN):F1} · D {fz.Item1:F2} · 무리 {e2.Group} · 원천 {e2.WLo.Src}/{e2.WHi.Src}"); } }
+                        else { step = Math.Max(step, acc); acc = 0; }
                         if (i >= 5) { double L = 0; for (int q = i - 4; q <= i; q++) L += Math.Sqrt(Sq(run[q].X - run[q - 1].X) + Sq(run[q].Y - run[q - 1].Y)); grade = Math.Max(grade, Math.Abs(run[i].Z - run[i - 5].Z) / Math.Max(L, 1e-9)); }
                     }
                     step = Math.Max(step, acc);
@@ -115,13 +116,22 @@ static class RoadRingTransition
         if (!b0.Ok || !b1.Ok) return null;
         Console.WriteLine($"[RT] {tag} 세모 단차: {RoadRingJack.TriStats(b0)}");
         Console.WriteLine($"[RT] {tag} 세모 전이: {RoadRingJack.TriStats(b1)} · 전이 점 {b1.Ev.TransUses}");
-        var ev = b1.Ev; int nFail = 0;
+        var ev = b1.Ev; int nFail = 0, nPart = 0;
         if (Environment.GetEnvironmentVariable("BLOCKTEST_RTDIAG") == "1") Diag(b1);
         var fl1 = RoadRing.DisplayLines(b1, b1.Lines, out var st1);
         foreach (var t in ev.Trans)
         {
             Console.WriteLine($"[RT] {tag} 꺾임 {t.No + 1} S {t.S0:F1}~{t.S1:F1} Rin {t.Rin:F2} 안쪽 {t.Side} · g {t.G:F3} · 상한 {t.Cap:F3} · 단차 최대 {t.DH:F2} m · 전이 길이 최대 {t.Len:F1} m · {(t.Ok ? "전이" : "못 함(" + t.Why + ")")}");
-            foreach (var tr in t.Tiers) Console.WriteLine($"[RT]      {(tr.Cut ? "절" : "성")} {tr.K}단 단차 {tr.DH:F2} m · 전이 {tr.Len:F1} m · 측점 {tr.Lo:F1}~{tr.Hi:F1}");
+            foreach (var tr in t.Tiers) Console.WriteLine($"[RT]      {(tr.Cut ? "절" : "성")} {tr.K}단 단차 {tr.DH:F2} m · 전이 {tr.Len:F1} m · 측점 {tr.Lo:F1}~{tr.Hi:F1} · {(tr.Ok ? "전이" : "못 함(" + tr.Why + ")")}");
+            // ★[v117.18.13 · JACK 1117 «단마다 따로»] 일부 단만 못 함 → 쪽마다 검토 목록 한 줄
+            if (t.Ok)
+                foreach (bool cs in new[] { true, false })
+                {
+                    int fk = cs ? t.CutFailK : t.FillFailK; if (fk <= 0 || !t.Tiers.Any(q => q.Cut == cs)) continue;
+                    nPart++;
+                    string key = $"꺾임 {t.No + 1} · {(cs ? "절토" : "성토")} {fk}단부터 전이 못 함";
+                    Check($"{tag} {key} → 검토 목록 한 줄", st1.Review.Any(r => r.StartsWith(key)), string.Join(" / ", st1.Review.Where(r => r.Contains("전이 못 함"))));
+                }
             if (!t.Ok && t.Tiers.Count > 0)
             {
                 nFail++;
@@ -142,7 +152,7 @@ static class RoadRingTransition
                     double sLo = tt.Lo - 2, sHi = tt.Hi + 2;
                     var a = BenchWalk(b0, t.Side, sLo, sHi, cut, dk, bw, t.Cap); var c = BenchWalk(b1, t.Side, sLo, sHi, cut, dk, bw, t.Cap);
                     Console.WriteLine($"[RT]      {(cut ? "절" : "성")} {f}단 소단 측점 {sLo:F0}~{sHi:F0} — 단차: 턱 {a.Step:F3} m · 0.1 m 최대 {a.Jump:F3} · 기울기 {a.Grade:F3} · 가로 {a.Cross:F3} ({a.N}) | 전이: 턱 {c.Step:F3} m · 0.1 m 최대 {c.Jump:F3} · 기울기 {c.Grade:F3} · 가로 {c.Cross:F3} ({c.N})");
-                    if (t.Ok)
+                    if (t.Ok && tt.Ok)
                     {
                         Check($"{tag} 꺾임 {t.No + 1} {(cut ? "절" : "성")} {f}단 전이 턱 ≤ 1 cm", c.Step <= 0.01, $"{c.Step * 100:F1} cm (단차 {a.Step:F2} m)");
                         Check($"{tag} 꺾임 {t.No + 1} {(cut ? "절" : "성")} {f}단 소단 기울기 ≤ 상한 {t.Cap:F3}", c.Grade <= t.Cap + 1e-3, $"{c.Grade:F3}");
@@ -150,6 +160,7 @@ static class RoadRingTransition
                 }
             }
         }
+        Console.WriteLine($"[RT] {tag} 일부 단만 못 함(쪽) {nPart}");
         if (wantFallback >= 0) Check($"{tag} 전이 못 한 굽이 수 = {wantFallback}", nFail == wantFallback, $"{nFail}"); else Console.WriteLine($"[RT] {tag} 전이 못 한 굽이 {nFail}");
         foreach (var r in st1.Review) Console.WriteLine($"[RT] {tag} 검토 {r}");
         // 고를 선 높이 = 면(1 mm) — 단차 판에도 있던 어긋남(덤프 1점 21.7 mm · 이음 끝)은 그대로 두고 늘지 않았는지

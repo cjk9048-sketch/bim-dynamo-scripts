@@ -36,6 +36,12 @@ internal sealed class ExcavPanel : UserControl
     private readonly TextBox _slope;
     // ★[v117.18.2 · JACK 1116 «굴착 구배 옆 체크박스로 가시설»] 켜면 구배 = 하한(0.01 = 엔진의 «수직») · 칸 꺼짐 · ④ 가시설 구간 도구 꺼짐 · 끄면 옛 값 복원
     private CheckBox _wallChk = null!;
+    // ★[튜토리얼 · JACK 1117] 튜토리얼이 비추는 것 — 덮개 자리 · [터파기선 선택] · [가시설] · [터파기 지표면 생성]
+    private FrameworkElement? _spotRoot;
+    internal FrameworkElement? SpotRoot => _spotRoot;
+    internal Button PickButton => _pick;
+    internal CheckBox WallCheck => _wallChk;
+    internal Button BuildButton => _build;
     private TextBlock _wallNote = null!;
     private string _prevSlopeText = "0.5";
     private bool _chkSync;
@@ -313,7 +319,9 @@ internal sealed class ExcavPanel : UserControl
             HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
             Background = Brushes.Transparent,   // ★바탕이 칠해지면 로고가 통째로 가려진다
         }));
-        Content = deck;
+        // ★[튜토리얼 · JACK 1117] 덮개(Adorner) 자리 — 창을 어둡게 덮고 누를 단추만 뚫는다(Tutorial.TutSpot)
+        _spotRoot = deck;
+        Content = new System.Windows.Documents.AdornerDecorator { Child = deck };
 
         // ★[검토 0909] 붙었다 떨어졌다 하는 창이므로 <b>붙을 때마다</b> 다시 구독한다.
         void Wire() { try { PickSession.Changed -= Refresh; PickSession.Changed += Refresh; } catch { } }
