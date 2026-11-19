@@ -81,6 +81,9 @@ static class RoadWallSiteCheck
         double sgn = rP.Contains(gf.CreatePoint(new Coordinate(c0.X - ty * 0.5, c0.Y + tx * 0.5))) ? 1 : -1;   // R_out 쪽 법선
         Point3 At(double d) => new(c0.X - sgn * ty * d, c0.Y + sgn * tx * d, 100);
         double d0 = shape == 3 ? b.TierDepth + 3 : 3;   // 다단은 소단 구역(깊이 D_T)도 Poly — 그 안쪽에서 시작
+        // ★[JACK 1119 «선 먼저» 2b] 다단 소단 자리 = 합성이 손댄 P0 세모 통째(두 테두리 모두 세모 변 — 정확 합성)라 P0 세모가 크면(선 먼저 면 · 한 면이 도로 가장자리 ~ 단 꺾임 한 세모)
+        //   Poly가 D_T보다 훨씬 안쪽까지 간다(곧은 성토 12 m 길: 고리 면 안쪽 4.0 m · 선 먼저 면 10.5 m = 도로 가장자리 — 그 자리 벽 면 = P0 그대로). 건넌 빗금은 Poly 안쪽 테두리 너머에서 시작
+        if (shape == 3) { double dIn = d0; while (dIn < 60 && polyIn.Contains(gf.CreatePoint(new Coordinate(c0.X - sgn * ty * -dIn, c0.Y + sgn * tx * -dIn)))) dIn += 0.5; d0 = Math.Max(d0, dIn + 1.0); }
         var ticks = new List<(Point3 A, Point3 B)> { (At(-d0), At(2)), (At(0.3), At(1.0)), (At(-40), At(-35)) };
         var ct = RoadGrade.CutTicks(ticks, ws);
         int inside = ct.Count(t => polyIn.Contains(gf.CreatePoint(new Coordinate((t.A.X + t.B.X) / 2, (t.A.Y + t.B.Y) / 2))) || polyIn.Contains(gf.CreatePoint(new Coordinate(t.A.X, t.A.Y))) || polyIn.Contains(gf.CreatePoint(new Coordinate(t.B.X, t.B.Y))));

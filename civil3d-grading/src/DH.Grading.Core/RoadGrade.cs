@@ -139,6 +139,8 @@ public static partial class RoadGrade
         internal int[] ProfMain = Array.Empty<int>();
         internal int[] ProfTier = Array.Empty<int>();
         internal double[] ProfBenchL = Array.Empty<double>();
+        /// <summary>★[JACK 1119 «선 먼저» 2b · 검토 M4] 겹친 기록의 주인 = 시작 단이 작은 것(고리 · 선 먼저 엔진 — <see cref="WinRec"/>) · 거짓 = 나중 기록(옛 엔진).</summary>
+        internal bool LowTierWins;
         /// <summary>(옹벽 단면 P, 이웃 단면 Q) → 띠 j(1부터)의 단면 번호.</summary>
         internal Dictionary<(int P, int Q), int[]> Trans = new();
         /// <summary>쪽마다(0 = 좌 · 1 = 우) 같은 단면 토막 — 시작 · 끝 · 단면(0 기본 · −2 가장자리 옹벽 · 1.. 변형) · 왼쪽/오른쪽 경계의 띠 이웃 단면(−1 = 띠 없음).</summary>
@@ -208,6 +210,8 @@ public static partial class RoadGrade
         /// <summary>★[v114.3 · JACK 1105 진입도로 옹벽 추가] 벽 층 되돌림(<see cref="PatchGridWall"/> — B1 층 위) · 고치기 전 부피 · 바뀐 칸 수.</summary>
         internal List<(int K, byte Kind, float Z, float F)>? WallUndo; internal (double Cut, double Fill, double MaxCut, double MaxFill) WallVol0; public int WallCells;
         public List<SlopeAt> Slopes = new();
+        /// <summary>★[JACK 1119 «선 먼저» 2단계] 새 엔진이 낸 절토 1단 시작선(묶음 번호 · 지은 자리와 맞닿은 그대로) — 있으면 <see cref="EdgeStartLines"/>가 표본 대신 씀.</summary>
+        public List<TierLine>? EdgeStart;
         public List<(double S0, double S1, int Side, string Why)> Suggest = new();
         public List<List<(double X, double Y)>> Daylight = new();
         public List<(double X, double Y, double Z)> EdgeL = new(), EdgeR = new();
@@ -511,6 +515,7 @@ public static partial class RoadGrade
         static bool EdgeWall(TierWall t) => t.Tier <= 0 && t.BenchL <= 0;
         int RecAt(double s, int side)
         {
+            // 옛 엔진 규칙(나중 기록이 이김) — 고리 · 선 먼저 엔진은 WinRec
             for (int i = recs.Count - 1; i >= 0; i--)
                 if (recs[i].Side == side && s >= recs[i].S0 - 1e-9 && s <= recs[i].S1 + 1e-9) return i;
             return -1;

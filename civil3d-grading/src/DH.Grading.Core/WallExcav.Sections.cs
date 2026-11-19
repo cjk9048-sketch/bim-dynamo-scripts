@@ -599,14 +599,15 @@ public static partial class WallExcav
     /// <para><see cref="Dist"/> = 자르는 선분 시작에서 교점까지 · <see cref="Sign"/> = 흙 쪽이 자르는 선 방향이면 +1 · <see cref="Stretch"/> = 1/sinθ(θ = 자르는 선과 앞면 변의 사잇각) ·
     /// 링 점 (X, Z) → 자르는 선 위 거리 Dist + Sign·X·Stretch · 높이 Toe + Z.</para></summary>
     /// <param name="Seg">자르는 꺾은선의 몇째 변인가 · <c>SegT</c> = 그 변 위 비율(종단은 이것으로 측점을 정확히 낸다).</param>
-    public sealed record CutSec(double Dist, int Sign, double Stretch, double SinT, double Toe, WallSection.Shape Shape, WallSection.Kind Kind, bool Up, int Line, int Seg, double SegT);
+    /// <param name="SlopeW">★[v117.18.22] 그 줄의 정지면 벽 앞면 구배(1:SlopeW · 모르면 음수) — 그림이 단면 앞면을 정지면 벽 앞면에 맞출 때(<see cref="WallSweep.LeanOf"/>).</param>
+    public sealed record CutSec(double Dist, int Sign, double Stretch, double SinT, double Toe, WallSection.Shape Shape, WallSection.Kind Kind, bool Up, int Line, int Seg, double SegT, double SlopeW = -1);
 
     /// <summary>★[v104.1] 자르는 선분 a → b(횡단 표본선)와 기록 줄이 만나는 자리마다 — <see cref="CutSections(SecRecord, IReadOnlyList{ValueTuple{double, double}}, double, out int)"/>.</summary>
     public static List<CutSec> CutSections(SecRecord rec, double ax, double ay, double bx, double by, double minSin, out int skipped)
         => CutSections(rec, new[] { (ax, ay), (bx, by) }, minSin, out skipped);
 
     /// <summary>★[v104.1] 자르는 꺾은선(횡단 = 표본선 두 점 · 종단 = 선형을 잘게 편 것)과 기록 줄(앞면 선)이 만나는 자리마다 <b>수량과 같은 단면</b>
-    /// (<see cref="ColumnAt"/>처럼 가까운 끝점의 단면 · 앞 땅만 보간 — 검토 중간 4).
+    /// (<see cref="ColumnAt"/>처럼 가까운 끝점의 단면 · 앞 땅 보간 — 검토 중간 4 · ★[v117.18.22] 보이는 높이도 보간 — 꼭대기가 그 자리 앞면 꼭대기에).
     /// sinθ &lt; <paramref name="minSin"/>(벽과 거의 나란함)은 안 돌려주고 <paramref name="skipped"/>로 센다.
     /// 같은 줄에서 꺾은선 거리 1 mm 안 교점(꼭짓점 통과)은 하나 — 그릴 수 있는 쪽을 남긴다. 거리순.</summary>
     public static List<CutSec> CutSections(SecRecord rec, IReadOnlyList<(double X, double Y)> path, double minSin, out int skipped)
@@ -645,7 +646,11 @@ public static partial class WallExcav
                     double nx = -ey / eL * ln.Soil, ny = ex / eL * ln.Soil;        // 흙 쪽 법선(SignedDist와 같은 정의)
                     int sg = nx * ux + ny * uy >= 0 ? +1 : -1;
                     int near = t < 0.5 ? i : i + 1;
-                    hits.Add((dist, false, new CutSec(dist, sg, 1.0 / sinT, sinT, p.Toe + (q.Toe - p.Toe) * t, ln.Shapes![near], ln.Kind, ln.Up, li, k, u)));
+                    // ★[v117.18.22 · JACK 1119 «끝단이 원지반과 안 닿는데?»] 보이는 높이도 앞 땅처럼 보간 — 표 줄 · 두께는 가까운 끝점 그대로 꼭대기만 앞면을 따라(<see cref="WallSweep.AtHeight"/>).
+                    //   가까운 끝점 높이 그대로면 벽 따라 높이가 빨리 바뀌는 자리에서 꼭대기가 땅과 어긋났다(현장 덤프 B 횡단에서 땅보다 100 mm 위로 솟음 · 점 간격 0.5 m의 반만큼 떨어진 높이).
+                    double hP = p.HTot - p.Df, hQ = q.HTot - q.Df;
+                    var shape = WallSweep.AtHeight(ln.Shapes![near], hP + (hQ - hP) * t);
+                    hits.Add((dist, false, new CutSec(dist, sg, 1.0 / sinT, sinT, p.Toe + (q.Toe - p.Toe) * t, shape, ln.Kind, ln.Up, li, k, u, ln.SlopeW)));
                 }
             }
             hits.Sort((a, b) => a.Dist.CompareTo(b.Dist));

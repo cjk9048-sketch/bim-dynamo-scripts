@@ -210,6 +210,18 @@ public static class CivilSafeMesh
         finally { flatHCur = flatWas; }
     }
 
+    /// <summary>★[JACK 1119 «선 먼저» 2b · 검토 M2] 시간 한도 안에서만 다듬기 — 넘으면 점 · 면을 더할 때 <see cref="TimeoutException"/>으로 멈춤
+    /// (Task.Wait 한도만 두면 실이 뒤에서 계속 돌아 메모리를 먹었다 — 바늘 1개 면에서 50 GB 기록). 한도는 이 호출에서 띄운 실(옛 길)까지 따라감.</summary>
+    public static List<WallDaylight.Tri>? MakeZoneWithin(int ms, IReadOnlyList<WallDaylight.Tri> tris, IEnumerable<Point3> fixedPts, out Report rep, double flatH = 0)
+    {
+        long was = zoneDeadline.Value;
+        zoneDeadline.Value = Environment.TickCount64 + Math.Max(1, ms);
+        try { return MakeZone(tris, fixedPts, out rep, flatH: flatH); }
+        finally { zoneDeadline.Value = was; }
+    }
+    static readonly System.Threading.AsyncLocal<long> zoneDeadline = new();
+    static void CheckDeadline() { long d = zoneDeadline.Value; if (d != 0 && Environment.TickCount64 > d) throw new TimeoutException("다듬기 시간 한도 넘음"); }
+
     /// <summary>옹벽 터파기면이 쓰는 «납작한 면» 높이 — Civil이 긴 변을 뒤집는 문턱(122µm) 곁(<see cref="ThinH"/>와 같은 값).</summary>
     public const double ThinFlat = 1.25e-4;
     [ThreadStatic] static double flatHCur;
@@ -488,6 +500,7 @@ public static class CivilSafeMesh
             {
                 var k = ((long)Math.Round(q.X / 1e-7), (long)Math.Round(q.Y / 1e-7));
                 if (id.TryGetValue(k, out int v)) return v;
+                CheckDeadline();
                 X.Add(q.X - ox); Y.Add(q.Y - oy); Z.Add(q.Z); WX.Add(q.X); WY.Add(q.Y);
                 dead.Add(false); border.Add(false); ringV.Add(false); fixedV.Add(fixedKeys != null && fixedKeys.Contains(k)); vf.Add(new HashSet<int>());
                 id[k] = X.Count - 1; return X.Count - 1;
@@ -537,7 +550,7 @@ public static class CivilSafeMesh
             nOrig = X.Count;
         }
 
-        void AddFace(int[] f) { F.Add(f); fAlive.Add(true); foreach (int v in f) vf[v].Add(F.Count - 1); if (initDone) modified.Add(F.Count - 1); }
+        void AddFace(int[] f) { CheckDeadline(); F.Add(f); fAlive.Add(true); foreach (int v in f) vf[v].Add(F.Count - 1); if (initDone) modified.Add(F.Count - 1); }
         void KillFace(int fi) { fAlive[fi] = false; foreach (int v in F[fi]) vf[v].Remove(fi); }
         public int PtsAlive() { int n = 0; for (int i = 0; i < X.Count; i++) if (!dead[i] && vf[i].Count > 0) n++; return n; }
         public int FacesAlive() { int n = 0; for (int i = 0; i < F.Count; i++) if (fAlive[i]) n++; return n; }
@@ -555,6 +568,7 @@ public static class CivilSafeMesh
             zr = double.NaN; px = x; py = y; double best = double.PositiveInfinity;
             for (double w = Math.Max(win, 1e-5); ; w *= 10)
             {
+                CheckDeadline();
                 foreach (int i in rsTree.Query(new Envelope(x - w, x + w, y - w, y + w)))
                 {
                     var s = rs[i];
@@ -919,6 +933,7 @@ public static class CivilSafeMesh
         {
             double px = X[u] + t * (X[v] - X[u]), py = Y[u] + t * (Y[v] - Y[u]), pz = Z[u] + t * (Z[v] - Z[u]);
             var fs = vf[u].Where(g => vf[v].Contains(g)).ToList();
+            CheckDeadline();
             X.Add(px); Y.Add(py); Z.Add(pz); WX.Add(px + ox); WY.Add(py + oy);
             int p = X.Count - 1;
             bool onRing = !zone && NearRing(px, py, OnRing, out _, out _, out _) <= OnRing;

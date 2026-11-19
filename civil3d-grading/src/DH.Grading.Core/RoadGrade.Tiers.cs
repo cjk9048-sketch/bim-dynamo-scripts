@@ -18,6 +18,8 @@ public static partial class RoadGrade
         public bool Cross;
         /// <summary>★[v114.3 · JACK 1105 진입도로 옹벽 추가] 선 옹벽 번호(0 = 아님) — 그 벽 면 머리 · 마구리 선(<see cref="CutLines"/>).</summary>
         public int WallNo;
+        /// <summary>★★★[JACK 1119 «선 먼저» 2단계] 이어진 한 줄 묶음 번호(새 엔진 · 0 = 없음) — 쪽이 바뀌어 나눈 줄도 같은 번호 · [옹벽 변환] · [사면 변환]이 묶음 전체를 한 번에.</summary>
+        public int Group;
         /// <summary>★[v116.9 · 4-1] 그림 전용 소단 턱 선(<see cref="RoadRing.DisplayLines"/>가 더함) — [사면→옹벽] 고르기 · 면 짓기에는 안 씀.</summary>
         public bool DisplayOnly;
         /// <summary>★[v117.18.2] 굽이 안쪽 모퉁이 이음선(<see cref="RoadRing.DisplayLines"/> — 면을 따라 걷는 선 · 꺾임 거리 위 점 아님).</summary>
@@ -503,6 +505,7 @@ public static partial class RoadGrade
         int Main(double s)
         {
             if (s < 0 || s > r.Length) return int.MinValue;
+            if (r.LowTierWins) { int w = WinRec(r.Recs, r.RecProf, p => p < r.ProfTier.Length ? r.ProfTier[p] : int.MaxValue, line.Side, s); return w < 0 ? 0 : Math.Max(0, r.RecProf[w]); }
             for (int i = r.Recs.Count - 1; i >= 0; i--)
                 if (r.Recs[i].Side == line.Side && s >= r.Recs[i].S0 - 1e-9 && s <= r.Recs[i].S1 + 1e-9) return Math.Max(0, r.RecProf[i]);
             return 0;
@@ -517,6 +520,20 @@ public static partial class RoadGrade
         return lo <= hi ? (Math.Max(a, lo), Math.Min(b, hi)) : (double.NaN, double.NaN);
     }
 
+    /// <summary>★★[JACK 1119 «선 먼저» 2단계 · 2b 검토 M4] 고리 · 선 먼저 엔진의 겹친 기록 주인 — 그 쪽 · 측점을 덮는 기록 중 시작 단이 가장 작은 것(같으면 나중 기록) · 없으면 −1.
+    /// 단면 번호가 0 이하인 기록은 단을 모름(가장 큼). 면 짓기(<see cref="RoadRing.Deck.ProfAt"/>) · 가장자리 표본 · 주인 구간이 모두 이것을 씀.</summary>
+    internal static int WinRec(IReadOnlyList<TierWall> recs, IReadOnlyList<int> recProf, Func<int, int> profTier, int side, double s)
+    {
+        int best = -1, bestT = int.MaxValue;
+        for (int i = recs.Count - 1; i >= 0; i--)
+            if (recs[i].Side == side && s >= recs[i].S0 - 1e-9 && s <= recs[i].S1 + 1e-9)
+            {
+                int p = i < recProf.Count ? Math.Max(0, recProf[i]) : 0, t = p > 0 ? profTier(p) : int.MaxValue;
+                if (best < 0 || t < bestT) { best = i; bestT = t; }
+            }
+        return best;
+    }
+
     /// <summary>★[v110.3.1 · 설치 전 검토 M2] 옹벽선 → 그 선을 낸 기록 고르기 — 단면 번호 0(도로 가장자리 0단 옹벽선)이면 가장자리 옹벽 기록(0단 · 소단 0) ·
     /// 그 밖이면 그 단면의 (단, 소단) 기록(단면 번호 = 엔진이 기록 (단, 소단 1 mm 반올림)마다 하나씩 만든 것).</summary>
     public static Func<double[], bool> WallLineMatch(Result r, TierLine line)
@@ -527,6 +544,8 @@ public static partial class RoadGrade
             if (r.RecProf[i] == lp)
             {
                 int tier = r.Recs[i].Tier; double bl = Math.Round(r.Recs[i].BenchL, 3);
+                // ★[2b · 검토 H3] 그 단면이 가장자리 옹벽 기록(0단 · 소단 0)이면 가장자리 옹벽 기록 고르기(선 먼저 엔진은 그 옹벽선에 단면 번호를 줌 — 아래 식은 그 기록을 뺐다)
+                if (tier <= 0 && bl <= 0) return w => w.Length >= 5 && w[3] <= 0 && w[4] <= 0;
                 return w => w.Length >= 5 && !(w[3] <= 0 && w[4] <= 0) && (int)Math.Max(0, w[3]) == tier && Math.Round(Math.Max(0, w[4]), 3) == bl;
             }
         return w => w.Length >= 5 && !(w[3] <= 0 && w[4] <= 0);

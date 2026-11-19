@@ -5,8 +5,21 @@ namespace DH.Grading.Core;
 /// <summary>★★★[v116 · 고리 엔진 계획 3판 §4] 결과 꾸러미 — 옛 <see cref="RoadGrade.Result"/> 뜻 그대로(미리보기 · 창 숫자 · 종단 검토선 폭 · 옹벽 제안) + 노리선 + 미리보기(세모 없이 빠르게).</summary>
 public static partial class RoadRing
 {
-    /// <summary>미리보기 — 격자(기본 1 m) · 사면 자리 · 소단/사면 꺾임선(사면 자리로 자름) · 성토 1단 윗선 · 데이라잇. 세모는 짓지 않음.</summary>
+    /// <summary>미리보기 — ★[JACK 1119] 옹벽 기록 없는 토막은 새 «선 먼저» 엔진(선 · 데이라잇 · 토량 — Civil 맞춤 안 함) · 못 지으면 옛 고리 미리보기 + 까닭 한 줄.</summary>
     public static Built Preview(RoadGrade.Input inp, double cell = 1.0)
+    {
+        if (!(RoadLines.On && RoadLines.Eligible(inp))) return PreviewRing(inp, cell);
+        var nb = RoadLines.Build(inp, false);
+        if (nb.Ok) { LinesFallback = ""; return nb; }
+        LinesFallback = nb.Note; LinesFallbacks++;
+        if (!RoadLines.RingCanTake(inp)) { nb.Note += " · ⚠선 먼저 엔진 못 지음(1단 옹벽 변환 — 옛 엔진 안 감)"; return nb; }
+        var ob = PreviewRing(inp, cell);
+        ob.Note += " · ⚠선 먼저 엔진 못 지음(" + nb.Note + ") → 고리 면";
+        return ob;
+    }
+
+    /// <summary>옛 고리 미리보기 — 격자(기본 1 m) · 사면 자리 · 소단/사면 꺾임선(사면 자리로 자름) · 성토 1단 윗선 · 데이라잇. 세모는 짓지 않음.</summary>
+    public static Built PreviewRing(RoadGrade.Input inp, double cell = 1.0)
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
         var b = new Built();
@@ -77,6 +90,7 @@ public static partial class RoadRing
     /// 직각 · 데이라잇 또는 첫 묶음 바뀜까지 · 맞은편 다리까지 재지 않음) · Suggest(사면 높이 &gt; SuggestH · 부딪힘).</summary>
     public static RoadGrade.Result ToResult(Built b, RoadGrade.Input inp)
     {
+        if (b.Lf != null) return RoadLines.ToResult(b, inp);
         var r = new RoadGrade.Result();
         if (b.Grid == null || b.Deck == null) { r.Error = b.Note.Length > 0 ? b.Note : "고리 면 없음"; return r; }
         var f = b.Grid; int n = f.W * f.H;
@@ -98,7 +112,7 @@ public static partial class RoadRing
             r.FS[k] = (float)s; r.FSide[k] = (sbyte)sd;
         }
         // ★[v117.16 · JACK 1112 «[옹벽 변환]도 고리 엔진»] 기록 · 단면 번호(옛 엔진과 같은 번호 — [사면 변환] 기록 고르기 WallLineMatch · OwnerRange) · 끝면 띠 없음(ProfMain = 자기)
-        r.Recs = b.Deck.Recs.ToList(); r.RecProf = b.Deck.RecProf.ToArray(); r.RecWiden = b.Deck.RecWiden.ToList();
+        r.Recs = b.Deck.Recs.ToList(); r.RecProf = b.Deck.RecProf.ToArray(); r.RecWiden = b.Deck.RecWiden.ToList(); r.LowTierWins = true;
         r.ProfMain = Enumerable.Range(0, b.Deck.ProfKeys.Count).ToArray();
         r.ProfTier = b.Deck.ProfKeys.Select(k => k.Tier).ToArray(); r.ProfBenchL = b.Deck.ProfKeys.Select(k => k.BenchL).ToArray();
         r.CutVol = b.CutVol; r.FillVol = b.FillVol; r.MaxCut = b.MaxCut; r.MaxFill = b.MaxFill;
@@ -118,7 +132,7 @@ public static partial class RoadRing
             double nx = d.NX[pv] + d.NX[i], ny = d.NY[pv] + d.NY[i], nl = Math.Sqrt(nx * nx + ny * ny); if (nl < 1e-9) continue;
             nx /= nl; ny /= nl;
             var sa = new RoadGrade.SlopeAt { S = d.BS[i], Side = d.BSide[i], X = d.B[i].X, Y = d.B[i].Y, EdgeZ = d.B[i].Z };
-            for (int ri = d.Recs.Count - 1; ri >= 0; ri--) if (d.Recs[ri].Side == sa.Side && sa.S >= d.Recs[ri].S0 - 1e-9 && sa.S <= d.Recs[ri].S1 + 1e-9) { sa.Rec = ri; break; }   // ★[v117.16] 가장자리 표본의 기록(1단 시작선 단면)
+            sa.Rec = d.RecAt(sa.Side, sa.S);   // ★[v117.16] 가장자리 표본의 기록(1단 시작선 단면) · ★[2b · 검토 M4] 면과 같은 주인 규칙
             double t = step, lastZ = d.B[i].Z, lastX = d.B[i].X, lastY = d.B[i].Y; bool any = false;
             while (t <= ev.Reach)
             {
@@ -185,6 +199,7 @@ public static partial class RoadRing
 
     public static List<(Point3 A, Point3 B)> Ticks(Built b, double shortSp = 1.0, double longSp = 5.0, bool longOnly = false, TickStats? st = null)
     {
+        if (b.Lf != null) return RoadLines.Ticks(b, shortSp, longSp, longOnly, st);
         var o = new List<(Point3, Point3)>();
         if (b.Deck == null || b.Ev == null) return o;
         if (shortSp <= 0) shortSp = 1.0; if (longSp <= 0) longSp = 5.0;

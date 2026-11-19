@@ -269,7 +269,12 @@ public static partial class WallExcav
             if (Math.Abs(rf) > steep) return (5, f5.Value, h, rf, rb);            // 앞면 위에 얹힌 선 — 늘인 벽 밑을 믿을 수 없다
             double toe = f5.Value + rf * 0.05;
             if (!double.IsNaN(p.Rec) && toe < p.Rec - 0.05) return (4, toe, h, rf, rb);
-            return (0, toe, h, rf, rb);
+            // ★[v117.18.22 · JACK 1119 «끝단이 원지반과 안 닿는데?»] 돌려주는 벽 높이 = <b>앞면 꼭대기</b>(뒤 땅이 앞면과 만나는 자리) − 벽 밑 — 단면 · 종단 · 횡단 그림 · 배면 · 3D가 이 높이로 선다.
+            //   위 h(순 단차)는 판정에만 — 뒤 땅을 선 앞 5 cm까지 늘여 빼서 뒤 땅이 오르면 (5 cm + 앞면 너비)·rb만큼 낮다
+            //   (현장 덤프 B: rb 0.42 · 앞면 꼭대기 4.477 m 벽이 4.437 m로 적혀 그린 단면 꼭대기가 땅보다 40 mm 아래).
+            //   뒤 땅 직선(bk에서 기울기 rb)과 앞면(벽 밑에서 1:SlopeW)이 만나는 높이 = (bk − rb·back − toe) / (1 − rb·SlopeW) · 뒤 표본이 앞면 위(|rb| ≥ steep)면 종전 값.
+            double hFace = Math.Abs(rb) < steep ? (bk.Value - rb * back - toe) / (1 - rb * Math.Max(0, f.SlopeW)) : h;
+            return (0, toe, hFace, rf, rb);
         }
         // 표본 자리 — 0.5 m 간격 + 꺾임점
         var ss = new SortedSet<double>();

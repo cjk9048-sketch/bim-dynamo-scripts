@@ -23,10 +23,29 @@ public static partial class RoadRing
         public bool Ok;
         /// <summary>★[v117.16 · 계획 1단계] 셈 한 줄(단계 ms · 평가 · 소단 조각 · M1 · 경계 |P0−G|).</summary>
         public RingCount Count = new();
+        /// <summary>★★★[JACK 1119 «선 먼저»] 새 엔진이 지은 꾸러미면 그 묶음(노리선 · 소단 자리 · 결과 격자가 읽음) · 옛 고리 엔진이면 null.</summary>
+        public RoadLines.Data? Lf;
     }
 
-    /// <summary>한 조각 짓기 — 못 지으면 Ok = false · Note에 까닭(부르는 쪽이 옛 엔진으로 물러섬).</summary>
+    /// <summary>★★★[JACK 1119 «선 먼저» · 계획 §5] 지난 짓기에서 새 엔진이 못 지어 옛 고리 엔진으로 물러선 까닭(빈 글 = 안 물러섬) · 물러선 수(하네스 · 키트 MUSTNOT).</summary>
+    public static string LinesFallback = ""; public static int LinesFallbacks;
+
+    /// <summary>한 조각 짓기 — ★[JACK 1119] 옹벽 기록 없는 토막은 새 «선 먼저» 엔진(<see cref="RoadLines"/>) · 못 지으면 옛 고리 엔진 + 노트에 까닭 한 줄.
+    /// 못 지으면 Ok = false · Note에 까닭(부르는 쪽이 옛 엔진으로 물러섬).</summary>
     public static Built Build(RoadGrade.Input inp)
+    {
+        if (!(RoadLines.On && RoadLines.Eligible(inp))) return BuildRing(inp);
+        var nb = RoadLines.Build(inp, true);
+        if (nb.Ok) { LinesFallback = ""; return nb; }
+        LinesFallback = nb.Note; LinesFallbacks++;
+        if (!RoadLines.RingCanTake(inp)) { nb.Note += " · ⚠선 먼저 엔진 못 지음(1단 옹벽 변환 — 옛 엔진 안 감)"; return nb; }
+        var ob = BuildRing(inp);
+        ob.Note += " · ⚠선 먼저 엔진 못 지음(" + nb.Note + ") → 고리 면";
+        return ob;
+    }
+
+    /// <summary>옛 고리 엔진 짓기(v116 ~ v117.18.21) — 못 지으면 Ok = false · Note에 까닭(부르는 쪽이 옛 엔진으로 물러섬).</summary>
+    public static Built BuildRing(RoadGrade.Input inp)
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
         var b = new Built();
@@ -213,7 +232,7 @@ public static partial class RoadRing
 
     /// <summary>T자 이음 고침 — 어느 세모 변의 속(끝점 빼고)에서 0.1 mm 안에 남의 꼭짓점이 있으면 그 세모를 그 점에서 둘로 나눔(반복).
     /// 도로 면 둘레 위 점이 0.1 mm 격자 · 둘레 맞춤 사이에서 30 µm 비켜 놓여 실오라기 틈이 생겼고 Civil이 메워 세모 수가 어긋났다(1109 키트 +4).</summary>
-    static int SplitTJunctions(List<WallDaylight.Tri> tris)
+    internal static int SplitTJunctions(List<WallDaylight.Tri> tris)
     {
         int done = 0;
         for (int pass = 0; pass < 6; pass++)
@@ -262,7 +281,7 @@ public static partial class RoadRing
 
     /// <summary>세 변 속 구멍 — Civil은 LandXML을 읽으며 세 변으로 닫힌 구멍을 세모로 메운다(1109 키트: 세모 +4로 «안 받음»). 넓이 · 크기와 상관없이 우리가 먼저:
     /// 바늘이 아니면 그 세모를 더하고(높이 = 세 점 그대로) · 바늘(높이 &lt; 1 mm)이면 가장 짧은 변의 두 점을 하나로 합쳐 구멍을 없앰. 돌려줌 = 고친 구멍 수.</summary>
-    static int FillTriHoles(List<WallDaylight.Tri> tris)
+    internal static int FillTriHoles(List<WallDaylight.Tri> tris)
     {
         int fixedN = 0;
         for (int pass = 0; pass < 4; pass++)
@@ -320,7 +339,7 @@ public static partial class RoadRing
     }
 
     /// <summary>바깥 둘레 점(한 번 쓰인 변의 끝) — Civil 맞춤 고정점.</summary>
-    static List<Point3> OuterPoints(List<WallDaylight.Tri> tris)
+    internal static List<Point3> OuterPoints(List<WallDaylight.Tri> tris)
     {
         var u = new Dictionary<((double, double), (double, double)), int>();
         foreach (var t in tris) foreach (var (p0, p1) in new[] { (t.A, t.B), (t.B, t.C), (t.C, t.A) }) { var a = (p0.X, p0.Y); var c = (p1.X, p1.Y); var k = a.CompareTo(c) < 0 ? (a, c) : (c, a); u[k] = u.GetValueOrDefault(k) + 1; }
@@ -331,7 +350,7 @@ public static partial class RoadRing
     }
 
     /// <summary>★[v116.4 설치 전 검토 M] 접힌 변 수 — 두 세모가 같이 쓰는 변에서 맞은편 두 꼭짓점이 변의 같은 쪽(1e-12 넘게)이면 접힘.</summary>
-    static int FoldCount(List<WallDaylight.Tri> tris)
+    internal static int FoldCount(List<WallDaylight.Tri> tris)
     {
         static ((double, double), (double, double)) Ek(Point3 p, Point3 q) { var a0 = (p.X, p.Y); var b0 = (q.X, q.Y); return a0.CompareTo(b0) < 0 ? (a0, b0) : (b0, a0); }
         var opp = new Dictionary<((double, double), (double, double)), List<Point3>>();
@@ -355,7 +374,7 @@ public static partial class RoadRing
 
     /// <summary>★[v116.4] 바깥 둘레 위 바늘 떼기 — 긴 변을 한 세모만 쓰는(둘레) 바늘(높이 &lt; <see cref="CivilSafeMesh.ThinH"/>)은 그 세모를 뺀다(둘레가 0.125 mm 안으로 들어감 · 구멍 없음).
     /// 속 바늘은 뒤집기 · 접기가 맡는다. 돌려줌 = 뗀 수.</summary>
-    static int DropRimNeedles(List<WallDaylight.Tri> tris)
+    internal static int DropRimNeedles(List<WallDaylight.Tri> tris)
     {
         static ((double, double), (double, double)) Ek(Point3 p, Point3 q) { var a0 = (p.X, p.Y); var b0 = (q.X, q.Y); return a0.CompareTo(b0) < 0 ? (a0, b0) : (b0, a0); }
         var use = new Dictionary<((double, double), (double, double)), int>();
@@ -377,7 +396,7 @@ public static partial class RoadRing
 
     /// <summary>★[v117.18.5 · JACK 1116 «옹벽 변환 바늘 1»] 끝 보정 — 접기 · 뒤집기 · 떼기가 못 푼 속 바늘(옹벽 면 끝 ~ 평면 폭 0 · 높이 차 5 cm)을 그 꼭짓점을 긴 변의 수직으로 0.4 mm 옮겨 푼다(높이는 그대로 · 한 세모만 쓰는 둘레 변 끝 점은 안 옮김 ·
     /// 그 점을 쓰는 모든 세모가 같은 방향 · 바늘 아님이어야 · 안 되면 그대로). 돌려줌 = 푼 수.</summary>
-    static int NudgeNeedles(List<WallDaylight.Tri> tris, double d = 0.0004)
+    internal static int NudgeNeedles(List<WallDaylight.Tri> tris, double d = 0.0004)
     {
         static double Cr(Point3 o, Point3 a, Point3 b) => (a.X - o.X) * (b.Y - o.Y) - (a.Y - o.Y) * (b.X - o.X);
         static double L(Point3 a, Point3 b) => Math.Sqrt(Sq(a.X - b.X) + Sq(a.Y - b.Y));
@@ -501,7 +520,7 @@ public static partial class RoadRing
     }
 
     /// <summary>도로 면 사다리 세모 — 둘레 변 위 점(사면 자리가 도로 둘레에 붙는 점)이 있으면 그 변을 가진 세모를 부채로 나눔(T자 없음) · 반시계.</summary>
-    static List<WallDaylight.Tri> SplitDeck(Deck d, Dictionary<(double, double), OnB> onB)
+    internal static List<WallDaylight.Tri> SplitDeck(Deck d, Dictionary<(double, double), OnB> onB)
     {
         int m = d.B.Count;
         var bySeg = new Dictionary<int, List<(double U, Point3 P)>>();

@@ -141,7 +141,9 @@ public static class WallSweep
 
     /// <summary>★[v106.0.1 · JACK 1027 «뾰족하게 튀어나오는 오류» · 검토 낮음 1] 단면을 보이는 높이 <paramref name="h"/>로 — <b>꼭대기 꼭짓점만</b>(z = 지금 높이) 앞면 기울기를 따라 옮긴다:
     /// (x, h0) → (x + FaceN·(h − h0), h). 꼭대기 꼭짓점은 모든 형식에서 x = c + FaceN·z 선(벽체 · 블록 · 패널 · 돌 · 뒤채움 · 배수층) 위라 그 줄로 높이 h에 다시 세운 단면과 같다
-    /// (기초 · 묻힌 몫은 그대로 — 비례로 늘이면 기초 윗면이 땅 위인 표에서 기초까지 늘었다). 같은 높이 · 1 cm 안 높이는 그대로. 3D 표 줄 가운데 정거장만 쓴다(수량 · 터파기와 무관).</summary>
+    /// (기초 · 묻힌 몫은 그대로 — 비례로 늘이면 기초 윗면이 땅 위인 표에서 기초까지 늘었다). 같은 높이 · 1 cm 안 높이는 그대로. 3D 표 줄 가운데 정거장 ·
+    /// ★[v117.18.22 · 2b 검토] 단면 자르기(<see cref="WallExcav.CutSections(WallExcav.SecRecord, IReadOnlyList{ValueTuple{double, double}}, double, out int)"/> — 종단 · 횡단 그림, 그리고 같은 단면을 쓰는 횡단 2D 터파기 · 구조물 공제 수량 · 활동방지벽 구간)도 쓴다
+    /// (그림 = 수량 규칙). 바뀌는 것은 꼭대기 높이뿐 — 터파기선(밑 · 앞뒤 여유)은 그대로 · 구조물 넓이만 이웃 점 높이 차의 반 안에서 바뀜(덤프 B 0.5 m 간격 최대 0.21 m 차).</summary>
     public static WallSection.Shape AtHeight(WallSection.Shape sh, double h)
     {
         double h0 = sh.ZTop;

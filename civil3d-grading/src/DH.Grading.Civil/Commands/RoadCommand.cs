@@ -693,9 +693,9 @@ public partial class RoadCommand
     }
 
     /// <returns>★[v117.15] <c>Added</c> = [옹벽 변환]이 막 넣은 계단선 옹벽 기록(그 밖 = null) · <c>At</c> = 넣은 차례 · <c>Done</c> = 다시 만들기가 받아들여지면 찍을 글(거절이면 안 찍음).</returns>
-    static (bool Changed, RoadSession? S, double[]? Added, int At, string Done) ConvertCore(bool wallMode)
+    static (bool Changed, RoadSession? S, double[][]? Added, int At, string Done) ConvertCore(bool wallMode)
     {
-        double[]? added = null; int at = -1; string done = "";   // ★[v117.15] [옹벽 변환] 넣은 기록 · 차례 · 받아들여지면 찍을 글
+        double[][]? added = null; int at = -1; string done = "";   // ★[v117.15] [옹벽 변환] 넣은 기록(★[JACK 1119 «선 먼저»] 한 줄 묶음 = 쪽마다 하나) · 첫 차례 · 받아들여지면 찍을 글
         string label = wallMode ? "옹벽 변환" : "사면 변환", noun = wallMode ? "계단선" : "옹벽선";   // ★[v113.0 · JACK 1104] 단추 이름과 같게
         var doc = AcadApp.DocumentManager.MdiActiveDocument;
         var ed = doc.Editor;
@@ -877,7 +877,14 @@ public partial class RoadCommand
                 var (w0, w1) = RoadGrade.RangeOnLine(line, null, null);
                 // ★[v111.3 · 계획 검토 M3] 이웃 사면선이 끝면 띠로 옹벽 구간 안까지 이어 들어간 몫은 뺌(그 선을 낸 단면이 주인인 자리만 — 안 빼면 변환할 때마다 옆 옹벽 구간이 띠만큼 먹힘)
                 (w0, w1) = RoadGrade.OwnerRange(ownR, line, w0, w1);
+                // ★★★[JACK 1119 «선 먼저» 2단계 · «굽이 안쪽도 클릭 한 번에 끝까지»] 새 엔진 선은 처음부터 한 줄(묶음 번호) — 같은 묶음 줄 모두(마구리를 돌아 쪽이 바뀐 줄 포함) · 쪽마다 줄 처음 ~ 끝 측점
+                //   ★[2b · 검토 H1] 묶음 번호는 토막마다 새로 셈 — 같은 토막 줄 안에서만 찾음(다른 토막 같은 번호 줄의 측점이 섞이면 기록이 엉뚱한 자리)
+                int pkSel = candP[li];
+                var grp = RoadGrade.GroupOf(cands.Where((_, ci) => candP[ci] == pkSel).ToList(), line);
+                var grpR = line.Group != 0 ? RoadGrade.GroupRanges(grp) : new List<(int Side, double S0, double S1)>();
+                if (grpR.Count > 0) { w0 = grpR.Where(g => g.Side == line.Side).Select(g => g.S0).DefaultIfEmpty(w0).Min(); w1 = grpR.Where(g => g.Side == line.Side).Select(g => g.S1).DefaultIfEmpty(w1).Max(); }
                 double span = w1 - w0;
+                if (grpR.Count > 1) span = grpR.Sum(g => g.S1 - g.S0);
                 string what = $"{(line.Side < 0 ? "좌" : "우")} · {(line.Cut ? "절토" : "성토")} {line.K + 1}단 {(line.Role == RoadGrade.LineRole.Crest ? "사면선" : line.Role == RoadGrade.LineRole.Toe ? "소단선" : "옹벽선")}";
                 // ★[v111.3 · 설치 전 검토 L3] 고른 선이 모두 옹벽 구간 끝면 띠 안(그 선의 주인 구간이 없음)이면 «NaN m» 대신 까닭
                 if (!double.IsFinite(span)) { ed.WriteMessage("\n → 이 선은 옹벽 구간 끝면 띠 안이라 고를 수 없습니다 — 띠 밖(사면 구간)의 선을 클릭하세요."); Paint(selId, false); selId = ObjectId.Null; continue; }
@@ -919,11 +926,18 @@ public partial class RoadCommand
                     var pdo = new PromptDoubleOptions($"\n옹벽 사이 소단 길이(m) 정하고 Enter") { DefaultValue = defL, AllowNegative = false, AllowZero = true, UseDefaultValue = true };
                     var pdr = ed.GetDouble(pdo);
                     if (pdr.Status != PromptStatus.OK) { Paint(selId, false); selId = ObjectId.Null; continue; }
-                    added = new[] { a0, a1, (double)line.Side, line.K, pdr.Value };
-                    d.TierWalls.Add(added); at = d.TierWalls.Count - 1;
+                    // 묶음이면 쪽마다 기록 하나(0.5 m 아래 쪽 조각은 뺌) · 아니면 고른 선 하나
+                    var recs = grpR.Count > 1 && !part
+                        ? grpR.Where(g => g.S1 - g.S0 >= 0.5).Select(g => new[] { g.S0 + s0Snap, g.S1 + s0Snap, (double)g.Side, line.K, pdr.Value }).ToArray()
+                        : new[] { new[] { a0, a1, (double)line.Side, line.K, pdr.Value } };
+                    // ★[2b · 검토 L2] 쪽마다 조각이 모두 0.5 m 아래면 넣을 기록이 없음 — 안 바꿈
+                    if (recs.Length == 0) { ed.WriteMessage("\n → 선이 너무 짧음(0.5 m 아래) → 다른 선 클릭"); Paint(selId, false); selId = ObjectId.Null; continue; }
+                    added = recs; at = d.TierWalls.Count;
+                    d.TierWalls.AddRange(recs);
                     s.SaveDesign(); changed = true; s.Recompute();   // ★[검토 L6] 기록이 저장되면 바뀐 것(다시 계산이 실패해도 도로 면은 다시)
                     // ★[v117.15 · JACK 1112] 알림은 다시 만들기가 받아들여진 뒤(Convert) — 깨진 면이면 기록을 되돌리고 거절 글만
-                    done = $"\n[{label}] {what} — {a0:F1} ~ {a1:F1} m({a1 - a0:F1} m) · {line.K + 1}단부터 옹벽 · 소단 {pdr.Value:0.##} m";
+                    // ★[2b · 검토 L2] 알림 구간 = 실제로 넣은 기록(묶음이면 쪽마다)
+                    done = $"\n[{label}] {what} — " + string.Join(" · ", recs.Select(w => $"{(recs.Length > 1 ? (w[2] < 0 ? "좌 " : "우 ") : "")}{w[0]:F1} ~ {w[1]:F1} m({w[1] - w[0]:F1} m)")) + $" · {line.K + 1}단부터 옹벽 · 소단 {pdr.Value:0.##} m";
                     // ★[v116 · 고리 엔진 §5 · D2] 벽 기록이 생겨 이 도로는 옛 엔진으로 넘어감 — 한 줄
                     //   ★[v117.17 · 검토 LOW] 2단부터 [옹벽 변환] 든 도로는 옛 엔진으로 안 감 — 그 글은 1단(가장자리) 옹벽 도로만(고리 면 못 지으면 Convert가 거절 글)
                     if (ringWas && s.Last != null && s.Pieces.All(p => p.Ring == null) && !s.Pieces.Any(p => RoadSession.RingTier(p.Inp))) done += $"\n[{label}] 옹벽 있음 → 옛 방식으로 다시 지음";
@@ -934,6 +948,13 @@ public partial class RoadCommand
                     // ★[JACK 1117 다리 포락] 전체구간 — 굽이 모퉁이까지 늘린 자리(다른 다리) 옹벽선이면 그 기록 저장 끝까지 넓혀 찾음
                     if (!part) { var (u0, u1) = RoadGrade.UnwidenRange(ownR, c0, c1); a0 = u0 + s0Snap; a1 = u1 + s0Snap; }
                     int n = RoadGrade.CutWallRecords(d.TierWalls, line.Side, a0, a1, whole: !part, match: part ? null : RoadGrade.WallLineMatch(ownR, line));
+                    // ★★[JACK 1119 «선 먼저» 2단계] 전체구간 — 같은 묶음의 다른 쪽 옹벽선(마구리를 돌아 쪽이 바뀐 줄)도 그 기록을 지움(옹벽 변환이 쪽마다 넣은 기록 둘)
+                    if (!part && line.Group != 0)
+                        foreach (var m in grp.Where(m => !ReferenceEquals(m, line) && m.Side != line.Side))
+                        {
+                            var (m0, m1) = RoadGrade.RangeOnLine(m, null, null); if (!double.IsFinite(m0)) continue;
+                            n += RoadGrade.CutWallRecords(d.TierWalls, m.Side, m0 + s0Snap, m1 + s0Snap, whole: true, match: RoadGrade.WallLineMatch(ownR, m));
+                        }
                     if (n == 0) { ed.WriteMessage("\n → 이 자리에는 옹벽 기록이 없습니다 — 다른 옹벽선을 클릭하세요."); Paint(selId, false); selId = ObjectId.Null; continue; }
                     s.SaveDesign(); changed = true; s.Recompute();   // ★[검토 L6] 기록이 저장되면 바뀐 것(다시 계산이 실패해도 도로 면은 다시)
                     ed.WriteMessage($"\n[{label}] {(line.Side < 0 ? "좌" : "우")} {a0:F1} ~ {a1:F1} m — 옹벽 {n}구간을 사면으로" + (part ? "(고른 구간만)" : ""));
@@ -985,10 +1006,17 @@ public partial class RoadCommand
         try
         {
             var d = s.Fresh();
-            int i = d.TierWalls.FindLastIndex(w => w.SequenceEqual(added));
-            // 같은 명령 ⓪ 끝 맞추기가 측점을 옮겼으면 값이 바뀜 — 넣은 차례 그대로 · 쪽 · 단 · 소단이 같을 때만
-            if (i < 0 && at >= 0 && d.TierWalls.Count == at + 1 && d.TierWalls[at] is { Length: >= 5 } w0 && w0[2] == added[2] && w0[3] == added[3] && w0[4] == added[4]) i = at;
-            if (i >= 0) { d.TierWalls.RemoveAt(i); s.SaveDesign(); back = true; }
+            int nb = 0;
+            for (int k = added.Length - 1; k >= 0; k--)
+            {
+                var ad = added[k];
+                int i = d.TierWalls.FindLastIndex(w => w.SequenceEqual(ad));
+                // 같은 명령 ⓪ 끝 맞추기가 측점을 옮겼으면 값이 바뀜 — 넣은 차례 그대로 · 쪽 · 단 · 소단이 같을 때만
+                if (i < 0 && at >= 0 && d.TierWalls.Count == at + k + 1 && d.TierWalls[at + k] is { Length: >= 5 } w0 && w0[2] == ad[2] && w0[3] == ad[3] && w0[4] == ad[4]) i = at + k;
+                if (i >= 0) { d.TierWalls.RemoveAt(i); nb++; }
+            }
+            if (nb > 0) s.SaveDesign();
+            back = nb == added.Length;
             s.Recompute();
         }
         catch (System.Exception exB) { try { DiagLog.Append("\n[옹벽 변환] 거절 뒤 기록 되돌리기 실패 — " + exB); } catch { } }
@@ -997,7 +1025,7 @@ public partial class RoadCommand
         ed.WriteMessage((ringFail ? "\n[옹벽 변환] 옹벽 변환 안 함 — 고리 면 못 지음 → 다른 단 고르기 · 또는 [옹벽 추가]"
                                   : "\n[옹벽 변환] 옹벽 변환 안 함 — 1단 옹벽은 굽은 안쪽 면이 깨짐 → 2단부터 고르기 · 또는 [옹벽 추가]")
                         + (back ? "" : "\n[옹벽 변환] ⚠넣은 기록 못 뺌 → U로 되돌리기"));
-        try { DiagLog.Append($"\n■ [옹벽 변환] 거절 — 기록 {(back ? "뺌(면 · 선 · 종단도 · 횡단도 그대로)" : "⚠못 뺌")} · 넣으려던 [{string.Join(", ", added.Select(v => v.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)))}] · {(ringFail ? "고리 면" : "옛 엔진 면")}: {tech}"); } catch { }
+        try { DiagLog.Append($"\n■ [옹벽 변환] 거절 — 기록 {(back ? "뺌(면 · 선 · 종단도 · 횡단도 그대로)" : "⚠못 뺌")} · 넣으려던 {string.Join(" · ", added.Select(a => "[" + string.Join(", ", a.Select(v => v.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture))) + "]"))} · {(ringFail ? "고리 면" : "옛 엔진 면")}: {tech}"); } catch { }
     }
 
     /// <summary>★[v117.12 · JACK 1112] [옹벽 삭제] — 부지 [옹벽 삭제](DHWALLREVERT)의 도로 쌍둥이. 옹벽 자리 클릭(폴리곤 안 · 곁) 또는 번호(N) → 빨간 테두리 + 확인 →

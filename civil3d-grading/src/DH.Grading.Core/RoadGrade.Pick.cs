@@ -35,14 +35,48 @@ public static partial class RoadGrade
             foreach (var l in edgeStart)
                 if (l.Side != 0 && l.Pts.Count >= 2) { src.Add(l); st.EdgeAdded++; }
         var o = new List<TierLine>();
+        var gpar = new Dictionary<int, int>();
         foreach (var g in src.GroupBy(l => (l.Cut, l.Side, l.K, l.Role, l.Prof, l.WallNo)))
-            o.AddRange(JoinPieces(g.ToList(), st));
+            o.AddRange(JoinPieces(g.ToList(), st, gpar));
+        // ★[2b · 검토 L1] 이어 붙인 조각들의 묶음 번호를 하나로(작은 번호) — 이은 줄은 첫 조각 번호만 가져서 둘째 조각 묶음(마구리를 돈 다른 쪽 줄)이 떨어졌다
+        if (gpar.Count > 0) foreach (var l in o) if (l.Group != 0) l.Group = GFind(gpar, l.Group);
         st.Out = o.Count;
         return o;
     }
 
+    /// <summary>★★★[JACK 1119 «선 먼저» 2단계 · «굽이 안쪽도 클릭 한 번에 끝까지»] 고른 선과 한 줄인 고를 선 모두 — 같은 묶음 번호(<see cref="TierLine.Group"/> ≠ 0) · 같은 절/성 · 단 · 역할
+    /// (도로 끝 마구리를 돌아 쪽이 바뀐 줄도 함께). 묶음 번호가 없으면(옛 엔진 · 가장자리 시작선) 고른 선 하나.</summary>
+    public static List<TierLine> GroupOf(IReadOnlyList<TierLine> cands, TierLine line)
+    {
+        if (line.Group == 0) return new List<TierLine> { line };
+        var o = cands.Where(l => l.Group == line.Group && l.Cut == line.Cut && l.K == line.K && l.Role == line.Role && l.Side != 0 && l.Pts.Count >= 2).ToList();
+        if (!o.Contains(line)) o.Insert(0, line);
+        return o;
+    }
+
+    /// <summary>★[2단계] 묶음 → 쪽마다 측점 구간(그 쪽 줄들 점 측점의 최소 ~ 최대) · 좌(−1) 먼저.</summary>
+    public static List<(int Side, double S0, double S1)> GroupRanges(IReadOnlyList<TierLine> members)
+    {
+        var o = new List<(int, double, double)>();
+        foreach (int side in new[] { -1, 1 })
+        {
+            double lo = double.PositiveInfinity, hi = double.NegativeInfinity;
+            foreach (var l in members.Where(m => m.Side == side)) { var (a, b) = RangeOnLine(l, null, null); if (double.IsFinite(a)) { lo = Math.Min(lo, a); hi = Math.Max(hi, b); } }
+            if (lo <= hi) o.Add((side, lo, hi));
+        }
+        return o;
+    }
+
     /// <summary>같은 열쇠 조각 잇기 — 끝점 짝을 틈 작은 차례로 · 두 끝이 아직 비었고 다른 줄이면 이음(고리를 닫지 않음).</summary>
-    static List<TierLine> JoinPieces(List<TierLine> L, PickStats st)
+    static int GFind(Dictionary<int, int> p, int g) { while (p.TryGetValue(g, out int q) && q != g) g = q; return g; }
+    static void GUnion(Dictionary<int, int> p, int a, int b)
+    {
+        if (a == 0 || b == 0) return;
+        int ra = GFind(p, a), rb = GFind(p, b); if (ra == rb) return;
+        if (ra < rb) p[rb] = ra; else p[ra] = rb;
+    }
+
+    static List<TierLine> JoinPieces(List<TierLine> L, PickStats st, Dictionary<int, int> gpar)
     {
         int n = L.Count;
         if (n < 2) return L;
@@ -101,11 +135,12 @@ public static partial class RoadGrade
         void Walk(int e0)
         {
             var first = L[e0 >> 1];
-            var t = new TierLine { Cut = first.Cut, Side = first.Side, K = first.K, Role = first.Role, Prof = first.Prof, WallNo = first.WallNo };
+            var t = new TierLine { Cut = first.Cut, Side = first.Side, K = first.K, Role = first.Role, Prof = first.Prof, WallNo = first.WallNo, Group = first.Group };
             int e = e0;
             while (true)
             {
                 int i = e >> 1; done[i] = true;
+                GUnion(gpar, t.Group, L[i].Group);
                 var p = L[i].Pts;
                 IEnumerable<(double X, double Y, double Z, double S)> seq = (e & 1) == 0 ? p : Enumerable.Reverse(p);
                 foreach (var q in seq)
@@ -135,6 +170,7 @@ public static partial class RoadGrade
     /// 엔진은 거리 0 꺾임을 선으로 안 낸다(성토 1단 윗선만 표본에서) — 고를 선에서만 씀(그림 · 면은 그대로). 측점 1.5 m 넘게 뛰거나 단면이 바뀌면 끊음(옛 가장자리 줄과 같은 끊기).</summary>
     public static List<TierLine> EdgeStartLines(Result r)
     {
+        if (r.EdgeStart != null) return r.EdgeStart.ToList();   // ★[JACK 1119 «선 먼저» 2단계] 새 엔진 — 지은 자리와 맞닿은 가장자리(묶음 번호)
         var o = new List<TierLine>();
         foreach (int side in new[] { -1, 1 })
         {

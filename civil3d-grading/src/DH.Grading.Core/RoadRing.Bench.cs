@@ -20,6 +20,7 @@ public static partial class RoadRing
     /// <paramref name="onSurface"/> = 지은 도로 면이 있는 자리(없으면 다 봄). 소단 없는 단면(소단폭 0)은 빈 결과.</summary>
     public static BenchAreaResult BenchArea(Built b, Func<double, double, bool>? onSurface = null, double cell = 0.25)
     {
+        if (b?.Lf != null) return RoadLines.BenchArea(b, onSurface);
         var R = new BenchAreaResult();
         if (b?.Ev == null || b.Grid == null || b.Grid.P.Length == 0) return R;
         var ev = b.Ev; var g = b.Grid; int m = ev.D.B.Count;

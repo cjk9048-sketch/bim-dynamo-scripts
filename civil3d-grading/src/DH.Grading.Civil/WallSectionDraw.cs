@@ -356,7 +356,11 @@ internal static class WallSectionDraw
                                 double txtH, int stagger, Layers L, ObjectId kst, string kind, string view, bool label = true)
     {
         int n = 0;
-        Point2d P(double X, double Z) => map(along0 + c.Sign * X * c.Stretch, c.Toe + Z);
+        // ★[v117.18.22 · JACK 1119 «끝단이 원지반과 안 닿는데?»] 앞면 맞춤 전단 — 표준 단면 앞면(콘크리트 1:0.02)이 정지면 벽 앞면(1:SlopeW · 보통 1:0.01)보다 누우면
+        //   그 차 b만큼 높이에 비례해 앞으로 세운다: x' = x − b·z(3D 내보내기 <see cref="WallSweep"/>와 같은 식 · 넓이 그대로 · 수량 단면은 그대로).
+        //   종전엔 그대로 그려 꼭대기 앞 모서리가 정지면 벽보다 b·h 뒤(현장 덤프 B 4.48 m 벽 45 mm)에 서서 땅에 안 닿았다. 벽 밑(z = 0)은 그대로 · 묻힌 기초는 b·깊이만큼 흙 쪽으로.
+        double faceB = WallSweep.LeanOf(c.Shape, c.SlopeW);
+        Point2d P(double X, double Z) => map(along0 + c.Sign * (X - faceB * Z) * c.Stretch, c.Toe + Z);
         foreach (var part in c.Shape.Parts.OrderBy(p => p.Structure ? 1 : 0))   // 비구조물 먼저(구조물 실선이 위에)
         {
             if (part.Ring.Count < 3) continue;

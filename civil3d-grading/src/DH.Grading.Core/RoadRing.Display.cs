@@ -19,6 +19,13 @@ public static partial class RoadRing
         var sw = System.Diagnostics.Stopwatch.StartNew();
         st = new DisplayStats();
         var o = new List<RoadGrade.TierLine>();
+        // ★[JACK 1119 «선 먼저»] 새 엔진 선은 처음부터 한 줄 · 면 위 — 거짓 조각 빼기 · 턱 더하기 · 굽이 이음 없이 그대로(이음 못 한 끝이 있으면 한 줄)
+        if (b?.Lf != null)
+        {
+            o.AddRange(lines); st.Pts = lines.Sum(l => l.Pts.Count); st.Kept = st.Pts;
+            if (b.Lf.OpenEnds > 0) st.Review.Add($"단 선 이음 못 함 — 면 속에서 끝난 끝 {b.Lf.OpenEnds}곳(첫 {b.Lf.OpenAt})");
+            st.Ms = sw.ElapsedMilliseconds; return o;
+        }
         if (b?.Ev == null) { o.AddRange(lines); return o; }
         var ev = b.Ev; int m = ev.D.B.Count;
         // ★[v117.18.12 · JACK 1116 «꺾임 소단 전이»] 전이를 못 한 굽이(단차 그대로)마다 한 줄

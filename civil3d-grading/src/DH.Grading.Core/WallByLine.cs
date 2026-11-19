@@ -1851,11 +1851,13 @@ public static partial class WallByLine
                 }
                 while (clean.Count > 3 && Math.Max(Math.Abs(clean[0].X - clean[^1].X), Math.Abs(clean[0].Y - clean[^1].Y)) < CivilSafeMesh.Gap) clean.RemoveAt(clean.Count - 1);
                 // 되돌아가는 바늘(앞 = 뒤) 걷기
+                //   ★[JACK 1119 «선 먼저» 2b · 키트 rwall 계측] 앞 · 뒤 점이 1e9 격자 열 칸(1e-8) 안이면 같은 점 — 1e-9로 재면 합친 자리(1e9 격자)의 1 nm 틈(갈 때 · 올 때 한 칸 다름)이
+                //   살아남아 그 끝(첫 줄 점)이 F 점(높이 = 땅)이 되고 첫 소단이 12 cm 처졌다(하네스 S198 (a) 넓은 소단 0.24 m 틀림도 같은 틈 — 걷으면 0 mm)
                 for (int it = 0; it < 3; it++)
                     for (int i = clean.Count - 1; i >= 0 && clean.Count > 3; i--)
                     {
                         var p = clean[(i - 1 + clean.Count) % clean.Count]; var q = clean[(i + 1) % clean.Count];
-                        if (Math.Abs(p.X - q.X) < 1e-9 && Math.Abs(p.Y - q.Y) < 1e-9) { clean.RemoveAt(i); if (i < clean.Count) clean.RemoveAt(i % clean.Count); }
+                        if (Math.Max(Math.Abs(p.X - q.X), Math.Abs(p.Y - q.Y)) < 1e-8) { clean.RemoveAt(i); if (i < clean.Count) clean.RemoveAt(i % clean.Count); }
                     }
                 // 되돌아가는 가시(거의 같은 길로 갔다 옴 · 각 1e-9 안) 걷기
                 for (bool any = true; any && clean.Count > 3;)

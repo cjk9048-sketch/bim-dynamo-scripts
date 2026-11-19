@@ -48,10 +48,11 @@ internal sealed class RoadSession
     /// <summary>★★[v116.7 · JACK 1110 «옹벽 추가 — 어디든 폴리선을 그으면 작성이 되어야» · 계획 `2026-11-10_진입도로_옹벽2단계_고리면.md`] 도로 면 = 고리 엔진(추가한 선 옹벽은 그 위에 얹음).
     /// 가장자리 옹벽 · [사면→옹벽] 벽 기록이 있는 토막만 옛 엔진(옛 판은 선 옹벽만 있어도 옛 엔진 — 반경 7 m 굽이에서 옛 면이 깨져 합성이 막혔다).
     /// ★★[v117.16 · JACK 1112] 2단부터 [옹벽 변환](Tier ≥ 1)도 고리 면(측점별 단면) — 옛 엔진은 가장자리 옹벽(inp.Walls) · 1단 변환(Tier 0)만.</summary>
-    internal static bool RingBase(RoadGrade.Input inp) => inp.Walls.Count == 0 && (RoadRing.Corridor ? inp.TierWalls.All(t => t.Tier >= 1) : inp.TierWalls.Count == 0);   // ★[설치 전 검토 MED] 코리더 스위치를 끄면 옹벽 변환 도로는 옛 엔진(시험한 조합으로 되돌림)
+    internal static bool RingBase(RoadGrade.Input inp) => inp.Walls.Count == 0 && (RoadLines.On || (RoadRing.Corridor ? inp.TierWalls.All(t => t.Tier >= 1) : inp.TierWalls.Count == 0));   // ★[설치 전 검토 MED] 코리더 스위치를 끄면 옹벽 변환 도로는 옛 엔진(시험한 조합으로 되돌림) · ★★★[JACK 1119 «선 먼저» 2단계] 새 엔진은 1단(0단부터) [옹벽 변환]도 지음
     /// <summary>★★[v117.16 · JACK 1112 «[옹벽 변환]도 고리 엔진 — 옛 엔진으로 안 물러섬»] 2단부터 [옹벽 변환] 기록(<see cref="RoadGrade.TierWall"/> Tier ≥ 1)이 있는 토막 —
     /// 고리 면(측점별 단면 · 코리더식 소단)으로만 짓는다. 못 지으면 옛 엔진 대신 단답형 거절(<see cref="TierRingWhy"/>). 1단(가장자리) 옹벽 기록은 이번 판도 옛 엔진(가드가 깨진 면을 막음).</summary>
-    internal static bool RingTier(RoadGrade.Input inp) => inp.TierWalls.Count > 0 && RingBase(inp);
+    // ★[JACK 1119 «선 먼저» 2b · 검토 M1] 1단(0단부터) 기록이 든 토막은 아님 — 새 엔진이 못 지으면 v117.18.21처럼 옛 엔진(RoadGrade.Run)으로(옛 고리 엔진은 1단을 못 받아 거절만 남았다 · 옛 도면 가장자리 옹벽).
+    internal static bool RingTier(RoadGrade.Input inp) => inp.TierWalls.Count > 0 && RingBase(inp) && RoadLines.RingCanTake(inp);
     /// <summary>★[v116] 면 노트 머리 → 길 이름(고리 면 · 선 따라 TIN · 칸 면 · 선 면) — 옛 노트는 옛 판정 그대로.</summary>
     internal static string PathOf(string note) => note.StartsWith(RingPath) ? RingPath : note.StartsWith("선 따라 TIN") ? "선 따라 TIN" : note.StartsWith("⚠") ? "칸 면" : "선 면";
     /// <summary>★[v116] 설계 기록 SurfacePath(토막 차례 «|» 목록 · 옛 기록 = 길 하나 = 모든 토막)의 토막 k 길 · 없으면 null(옛 엔진).</summary>
@@ -94,7 +95,7 @@ internal sealed class RoadSession
         catch (System.Exception ex) { try { DiagLog.Append(System.Environment.NewLine + $"[진입도로] {Name} — ⚠표시 소단선 못 셈({ex.Message}) — 짓는 선 그대로"); } catch { } return lines; }
     }
 
-    static RoadRing.Built Light(RoadRing.Built b) => new() { Deck = b.Deck, Ev = b.Ev, Lines = b.Lines, Daylight = b.Daylight, Ok = b.Ok, Note = b.Note };   // 격자 · 세모는 버림(Ticks는 안 씀) · ★[v116.5] 데이라잇은 노리선 멈춤 선
+    static RoadRing.Built Light(RoadRing.Built b) { b.Lf?.Trim(); return new() { Deck = b.Deck, Ev = b.Ev, Lines = b.Lines, Daylight = b.Daylight, Ok = b.Ok, Note = b.Note, Lf = b.Lf }; }   // ★[2b · 검토 M3] 새 엔진 꾸러미는 보이는 조각 캐시를 버림(덤프 B 3 MB · 판 · 가림은 노리선 · 소단 자리 · 단 표가 씀)   // 격자 · 세모는 버림(Ticks는 안 씀) · ★[v116.5] 데이라잇은 노리선 멈춤 선
     /// <summary>★[v116] 지은 면에 덧붙일 고리 면 물러섬 까닭(빈 글 = 없음) — CreateSurface가 알림 끝에.</summary>
     string _pendingRingNote = "";
     /// <summary>★[도로 마무리 ①] 지금 도로 구간(노선 측점) · 끝 판정 · 제안 글(EndsOn 거짓 = [끝 맞추기] 제안) · 끝 맞춤 필요(EndsOn 참 = [업데이트] 깜박).</summary>

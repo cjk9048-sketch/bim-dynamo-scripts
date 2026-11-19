@@ -120,6 +120,10 @@ if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "bendflat")
     Console.WriteLine(fails == 0 ? "\n== 전부 통과 ==" : $"\n== 실패 {fails}건 ==");
     return fails == 0 ? 0 : 1;
 }
+// ★★★[JACK 1119 «선 먼저» 0단계] BLOCKTEST_ONLY=lines — 합격표 A · B · E · F · G(옛 고리 엔진 · 새 선 먼저 엔진 · BLOCKTEST_LFDUMPS)
+if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "lines") { LinesGate.Run(); return Environment.ExitCode; }
+// ★★★[JACK 1119 «선 먼저» 2단계] BLOCKTEST_ONLY=lfwall — 옹벽 합격표 C(고를 선마다 변환 · 사면 남음 · 되돌림 지문) · D([옹벽 추가] 자동 선)
+if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "lfwall") { WallGate.Run(); return Environment.ExitCode; }
 // ★[v117.18.1] BLOCKTEST_ONLY=rjack — JACK 도로 덤프 소단선 끊김 계측(BLOCKTEST_RRJACK = 덤프 폴더)
 if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "rjack") { RoadRingJack.Run(); return 0; }
 // ★[v117.18.12 · JACK 1116 «꺾임 소단 전이»] BLOCKTEST_ONLY=rtrans — 급한 굽이 안쪽 소단 전이(단차 ↔ 전이 · 소단선 턱 · 소단 기울기 상한 · 단마다 한 줄 변환 · 못 하면 단차)

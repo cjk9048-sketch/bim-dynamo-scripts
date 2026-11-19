@@ -1,4 +1,4 @@
-using NetTopologySuite.Geometries;
+﻿using NetTopologySuite.Geometries;
 
 namespace DH.Grading.Core;
 
@@ -122,10 +122,13 @@ public static partial class RoadRing
         public int ProfAt(int side, double s)
         {
             if (side == 0) return 0;
-            for (int i = Recs.Count - 1; i >= 0; i--)
-                if (Recs[i].Side == side && s >= Recs[i].S0 - 1e-9 && s <= Recs[i].S1 + 1e-9) return Math.Max(0, RecProf[i]);
-            return 0;
+            // ★[JACK 1119 «선 먼저» 2단계 · «여러 단 함께»] 겹친 기록은 옹벽이 더한 쪽(시작 단이 작은 것)이 이김 · 같으면 나중 기록 —
+            //   종전 «나중 기록이 이김»은 1단을 바꾼 뒤 2단을 바꾸면 1단 옹벽이 다시 사면이 됐다(끝 마구리 CapWalls · 꼭짓점 VtxProf와 같은 규칙)
+            int w = RecAt(side, s);
+            return w < 0 ? 0 : Math.Max(0, RecProf[w]);
         }
+        /// <summary>★[2b · 검토 M4] 그 쪽 · 측점의 주인 기록 번호(<see cref="RoadGrade.WinRec"/> — 면 · 가장자리 표본 · 주인 구간이 같은 규칙) · 없으면 −1.</summary>
+        public int RecAt(int side, double s) => side == 0 ? -1 : RoadGrade.WinRec(Recs, RecProf, p => p < ProfKeys.Count ? ProfKeys[p].Tier : int.MaxValue, side, s);
     }
 
     const double CurveDeg = 1.0, CurveStep = 0.25, DitchGap = 0.05;
@@ -233,7 +236,10 @@ public static partial class RoadRing
 
     /// <summary>도로 면 짓기 — 측점마다 가로 끊김점(측구 바깥 · 길어깨 끝 · 차로 끝 · 크라운 · …) · 사다리 세모 · 둘레 B(마구리에 가로 점 모두 — 크라운 높이 그대로).
     /// 못 지으면(점 &lt; 2 · 둘레 자기 교차 = 굽이 반경 &lt; 반폭) null · 까닭.</summary>
-    public static Deck? BuildDeck(RoadGrade.Input inp, out string why)
+    public static Deck? BuildDeck(RoadGrade.Input inp, out string why) => BuildDeck(inp, out why, false);
+    /// <summary>★★★[JACK 1119 «선 먼저» 2단계] <paramref name="lines"/> = 새 엔진(<see cref="RoadLines"/>) — 1단 가장자리 옹벽 기록(단 0 · 소단 0)도 단면 번호를 받고(새 엔진은 0단부터 수직 옹벽 단면으로 지음) ·
+    /// 급한 굽이 모퉁이 늘림(RecWiden)은 안 함(고른 선 한 줄의 처음 ~ 끝 측점이 이미 굽이를 지나 끝까지 — 계획 §3).</summary>
+    public static Deck? BuildDeck(RoadGrade.Input inp, out string why, bool lines)
     {
         why = "";
         if (inp.X.Length < 2 || inp.Y.Length != inp.X.Length || inp.Z.Length != inp.X.Length) { why = "중심선 점이 모자람"; return null; }
@@ -253,7 +259,7 @@ public static partial class RoadRing
             if (!(Math.Abs(t.S1 - t.S0) > 1e-6) || (t.Side != -1 && t.Side != 1)) continue;
             var tw = t with { S0 = Math.Min(t.S0, t.S1), S1 = Math.Max(t.S0, t.S1), Tier = Math.Max(0, t.Tier), BenchL = Math.Max(0, t.BenchL) };
             recs.Add(tw);
-            if (tw.Tier <= 0 && tw.BenchL <= 0) { recProf.Add(-1); continue; }   // 가장자리 옹벽 — 고리 엔진은 안 받음(부르는 쪽 RingBase가 막음)
+            if (tw.Tier <= 0 && tw.BenchL <= 0 && !lines) { recProf.Add(-1); continue; }   // 가장자리 옹벽 — 고리 엔진은 안 받음(부르는 쪽 RingBase가 막음)
             var key = (tw.Tier, Math.Round(tw.BenchL, 3));
             int pi = profKeys.IndexOf(key); if (pi < 0) { pi = profKeys.Count; profKeys.Add(key); }
             recProf.Add(pi);
@@ -273,7 +279,7 @@ public static partial class RoadRing
             if (a != recs[i].S0 || c != recs[i].S1) recs[i] = recs[i] with { S0 = a, S1 = c };
         }
         //   급한 굽이 모퉁이 늘림 — 모퉁이 셈을 쓰는 도로(전이 끔 · 코리더식 · 모퉁이 셈 켬)만 · 기록 끝마다 그 끝이 든 굽이 하나만(이웃 굽이로 이어 늘리지 않음)
-        if (recs.Count > 0 && sharp.Count > 0 && !inp.BendTrans && CornerRule && Corridor)
+        if (!lines && recs.Count > 0 && sharp.Count > 0 && !inp.BendTrans && CornerRule && Corridor)
         {
             double br = Math.Max(inp.Cut.BenchH * inp.Cut.Slope + inp.Cut.BenchW, inp.Fill.BenchH * inp.Fill.Slope + inp.Fill.BenchW);
             var orig = recs.ToList();
@@ -443,7 +449,8 @@ public static partial class RoadRing
         for (int j = 0; j < m; j++)
         {
             int a = d.SegProf[(j - 1 + m) % m], b = d.SegProf[j];
-            d.VtxProf[j] = a == b ? a : Rank(a) >= Rank(b) ? a : b;
+            // ★[JACK 1119 «선 먼저» 2단계] 새 엔진은 옹벽이 더한 쪽(꺾인 꼭짓점 부채도 옹벽 — 기록 끝 볼록 모서리에 사면 조각이 남지 않게) · 옛 엔진은 덜한 쪽(날개)
+            d.VtxProf[j] = a == b ? a : lines ? (Rank(a) <= Rank(b) ? a : b) : Rank(a) >= Rank(b) ? a : b;
         }
         var gf = new GeometryFactory();
         var cs = d.B.Select(p => new Coordinate(p.X, p.Y)).Append(new Coordinate(d.B[0].X, d.B[0].Y)).ToArray();

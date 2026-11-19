@@ -280,10 +280,14 @@ static class WallLineCheck
                 //   오목 꼭짓점 끝 선 고침(v114.0) 뒤에도 이 꼴은 바깥 소단이 이웃 줄기 칸까지 넘어 0.24 m 틀린다 — 그 잰 값을 함께 본다
                 if (wide)
                 {
-                    check($"S198 {nm} ① (a) 소단 높이 관문이 거절 — 까닭 «옹벽 소단 높이가 맞지 않음(x, y · 차 N cm)» 한 줄 · 소단 틀림 > 0 · 잰 차 > 10 cm",
-                        b != null && !b.Ok && b.Code == "소단 높이" && b.Why.StartsWith("옹벽 소단 높이가 맞지 않음(") && b.Why.Contains("cm) — 소단 폭을 줄이거나 선을 펴세요") && !b.Why.Contains('\n')
-                        && b.BenchSag > 0 && b.BenchMax > 0.1 && b.Marks.Count == 1,
-                        b == null ? cut.Why : $"{b.Code} · {b.Why} · 소단 {b.BenchN}점 중 틀림 {b.BenchSag} · 면 없음 {b.BenchMiss} · F {b.FootN}점 중 턱 {b.FootBad} · 최대 {b.BenchMax * 1000:F0} mm @({b.BenchAt.X:F2},{b.BenchAt.Y:F2})");
+                    // ★[JACK 1119 «선 먼저» 2b] 잰 0.24 m 틀림은 바꿀 자리 고리의 1 nm 틈(1e9 격자 한 칸 — 되돌아가는 바늘 걷기가 1e-9로 재 놓침) 끝 꼭짓점이 F(높이 = 땅)가 된 탓이었다 —
+                    //   틈을 걷으면 소단 185점 틀림 0 · 최대 0 mm. 이 꼴은 그래도 합성이 거절(판정 3 — 관문 끈 길과 같음) → «짓기 거절(소단 높이)» 또는 «소단 맞음 + 합성 거절»이면 통과
+                    bool gateNo = b != null && !b.Ok && b.Code == "소단 높이" && b.Why.StartsWith("옹벽 소단 높이가 맞지 않음(") && b.Why.Contains("cm) — 소단 폭을 줄이거나 선을 펴세요") && !b.Why.Contains('\n')
+                        && b.BenchSag > 0 && b.BenchMax > 0.1 && b.Marks.Count == 1;
+                    bool compNo = false; string compTxt = "";
+                    if (b != null && b.Ok && b.BenchSag == 0 && b.BenchMiss == 0) { var (rw, _, _) = Comp(b, g, p0, sz); compNo = rw.Zone == null || rw.Tier >= 3; compTxt = $" · 합성 판정 {rw.Tier}"; }
+                    check($"S198 {nm} ① (a) 거절 — 소단 높이 관문(까닭 한 줄 · 틀림 > 0 · 차 > 10 cm) 또는 소단 맞음(틀림 0) + 합성 거절(판정 3)", gateNo || compNo,
+                        b == null ? cut.Why : $"{b.Code} · {b.Why} · 소단 {b.BenchN}점 중 틀림 {b.BenchSag} · 면 없음 {b.BenchMiss} · F {b.FootN}점 중 턱 {b.FootBad} · 최대 {b.BenchMax * 1000:F0} mm @({b.BenchAt.X:F2},{b.BenchAt.Y:F2})" + compTxt);
                     // 관문을 끄면(재기만) 짓기는 되고 — 그 면으로 합성하면 소단이 틀린 채로 남는다(합성 관문 · 같은 표본)
                     (BoundaryCut.Result, WallByLine.Built?) gOff3;
                     try { WallByLine.BenchGateOff = true; gOff3 = Make(L0, h: h, t: t, g: g, p0: p0, sz: sz, reach: 30); } finally { WallByLine.BenchGateOff = false; }   // ★[v115 · 검토 L8]

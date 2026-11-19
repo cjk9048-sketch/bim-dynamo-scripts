@@ -10,7 +10,7 @@ public static partial class RoadRing
 {
     /// <summary>단 k 높이 = 그 점을 이긴 원천(변 · 꼭짓점 · 이어 받는 원뿔)의 후보 값에서 남은 단면 높이만큼(<see cref="Level"/>) —
     /// 소단 띠 안이면 면 값 그대로 · 사면 위면 그 단면의 소단 높이 · 단 간격 = 단높이 그대로. 변 원천은 소단이 평평(발 높이 + rise_k).</summary>
-    public sealed class RingBench : WallByLine.BenchLevels
+    public sealed class RingBench : WallByLine.BenchLevels, IRoadSideBench
     {
         readonly Evaluator _ev; readonly bool _up; readonly int _m;
         readonly double[] _rise, _h, _dIn, _dOut;

@@ -155,7 +155,7 @@ public static partial class RoadGrade
                        : path.StartsWith("칸", StringComparison.Ordinal) || path.StartsWith("⚠", StringComparison.Ordinal) ? "칸 면 위에는 선 옹벽 안 지음 — 선 면 · 선 따라 TIN을 Civil이 거절"
                        : r.Error.Length > 0 ? "도로 계산 실패"
                        : inp.Base is not IGroundTris ? "바탕 세모를 못 읽습니다(가지 바탕 위 선 옹벽은 이번 판에 안 지음)"   // ★[v116.7 · 검토 M] 두 엔진 다
-                       : ring != null ? (ring.Ev == null ? "고리 면 셈이 없습니다" : "")
+                       : ring != null ? (ring.Ev == null && ring.Lf == null ? "고리 면 셈이 없습니다" : "")
                        : r.Sections == null || r.Eval == null ? "단면 광선이 없습니다(선 면 · 선 따라 TIN이 아님)" : "";
         var gtr = inp.Base as IGroundTris;
         var cur = p0;
@@ -166,7 +166,8 @@ public static partial class RoadGrade
         {
             var key = ring != null ? (0, up) : (side, up);
             if (benchCache.TryGetValue(key, out var b)) return b;
-            return benchCache[key] = ring != null ? new RoadRing.RingBench(ring, up ? inp.Cut : inp.Fill, up) : RoadBench.Of(r.Sections!, r, inp, side, up);
+            // ★★[JACK 1119 «선 먼저» 2단계] 선 먼저 면 = 그 판에서 단 높이(LinesBench) · 옛 고리 면 = 고리 셈(RingBench)
+            return benchCache[key] = ring != null ? (ring.Lf != null ? new RoadLines.LinesBench(ring, up ? inp.Cut : inp.Fill, up) : new RoadRing.RingBench(ring, up ? inp.Cut : inp.Fill, up)) : RoadBench.Of(r.Sections!, r, inp, side, up);
         }
         foreach (var w in walls)
         {
@@ -229,7 +230,7 @@ public static partial class RoadGrade
         if (ringP0)
         {
             // ★[v116.6] 고리 면 — 단 높이는 점마다 이긴 원천에서(쪽 · 끝 마구리 상관없음) · 쪽은 표시 · 기록용(많은 쪽 · 마구리만이면 0)
-            var gc = (RoadRing.RingBench)bench(0, true); var gfl = (RoadRing.RingBench)bench(0, false);
+            var gcB = bench(0, true); var gflB = bench(0, false); var gc = (IRoadSideBench)gcB; var gfl = (IRoadSideBench)gflB;
             foreach (var (x, y) in lPts)
             {
                 int sd = gc.SideAt(x, y); if (sd == 0) sd = gfl.SideAt(x, y);
@@ -237,7 +238,7 @@ public static partial class RoadGrade
             }
             log.Append(string.Format(ci, "  ⓪ 쪽(고리 면 · 막지 않음) — L 표본 {0} · 좌 {1} · 우 {2} · 마구리 · 원천 없음 {3}\n", lPts.Count, nL, nR, nNone));
             st.Side = nR > nL ? 1 : -1;   // ★[v116.7 · 검토 L] 표시 · 기록용(0이면 [옹벽→사면] 고르기에서 빠짐) — 마구리만이면 좌
-            st.BenchC = gc; st.BenchF = gfl;
+            st.BenchC = gcB; st.BenchF = gflB;
         }
         else
         {
@@ -565,7 +566,7 @@ public static partial class RoadGrade
                 var src = w.Built.Shape is 2 or 3 && !f.Up ? f.Foot : f.Top;
                 if (src.Count < 2) continue;
                 var nt = new TierLine { Cut = f.Up, Side = w.Side, K = Math.Max(0, f.Tier - 1), Role = LineRole.Wall, Prof = 0, Cross = f.Kind == 1, WallNo = w.No };
-                foreach (var q in src) nt.Pts.Add((q.X, q.Y, q.Z, b switch { RoadBench rb => rb.Band(q.X, q.Y).S, RoadRing.RingBench gb => gb.StationAt(q.X, q.Y), _ => double.NaN }));
+                foreach (var q in src) nt.Pts.Add((q.X, q.Y, q.Z, b switch { RoadBench rb => rb.Band(q.X, q.Y).S, IRoadSideBench gb => gb.StationAt(q.X, q.Y), _ => double.NaN }));
                 o.Add(nt);
             }
         }
