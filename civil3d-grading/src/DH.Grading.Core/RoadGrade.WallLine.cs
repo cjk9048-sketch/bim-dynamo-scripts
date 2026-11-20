@@ -413,11 +413,17 @@ public static partial class RoadGrade
         {
             st.Rest = true; st.Code = "관문";
             string at = "";
+            // ★[v117.18.25 · walladd 1121] 자리 = 센 바늘(WallHealth와 같은 잣대 — 가장 긴 변을 이웃과 나눔). 옛 글은 테두리 납작 세모(안 셈)를 먼저 집어
+            //   JACK 1121 «@(152234.40, 558149.88)»처럼 엉뚱한 자리(선 시작 곁 테두리)를 알렸다
+            static ((double, double), (double, double)) EK(Point3 p, Point3 q) { var a = (p.X, p.Y); var b = (q.X, q.Y); return a.CompareTo(b) < 0 ? (a, b) : (b, a); }
+            var useK = new Dictionary<((double, double), (double, double)), int>();
+            foreach (var t in kept) foreach (var (p0, p1) in new[] { (t.A, t.B), (t.B, t.C), (t.C, t.A) }) { var k = EK(p0, p1); useK[k] = useK.GetValueOrDefault(k) + 1; }
             foreach (var t in kept)
             {
                 double l1 = Math.Sqrt(Sq(t.A.X - t.B.X) + Sq(t.A.Y - t.B.Y)), l2 = Math.Sqrt(Sq(t.B.X - t.C.X) + Sq(t.B.Y - t.C.Y)), l3 = Math.Sqrt(Sq(t.C.X - t.A.X) + Sq(t.C.Y - t.A.Y));
                 double h = Math.Abs((t.B.X - t.A.X) * (t.C.Y - t.A.Y) - (t.B.Y - t.A.Y) * (t.C.X - t.A.X)) / Math.Max(l1, Math.Max(l2, l3));
-                if (h < 1.22e-4) { at = string.Format(ci, " @({0:F2}, {1:F2}) 높이 {2:F0} µm · 짧은 변 {3:F1} mm", (t.A.X + t.B.X + t.C.X) / 3, (t.A.Y + t.B.Y + t.C.Y) / 3, h * 1e6, Math.Min(l1, Math.Min(l2, l3)) * 1000); break; }
+                var le = l1 >= l2 && l1 >= l3 ? EK(t.A, t.B) : l2 >= l3 ? EK(t.B, t.C) : EK(t.C, t.A);
+                if (h < NeedleCount && useK[le] >= 2) { at = string.Format(ci, " @({0:F2}, {1:F2}) 높이 {2:F0} µm · 짧은 변 {3:F1} mm", (t.A.X + t.B.X + t.C.X) / 3, (t.A.Y + t.B.Y + t.C.Y) / 3, h * 1e6, Math.Min(l1, Math.Min(l2, l3)) * 1000); break; }
             }
             if (at.Length == 0 && prs > 0 && prAt is { } pa) at = string.Format(ci, " @({0:F2}, {1:F2}) 0.1 mm 안 점 쌍", pa.X, pa.Y);   // ★[v115 · 검토 L4]
             st.Why = $"이음매 바늘 {thin} · 0.1 mm 변 {gapE} · 0.1 mm 점 쌍 {prs} · 세 세모 변 {nm} · F 건넌 세모 {straddle}{at} — 이 벽은 쉽니다(도로 면은 그대로)";

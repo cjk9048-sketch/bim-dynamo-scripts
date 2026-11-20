@@ -772,7 +772,11 @@ public static partial class WallByLine
             qExt = o.ToArray();
         }
         var plQ = new PL(qExt); var qLine = gf.CreateLineString(qExt); var qCore = gf.CreateLineString(qL);
-        bool InnerOf(Coordinate c) { var nr = plQ.Near(c.X, c.Y); return nr.D > 1e-9 && nr.Side != side; }
+        // ★[v117.18.25 · JACK 1121 «옹벽 추가 계산 실패» · 자동 우 155~186] 안쪽 = 2차 수직 Poly(띠 ∪ R_out — 첫 qn 점이 L′) 밖. 옛 판정(L′ 최근접점의 쪽)은
+        //   L′ 끝 너머(끝 비탈 · 합성 손댐 세모가 선 끝을 돌아 나간 자리)에서 «늘인 L′ 직선»으로 갈라 세모를 통째로 넣고 빼 들쭉날쭉한 테두리를 만들었다 —
+        //   꼭짓점 하나로만 붙은 조각 · 구멍(«소단 자리가 한 고리가 아닙니다»). 최종 Poly = 소단 자리 ∪ 2차 Poly(공유 테두리 = L′)라 «2차 Poly 밖»이 그 계약과 같은 뜻
+        var poly2P = PreparedGeometryFactory.Prepare(PolyL(b2.Poly));
+        bool InnerOf(Coordinate c) => !poly2P.Covers(gf.CreatePoint(c));
         var pieces = new List<(List<Point3> P, Tri Src)>();
         var prepBd = PreparedGeometryFactory.Prepare(bdAll);
         int clipMiss = 0, clipped = 0, dropSide = 0, dropBd = 0, dropBad = 0;
