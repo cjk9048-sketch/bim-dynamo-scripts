@@ -20,6 +20,7 @@ public sealed class AltCommand
         if (doc == null) return;
         var ed = doc.Editor;
         Alternatives.Row? now = null;
+        byte[]? nowPic = null;   // ★[JACK 1119] 지금 도면 평면 그림 — 명령마다 한 번(수량 잴 때) · 저장하면 이 그림을 대안 옆에
         for (int guard = 0; guard < 50; guard++)
         {
             string path = doc.Name ?? "";
@@ -43,14 +44,14 @@ public sealed class AltCommand
             if (now == null)
             {
                 ed.WriteMessage("\n[대안] 지금 도면 수량을 재는 중...");
-                now = Measure(doc, out string mlog);
+                now = Measure(doc, out string mlog, out nowPic);
                 try { DiagLog.Append("\n[대안] 지금 도면 수량 — " + mlog); } catch { }
             }
             now.Name = titled ? System.IO.Path.GetFileNameWithoutExtension(path) : "(저장 안 된 도면)";
             var missing = new HashSet<string>(book.Rows.Where(r => FileOf(folder, r) is not string f || !System.IO.File.Exists(f)).Select(r => r.File), System.StringComparer.OrdinalIgnoreCase);
             string? openFile = titled && Alternatives.IsCopy(path) ? System.IO.Path.GetFileName(path) : null;
 
-            var dlg = new AltDialog(book, now, noSave, folder, openFile, missing);
+            var dlg = new AltDialog(book, now, noSave, folder, openFile, missing, nowPic);
             AcadApp.ShowModalWindow(dlg);
             if (dlg.MemosChanged && titled)
                 try { Alternatives.Save(folder, book); } catch (System.Exception ex) { ed.WriteMessage($"\n[대안] 메모를 못 적었습니다 — {ex.Message}"); }
@@ -61,7 +62,7 @@ public sealed class AltCommand
                 switch (dlg.Action)
                 {
                     case AltDialog.Act.Save:
-                        SaveCopy(doc, path, folder, book, now, dlg.NewName, dlg.NewMemo);
+                        SaveCopy(doc, path, folder, book, now, dlg.NewName, dlg.NewMemo, nowPic);
                         continue;   // 창 다시(그만둬도)
                     case AltDialog.Act.Delete:
                         Delete(doc, folder, book, dlg.Target!);
@@ -84,7 +85,7 @@ public sealed class AltCommand
     internal static System.Func<string, bool>? AskForTest;
 
     /// <summary>도면 저장(바뀌었을 때만) → 사본 복사 → 목록에 한 줄. 돌려줌 = 거짓이면 사용자가 그만둠.</summary>
-    static bool SaveCopy(Document doc, string path, string folder, Alternatives.Book book, Alternatives.Row now, string name, string memo)
+    static bool SaveCopy(Document doc, string path, string folder, Alternatives.Book book, Alternatives.Row now, string name, string memo, byte[]? pic)
     {
         string why = Alternatives.CheckName(name, book.Rows.Select(r => r.Name));
         if (why.Length > 0) throw new System.InvalidOperationException(why);
@@ -119,13 +120,37 @@ public sealed class AltCommand
             Name = name.Trim(), File = file, Saved = System.DateTime.Now, Memo = memo,
             Cut = now.Cut, Fill = now.Fill, WallLen = now.WallLen, SlopeArea = now.SlopeArea, RoadLen = now.RoadLen,
         };
-        if (dirty && own != null) { own.Saved = row.Saved; own.Cut = now.Cut; own.Fill = now.Fill; own.WallLen = now.WallLen; own.SlopeArea = now.SlopeArea; own.RoadLen = now.RoadLen; }
+        // ★[JACK 1119 «대안 평면 그림»] 그림 = 사본 옆 «이름.png»(못 쓰면 그림 없이 저장 — 대안은 그대로)
+        string picNote = "";
+        string? PutPic(string dwgFile)
+        {
+            if (pic == null) { picNote = " · 그림 없음"; return null; }
+            string pf = System.IO.Path.GetFileNameWithoutExtension(dwgFile) + ".png";
+            try { System.IO.File.WriteAllBytes(System.IO.Path.Combine(folder, pf), pic); return pf; }
+            catch (System.Exception exP) { picNote = " · ⚠그림 못 씀 — " + exP.Message; return null; }
+        }
+        row.Pic = PutPic(file);
+        // 연 대안을 저장한 경우 그 대안 그림도 지금 모양으로 — 파일은 목록을 적은 뒤에(목록 못 적으면 옛 그림 그대로)
+        string? ownPic = null;
+        if (dirty && own != null)
+        {
+            own.Saved = row.Saved; own.Cut = now.Cut; own.Fill = now.Fill; own.WallLen = now.WallLen; own.SlopeArea = now.SlopeArea; own.RoadLen = now.RoadLen;
+            if (pic != null) { ownPic = System.IO.Path.GetFileNameWithoutExtension(own.File) + ".png"; own.Pic = ownPic; }
+        }
         if (book.Base.Length == 0 && !Alternatives.IsCopy(path)) book.Base = System.IO.Path.GetFileName(path);
         book.Rows.Add(row);
         try { Alternatives.Save(folder, book); }
-        catch { try { System.IO.File.Delete(dst); } catch { } throw; }   // 목록에 못 적으면 사본도 거둠(주인 없는 파일 안 남김)
+        catch
+        {
+            try { System.IO.File.Delete(dst); } catch { }   // 목록에 못 적으면 사본도 거둠(주인 없는 파일 안 남김)
+            if (row.Pic != null) try { System.IO.File.Delete(System.IO.Path.Combine(folder, row.Pic)); } catch { }
+            throw;
+        }
+        if (ownPic != null)
+            try { System.IO.File.WriteAllBytes(System.IO.Path.Combine(folder, ownPic), pic!); }
+            catch (System.Exception exO) { picNote += " · ⚠연 대안 그림 못 씀 — " + exO.Message; }
         doc.Editor.WriteMessage($"\n[대안] «{row.Name}» 저장 — {dst}" + (dirty ? "(도면도 저장함)" : ""));
-        try { DiagLog.Append($"\n[대안] 저장 «{row.Name}» → {dst} · 도면 저장 {(dirty ? "함" : "안 함(바뀐 것 없음)")}" + (claim.Length > 0 ? " · " + claim : "")); } catch { }
+        try { DiagLog.Append($"\n[대안] 저장 «{row.Name}» → {dst} · 도면 저장 {(dirty ? "함" : "안 함(바뀐 것 없음)")}" + (claim.Length > 0 ? " · " + claim : "") + picNote); } catch { }
         return true;
     }
 
@@ -134,6 +159,19 @@ public sealed class AltCommand
     {
         string f = r.File ?? "";
         if (f.Length == 0 || System.IO.Path.GetFileName(f) != f || !f.EndsWith(".dwg", System.StringComparison.OrdinalIgnoreCase)) return null;
+        try
+        {
+            string root = System.IO.Path.GetFullPath(folder).TrimEnd('\\') + "\\", full = System.IO.Path.GetFullPath(System.IO.Path.Combine(folder, f));
+            return full.StartsWith(root, System.StringComparison.OrdinalIgnoreCase) ? full : null;
+        }
+        catch { return null; }
+    }
+
+    /// <summary>★[JACK 1119] 줄의 평면 그림 — 이름만 · .png · 대안 폴더 안일 때만 전체 경로(옛 줄 · 이상한 이름 = null).</summary>
+    internal static string? PicOf(string folder, Alternatives.Row r)
+    {
+        string f = r.Pic ?? "";
+        if (f.Length == 0 || System.IO.Path.GetFileName(f) != f || !f.EndsWith(".png", System.StringComparison.OrdinalIgnoreCase)) return null;
         try
         {
             string root = System.IO.Path.GetFullPath(folder).TrimEnd('\\') + "\\", full = System.IO.Path.GetFullPath(System.IO.Path.Combine(folder, f));
@@ -154,6 +192,7 @@ public sealed class AltCommand
         string? full = FileOf(folder, r);
         if (full != null && OpenDoc(full) != null) throw new System.InvalidOperationException($"«{r.Name}»이(가) 열려 있어 못 지웁니다 — 그 도면을 닫고 다시");
         if (full != null && System.IO.File.Exists(full)) System.IO.File.Delete(full);   // 이상한 파일 이름이면 목록 줄만 지움
+        if (PicOf(folder, r) is string pf && System.IO.File.Exists(pf)) try { System.IO.File.Delete(pf); } catch { }   // ★[JACK 1119] 그림도(못 지워도 대안은 지움)
         book.Rows.Remove(r);
         Alternatives.Save(folder, book);
         doc.Editor.WriteMessage($"\n[대안] «{r.Name}» 지움");
@@ -174,8 +213,12 @@ public sealed class AltCommand
     }
 
     /// <summary>지금 도면 수량 — 토공(도면화 토공량표 «계»와 같은 셈) · 옹벽 앞면 선(부지 + 진입도로 구간) · 사면 겉넓이 · 도로 길이. 못 잰 칸 = null.</summary>
-    internal static Alternatives.Row Measure(Document doc, out string log)
+    /// <param name="pic">★[JACK 1119] 지금 설계 대략 평면 그림 PNG(<see cref="AltPlanPic"/> · 못 그리면 null).</param>
+    internal static Alternatives.Row Measure(Document doc, out string log, out byte[]? pic)
     {
+        pic = null;
+        var scene = new AltPlanPic.Scene();
+        CachedGroundSurface? gs = null;
         var db = doc.Database;
         var sb = new System.Text.StringBuilder();
         var row = new Alternatives.Row();
@@ -203,10 +246,13 @@ public sealed class AltCommand
                 if (!gid.IsNull && !did.IsNull)
                 {
                     using var tr = db.TransactionManager.StartTransaction();
-                    var gs = new CachedGroundSurface((CivilDb.TinSurface)tr.GetObject(gid, OpenMode.ForRead));
+                    var g0 = new CachedGroundSurface((CivilDb.TinSurface)tr.GetObject(gid, OpenMode.ForRead));
                     var ds = new CachedGroundSurface((CivilDb.TinSurface)tr.GetObject(did, OpenMode.ForRead));
-                    row.SlopeArea = Alternatives.SlopeArea(ds.AllTriangles().Select(t => (t.A, t.B, t.C)),
-                                                           (x, y) => gs.TryGetElevation(x, y, out double z) ? z : null);
+                    var dtris = ds.AllTriangles();
+                    row.SlopeArea = Alternatives.SlopeArea(dtris.Select(t => (t.A, t.B, t.C)),
+                                                           (x, y) => g0.TryGetElevation(x, y, out double z) ? z : null);
+                    gs = g0;
+                    try { AltPlanPic.AddChanged(scene, dtris, g0); } catch (System.Exception exP) { sb.Append(" · ⚠그림 세모 " + exP.Message); }
                     tr.Commit();
                 }
             }
@@ -217,10 +263,20 @@ public sealed class AltCommand
                 using var tr = db.TransactionManager.StartTransaction();
                 double wall = 0, road = 0; int nw = 0, nr = 0;
                 if (!gid.IsNull)
-                    foreach (var w in PureWithWallsBuilder.CurrentWalls(db, tr, gid, out _)) { wall += w.Kind != 0 ? w.LineLen : Alternatives.LineLength(w.Poly, w.IsWall); nw++; }   // ★[v114.0] 선 옹벽(종류 2) = 앞면 토막 길이 합(Faces)
+                    foreach (var w in PureWithWallsBuilder.CurrentWalls(db, tr, gid, out _)) { wall += w.Kind != 0 ? w.LineLen : Alternatives.LineLength(w.Poly, w.IsWall); nw++; scene.Walls.AddRange(AltPlanPic.WallLines(w)); }   // ★[v114.0] 선 옹벽(종류 2) = 앞면 토막 길이 합(Faces)
                 foreach (var id in RoadRanges.Roads(tr, db))
                 {
                     try { road += ((CivilDb.Alignment)tr.GetObject(id, OpenMode.ForRead)).Length; nr++; } catch { }
+                    try
+                    {
+                        // ★[JACK 1119] 그림 — 도로 중심선(200 칸)
+                        var al = (CivilDb.Alignment)tr.GetObject(id, OpenMode.ForRead);
+                        double s0 = al.StartingStation, s1 = al.EndingStation, x = 0, y = 0;
+                        var cl = new List<Point3>();
+                        for (int k = 0; k <= 200 && s1 > s0; k++) { al.PointLocation(s0 + (s1 - s0) * k / 200.0, 0, ref x, ref y); cl.Add(new Point3(x, y, 0)); }
+                        if (cl.Count >= 2) scene.Roads.Add(cl);
+                    }
+                    catch { }
                     var d = RoadDesign.Read(tr, id);
                     if (d == null) continue;
                     foreach (var x in d.Walls) if (x.Length >= 2 && double.IsFinite(x[0]) && double.IsFinite(x[1])) wall += System.Math.Abs(x[1] - x[0]);
@@ -231,6 +287,23 @@ public sealed class AltCommand
                 tr.Commit();
             }
             catch (System.Exception ex) { sb.Append(" · ⚠옹벽 · 도로 " + ex.Message); }
+
+            // ★[JACK 1119 «대안 평면 그림»] 계획 경계(부지 구역마다) · 그림 범위 안 원지반 세모(등고선) → PNG
+            try
+            {
+                using var tr = db.TransactionManager.StartTransaction();
+                foreach (var b in GradingBundleStore.TryLoadAll(db, tr, out _) ?? new List<GradingBundle>())
+                    if (b.Boundary.Count >= 3) scene.Sites.Add(b.Boundary.Append(b.Boundary[0]).ToList());
+                tr.Commit();
+            }
+            catch (System.Exception ex) { sb.Append(" · ⚠그림 경계 " + ex.Message); }
+            try
+            {
+                if (gs != null && AltPlanPic.Box(scene) is { } bb) scene.Ground = gs.TrianglesIn(bb.X0, bb.Y0, bb.X1, bb.Y1);
+                pic = AltPlanPic.Render(scene, out string plog);
+                sb.Append(" · " + plog);
+            }
+            catch (System.Exception ex) { pic = null; sb.Append(" · ⚠그림 " + ex.Message); }
         }
         log = sb.ToString().Replace("\r", "").Replace("\n", " ").Trim();
         return row;

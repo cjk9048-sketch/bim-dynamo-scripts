@@ -100,7 +100,7 @@ internal sealed class PlanOptsWindow : Window
         _rot.TextChanged += (_, __) => { if (Num(_rot, out double d)) _dial.Value = System.Math.IEEERemainder(d, 360); };
         _rot.ToolTip = "평면도를 돌릴 각도(반시계 +) — 방위표도 함께 돎";
         Row("등고선 간격", Sub("주곡선"), _cMinor, Sub("계곡선", 10), _cMajor, Sub("m", 4));
-        _cMinor.ToolTip = "모든 지형의 등고선 간격(도면설정 «3. 공통»과 같은 값)"; _cMajor.ToolTip = "굵은 등고선 간격 — 주곡선의 배수";
+        _cMinor.ToolTip = "모든 지형의 등고선 간격(공통설정과 같은 값)"; _cMajor.ToolTip = "굵은 등고선 간격 — 주곡선의 배수";
         var tg = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(80, 0, 0, 0) };
         tg.Children.Add(_cLabels); tg.Children.Add(_stations); tg.Children.Add(_stationsR);
         root.Children.Add(tg);

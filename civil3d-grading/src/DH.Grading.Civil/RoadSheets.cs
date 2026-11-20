@@ -75,7 +75,7 @@ internal static class RoadSheets
             return (pp, false, "", $"그린 축척 1:{drawnH:0} 그대로" + (pp.KeepAnno > 0 ? $" · 부지 주석 축척 1:{anno:0}" : ""), site);
         }
         var p = new ProfilePlan { PinH = vh.H, PinV = vh.V, HMax = ProfileScaleFit.AutoHMax, KeepAnno = site && anno > 0 ? anno : 0, RoadTag = roadHandle };
-        string note = $"도면설정 H {(vh.H > 0 ? $"1:{vh.H:0}" : "자동")} · V {(vh.V > 0 ? $"1:{vh.V:0}" : vh.V < 0 ? "H와 같게" : "자동")}"
+        string note = $"종횡단도 설정 H {(vh.H > 0 ? $"1:{vh.H:0}" : "자동")} · V {(vh.V > 0 ? $"1:{vh.V:0}" : vh.V < 0 ? "H와 같게" : "자동")}"
                     + (p.KeepAnno > 0 ? $" · 부지 주석 축척 1:{anno:0}" : "");
         return (p, true, ProfileScaleFit.Key(vh.H, vh.V), note, site);
     }

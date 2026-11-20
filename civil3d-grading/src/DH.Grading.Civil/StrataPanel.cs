@@ -29,6 +29,8 @@ public sealed class StrataPanel : UserControl
     private readonly DataGrid _gBore = new();
     
     private readonly TextBlock _status = new();
+    /// <summary>★[JACK 1119 «지층구성 팝업도 애니메이션을 최상단에 · 층별 GL값 · 층별 두께 · ② 보링공 값 실시간»] 맨 위 설명 칸(<see cref="DemoFrame"/> 공용 틀).</summary>
+    private readonly StrataDemoView _demo = new();
     /// <summary>표식 크기 바의 양 끝 — ★[JACK 0831] <b>×1이 정확히 1/3 자리</b>에 오도록 잡았다.
     /// <para><c>(1 − 0.2) / (2.6 − 0.2) = 1/3</c>. 더 크게 키울 일이 있으면 이 두 값을 함께 옮긴다
     /// (한쪽만 바꾸면 ×1이 1/3에서 벗어난다 — 그 관계가 이 값들의 이유다).</para></summary>
@@ -93,6 +95,14 @@ public sealed class StrataPanel : UserControl
             RebuildThicknessColumns();
             SyncThicknessLength();
         };
+        // ★[JACK 1119] 미리보기 — 공 더함 · 지움 · 옮김(지반고 다시 읽음) · 지하수위도 바로 다시(미리보기가 떠 있을 때만 그림)
+        System.ComponentModel.PropertyChangedEventHandler boreProp = (_, _) => _demo.Redraw();
+        Bores.CollectionChanged += (_, e) =>
+        {
+            if (e.OldItems != null) foreach (BoreRow r in e.OldItems) r.PropertyChanged -= boreProp;   // 지운 공은 끊음
+            if (e.NewItems != null) foreach (BoreRow r in e.NewItems) r.PropertyChanged += boreProp;
+            _demo.Redraw();
+        };
         SeedDefaultLayers();
     }
 
@@ -133,11 +143,12 @@ public sealed class StrataPanel : UserControl
 
     private void Build()
     {
-        var root = new Grid { Margin = new Thickness(10) };
+        var root = new Grid();
         // ★★[JACK 0908 "회사로고 활용"] 맨 위 <b>로고 머리띠</b> — 팝업 둘과 같은 얼굴.
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });                      // 머리띠
+        root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });                      // ★[JACK 1119] 설명 칸
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });                      // ① 카드
-        root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) }); // ② 카드 (늘어나는 칸)
+        root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star), MinHeight = BoreCardMin }); // ② 카드 (늘어나는 칸)
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });                      // 알림
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });                      // 확인
 
@@ -147,8 +158,13 @@ public sealed class StrataPanel : UserControl
         c1.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });     // 옵션단추
         c1.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });     // 설명
         c1.RowDefinitions.Add(new RowDefinition { Height = new GridLength(150) }); // 표
-        c1.Children.Add(MakeHead("① 지층 높이 설정",
-            "시추주상도를 어떻게 읽어 오실지 고르세요."));
+        var head1 = MakeHead("① 지층 높이 설정",
+            "시추주상도를 어떻게 읽어 오실지 고르세요.");
+        c1.Children.Add(head1);
+        // ★[JACK 1119] 설명 칸 — 칸 머리 · 안내 = 지금 고른 쪽 장면 · 선택지마다 제 장면
+        string ModeScene() => Mode == StrataHeightMode.Elevation ? "stGl" : "stTh";
+        HookDemo(head1, ModeScene);
+        HookDemo(_modeHint, ModeScene);
 
         // ★★★[JACK 0901] <b>모드는 도면 전체에서 하나</b> — 층마다 고르면 헷갈린다.
         var modeBox = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 4, 0, 2) };
@@ -167,6 +183,7 @@ public sealed class StrataPanel : UserControl
             DhBrand.StyleOne(rb);
             rb.VerticalContentAlignment = VerticalAlignment.Center;
             rb.Checked += (_, _) => SetMode(m);
+            HookDemo(rb, () => m == StrataHeightMode.Elevation ? "stGl" : "stTh");
             modeBox.Children.Add(rb);
         }
         // ★[JACK 0901] <b>층별 GL값이 먼저이고 기본</b>이다.
@@ -215,7 +232,13 @@ public sealed class StrataPanel : UserControl
         brandBar.Background = Brushes.Transparent;   // 도킹창 바탕(Wall) 위에 그대로 얹는다
         brandBar.Margin = new Thickness(0, 0, 0, 2);
         Grid.SetRow(brandBar, 0); root.Children.Add(brandBar);
-        root.Children.Add(MakeCard(c1, 1));
+        // ★★[JACK 1119] 맨 위 설명 칸 — 다른 도킹창과 같은 틀(DemoFrame · «도움말» 체크로 접힘)
+        _demo.Source = DemoInput;
+        var demoBox = DemoFrame.Wrap("Strata", _demo);
+        demoBox.HorizontalAlignment = HorizontalAlignment.Left;
+        Grid.SetRow(demoBox, 1); root.Children.Add(demoBox);
+        var card1 = MakeCard(c1, 2);
+        root.Children.Add(card1);
 
         // ── ② 보링공 카드 ────────────────────────────────────────────
         var c2 = new Grid();
@@ -225,7 +248,16 @@ public sealed class StrataPanel : UserControl
         c2.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });                      // 단추 줄
         c2.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) }); // 표
         // ★[JACK 0901 문구 확정] 짧게 — 무엇을 치는지는 <b>위 모드 안내</b>가 이미 말한다.
-        c2.Children.Add(MakeHead("② 보링공", "지층 데이터 입력. (지반고 자동 로딩)"));
+        var head2 = MakeHead("② 보링공", "지층 데이터 입력. (지반고 자동 로딩)");
+        c2.Children.Add(head2);
+        // ★★[JACK 1119 «2번 보링공에서 입력받은 값에 따라 실시간으로»] 표 = 미리보기 뷰 — 마우스 · 칸 선택 · 글자 바뀜마다 바로(값은 표에서만 읽음)
+        HookDemo(head2, () => "stLive");
+        HookDemo(_gBore, () => "stLive");
+        _gBore.GotKeyboardFocus += (_, _) => _demo.Play("stLive");
+        _gBore.AddHandler(System.Windows.Controls.Primitives.TextBoxBase.TextChangedEvent,
+            new TextChangedEventHandler((_, _) =>
+                // 칸 글자 → 표 값(PropertyChanged 묶음)이 넘어간 뒤에 읽는다
+                Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Background, new Action(() => _demo.Play("stLive")))), true);
 
         // ★★★[JACK 0908] <b>선택칸을 없앴다 — 시스템이 정한다.</b>
         //   0907에 "지하수위 잇기(표고로/심도로)" 칸을 넣었는데, JACK이 하루 써 보고
@@ -253,12 +285,14 @@ public sealed class StrataPanel : UserControl
         {
             if (e.Key == System.Windows.Input.Key.V
                 && (System.Windows.Input.Keyboard.Modifiers & System.Windows.Input.ModifierKeys.Control) != 0)
-            { PasteFromClipboard(); e.Handled = true; }
+            { PasteFromClipboard(); e.Handled = true; _demo.Play("stLive"); }
         };
         Grid.SetRow(_gBore, 2); c2.Children.Add(_gBore);
 
         var bbtn = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 4, 0, 8) };
-        bbtn.Children.Add(MakeBtn("평면에서 찍기", (_, _) => Pick(), primary: true));
+        var pickBtn = MakeBtn("평면에서 찍기", (_, _) => Pick(), primary: true);
+        HookDemo(pickBtn, () => "stPick");
+        bbtn.Children.Add(pickBtn);
         // ★★[JACK 0828 검토] <b>도면에서 못 지웠으면 표에서도 지우지 않는다.</b>
         //   종전엔 <c>EraseMark</c>가 실패해도 줄을 지웠다 — 그러면 평면에 <b>유령 표식</b>이 남고
         //   그것을 가리키던 줄이 사라져 <b>지울 길이 영영 없어진다</b>.
@@ -323,7 +357,7 @@ public sealed class StrataPanel : UserControl
         bbtn.Children.Add(_sizeText);
 
         Grid.SetRow(bbtn, 1); c2.Children.Add(bbtn);
-        root.Children.Add(MakeCard(c2, 2));
+        root.Children.Add(MakeCard(c2, 3));
 
         // ── 알림 줄 — 옅은 바탕에 담아 <b>말이 눈에 띄되 시끄럽지 않게</b>.
         _status.TextWrapping = TextWrapping.Wrap;
@@ -337,7 +371,7 @@ public sealed class StrataPanel : UserControl
             Margin = new Thickness(0, 0, 0, 8),
             Child = _status,
         };
-        Grid.SetRow(sbox, 3); root.Children.Add(sbox);
+        Grid.SetRow(sbox, 4); root.Children.Add(sbox);
         Say("① 지층을 정하고 ② 평면에서 찍기로 시추 위치를 클릭하세요.");
 
         // ── 확인 — 하나뿐인 큰 단추. 무엇을 눌러야 하는지 헷갈릴 자리가 없다.
@@ -346,11 +380,45 @@ public sealed class StrataPanel : UserControl
         ok.FontSize = 13;
         ok.FontWeight = FontWeights.SemiBold;
         ok.Margin = new Thickness(0);
-        Grid.SetRow(ok, 4); root.Children.Add(ok);
+        Grid.SetRow(ok, 5); root.Children.Add(ok);
+        HookDemo(ok, () => "stMake");
+
+        // ★★[JACK 1119] 설명 칸이 들어가 키가 커짐 — 창이 넉넉하면 종전대로 ② 표가 남은 높이를 채우고(표 안에서 굴림),
+        //   모자라면 ② 표를 BoreCardMin에서 멈추고 창 전체를 굴린다(확인 단추가 잘려 안 보이는 일 없게)
+        var pad = new Border { Padding = new Thickness(10), Child = root };
+        var sv = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, Content = pad };
+        pad.SetBinding(HeightProperty, new Binding(nameof(ScrollViewer.ViewportHeight)) { Source = sv });
+        var fixedRows = new FrameworkElement[] { brandBar, demoBox, card1, sbox, ok };
+        void FitMin()
+        {
+            double h = pad.Padding.Top + pad.Padding.Bottom + BoreCardMin;
+            foreach (var fe in fixedRows) h += fe.ActualHeight + fe.Margin.Top + fe.Margin.Bottom;
+            pad.MinHeight = h;
+        }
+        foreach (var fe in fixedRows) fe.SizeChanged += (_, _) => FitMin();
 
         Background = Wall;
-        Content = root;
+        Content = sv;
     }
+
+    /// <summary>② 보링공 카드가 줄어들 수 있는 가장 낮은 키 — 제목 · 단추 줄 · 표 머리 + 두 줄 + 카드 여백.</summary>
+    private const double BoreCardMin = 190;
+
+    /// <summary>★[JACK 1119] 설명 칸 잇기 — 마우스 올림 = 그 장면 · 나감 = 끝 그림에서 멈춤.</summary>
+    private void HookDemo(FrameworkElement fe, Func<string> key)
+    {
+        fe.MouseEnter += (_, _) => _demo.Play(key());
+        fe.MouseLeave += (_, _) => _demo.Idle();
+    }
+
+    /// <summary>★[JACK 1119] 설명 칸 미리보기가 읽는 값 — 표 숫자 그대로(지표면 · 모델 셈 없음).</summary>
+    private StrataDemoView.Input DemoInput() => new()
+    {
+        ByGl = Mode == StrataHeightMode.Elevation,
+        Names = Layers.Select(l => l.Name ?? "").ToArray(),
+        IsRock = Layers.Select(l => l.Rock != RockClass.Soil).ToArray(),
+        Bores = Bores.Select(b => new StrataDemoView.Bore { Name = b.Name, Gl = b.Gl, Water = b.Water, V = b.Th.ToArray() }).ToList(),
+    };
 
     // ── 겉모습 ★★[JACK 0828 "도킹바 UI를 좀 예쁘게 못하나? 너무 각져서"] ──────────────
     //   기본 WPF는 <b>90년대 회색 상자</b>다. 색을 요란하게 쓰는 대신
@@ -613,6 +681,7 @@ public sealed class StrataPanel : UserControl
         // 표를 치던 중에 열을 다시 만들면 WPF가 막는다 — 편집을 먼저 끝낸다(SafeRefresh와 같은 이유).
         try { _gBore.CommitEdit(DataGridEditingUnit.Row, true); } catch { }
         try { RebuildThicknessColumns(); } catch { }
+        _demo.Redraw();   // ★[JACK 1119] 층 이름 → 미리보기 범례
     }
 
     /// <summary>층 수가 바뀌면 모든 공의 두께 칸 수를 맞춘다 — <b>모자라면 모른다(NaN)로 채운다</b>.</summary>
@@ -640,6 +709,7 @@ public sealed class StrataPanel : UserControl
             // 그래도 막히면 <b>표만 안 새로 그려질 뿐</b> 자료는 멀쩡하다 — 터뜨리지 않는다.
             Say("표 새로 그리기를 미뤘습니다(편집 중) — " + ex.GetType().Name);
         }
+        _demo.Redraw();   // ★[JACK 1119] 모드 바꿈 · 붙여넣기 · 공 더함 → 미리보기 값도 같이
     }
 
     /// <summary>표를 다시 그린다(창을 다시 열 때).</summary>

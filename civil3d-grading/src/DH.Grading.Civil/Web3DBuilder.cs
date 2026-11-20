@@ -439,7 +439,7 @@ internal static class Web3DBuilder
 
         // ④c ★★[v111.7 · JACK 1102 «3D 보기에 건물 · 층수로 높이 · 켜고 끄기»] 건물 — VWorld 건물정보
         //   ★[v111.7.1 · JACK 1102 «주변 아파트가 빠짐»] 범위 = 3D 지형 전체(위성 바탕과 같은 범위) · 많으면 바뀐 자리 + 500 → + 200 → + 50 m → 가운데
-        //   높이 = 지상층수 × 3.5 m(0 · 빈칸은 안 그림) · 바닥 = 발자국 아래 원지반 가장 낮은 곳(그 건물 밑에 원지반이 없으면 보이는 지형) · 바뀌는 자리에 닿으면 빨강 반투명
+        //   높이 = 지상층수 × 3.5 m(0 · 빈칸은 안 그림) · 바닥 = 발자국 아래 원지반 가장 낮은 곳(그 건물 밑에 원지반이 없으면 보이는 지형) · 바뀌는 자리에 닿으면 철거로 보고 안 그림
         //   못 받아도(키 · 인터넷) 3D는 그대로 — 층 목록에 회색 + ⚠ · 장면에만(도면 · InfraWorks 파일에는 안 넣음) · 화면 없는 시험(skipSat)은 인터넷을 안 쓴다
         //   ★[검토 M · 보안] 페이지(경고 · 층 글)에는 정해 둔 짧은 글만 — 받은 글 · 예외 글은 진단 로그에만(키를 지우고)
         object? bldgHead = null;
@@ -484,9 +484,9 @@ internal static class Web3DBuilder
                         bldgHead = new Dictionary<string, object>
                         {
                             ["n"] = pr.Items.Count, ["xy"] = sc.F32(ar.Xy), ["ring"] = sc.U32(ar.Ring), ["poly"] = sc.U32(ar.Poly), ["bldg"] = sc.U32(ar.Bldg),
-                            ["z0"] = sc.F32(ar.Z0), ["h"] = sc.F32(ar.H), ["hit"] = sc.U8(ar.Hit),
+                            ["z0"] = sc.F32(ar.Z0), ["h"] = sc.F32(ar.H),
                             // ★[v111.7.1 · JACK 1102] 층 풍선 글 끝에 자료 한계 한 줄(철거된 건물이 남아 있을 수 있음)
-                            ["note"] = $"건물 {pr.Items.Count:N0}동 · 바뀌는 자리에 닿음 {pr.Touch:N0}동(빨강) · 뺌: {pr.DropText} · 높이 = 지상층수 × {Web3DBuildings.FloorHeight} m\n{BldgNote}",
+                            ["note"] = $"건물 {pr.Items.Count:N0}동 · 바뀌는 자리에 닿아 철거로 보고 뺌 {pr.Demolished:N0}동 · 뺌: {pr.DropText} · 높이 = 지상층수 × {Web3DBuildings.FloorHeight} m\n{BldgNote}",
                         };
                     }
                 }

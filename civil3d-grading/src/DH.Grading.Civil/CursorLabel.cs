@@ -46,10 +46,11 @@ internal static class CursorLabel
                 }
                 var st = r.Status;
                 // 지그의 Sampler는 점이 아닌 입력(Enter · 키워드)에 Cancel을 돌려준다 — 그 입력이 무엇이었는지는 마지막 받은 값이 안다
-                if (st != PromptStatus.OK && jig.LastStatus is PromptStatus.None or PromptStatus.Keyword) st = jig.LastStatus;
+                if (st != PromptStatus.OK && jig.LastStatus is PromptStatus.None or PromptStatus.Keyword or PromptStatus.Other) st = jig.LastStatus;
                 if (st == PromptStatus.None && !ppo.AllowNone) continue;   // GetPoint(AllowNone = 거짓)처럼 Enter는 다시 묻기
                 if (st == PromptStatus.OK) return new Result(st, jig.Point.TransformBy(ed.CurrentUserCoordinateSystem.Inverse()), "");
-                if (st == PromptStatus.Keyword) return new Result(st, Point3d.Origin, jig.LastString.Length > 0 ? jig.LastString : r.StringResult ?? "");
+                // ★[JACK 1119 «거리 입력 또는 위치 클릭»] 아무 글(AllowArbitraryInput — 숫자 등)은 GetPoint처럼 키워드로 돌려줌
+                if (st is PromptStatus.Keyword or PromptStatus.Other) return new Result(PromptStatus.Keyword, Point3d.Origin, jig.LastString.Length > 0 ? jig.LastString : r.StringResult ?? "");
                 return new Result(st, Point3d.Origin, "");
             }
         }
@@ -185,6 +186,7 @@ internal static class CursorLabel
                 AppendKeywordsToMessage = ppo.AppendKeywordsToMessage,
             };
             foreach (Keyword k in ppo.Keywords) _opt.Keywords.Add(k.GlobalName, k.LocalName, k.DisplayName, k.Visible, k.Enabled);
+            if (ppo.AllowArbitraryInput) _opt.UserInputControls |= UserInputControls.AcceptOtherInputString;   // ★[JACK 1119] 거리 숫자 입력
             // 화면 오른쪽 · 위 방향(평면이면 WCS X · Y) — 뷰 방향 · 비틀기에서
             try
             {

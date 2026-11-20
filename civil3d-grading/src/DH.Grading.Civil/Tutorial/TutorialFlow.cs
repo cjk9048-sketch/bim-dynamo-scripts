@@ -157,7 +157,7 @@ internal static class TutorialFlow
         Step.Qty => "[수량 산출서] → 창 [만들기] → 토공 수량 엑셀",
         Step.RdOpen => "[진입도로 생성] → 진입도로 창 열기",
         Step.RdDraw => "창 [진입도로 생성](경로 그리기) → " + (guide ? "노란 점선 따라" : "부지 끝에서 바깥 땅으로") + " 점 클릭 → Enter → 도로 · 지표면",
-        Step.RdWall => "■ 진입도로 수정 → [옹벽 변환] → 2단 소단선 클릭 → Enter → 옹벽",
+        Step.RdWall => "[진입도로 수정] 탭 → [옹벽 변환] → 2단 소단선 클릭 → Enter → 옹벽",
         Step.RdSlope => "[사면 변환] → 빨간 옹벽선 클릭 → Enter → 다시 사면",
         Step.RdWallAdd => "[옹벽 추가] → 도로 면 경계 → 사면 안 → 경계 클릭 → Enter → 선 따라 옹벽",
         Step.RdWallDel => "[옹벽 삭제] → 추가한 옹벽 클릭 → Enter → 원래 사면",
@@ -169,7 +169,7 @@ internal static class TutorialFlow
         Step.RdRedraft => "[종단 자동으로 다시] → Enter(예) → 땅 따라 종단",
         Step.RdRev => "[시점↔종점] → 방향 뒤집기",
         Step.RdXsec => "[횡단도 생성] → 빈 자리 클릭 → 측점마다 횡단도",
-        Step.RdPave => "■ 도로 설정 → 포장 «종류» 바꾸기(예: 아스팔트 → 콘크리트) → 횡단도 포장",
+        Step.RdPave => "[진입도로 생성] 탭 → 포장 «종류» 바꾸기(예: 아스팔트 → 콘크리트) → 횡단도 포장",
         Step.RdUpdate => "[지표면 업데이트](빨강) → 지표면 · 종단도 · 횡단도 다시",
         Step.RdReset => "진입도로 창 [진입도로 초기화] → [예] → 진입도로 모두 지우기",
         _ => "완료",
@@ -292,7 +292,7 @@ internal static class TutorialFlow
     internal const string NoteRdSecClosed = "종횡단도 창 닫힘 → 진입도로 [종횡단도]로 다시 열기";
     internal const string NoteRdDrawFail = "도로 못 만듦 → 점 2개 이상 · 부지 안에서 시작 → 다시";
     internal const string NoteRdLost = "진입도로가 없어짐 → 다시 그리기";
-    internal const string NoteRdOpenEdit = "■ 진입도로 수정 펼치기 → 옹벽 단추 보이기";
+    internal const string NoteRdOpenEdit = "[진입도로 수정] 탭 → 옹벽 단추 보이기";
     internal const string NoteRdWallFail = "옹벽 안 바뀜 → 다른 소단선(2단부터) 클릭 → Enter";
     internal const string NoteRdSlopeFail = "사면 안 바뀜 → 빨간 옹벽선 클릭 → Enter";
     internal const string NoteRdWallAddFail = "옹벽 안 생김 → 경계 밖에서 시작 · 사면 안 지나 · 경계 밖에서 끝 → 다시";

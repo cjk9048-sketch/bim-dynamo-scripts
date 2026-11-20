@@ -621,6 +621,67 @@ public static class CivilSafeMesh
         public int OverlayExc;
 
         /// <summary>점이 이 삼각망의 바깥 테두리 위인가 — 그 점에서 나가는 변 중 면 하나만 쓰는 변이 있나.</summary>
+        /// <summary>★[lf3b] 다시 나누기는 보통 풀이로 못 푼 쌍에만(마지막 판) — 다른 면은 예전 그대로(비트 같음).</summary>
+        bool reTriOn;
+        /// <summary>★[lf3b] 안쪽 점 v를 빼고 둘레 고리(이웃 점 차례)를 귀 자르기로 나눈 면들(귀마다 옹벽 높이 오차가 가장 작은 것) — 고리가 안 닫히거나 못 나누면 거짓.</summary>
+        bool ReTri(int v, out List<int[]> o, out double maxW)
+        {
+            o = new List<int[]>(); maxW = 0;
+            var next = new Dictionary<int, int>();
+            foreach (int fi in vf[v])
+            {
+                var f = F[fi]; int k = Array.IndexOf(f, v); if (k < 0) return false;
+                int b = f[(k + 1) % 3], c = f[(k + 2) % 3];
+                if (Sa(f[0], f[1], f[2]) < 0) (b, c) = (c, b);
+                if (next.ContainsKey(b)) return false;
+                next[b] = c;
+            }
+            var ring = new List<int>();
+            var vals = new HashSet<int>(next.Values);
+            var heads = next.Keys.Where(k0 => !vals.Contains(k0)).ToList();
+            if (heads.Count == 0)
+            {
+                if (next.Count < 3) return false;
+                int s0 = next.Keys.First(), cur = s0;
+                for (int g = 0; g <= next.Count; g++) { ring.Add(cur); if (!next.TryGetValue(cur, out cur)) return false; if (cur == s0) break; }
+                if (cur != s0 || ring.Count != next.Count) return false;
+            }
+            else
+            {
+                // ★[lf3c] 바깥 테두리 점 — 둘레가 열린 사슬(머리 → 꼬리). 그 점을 빼면 테두리가 머리–꼬리 곧은 변이 됨: 점이 그 변에서 3 µm(BorderSlide 잣대) 안일 때만
+                if (heads.Count != 1 || next.Count < 2) return false;
+                int cur = heads[0];
+                for (int g = 0; g <= next.Count + 1; g++) { ring.Add(cur); if (!next.TryGetValue(cur, out cur)) break; }
+                if (ring.Count != next.Count + 1) return false;
+                int h = ring[0], t = ring[^1];
+                double ex = X[t] - X[h], ey = Y[t] - Y[h], l2 = ex * ex + ey * ey;
+                double u = l2 < 1e-24 ? 0 : Math.Clamp(((X[v] - X[h]) * ex + (Y[v] - Y[h]) * ey) / l2, 0, 1);
+                double qx = X[h] + ex * u - X[v], qy = Y[h] + ey * u - Y[v];
+                if (qx * qx + qy * qy > 9e-12) return false;
+                if (ring.Count < 3) return false;
+            }
+            var rem = new List<int>(ring);
+            while (rem.Count > 3)
+            {
+                int bi = -1; double bw = double.PositiveInfinity;
+                for (int i = 0; i < rem.Count; i++)
+                {
+                    int a = rem[(i - 1 + rem.Count) % rem.Count], b = rem[i], c = rem[(i + 1) % rem.Count];
+                    if (!(Sa(a, b, c) > 1e-15)) continue;
+                    bool inside = false;
+                    foreach (int q in rem) { if (q == a || q == b || q == c) continue; if (Sa(a, b, q) >= 0 && Sa(b, c, q) >= 0 && Sa(c, a, q) >= 0) { inside = true; break; } }
+                    if (inside) continue;
+                    double w = FaceWallErr(a, b, c, out _, out _);
+                    if (w < bw) { bw = w; bi = i; }
+                }
+                if (bi < 0) return false;
+                o.Add(new[] { rem[(bi - 1 + rem.Count) % rem.Count], rem[bi], rem[(bi + 1) % rem.Count] }); maxW = Math.Max(maxW, bw); rem.RemoveAt(bi);
+            }
+            if (!(Sa(rem[0], rem[1], rem[2]) > 1e-15)) return false;
+            o.Add(new[] { rem[0], rem[1], rem[2] }); maxW = Math.Max(maxW, FaceWallErr(rem[0], rem[1], rem[2], out _, out _));
+            return true;
+        }
+
         bool OnMeshBorder(int v)
         {
             var cnt = new Dictionary<int, int>();
@@ -646,7 +707,12 @@ public static class CivilSafeMesh
                 var cntB = new Dictionary<int, int>();
                 foreach (int fi in vf[gone]) foreach (int x in F[fi]) if (x != gone) cntB[x] = cntB.TryGetValue(x, out int nb) ? nb + 1 : 1;
                 var bn = cntB.Where(kv => kv.Value == 1).Select(kv => kv.Key).ToList();
-                if (bn.Count != 2 || !bn.Contains(keep)) return false;
+                if (bn.Count != 2 || !bn.Contains(keep))
+                {
+                    // ★[lf3c · JACK 1119b [옹벽 추가] 선 끝 «못 푼 쌍»] 테두리 점 곁 µm 안쪽 점 — 테두리 이웃이 아니라 미끄러질 수 없음 → (마지막 판만) 테두리 점을 빼고 다시 나눔(테두리 3 µm 안 · 옹벽 높이 ≤ 1 mm)
+                    if (reTriOn && !border[gone] && ReTri(gone, out var rb2, out double rw2) && rw2 <= ZTol1) { newFaces = rb2; kill = vf[gone].ToList(); score = rw2 / ZTol1; lastWall = rw2; lastBz = 0; lastPlan = 0; return true; }
+                    return false;
+                }
                 int other = bn[0] == keep ? bn[1] : bn[0];
                 double ex = X[other] - X[keep], ey = Y[other] - Y[keep], el2 = ex * ex + ey * ey;
                 double u = el2 < 1e-24 ? 0 : Math.Clamp(((X[gone] - X[keep]) * ex + (Y[gone] - Y[keep]) * ey) / el2, 0, 1);
@@ -671,7 +737,13 @@ public static class CivilSafeMesh
                 kill.Add(fi);
                 if (both.Contains(fi)) continue;
                 var nf = F[fi].Select(v => v == gone ? keep : v).ToArray();
-                if (!(Sa(nf[0], nf[1], nf[2]) > 1e-15)) return false;  // 뒤집힘·넓이 0
+                if (!(Sa(nf[0], nf[1], nf[2]) > 1e-15))
+                {
+                    // ★[lf3b · JACK 1119b 진입도로 [옹벽 추가] «못 푼 쌍»] 안쪽 점을 이웃 점으로 접으면 둘레 면이 뒤집히는 자리(별 모양 아님) — 접는 대신 그 점을 빼고
+                    //   둘레 고리를 다시 나눈다(귀마다 높이 오차가 가장 작은 것부터 · keep도 고리 위라 쌍이 풀린다). 정확 기준(옹벽 높이 ≤ 1 mm) 안일 때만 · 테두리 점은 안 함
+                    if (reTriOn && !border[gone] && ReTri(gone, out var rf, out double rw) && rw <= ZTol1) { newFaces = rf; kill = fg.ToList(); wall = rw; break; }
+                    return false;   // 뒤집힘·넓이 0
+                }
                 newFaces.Add(nf);
                 wall = Math.Max(wall, FaceWallErr(nf[0], nf[1], nf[2], out _, out _));
             }
@@ -749,7 +821,7 @@ public static class CivilSafeMesh
             else rep.Pairs = pairs.Count;
             // ★[검토 0928 v100.4 · 중간 2] 한 번 보고 버리지 않는다 — 먼저 본 쌍이 아직 변으로 안 이어졌거나(다른 변이 가로지름)
             //   잘록한 목이라 막혀도, 다른 쌍을 합치고 나면 풀린다. 더 합칠 것이 없을 때까지 되풀이하고 남은 것만 «못 푼 쌍»으로
-            var pending = pairs;
+            var pending = pairs; var keptMargin = new List<(double D, int A, int B)>();
             for (int pass = 0; pass < 8 && pending.Count > 0; pass++)
             {
                 var next = new List<(double D, int A, int B)>();
@@ -788,7 +860,10 @@ public static class CivilSafeMesh
                     { double sc = takeA ? sA : sB; if (sc > 1) rep.BigOps.Add((X[gone] + ox, Y[gone] + oy, sc)); }
                     // ★[v102.1 · 계획 검토 H1·L12] Civil이 반드시 합칠 쌍(네모 < 1e-4 — 부동소수 몫 1e-9을 빼고 · 처음 받은 점끼리)을 합쳐
                     //   1mm 넘게 어긋났으면 그 자리를 적는다 — 지금 오차를 자리로 가를 때 쓴다(합칠 때 값은 참고로만)
-                    if (dd < CivilMerge - 1e-9 && a < nOrig && b < nOrig)
+                    // ★[lf3b · JACK 1119b 진입도로 [옹벽 추가] «계산 실패»] 여유 띠([0.1, 0.105) mm) 쌍도 Civil이 높이를 바꿀 자리로 센다 — 두 점을 잇는 변은 늘 높이 < 0.105 mm 바늘을
+                    //   만들고 Civil은 0.122 mm 아래 바늘을 되읽으며 반드시 뒤집는다(실측 문턱). 1:0.01 벽 면에선 그 높이 차가 ≈ 1 cm라 0.1 mm 쌍만 세면 «곁 오차 10.44 > Civil이 바꿀 8.89 mm»로
+                    //   벽이 거절됐다(소단이 지금 면보다 1.04 cm 위인 자리 · 쌍 네모 101 µm)
+                    if (dd < Gap && a < nOrig && b < nOrig)
                     {
                         var ce2 = takeA ? eA : eB; double fe = Math.Max(ce2.Item1, ce2.Item2);
                         if (fe > ZTol1)
@@ -800,8 +875,17 @@ public static class CivilSafeMesh
                     if (takeA) ApplyMove(a, b, nfA, kA); else ApplyMove(b, a, nfB, kB);
                 }
                 pending = next;
-                if (moved == 0) break;
+                if (moved == 0)
+                {
+                    // ★[lf3b] 반드시 합칠 쌍이 못 푼 채 남으면 그 쌍만 한 판 더 — 접으면 뒤집히는 안쪽 점은 빼고 둘레를 다시 나눔(정확 기준 안일 때만) · 여유 띠 쌍은 그대로 둠(예전과 같음)
+                    if (reTriOn || !pending.Any(q => !(Margin && q.D >= MustMerge))) break;
+                    reTriOn = true;
+                    keptMargin.AddRange(pending.Where(q => Margin && q.D >= MustMerge));
+                    pending = pending.Where(q => !(Margin && q.D >= MustMerge)).ToList();
+                }
             }
+            reTriOn = false;
+            pending.AddRange(keptMargin);
             foreach (var (dd, a, b) in pending)
             {
                 if (dead[a] || dead[b]) continue;

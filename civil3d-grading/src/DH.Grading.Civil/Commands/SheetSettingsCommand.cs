@@ -5,6 +5,7 @@ using AcadApp = Autodesk.AutoCAD.ApplicationServices.Application;
 namespace DH.Grading.Civil.Commands;
 
 /// <summary>★★[v32.28 · JACK 0813] <b>"도면 설정"(DHSHEETSET)</b> — 도면화에 관한 값만 모은 창.
+/// ★[JACK 1119] 화면 이름 = «공통설정»(명령 · 저장 키 그대로) · 도곽은 도면생성 창으로 · 아래 Saved · SavedBench · SavedRoadVH는 종횡단도 창 [설정 적용]이 부름 → 머리말 [종횡단도 설정].
 ///
 /// <para>정지옵션(<c>DHGRADESET</c>)에서 <b>도면 쪽 값들을 떼어 왔다</b>: 횡단 간격·폭·배치 수,
 /// 원지반 굴곡, 종단도 표 종류, 배경지도 화질. 가른 기준은 하나다 —
@@ -35,7 +36,7 @@ public sealed class SheetSettingsCommand
         SavedContour(doc, cm0, cM0, dlg.ContourMinor, dlg.ContourMajor);
         SheetPrefs.TryPin(doc.Database, "저장");   // 배경지도 화질(DH_SHEETPREFS · 같으면 안 씀)
         if (System.Math.Abs(GradingSettings.BasemapRes - bm0) > 1e-9)
-            doc.Editor.WriteMessage("\n[도면 설정] 배경지도 화질 " + GradingSettings.BasemapRes.ToString("0.##") + " m/픽셀 — 다음 [위성지도]부터");
+            doc.Editor.WriteMessage("\n[공통설정] 배경지도 화질 " + GradingSettings.BasemapRes.ToString("0.##") + " m/픽셀 — 다음 [위성지도]부터");
     }
 
     /// <summary>★[JACK 1116 «층따기»] [저장] 뒤 — 바뀌었을 때만 도면에 적는다(다음 [횡단도 생성]부터 반영). 창 없이 시험이 같은 길을 부른다.</summary>
@@ -45,9 +46,9 @@ public sealed class SheetSettingsCommand
         try
         {
             using (doc.LockDocument()) XsecQtyOptions.WriteBench(doc.Database, onAfter, after);
-            doc.Editor.WriteMessage("\n[도면 설정] 층따기 " + (onAfter ? "켬" : "끔") + " — 다음 [횡단도 생성]부터 반영");
+            doc.Editor.WriteMessage("\n[종횡단도 설정] 층따기 " + (onAfter ? "켬" : "끔") + " — 다음 [횡단도 생성]부터 반영");
         }
-        catch (System.Exception ex) { doc.Editor.WriteMessage("\n[도면 설정] 층따기 저장 실패 — " + ex.Message); }
+        catch (System.Exception ex) { doc.Editor.WriteMessage("\n[종횡단도 설정] 층따기 저장 실패 — " + ex.Message); }
     }
 
     /// <summary>★[JACK 1112] «노리선 그리기» [저장] 뒤 — 바뀌었을 때만: 끄면 그려 둔 노리선(부지 · 진입도로)을 지우고, 켜면 지금 그린다(면이 있으면). 창 없이 시험이 같은 길을 부른다.</summary>
@@ -61,15 +62,15 @@ public sealed class SheetSettingsCommand
             {
                 int n = RoadSession.EraseAllTicks(doc.Database, out int locked);
                 RoadSession.Of(doc)?.NoteTicksDrawn();
-                doc.Editor.WriteMessage($"\n[도면 설정] 노리선 끔 — {n}개 지움" + (locked > 0 ? $" · ⚠{locked}개 못 지움(레이어 잠금?)" : ""));
+                doc.Editor.WriteMessage($"\n[공통설정] 노리선 끔 — {n}개 지움" + (locked > 0 ? $" · ⚠{locked}개 못 지움(레이어 잠금?)" : ""));
             }
             else
             {
                 string res = NoriCommand.AutoDraw(doc);
-                doc.Editor.WriteMessage("\n[도면 설정] 노리선 켬" + (res.Length > 0 ? " — " + res : ""));
+                doc.Editor.WriteMessage("\n[공통설정] 노리선 켬" + (res.Length > 0 ? " — " + res : ""));
             }
         }
-        catch (System.Exception ex) { doc.Editor.WriteMessage("\n[도면 설정] 노리선 저장 실패 — " + ex.Message); }
+        catch (System.Exception ex) { doc.Editor.WriteMessage("\n[공통설정] 노리선 저장 실패 — " + ex.Message); }
     }
 
     /// <summary>★★[v113.1 · 계획_종단방향_축척.md 3] 진입도로 종단 H · V — 판 2로 적음(바뀌었거나 판 2가 없던 도면에서 값이 옛 규칙과 다를 때). 창 없이 시험이 같은 길을 부른다.</summary>
@@ -79,7 +80,7 @@ public sealed class SheetSettingsCommand
         bool changed = System.Math.Abs(h1 - h0) > 1e-9 || System.Math.Abs(v1 - v0) > 1e-9;
         if (!changed) return;
         try { RoadDrawingSettings.WriteVH(doc.Database, h1, v1); }
-        catch (System.Exception ex) { doc.Editor.WriteMessage("\n[도면 설정] 진입도로 종단 H · V 저장 실패 — " + ex.Message); }
+        catch (System.Exception ex) { doc.Editor.WriteMessage("\n[종횡단도 설정] 진입도로 종단 H · V 저장 실패 — " + ex.Message); }
     }
 
     /// <summary>★★[v111.11 · JACK 1103 «원지형 및 모든 지형의 등고선 간격»] [저장] 뒤 — 바뀌었을 때만 도면에 적고 우리 지표면 스타일의 간격을 고친다
@@ -90,9 +91,9 @@ public sealed class SheetSettingsCommand
         try
         {
             ContourInterval.Write(doc.Database, mi1, ma1);
-            doc.Editor.WriteMessage("\n[도면 설정] " + ContourInterval.Apply(doc.Database, mi1, ma1));
+            doc.Editor.WriteMessage("\n[공통설정] " + ContourInterval.Apply(doc.Database, mi1, ma1));
         }
-        catch (System.Exception ex) { doc.Editor.WriteMessage("\n[도면 설정] 등고선 간격 저장 실패 — " + ex.Message); }
+        catch (System.Exception ex) { doc.Editor.WriteMessage("\n[공통설정] 등고선 간격 저장 실패 — " + ex.Message); }
     }
 
     /// <summary>★[v111.7.2 검토 낮음] 이 도면에 부지 횡단뷰(진입도로가 아닌 노선의 검토선에 매달린 횡단뷰)가 있나.</summary>
@@ -130,7 +131,7 @@ public sealed class SheetSettingsCommand
         if (roadChanged)
         {
             try { RoadDrawingSettings.Write(doc.Database, rp1, rx1); }
-            catch (System.Exception exR) { doc.Editor.WriteMessage("\n[도면 설정] 진입도로 축척 저장 실패 — " + exR.Message); }
+            catch (System.Exception exR) { doc.Editor.WriteMessage("\n[종횡단도 설정] 진입도로 축척 저장 실패 — " + exR.Message); }
         }
         // ★★[v111.7.2 · JACK 1102 «횡단도 배치 드롭박스를 바꿔도 안 바뀌어»] 횡단도 배치 — 도면에 저장(바뀌었거나 기록과 다를 때만 씀)
         //   ★[v113.2 · JACK 1104] 부지 · 진입도로 따로 — 부지 배치가 바뀌면 부지 횡단도만, 진입도로 배치는 아래 RedrawStale(진입도로 «바뀜» 판정)이
@@ -140,7 +141,7 @@ public sealed class SheetSettingsCommand
         if (layoutChanged || roadLayoutChanged || lsRec != GradingSettings.XsecLayout || lrRec != GradingSettings.XsecLayoutRoad)
         {
             try { RoadDrawingSettings.WriteLayouts(doc.Database, GradingSettings.XsecLayout, GradingSettings.XsecLayoutRoad); }
-            catch (System.Exception exL) { doc.Editor.WriteMessage("\n[도면 설정] 횡단도 배치 저장 실패 — " + exL.Message); }
+            catch (System.Exception exL) { doc.Editor.WriteMessage("\n[종횡단도 설정] 횡단도 배치 저장 실패 — " + exL.Message); }
         }
 
         // ★★★[검토 0908 · 심각] <b>안내문은 재생성 <u>뒤에</u> 찍는다.</b>
@@ -183,13 +184,13 @@ public sealed class SheetSettingsCommand
         //   ★[검토 낮음] 배치만 바뀐 때는 이 도면에 부지 횡단뷰가 있을 때만(LastAt은 세션 값 — 다른 도면에서 그린 자리일 수 있음)
         bool xsecTried = XsecViewCommand.KnowsSiteAt(doc.Database) && (profileTouched || (layoutChanged && HasSiteXsec(doc.Database)));
         if (xsecTried)
-            doc.Editor.WriteMessage("\n[도면 설정] 횡단도도 같은 자리에 다시 그립니다 — 장수가 많으면 시간이 걸립니다...");
+            doc.Editor.WriteMessage("\n[종횡단도 설정] 횡단도도 같은 자리에 다시 그립니다 — 장수가 많으면 시간이 걸립니다...");
         try { if (xsecTried) xsecBack = XsecViewCommand.Refresh(doc); }
-        catch (System.Exception ex) { doc.Editor.WriteMessage("\n[도면 설정] 횡단도 갱신 실패 — " + ex.Message); }
+        catch (System.Exception ex) { doc.Editor.WriteMessage("\n[종횡단도 설정] 횡단도 갱신 실패 — " + ex.Message); }
 
         // ★재생성이 폭을 고쳤을 수 있으므로 <b>지금</b> 읽어 찍는다.
         doc.Editor.WriteMessage(
-            "\n[도면 설정] 저장했습니다 — 측점 간격 " + GradingSettings.XsecInterval.ToString("0.#") + "m"
+            "\n[종횡단도 설정] 저장했습니다 — 측점 간격 " + GradingSettings.XsecInterval.ToString("0.#") + "m"
             + " · 횡단도 배치 " + GradingSettings.XsecLayoutLabels[System.Math.Clamp(GradingSettings.XsecLayout, 0, GradingSettings.XsecLayoutLabels.Length - 1)]
             + "(진입도로 " + GradingSettings.XsecLayoutLabels[System.Math.Clamp(GradingSettings.XsecLayoutRoad, 0, GradingSettings.XsecLayoutLabels.Length - 1)] + ")"
             + " · 폭 좌" + GradingSettings.XsecLeft.ToString("0.#") + "/우" + GradingSettings.XsecRight.ToString("0.#") + "m"

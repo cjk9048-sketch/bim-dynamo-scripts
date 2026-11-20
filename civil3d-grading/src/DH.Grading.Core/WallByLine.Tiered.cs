@@ -868,6 +868,7 @@ public static partial class WallByLine
             {
                 var at = big.Count > 1 ? big.OrderBy(p => p.Area).First().InteriorPoint.Coordinate : big.Count == 1 ? big[0].GetInteriorRingN(0).Centroid.Coordinate : new Coordinate(0, 0);
                 log.Append(string.Format(ci, "  [다단] 소단 자리 조각 {0} · L′로 자름 {1} · 뺌(L′ 바깥 {2} · 경계 밖 {3} · 세모 못 씀 {4})\n", pieces.Count, clipped, dropSide, dropBd, dropBad));
+                log.Append("  [다단] 소단 자리 조각 넓이 " + string.Join(" · ", big.Select(p => p.Area.ToString("E2", ci) + "(구멍 " + string.Join("/", Enumerable.Range(0, p.NumInteriorRings).Select(h => gf.CreatePolygon((LinearRing)p.GetInteriorRingN(h)).Area.ToString("E2", ci))) + ")")) + "\n");
                 return No("다단 합성", string.Format(ci, "소단 자리가 한 고리가 아닙니다(조각 {0} · 구멍 {1}) ({2:F3}, {3:F3})", big.Count, big.Count > 0 ? big[0].NumInteriorRings : 0, at.X + ox, at.Y + oy), Wd(at));
             }
             trP = big[0];

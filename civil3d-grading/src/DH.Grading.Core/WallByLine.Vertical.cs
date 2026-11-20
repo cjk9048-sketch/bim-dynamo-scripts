@@ -41,6 +41,8 @@ public static partial class WallByLine
         /// <summary>기운 가로대 방향 후보(단위 · 변 끝까지 길이 · P0 변인가) — 다 못 쓰면 수선(검토 2-ii).</summary>
         public List<(double X, double Y, double T, bool P0)> Dirs = new();
         public int Cand; public bool Gone, HasG;
+        /// <summary>★[lf3b] L′ 위 P0 변 가로대(종류 10)를 이웃 가로대의 L 발(P)로 다시 이은 것 — 한 번만.</summary>
+        public bool ReAim;
         public List<VRung>? Made;
     }
 
@@ -56,8 +58,20 @@ public static partial class WallByLine
         public bool Tail;
     }
 
-    /// <summary>★★★[v117.0] 수직 옹벽 짓기 — 못 지으면 Ok = 거짓 · 까닭(코드 · 글 · 자리). 아무것도 안 바꾼다(순수 셈).</summary>
+    /// <summary>★★★[v117.0] 수직 옹벽 짓기 — 못 지으면 Ok = 거짓 · 까닭(코드 · 글 · 자리). 아무것도 안 바꾼다(순수 셈).
+    /// ★[lf3b · JACK 1119b 진입도로 [옹벽 추가] «계산 실패»] 첫 짓기가 «턱»(L · L′ 위 꺾임을 사다리에 못 넣음)이면 엇갈린 가로대를 버리지 않고 다시 잇는 길로 한 번 더 —
+    ///   L′ 위 P0 꼭짓점은 맞은편 가로대의 L 발로 · L 위 G 꼭짓점은 맞은편 가로대의 L′ 끝으로(함께 쓰면 못 엇갈림) · L 꺾은점 발 가로대는 꺾은점 부채와 같은 기준 법선 ·
+    ///   L′ 위 P0 새 건넘 다시 넣기 12번. 첫 짓기가 되면 결과는 예전 그대로(비트 같음).</summary>
     public static Built BuildVertical(Input inp)
+    {
+        var r0 = BuildVertical(inp, false);
+        if (r0.Ok || !(r0.Code == "턱" || r0.Code == "자가검증" && r0.Why.Contains("0.1 mm 안 점 쌍"))) return r0;
+        var r1 = BuildVertical(inp, true);
+        if (r1.Ok) r1.Log = r0.Log + "  ↻ 다시 잇는 사다리로 한 번 더 — 지어짐\n" + r1.Log;
+        return r1.Ok ? r1 : r0;
+    }
+
+    static Built BuildVertical(Input inp, bool reLink)
     {
         var R = new Built { Shape = 2 };
         var log = new System.Text.StringBuilder();
@@ -334,6 +348,8 @@ public static partial class WallByLine
             if (l < 1e-15) return 0;
             return side * Math.Atan2(nref.X * dy - nref.Y * dx, nref.X * dx + nref.Y * dy);
         }
+        // ★[lf3b] L 꺾은점에 발이 놓인 가로대는 꺾은점 부채와 같은 기준 법선(이등분선)으로 Phi를 재야 같은 P 가로대끼리 차례가 맞는다(아니면 칸 세모가 뒤집혀 «띠 안 엇갈림»으로 빠짐)
+        int VtxAt(double s0) { for (int iv = 1; iv < nL - 1; iv++) if (Math.Abs(pl.Cum[iv] - s0) <= 1e-9) return iv; return -1; }
         (double X, double Y) NRef(VPt p)
         {
             if (p.Vtx > 0 && p.Vtx < nL - 1) { var a = nm[p.Vtx - 1]; var b = nm[p.Vtx]; double x = a.X + b.X, y = a.Y + b.Y, l = Math.Sqrt(x * x + y * y); return l < 1e-12 ? a : (x / l, y / l); }
@@ -553,7 +569,7 @@ public static partial class WallByLine
         {
             var poly = new List<Coordinate> { a.P };
             if (!b.P.Equals2D(a.P)) poly.Add(b.P);
-            poly.AddRange(b.Mid); poly.Add(b.Q); poly.Add(a.Q);
+            poly.AddRange(b.Mid); poly.Add(b.Q); if (!(a.Q.Equals2D(b.Q) && (a.Pt.ReAim || b.Pt.ReAim))) poly.Add(a.Q);
             for (int i = a.Mid.Count - 1; i >= 0; i--) poly.Add(a.Mid[i]);
             return poly;
         }
@@ -598,7 +614,7 @@ public static partial class WallByLine
             return o;
         }
         List<VRung> Sorted() => pts.Where(p => !p.Gone).SelectMany(p => p.Made!).OrderBy(r => r.S).ThenBy(r => r.Phi).ToList();
-        var gone = new List<VPt>();
+        var gone = new List<VPt>(); int reAimN = 0;
         string? Resolve()
         {
             for (int guard = 0; guard < 200000; guard++)
@@ -610,7 +626,7 @@ public static partial class WallByLine
                 {
                     var a = rs[i]; var b = rs[i + 1];
                     if (a.Pt != b.Pt && !a.P.Equals2D(b.P) && a.P.Distance(b.P) < MinSp) { bad = i; why = "L 위 끝 0.25 mm 안"; break; }
-                    if (a.Q.Distance(b.Q) < MinSp) { bad = i; why = "L′ 위 끝 0.25 mm 안"; break; }
+                    if (!(a.Q.Equals2D(b.Q) && (a.Pt.ReAim || b.Pt.ReAim)) && a.Q.Distance(b.Q) < MinSp) { bad = i; why = "L′ 위 끝 0.25 mm 안"; break; }   // ★[lf3b] 다시 이은 가로대가 Q를 함께 쓰면(부채) 부딪힘 아님
                     if (!a.P.Equals2D(b.P) && SegX(a.P, a.Q, b.P, b.Q)) { bad = i; why = "띠 안 엇갈림"; break; }
                     var cell = Cell(CellPoly(a, b), out double hm);
                     if (cell == null) { bad = i; why = "띠 안 엇갈림"; break; }
@@ -637,6 +653,28 @@ public static partial class WallByLine
                         corner ? "선 꺾은점 곁에서 벽 띠가 뒤집힙니다 — 선을 그 자리에서 덜 꺾거나 꺾은점 사이를 넓히세요" : "꼭 있어야 할 가로대(끝 · 가름점 · 꺾은점)끼리 부딪힙니다 — 선을 조금 옮기세요", at.Item1, at.Item2, why);
                 }
                 Drop(why);
+                // ★[lf3b · JACK 1119b 진입도로 [옹벽 추가] «계산 실패»] L′ 위 P0 변 꼭짓점(종류 10)이 엇갈림으로 지면 버리지 않고 맞은편 가로대의 L 발(P)에서 부채로 다시 잇는다 —
+                //   Q(L′ 위 P0 꺾임)는 그대로 남아 L′ 위 W = P0가 지켜진다(P를 함께 쓰면 두 가로대는 못 엇갈린다). 버리면 그 P0 꺾임이 L′에서 빠져 W − P0가 1 mm를 넘었다
+                //   (굽이 안쪽 C 곁 · 선 꺾은점 곁에서 L′ 건넘이 5 cm 간격으로 몰림 — 계측 2.6 ~ 40.9 mm «턱»).
+                if (reLink && lose.Kind == 10 && !lose.ReAim && why != "L 위 끝 0.25 mm 안" && lose.Made is { Count: 1 } lm)
+                {
+                    var keep = lose == ra.Pt ? rb : ra; var q0 = lm[0];
+                    var vp = new VPt { S = keep.S, C = keep.P, Seg = SegOf(Math.Clamp(keep.S, 0, pl.Cum[^1])), Kind = 10, Pri = 5, ReAim = true, Vtx = VtxAt(keep.S) };
+                    vp.Made = new() { Rung(vp, q0.Q, q0.H, 10, 0, q0.ZQ) };
+                    lose.Gone = true; pts.Add(vp); reAimN++;
+                    continue;
+                }
+                // ★[lf3b] L 위 원지반 꺾임(G 변 건넘 · 종류 5 · 6)이 후보를 다 쓰고 엇갈림으로 지면 버리지 않고 맞은편 가로대의 L′ 끝(Q)을 함께 쓰는 가로대로 잇는다 —
+                //   P(L 위 G 꺾임)가 남아 L 위 W = G가 지켜진다(Q를 함께 쓰면 못 엇갈림). 버리면 L 꺾은점 곁 원지반 꺾임이 빠져 L 위 W − G 3.0 mm «턱»(계측 1119b 자동 선)
+                if (reLink && (lose.Kind == 5 || lose.Kind == 6) && !lose.ReAim && why == "띠 안 엇갈림" && lose.Cand >= lose.Dirs.Count && lose.Made is { Count: 1 } gm)
+                {
+                    var keep = lose == ra.Pt ? rb : ra; var g0 = gm[0];
+                    var vp = new VPt { S = lose.S, C = lose.C, Seg = lose.Seg, Kind = lose.Kind, Pri = lose.Pri, ReAim = true, Vtx = lose.Vtx, HasG = lose.HasG, Cand = lose.Dirs.Count };
+                    var zg = GR(lose.C.X, lose.C.Y) ?? g0.ZP;
+                    vp.Made = new() { Rung(vp, keep.Q, Math.Abs(zg - keep.ZQ), lose.Kind, 0, keep.ZQ) };
+                    lose.Gone = true; pts.Add(vp); reAimN++;
+                    continue;
+                }
                 if (why.StartsWith("L 위") || lose.Kind == 7 || lose.Kind == 10 || lose.Cand >= lose.Dirs.Count) { lose.Gone = true; gone.Add(lose); continue; }
                 lose.Cand++;
                 lose.Made = Make(lose);
@@ -694,7 +732,7 @@ public static partial class WallByLine
                 var nr = pl.Near(c.X, c.Y);
                 var pz = PR(c.X, c.Y); if (pz == null) continue;
                 var foot = pl.At(nr.S);
-                var vp = new VPt { S = nr.S, C = foot, Seg = SegOf(nr.S), Kind = 10, Pri = 5 };
+                var vp = new VPt { S = nr.S, C = foot, Seg = SegOf(nr.S), Kind = 10, Pri = 5, Vtx = reLink ? VtxAt(nr.S) : -1 };
                 double h = Math.Abs((GR(foot.X, foot.Y) ?? double.NaN) - pz.Value);
                 vp.Made = new() { Rung(vp, c, h, 10, 0, pz.Value) };
                 pts.Add(vp); nAdd++;
@@ -709,7 +747,7 @@ public static partial class WallByLine
             if (rz != null) { var sp = rz.Split('|', 2); return No(sp[0], sp[1], mkAt); }
             // ★[v117.2 · 설치 전 검토 뒤처리 1 · 계획 검토 M1] 셋째 Resolve가 기운 가로대를 바꾸면(:604 lose.Made = Make) L′ 끝이 움직여 꼭짓점 없는 P0 건넘이 새로 생긴다 —
             //   마지막 사다리에서 다시 구해 잰다. 1 mm(턱 한도) 안이면 사다리 그대로(옛 결과 비트 같음 · 관문이 마지막 L′ 위에서 잰다) · 넘는 자리만 L′ 꼭짓점으로 넣고 다시 풂(3번까지)
-            for (int rep = 0; rep < 3; rep++)
+            for (int rep = 0; rep < (reLink ? 12 : 3); rep++)
             {
                 var fresh = P0Cross().Where(q => !p0Tried.Any(t => t.Distance(q.C) <= 1e-9)).ToList();
                 if (rep == 0) { freshN = fresh.Count; freshMax = fresh.Where(q => !double.IsNaN(q.Dev)).Select(q => q.Dev).DefaultIfEmpty(0).Max(); }
@@ -726,6 +764,7 @@ public static partial class WallByLine
         if (rungs.Count < 2 || rungs[0].Kind != 0 || rungs[^1].Kind != 1) return No("가로대", "사다리 첫 · 끝 가로대가 선 끝 A · B가 아닙니다");
         R.RungN = rungs.Count; R.RungG = rungs.Count(r => r.Kind == 5); R.RungP0 = rungs.Count(r => r.Kind == 4 || r.Kind == 6 || r.Kind == 10);
         R.Unsolved = unsolved; R.RungDrop = drop;
+        if (reAimN > 0) log.Append(string.Format(ci, "  ②-b L′ 위 P0 꼭짓점 맞은편 L 발로 다시 이음 {0}\n", reAimN));
         R.WMin = rungs.Min(r => r.W); R.WMax = rungs.Max(r => r.W);
         log.Append(string.Format(ci, "  ② 가로대 {0}(끝 2 · 가름점 {1} · 꺾은점 {2} · P0 변 {3}(L′ 위 {4}) · G 변 {5} · 수선(대신) {6} · 고른 {7}) · 뺌 {8}({9}) · 못 풂 {10} · 풀이 되풀이 최대 {11} · 띠 {12:F2}~{13:F2} mm · 끝 Bd 점 뺌 {14}\n",
             rungs.Count, rungs.Count(r => r.Kind == 2), rungs.Count(r => r.Kind == 3), R.RungP0, rungs.Count(r => r.Kind == 10), R.RungG, rungs.Count(r => r.Kind == 8), rungs.Count(r => r.Kind == 7),
@@ -885,6 +924,28 @@ public static partial class WallByLine
         var lines = new List<List<Point3>> { new List<Point3>(polyZ) { polyZ[0] } };
         foreach (var z in R.ZoneC.Concat(R.ZoneF)) lines.Add(new List<Point3>(z) { z[0] });
         foreach (var r in rungs) if (r.Kind != 0 && r.Kind != 1 && r.Kind != 2) lines.Add(new List<Point3> { Wz(r.P), Wz(r.Q) });
+        // ★[lf3d · 튜토리얼 [옹벽 추가] «자가검증 0.1 mm 안 점 쌍»] 부분 고리(띠) 꼭짓점이 Poly 고리 꼭짓점과 0.1 mm(Civil 합침 네모) 안이면 Poly 꼭짓점으로 옮김 —
+        //   같은 자리(선 끝 X 곁)를 두 고리가 따로 셈해 0.1 mm 차로 남은 점(Civil이 합침 · 높이는 Poly 점 값). 다시 짓는 길(reLink)에서만 · 첫 짓기 결과는 그대로
+        int snapN = 0;
+        if (reLink)
+        {
+            var p0s = lines[0];
+            for (int li = 1; li < lines.Count; li++)
+                for (int k = 0; k < lines[li].Count; k++)
+                {
+                    var q = lines[li][k];
+                    foreach (var pz in p0s)
+                        if ((pz.X != q.X || pz.Y != q.Y) && Math.Max(Math.Abs(pz.X - q.X), Math.Abs(pz.Y - q.Y)) < CivilSafeMesh.Gap) { lines[li][k] = pz; snapN++; break; }
+                }
+            if (snapN > 0)
+            {
+                log.Append(string.Format(ci, "  ②-c 띠 고리 꼭짓점을 Poly 꼭짓점으로 옮김(0.1 mm 안) {0}\n", snapN));
+                // 띠 자리(ZoneC · ZoneF)도 옮긴 선과 같게 — lines[1..] = ZoneC 다음 ZoneF 차례(닫는 점 뺌)
+                int zi = 1;
+                for (int i = 0; i < R.ZoneC.Count; i++, zi++) R.ZoneC[i] = lines[zi].Take(lines[zi].Count - 1).ToList();
+                for (int i = 0; i < R.ZoneF.Count; i++, zi++) R.ZoneF[i] = lines[zi].Take(lines[zi].Count - 1).ToList();
+            }
+        }
         R.Lines = lines;
         R.Rows.Add(qChain); R.Rows.Add(lChain); R.RawRows.AddRange(R.Rows);
         R.Foot.Add(lChain); R.FootMax = 0;
@@ -1137,7 +1198,8 @@ public static partial class WallByLine
         }
         VStage = "⑧ 쌍";
         // 쌍 · 짧은 변 · 바늘
-        var needleAt = new List<string>();
+        var needleAt = new List<string>(); string pairAtV = "";
+        string LineOfV(double x, double y) { for (int li = 0; li < R.Lines.Count; li++) if (R.Lines[li].Any(q => q.X == x && q.Y == y)) return li.ToString(); return "?"; }
         {
             var all = new HashSet<(double, double)>();
             foreach (var l in R.Lines) foreach (var q in l) all.Add((q.X, q.Y));
@@ -1152,7 +1214,7 @@ public static partial class WallByLine
                             foreach (var q in l)
                             {
                                 if (q.X == p.Item1 && q.Y == p.Item2) continue;
-                                if (Math.Max(Math.Abs(q.X - p.Item1), Math.Abs(q.Y - p.Item2)) < CivilSafeMesh.Gap && (q.X, q.Y).CompareTo(p) > 0) R.PairsUnder01++;
+                                if (Math.Max(Math.Abs(q.X - p.Item1), Math.Abs(q.Y - p.Item2)) < CivilSafeMesh.Gap && (q.X, q.Y).CompareTo(p) > 0) { R.PairsUnder01++; if (pairAtV.Length == 0) pairAtV = string.Format(ci, " @({0:F4},{1:F4})~({2:F4},{3:F4}) 줄 {4}/{5}", p.Item1, p.Item2, q.X, q.Y, LineOfV(p.Item1, p.Item2), LineOfV(q.X, q.Y)); }
                             }
             }
             var seen = new HashSet<((double, double), (double, double))>();
@@ -1189,7 +1251,7 @@ public static partial class WallByLine
         if (R.OutsideN > 0) return No("자가검증", $"벽 띠 · 세모 {R.OutsideN}개가 선 바깥(R_out)에 있습니다 — 선 바깥에는 아무것도 없어야 합니다", (R.A.X, R.A.Y));
         if (R.SignBad > 0) return No("자가검증", string.Format(ci, "띠 안 벽 면이 원지반 반대쪽 {0}점(최대 {1:F1} µm @({2:F2}, {3:F2})) — 합성이 벽 대신 원지반을 고른다", R.SignBad, R.SignMax * 1e6, signAt.X, signAt.Y), signAt);
         if (zeroMax > VEdgeMax) return No("턱", string.Format(ci, "높이 0 칸(소단이 땅 높이에서 잘린 자리) 벽 면이 원지반과 {0:F2} mm 어긋납니다 ({1:F2}, {2:F2}) — 띠 안 원지반 꺾임 · 가로대 빠진 벽", zeroMax * 1000, zeroWAt.X, zeroWAt.Y), zeroWAt);
-        if (R.PairsUnder01 + R.ShortEdges + R.Needles > 0) return No("자가검증", $"0.1 mm 안 점 쌍 {R.PairsUnder01} · 0.25 mm 미만 변 {R.ShortEdges} · 바늘 세모 {R.Needles} — Civil이 합치거나 뒤집는다", (R.A.X, R.A.Y));
+        if (R.PairsUnder01 + R.ShortEdges + R.Needles > 0) return No("자가검증", $"0.1 mm 안 점 쌍 {R.PairsUnder01}{pairAtV} · 0.25 mm 미만 변 {R.ShortEdges} · 바늘 세모 {R.Needles} — Civil이 합치거나 뒤집는다", (R.A.X, R.A.Y));
         if (R.EdgeGMax > VEdgeMax) return No("턱", string.Format(ci, "선(L) 위 벽 면이 원지반과 {0:F2} mm 어긋납니다 ({1:F2}, {2:F2}) — 사다리에 못 넣은 원지반 꺾임", R.EdgeGMax * 1000, eGAt.X, eGAt.Y), eGAt);
         if (R.EdgeP0Max > VEdgeMax) return No("턱", string.Format(ci, "벽 띠 안쪽 끝(L′) 위 벽 면이 정지면과 {0:F2} mm 어긋납니다 ({1:F2}, {2:F2}) — 사다리에 못 넣은 정지면 꺾임", R.EdgeP0Max * 1000, eP0At.X, eP0At.Y), eP0At);
         if (p0Fb > 0) R.Warn.Add($"정지면을 못 읽은 점 {p0Fb}개는 1 mm 옆(끝 · 테두리) 또는 원지반 값");

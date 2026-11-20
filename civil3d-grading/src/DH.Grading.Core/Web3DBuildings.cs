@@ -7,7 +7,7 @@ namespace DH.Grading.Core;
 /// 높이 · 바닥 높이 · 바뀌는 자리 닿음 · 장면 배열. 인터넷 · 도면은 Civil 쪽(<c>VWorldBuildings</c>) — 여기는 받은 글과 높이 함수만.
 /// <para>규칙(JACK 1102): 높이 = 지상층수 × <see cref="FloorHeight"/> m · 지상층수 0 · 빈칸 · 못 읽음 = 안 그림(셈만) ·
 /// 바닥 = 발자국 아래 원지반 <b>가장 낮은 곳</b>(꼭짓점 + 둘레 2 m마다 + 안쪽 격자 — 높이가 하나도 없으면 안 그림) ·
-/// 바뀌는 자리(계획부지 · 진입도로)에 닿으면 «닿음»(뷰어 = 빨강 반투명).</para>
+/// 바뀌는 자리(계획부지 · 진입도로 · 사면 포함)에 발자국이 닿는 건물 = <b>철거로 보고 안 그림</b>(셈만 — <see cref="Result.Demolished"/>) · 빨강 반투명은 없다(JACK 1119).</para>
 /// <para>응답 꼴(1102 실측 · 공개 장소): 피처 <c>id</c> «LT_C_BLDGINFO.n» · 도형 MultiPolygon · 속성 <c>grnd_flr</c>(글) · <c>ugrnd_flr</c> · <c>height</c> · <c>bld_nm</c> …
 /// 상자에 걸친 건물은 상자 밖까지 통째로 온다 · 지상층수 «0»이 절반 가까이.</para></summary>
 public static class Web3DBuildings
@@ -98,8 +98,6 @@ public static class Web3DBuildings
         public int Floors;
         /// <summary>바닥 높이(발자국 아래 원지반 가장 낮은 곳) · 높이(층 × 3.5 m).</summary>
         public double Base, Height;
-        /// <summary>바뀌는 자리에 닿음.</summary>
-        public bool Touch;
         /// <summary>다각형들 — 바깥 고리 반시계 · 구멍 시계(벽 법선이 바깥 · 지붕이 위) · 닫는 점 없음 · 겹친 점 없음.</summary>
         public List<VWorldParcels.Poly> Polys = new();
     }
@@ -109,10 +107,11 @@ public static class Web3DBuildings
         public List<Bldg> Items = new();
         /// <summary>받은 줄 · 같은 건물 두 번(상자 경계) · 층수 없음(0 · 빈칸 · 못 읽음) · 땅 높이 없음 · 모양 나쁨(다각형 없음) · 원지반이 없어 보이는 지형으로 바닥을 잰 것.</summary>
         public int Raws, Dup, NoFloor, NoGround, BadShape, Fallback;
-        public int Touch => Items.Count(b => b.Touch);
+        /// <summary>★[JACK 1119] 바뀌는 자리에 발자국이 닿아 철거로 보고 뺀 건물 수(그리지 않음).</summary>
+        public int Demolished;
         /// <summary>뺀 까닭 셈 — 페이지에도 나가는 짧은 글(숫자만).</summary>
         public string DropText => $"층수 없음 {NoFloor:N0} · 땅 높이 없음 {NoGround:N0} · 모양 이상 {BadShape:N0}";
-        public string Text => $"{Items.Count:N0}동(바뀌는 자리에 닿음 {Touch:N0}) · {DropText}" + (Fallback > 0 ? $" · 원지반 없어 보이는 지형으로 바닥 {Fallback:N0}" : "")
+        public string Text => $"{Items.Count:N0}동(바뀌는 자리에 닿아 뺌 {Demolished:N0}) · {DropText}" + (Fallback > 0 ? $" · 원지반 없어 보이는 지형으로 바닥 {Fallback:N0}" : "")
             + $" · 받음 {Raws:N0}" + (Dup > 0 ? $"(겹쳐 받음 {Dup:N0})" : "");
     }
 
@@ -168,8 +167,9 @@ public static class Web3DBuildings
                     if (fallback(x, y) is double z && double.IsFinite(z) && z < zMin) zMin = z;
                 if (double.IsFinite(zMin)) res.Fallback++;
             }
+            if (touch) { res.Demolished++; continue; }   // ★[JACK 1119] 바뀌는 자리에 닿음 = 철거 — 안 그림
             if (!double.IsFinite(zMin)) { res.NoGround++; continue; }
-            res.Items.Add(new Bldg { Id = r.Id, Floors = fl.Value, Base = zMin, Height = fl.Value * FloorHeight, Touch = touch, Polys = polys });
+            res.Items.Add(new Bldg { Id = r.Id, Floors = fl.Value, Base = zMin, Height = fl.Value * FloorHeight, Polys = polys });
         }
         return res;
     }
@@ -261,18 +261,17 @@ public static class Web3DBuildings
 
     /// <summary>장면 배열(뷰어 <c>web3d/src/extras.js buildBldg</c>와 짝) — 점은 원점을 뺀 float32 (x, y) 차례 ·
     /// <c>Ring[i]</c> = 고리 i의 첫 점 순번 · <c>Poly[j]</c> = 다각형 j의 첫 고리(첫 고리 = 바깥 · 나머지 = 구멍) · <c>Bldg[k]</c> = 건물 k의 첫 다각형 —
-    /// 셋 다 끝에 «다음 첫 것»(전체 수)을 하나 더 붙인다 · 건물마다 바닥 높이 · 높이 · 닿음(0/1).</summary>
+    /// 셋 다 끝에 «다음 첫 것»(전체 수)을 하나 더 붙인다 · 건물마다 바닥 높이 · 높이.</summary>
     public sealed class Arrays
     {
         public float[] Xy = Array.Empty<float>(), Z0 = Array.Empty<float>(), H = Array.Empty<float>();
         public int[] Ring = Array.Empty<int>(), Poly = Array.Empty<int>(), Bldg = Array.Empty<int>();
-        public byte[] Hit = Array.Empty<byte>();
     }
 
     public static Arrays Pack(IReadOnlyList<Bldg> items, double ox, double oy)
     {
         var xy = new List<float>(); var ring = new List<int>(); var poly = new List<int>(); var bl = new List<int>();
-        var z0 = new float[items.Count]; var h = new float[items.Count]; var hit = new byte[items.Count];
+        var z0 = new float[items.Count]; var h = new float[items.Count];
         for (int k = 0; k < items.Count; k++)
         {
             var b = items[k];
@@ -286,9 +285,9 @@ public static class Web3DBuildings
                     foreach (var (x, y) in r) { xy.Add((float)(x - ox)); xy.Add((float)(y - oy)); }
                 }
             }
-            z0[k] = (float)b.Base; h[k] = (float)b.Height; hit[k] = b.Touch ? (byte)1 : (byte)0;
+            z0[k] = (float)b.Base; h[k] = (float)b.Height;
         }
         ring.Add(xy.Count / 2); poly.Add(ring.Count - 1); bl.Add(poly.Count - 1);
-        return new Arrays { Xy = xy.ToArray(), Ring = ring.ToArray(), Poly = poly.ToArray(), Bldg = bl.ToArray(), Z0 = z0, H = h, Hit = hit };
+        return new Arrays { Xy = xy.ToArray(), Ring = ring.ToArray(), Poly = poly.ToArray(), Bldg = bl.ToArray(), Z0 = z0, H = h };
     }
 }

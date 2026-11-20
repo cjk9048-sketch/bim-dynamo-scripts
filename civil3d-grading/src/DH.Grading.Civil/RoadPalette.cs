@@ -24,7 +24,8 @@ internal static class RoadPalette
                 DockEnabled = DockSides.Left | DockSides.Right,
                 MinimumSize = new System.Drawing.Size(360, 520),
             };
-            _ps.AddVisual("진입도로", DockClose.Wrap(_panel, () => _ps));
+            // ★[JACK 1119 «진입도로 초기화는 닫기 버튼 줄 앞쪽»] 정지 창과 같이 [닫기] 줄 왼쪽 — 탭과 상관없이 보임
+            _ps.AddVisual("진입도로", DockClose.Wrap(_panel, () => _ps, _panel.ResetButton));
             RoadSession.Changed += s => { try { _panel.Dispatcher.Invoke(() => _panel.Show(s ?? RoadSession.Of(AcadApp.DocumentManager.MdiActiveDocument))); } catch { } };
             AcadApp.DocumentManager.DocumentActivated += (_, e) => { try { _panel.Show(RoadSession.Of(e.Document)); } catch { } };
         }
@@ -84,6 +85,13 @@ internal sealed class RoadPanel : UserControl
         _demo = new FixDemoView("칸 · 단추에 마우스 → 설명", "add");
         _demo.RoadSrc = RoadParams;   // ★[v117.18.2 · JACK 1116] 횡단 · 포장 · 사면 · 노선 장면은 지금 창 값으로
         top.Children.Add(DemoFrame.Wrap("Road", _demo));
+        // ★[JACK 1119 «계획부지 생성 팝업처럼 — 진입도로 생성 탭(도로 설정 · 진입도로 생성) | 진입도로 수정 탭 · 결과는 두 탭 모두»] 탭 머리 = 스크롤 밖 고정(정지 창과 같은 꼴)
+        //   몸 둘은 _root 맨 앞 · ■ 결과는 그 아래 하나(두 탭 공통 — 같은 칸이라 늘 같은 값)
+        _tabMakeBody = new StackPanel();
+        _tabEditBody = new StackPanel { Visibility = Visibility.Collapsed };
+        _root.Children.Add(_tabMakeBody);
+        _root.Children.Add(_tabEditBody);
+        top.Children.Add(BuildTabs());
         top.Children.Add(_title);
         top.Children.Add(_note);
         var deck = new DockPanel { LastChildFill = true };
@@ -136,7 +144,7 @@ internal sealed class RoadPanel : UserControl
         rbPick.MouseEnter += (_, __) => _demo.Play("roadPick"); rbPick.MouseLeave += (_, __) => _demo.Idle();
         _makeCmd = () => rbPick.IsChecked == true ? "DHROAD" : "DHROADDRAW";
         mk.Children.Add(rbDraw); mk.Children.Add(rbPick);
-        GradingDialog.ForgetOpen("도로:노선", "도로:횡단", "도로:포장", "도로:사면", "도로:설정", "도로:수정");   // ★[JACK 1116] 창을 만들 때마다 ■ 도로 설정 열림 · ■ 진입도로 수정 닫힘
+        GradingDialog.ForgetOpen("도로:노선", "도로:횡단", "도로:포장", "도로:사면");
         // ★★[v117.18 · JACK 1116 «도로 설정 아래 노선 · 횡단 · 포장 · 사면은 늘 펼침 · 항목마다 설명 애니메이션»] 접는 칸이 아니라 제목만(화살표 · 접힘 · 묶음 없음) — 제목 · 칸에 마우스 → 맨 위 설명
         StackPanel Plain(Panel parent, string title, string tip, bool sub, string? demoKey, bool first = false)
         {
@@ -154,10 +162,10 @@ internal sealed class RoadPanel : UserControl
             if (demoKey != null) { blk.MouseEnter += (_, __) => _demo.Play(demoKey); blk.MouseLeave += (_, __) => _demo.Idle(); }
             return body;
         }
-        // ★[JACK 1116 «처음엔 도로 설정 열림 · 진입도로 수정을 열면 닫힘»] 접는 칸 + 아코디언 묶음 «도로»(■ 진입도로 수정과 한 번에 하나만 열림)
-        var secSet = GradingDialog.AddCollapsible(_root, "■ 도로 설정", "노선 · 횡단 · 포장 · 사면", first: true, open: true, key: "도로:설정", group: "도로");
+        // ★[JACK 1119] 옛 접는 칸 ■ 도로 설정 → «진입도로 생성» 탭 몸(큰 칸 머리는 탭 제목이 대신 — 정지 창과 같음)
+        var secSet = _tabMakeBody;
 
-        _host = Plain(secSet, "노선", "꺾인 곳 곡선 반경 — [경로 그리기] · [폴리선 선택] 둘 다 · 바꾸면 열린 도로의 곡선도 바뀝니다", true, "roadAlign");
+        _host = Plain(secSet, "노선", "꺾인 곳 곡선 반경 — [경로 그리기] · [폴리선 선택] 둘 다 · 바꾸면 열린 도로의 곡선도 바뀝니다", true, "roadAlign", first: true);
         _curve = Row(("곡선 반경 m", d => d.CurveR, (d, v) => { d.CurveR = v; RoadDesign.LastCurveR = v; _recurve = true; }, 1, 3, 1000))[0];
 
         _host = Plain(secSet, "횡단", "차로 · 길어깨 폭과 경사", true, "roadXsec");
@@ -215,14 +223,14 @@ internal sealed class RoadPanel : UserControl
         _host.Children.Add(gRow);
 
         // ★[v117.18 · JACK 1116] [도로 경로 그리기] [폴리선 선택]은 ■ 도로 설정 바로 아래 · ■ 종단 → «종단수정»
-        _root.Children.Add(mk);
+        _tabMakeBody.Children.Add(mk);
         // ── ■ 옹벽 ──
         // ★★[v111.7 · JACK 1102] [옹벽 변환] [사면 변환](옛 ■ 진입도로 수정에서 옮김 — 전체 해제는 명령 안 C · 부지와 같음) → 옹벽 제안 한 줄(제안 높이 · [사업 경계]) · 풍선 글은 쉬운 말로
-        // ★[v117.18.4 · JACK 1116 «진입도로 수정 열림펼침 제목 안에 옹벽 · 측구»] 한 접는 칸 + 소제목 둘
-        var editBody = GradingDialog.AddCollapsible(_root, "■ 진입도로 수정", out var editBadge, "옹벽 · 측구", open: false, key: "도로:수정", group: "도로");
-        _editBadge = editBadge;
-        editBadge.Foreground = DhBrand.Warn; editBadge.FontWeight = FontWeights.Bold;
-        HookBig(editBadge, editBody, "roadWall");
+        // ★[v117.18.4 · JACK 1116 «진입도로 수정 열림펼침 제목 안에 옹벽 · 측구»] 소제목 둘
+        // ★[JACK 1119] 옛 접는 칸 ■ 진입도로 수정 → «진입도로 수정» 탭 몸 · 몸에 마우스 → 옹벽 설명(옛 칸과 같음)
+        var editBody = _tabEditBody;
+        editBody.MouseEnter += (_, __) => _demo.Play("roadWall");
+        editBody.MouseLeave += (_, __) => _demo.Idle();
         _host = Plain(editBody, "옹벽", "옹벽 변환 · 사면 변환 · 옹벽 추가 · 삭제", true, "roadWall", first: true);
         var wallBody = _host;
         // ★★[v113.0 · JACK 1104 «옹벽 변환은 소단선 변형 · 폴리선 옹벽 추가는 별도 단추»] [사면→옹벽] · [옹벽→사면] · [옹벽 추가](풍선 글 짧게)
@@ -312,7 +320,7 @@ internal sealed class RoadPanel : UserControl
         _host = updHost;
         _updateBtn = Buttons(("지표면 업데이트", "DHROADUPDATE", "지표면 · 종단도 · 횡단도를 한꺼번에 다시 만듭니다 — 고친 것이 있으면 빨갛게 깜박입니다", false))[0];
 
-        // ── ■ 결과 ──
+        // ── ■ 결과 ── ★[JACK 1119 «결과는 두 탭 모두»] 탭 몸 둘 아래(_root) — 어느 탭이든 보임
         _host = Plain(_root, "■ 결과", "토공량 · 높이 · 경사 · 옹벽", false, null);   // ★[JACK 1116 «업데이트 창 도움말은 필요 없어 — 예시 값 때문에 더 헷갈려»] 결과 칸 · 업데이트 단추 예시 장면 없앰   // ★[v117.18.4 · JACK 1116 «결과쪽은 항상 열려 있어야 해»] 접는 칸 아님
         var resCard = Card(_result);
         resCard.ToolTip = "최대 종단경사가 종횡단도 창 «최대 경사 %»를 넘으면 빨간 글로 알립니다";
@@ -326,9 +334,9 @@ internal sealed class RoadPanel : UserControl
         _host.Children.Add(_endsLine);
         _endsBtn = Buttons(("끝 맞추기", "DHROADENDS", "노선 끝을 부지 바닥 끝 · 본 도로 포장 끝에 맞춥니다(넘치면 자르고 · 20 m 안 못 미치면 늘림 · 끝 높이 = 바닥 높이) — 그 뒤 [지표면 업데이트]가 늘 맞춥니다", false))[0];
         _endsBtn.Visibility = Visibility.Collapsed;
-        // ★[v111.10 · 계획_초기화.md 3.5 · JACK 1103 «창마다 초기화 단추 = 주황»] [진입도로 초기화] — 창 맨 끝 얇은 줄 아래 · 도면의 모든 진입도로.
+        // ★[v111.10 · 계획_초기화.md 3.5 · JACK 1103 «창마다 초기화 단추 = 주황»] [진입도로 초기화] — 도면의 모든 진입도로.
         //   열린 도로가 없어도(도면에 도로가 있으면) 켜져야 한다 → Buttons · Act · _needRoad를 안 쓰고 바로 보냄(Act는 세션이 없으면 아무것도 안 보냄)
-        _root.Children.Add(new Border { Height = 1, Background = DhBrand.Line, Margin = new Thickness(0, 10, 0, 6) });
+        //   ★[JACK 1119] 스크롤 칸이 아니라 맨 아래 줄 [닫기] 앞(왼쪽) — <see cref="ResetButton"/> → <see cref="DockClose.Wrap"/>(정지 창과 같음)
         _resetBtn = DhBrand.CautionButton("진입도로 초기화", "이 도면의 진입도로를 모두 지웁니다(노선 · 종단도 · 횡단도 · 도로 면 · 최종지표면). 계획지표면은 그대로입니다.");
         _resetBtn.Click += (_, __) =>
         {
@@ -338,21 +346,49 @@ internal sealed class RoadPanel : UserControl
             try { doc.SendStringToExecute("\x03\x03" + "DHROADRESET ", true, false, false); }
             catch (System.Exception ex) { _note.Text = "진입도로 초기화 실패 — " + ex.Message; }
         };
-        _root.Children.Add(_resetBtn);
         Show(null);
     }
 
-    /// <summary>★[v117.18] 접는 큰 칸 — 제목 줄 · 펼친 칸에 마우스 → 그 칸 설명(맨 위) · 나가면 멈춤.</summary>
-    void HookBig(TextBlock badge, FrameworkElement body, string key)
+    /// <summary>★[JACK 1119] 탭 머리 — 정지 창(<see cref="GradingPanel"/>)과 같은 도화 청록 분절 단추(고른 쪽 청록 바탕 · 흰 글 / 아닌 쪽 옅은 바탕).
+    /// 도킹창이 살아 있는 동안 고른 탭을 기억(<see cref="_tabFix"/>) · 저절로 넘기지 않음(정지 창과 같음). «진입도로 수정» 뒤 빨간 점 = 지표면 업데이트 필요(옛 접힌 칸 제목 글 대신).</summary>
+    FrameworkElement BuildTabs()
     {
-        var head = (badge.Parent as FrameworkElement)?.Parent as FrameworkElement;   // 요약칸 → 머리 줄 → 머리(누르는 자리)
-        foreach (var fe in new[] { head, body })
+        var grid = new Grid { Margin = new Thickness(0, 8, 0, 6) };
+        grid.ColumnDefinitions.Add(new ColumnDefinition()); grid.ColumnDefinitions.Add(new ColumnDefinition());
+        var tabs = new Border[2];
+        string[] names = { "진입도로 생성", "진입도로 수정" };
+        void Paint()
         {
-            if (fe == null) continue;
-            fe.MouseEnter += (_, __) => _demo.Play(key);
-            fe.MouseLeave += (_, __) => _demo.Idle();
+            for (int i = 0; i < 2; i++)
+            {
+                bool on = (i == 1) == _tabFix;
+                tabs[i].Background = on ? DhBrand.Brand : DhBrand.BrandDim;
+                ((TextBlock)tabs[i].Child).Foreground = on ? System.Windows.Media.Brushes.White : DhBrand.Brand;
+            }
+            _tabMakeBody.Visibility = _tabFix ? Visibility.Collapsed : Visibility.Visible;
+            _tabEditBody.Visibility = _tabFix ? Visibility.Visible : Visibility.Collapsed;
         }
+        for (int i = 0; i < 2; i++)
+        {
+            int idx = i;
+            var tb = new TextBlock { FontSize = 13, FontWeight = FontWeights.SemiBold, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
+            tb.Inlines.Add(new System.Windows.Documents.Run(names[i]));
+            if (i == 1) { _editDot = new System.Windows.Documents.Run("") { Foreground = DhBrand.Warn }; tb.Inlines.Add(_editDot); }
+            tabs[i] = new Border { Child = tb, Height = 30, Cursor = System.Windows.Input.Cursors.Hand, Focusable = true, CornerRadius = i == 0 ? new CornerRadius(6, 0, 0, 6) : new CornerRadius(0, 6, 6, 0), BorderBrush = DhBrand.Brand, BorderThickness = new Thickness(1) };
+            tabs[i].MouseLeftButtonUp += (_, __) => { _tabFix = idx == 1; Paint(); };
+            Grid.SetColumn(tabs[i], i); grid.Children.Add(tabs[i]);
+        }
+        Paint();
+        _paintTabs = Paint;
+        return grid;
     }
+    bool _tabFix;
+    Action? _paintTabs;
+    StackPanel _tabMakeBody = null!, _tabEditBody = null!;
+    System.Windows.Documents.Run _editDot = null!;
+    /// <summary>★[튜토리얼] 누를 단추가 든 탭으로 돌리기.</summary>
+    internal void ShowMakeTab() { if (!_tabFix) return; _tabFix = false; _paintTabs?.Invoke(); }
+    internal void ShowFixTab() { if (_tabFix) return; _tabFix = true; _paintTabs?.Invoke(); }
 
     // ★[튜토리얼 · JACK 1117] 튜토리얼이 비추는 단추 · 덮개 자리(5단원 진입도로)
     FrameworkElement? _spotRoot;
@@ -394,7 +430,6 @@ internal sealed class RoadPanel : UserControl
     }
 
     Button _updateBtn = null!;
-    TextBlock _editBadge = null!;
     Button _groundBtn = null!;
     TextBlock _groundTxt = null!;
     Button _resetBtn = null!;
@@ -880,8 +915,8 @@ internal sealed class RoadPanel : UserControl
             bool need = NeedUpdate(s);
             _updateBtn.IsEnabled = need;
             UpdateLook(_updateBtn, need);
-            // ★[JACK 1116] 접힌 ■ 진입도로 수정 제목에 «지표면 업데이트 필요»
-            _editBadge.Text = stBlink ? "지표면 업데이트 필요" : "";
+            // ★[JACK 1116] 접힌 ■ 진입도로 수정 제목에 «지표면 업데이트 필요» → ★[JACK 1119] 탭이 되어 «진입도로 수정» 탭 머리 빨간 점(글은 ■ 결과 상태 줄이 두 탭 모두에 보임)
+            _editDot.Text = stBlink ? " ●" : "";
             _result.Inlines.Clear();
             if (r == null) return;
             if (r.Error.Length > 0) { _result.Text = r.Error; return; }

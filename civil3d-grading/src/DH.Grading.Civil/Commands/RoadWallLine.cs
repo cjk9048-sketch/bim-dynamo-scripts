@@ -183,6 +183,22 @@ internal static class RoadWallLine
         return (0, why);
     }
 
+    /// <summary>★[JACK 1119 «도로선평행(P)»] 도로 지표면을 눌렀을 때 — 누른 자리에 가장 가까운 설계 도로 끝(토막마다 좌 · 우 · 평면 점열) · 없으면 null.</summary>
+    internal static List<Point3>? EdgeNear(RoadSession s, double x, double y)
+    {
+        var rs = s.Pieces.Select(p => p.R).Append(s.Last).Where(r => r != null && r.Error.Length == 0).Distinct().ToList();
+        List<Point3>? best = null; double bd = double.MaxValue;
+        foreach (var r in rs)
+            foreach (var e in new[] { r!.EdgeL, r.EdgeR })
+            {
+                var pl = e.Where(q => double.IsFinite(q.X) && double.IsFinite(q.Y)).Select(q => new Point3(q.X, q.Y, 0)).ToList();
+                if (pl.Count < 2) continue;
+                double d = RoadEdgeOffset.Project(pl, x, y).D;
+                if (d < bd) { bd = d; best = pl; }
+            }
+        return best;
+    }
+
     /// <summary>★[v114.3] 대화 — [옹벽 추가](DHROADWALLADD). 바꿨으면 참(부르는 쪽이 도로 면 · 종단 · 횡단을 다시).</summary>
     internal static bool Run(Document doc, RoadSession s)
     {
@@ -193,7 +209,7 @@ internal static class RoadWallLine
         try { DiagLog.Append($"\n[{Tag}] 준비 {swRun.ElapsedMilliseconds} ms — {s.P0Note} · 앞 옹벽 {s.Design.BoundWalls?.Count ?? 0}개 얹기 {ol.MsPrev} ms · 바깥 고리 {ol.MsRing} ms"); } catch { }
         if (ol.Bd == null || ol.Band == null) { ed.WriteMessage($"\n[{Tag}] {ol.Why} — 안 바뀜"); return false; }
         var bd = ol.Bd; var band = ol.Band; var bl = ol.Bl;
-        var got = WallLineDraw.Run(doc, Tag, bd, band, pts => BoundaryCut.Classify(pts, bd, band, bl));
+        var got = WallLineDraw.Run(doc, Tag, bd, band, pts => BoundaryCut.Classify(pts, bd, band, bl), roadEdge: (x, y) => EdgeNear(s, x, y));
         if (got == null) return false;
         var d = s.Fresh();
         int no = NextNo(d);
@@ -258,7 +274,7 @@ internal static class RoadWallLine
             string kw = r.Status == PromptStatus.None ? "" : (r.StringResult ?? "").Trim().ToUpperInvariant();
             if (kw == "S")
             {
-                var g2 = WallLineDraw.Run(doc, Tag, bd, band, pts => BoundaryCut.Classify(pts, bd, band, bl));
+                var g2 = WallLineDraw.Run(doc, Tag, bd, band, pts => BoundaryCut.Classify(pts, bd, band, bl), roadEdge: (x, y) => EdgeNear(s, x, y));
                 if (g2 == null) return false;
                 got = g2; t = Geo();
                 continue;

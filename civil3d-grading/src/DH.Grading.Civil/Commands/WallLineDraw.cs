@@ -65,14 +65,15 @@ internal static class WallLineDraw
     /// <param name="tag">명령 이름(«옹벽 변환» · «진입도로 옹벽 변환»).</param>
     /// <param name="bd">생성된 지표면 경계(시안으로 보인다).</param>
     /// <param name="floor">바닥(계획선 · 도로 띠) — 회색으로.</param>
+    /// <param name="roadEdge">★[JACK 1119 «도로선평행(P)»] 진입도로만 — 있으면 시작 질문에 [도로선평행(P)](<see cref="WallLineParallel"/>) · 도로 지표면을 눌렀을 때 누른 자리에 가까운 설계 도로 끝.</param>
     internal static Got? Run(Document doc, string tag, IReadOnlyList<Point3> bd, IReadOnlyList<Point3>? floor, System.Func<List<Point3>, BoundaryCut.Result> classify,
-        System.Func<WallBenchPreview.Input, WallBenchPreview.Result?>? benchPreview = null)
+        System.Func<WallBenchPreview.Input, WallBenchPreview.Result?>? benchPreview = null, System.Func<double, double, List<Point3>?>? roadEdge = null)
     {
         // ★★[v116.11 · JACK 1110 «옹벽 추가할 때 스냅 좀 잡혔으면 — 스냅이 안 잡혀»] 객체 스냅(OSMODE)을 끄지 않는다.
         //   v113.0은 찍는 동안 OSMODE를 0으로 껐다 — 기운 3D 화면에서 높이 있는 객체(지표면 등)에 붙은 점을 «시선 따라 Z = 0 평면으로 내림»(Flat)이
         //   높이 × 기울기만큼 옮겨 평면 자리가 수백 m 어긋났기 때문(1104 화면 없는 시험 338~346 m). 원인은 스냅이 아니라 내림이었다 —
         //   객체에 붙은 점은 그 X · Y가 곧 평면 자리이므로 내리지 않는다(<see cref="RunCore"/>의 Plan). 스냅 안 된 커서 점만 지금처럼 내린다.
-        return RunCore(doc, tag, bd, floor, classify, benchPreview);
+        return RunCore(doc, tag, bd, floor, classify, benchPreview, roadEdge);
     }
 
     /// <summary>화면 시선 방향으로 경계 평면(Z = 0)에 내린 점 — 기운 3D 화면에서 커서가 가리키는 평면 자리(위에서 본 화면이면 X · Y 그대로).</summary>
@@ -83,7 +84,7 @@ internal static class WallLineDraw
     }
 
     static Got? RunCore(Document doc, string tag, IReadOnlyList<Point3> bd, IReadOnlyList<Point3>? floor, System.Func<List<Point3>, BoundaryCut.Result> classify,
-        System.Func<WallBenchPreview.Input, WallBenchPreview.Result?>? benchPreview)
+        System.Func<WallBenchPreview.Input, WallBenchPreview.Result?>? benchPreview, System.Func<double, double, List<Point3>?>? roadEdge)
     {
         // ★[v116.11] 객체 스냅이 잡힌 점인가 — AutoCAD가 알려 주는 «객체 스냅됨»(PointMonitor) · 지그는 지금 커서 점마다 이 값을 새로 받는다
         var edS = doc.Editor;
@@ -94,12 +95,12 @@ internal static class WallLineDraw
             catch { snapNow = false; }
         };
         edS.PointMonitor += onPm;
-        try { return RunCore2(doc, tag, bd, floor, classify, () => (snapNow, snapAt), benchPreview); }
+        try { return RunCore2(doc, tag, bd, floor, classify, () => (snapNow, snapAt), benchPreview, roadEdge); }
         finally { try { edS.PointMonitor -= onPm; } catch { } }
     }
 
     static Got? RunCore2(Document doc, string tag, IReadOnlyList<Point3> bd, IReadOnlyList<Point3>? floor, System.Func<List<Point3>, BoundaryCut.Result> classify,
-        System.Func<(bool On, Point3d At)> snapState, System.Func<WallBenchPreview.Input, WallBenchPreview.Result?>? benchPreview)
+        System.Func<(bool On, Point3d At)> snapState, System.Func<WallBenchPreview.Input, WallBenchPreview.Result?>? benchPreview, System.Func<double, double, List<Point3>?>? roadEdge)
     {
         var ed = doc.Editor; var db = doc.Database;
         var ucs = ed.CurrentUserCoordinateSystem;
@@ -237,8 +238,9 @@ internal static class WallLineDraw
             {
                 double snap = SnapTol();
                 bool first = pts.Count == 0;
-                var ppo = new PromptPointOptions(first ? $"\n[{tag}] 시작점 — 가장 가까운 경계 점에 붙음 [고르기(S)]: " : $"\n[{tag}] 다음 점 — 사면 띠 안(계획선 밖) · 경계 위나 밖을 누르면 끝 [되돌리기(U)]: ");
-                if (first) ppo.Keywords.Add("S", "S", "고르기(S)");
+                bool par = roadEdge != null && floor != null;   // ★[JACK 1119] 도로선평행(P) — 진입도로만
+                var ppo = new PromptPointOptions(first ? $"\n[{tag}] 시작점 — 가장 가까운 경계 점에 붙음 [고르기(S){(par ? "/도로선평행(P)" : "")}]: " : $"\n[{tag}] 다음 점 — 사면 띠 안(계획선 밖) · 경계 위나 밖을 누르면 끝 [되돌리기(U)]: ");
+                if (first) { ppo.Keywords.Add("S", "S", "고르기(S)"); if (par) ppo.Keywords.Add("P", "P", "도로선평행(P)"); }
                 else
                 {
                     if (SelfCheckLog.Headless) { ppo.UseBasePoint = true; ppo.BasePoint = pts[^1].TransformBy(ucs.Inverse()); ppo.UseDashedLine = false; }
@@ -316,6 +318,15 @@ internal static class WallLineDraw
                         ed.WriteMessage("\n  폴리선 점 읽기 실패");
                         pts.Clear();
                         continue;
+                    }
+                    if (kw == "P" && pts.Count == 0 && par)
+                    {
+                        // ★[JACK 1119] 도로 끝선 → 사면 쪽 평행선 → 경계를 두 번 지나는 선 — 아래는 고르기(S)와 같은 길(늘이지 않고 판정)
+                        var pl = WallLineParallel.Pick(doc, tag, bd, floor!, q => Plan(q, out _), roadEdge, out string psrc);
+                        if (pl == null || pl.Count < 2) continue;
+                        pts = pl.Select(q => new Point3d(q.X, q.Y, 0)).ToList();
+                        src = psrc;
+                        drawnMode = false; break;
                     }
                     continue;
                 }

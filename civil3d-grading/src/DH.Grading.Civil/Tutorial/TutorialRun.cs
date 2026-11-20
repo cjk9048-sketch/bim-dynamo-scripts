@@ -1007,8 +1007,11 @@ internal sealed class Tut
         }
         else if (TutorialFlow.IsRdPanel(s) && RoadPalette.OpenPanel is RoadPanel rp)
         {
-            // ★[5단원] 진입도로 창 — 누를 단추(접힌 ■ 진입도로 수정 안이면 안 덮고 «펼치기» 알림)
+            // ★[5단원] 진입도로 창 — 누를 단추(안 보이면 안 덮고 알림)
+            // ★[JACK 1119] 탭 둘 — 단추가 든 탭으로 돌림(옹벽 넷 = 진입도로 수정 · 그리기 · 포장 = 진입도로 생성 · 초기화 = 아래 줄이라 그대로)
             root = rp.SpotRoot;
+            if (s is Step.RdWall or Step.RdSlope or Step.RdWallAdd or Step.RdWallDel) rp.ShowFixTab();
+            else if (s is Step.RdDraw or Step.RdPave) rp.ShowMakeTab();
             FrameworkElement? t = s switch
             {
                 Step.RdDraw => rp.MakeButton,
@@ -1020,12 +1023,17 @@ internal sealed class Tut
                 Step.RdReset => rp.ResetButton,
                 _ => null,
             };
+            // [진입도로 초기화]는 아래 줄(DockClose.Wrap) — 창 몸(SpotRoot) 밖이라 바깥 판(덮개 자리 바로 아래)을 덮는다
+            if (s == Step.RdReset && t != null)
+                for (DependencyObject? q = t; q != null; q = System.Windows.Media.VisualTreeHelper.GetParent(q))
+                    if (System.Windows.Media.VisualTreeHelper.GetParent(q) is AdornerDecorator && q is FrameworkElement qf) { root = qf; break; }
             targets = t != null && t.IsVisible ? new() { t } : null;
             if (targets == null && s is Step.RdWall or Step.RdSlope or Step.RdWallAdd or Step.RdWallDel) note ??= TutorialFlow.NoteRdOpenEdit;
         }
         else if (TutorialFlow.IsRdSec(s) && SectionPalette.RoadOpenPanel is SectionPanel sp)
         {
             root = sp.SpotRoot;
+            sp.ShowTab(s == Step.RdXsec);   // ★[JACK 1119] 횡단도 생성만 «횡단도 생성» 탭 · 나머지(종단 · 측점 · 지표면 업데이트)는 «종단도 생성» 탭
             string cmd = s switch
             {
                 Step.RdProf => "DHROADSHEET", Step.RdPviAdd => "DHROADPVIADD", Step.RdPviDel => "DHROADPVIDEL", Step.RdPviDraw => "DHROADPVIDRAW",
@@ -1034,6 +1042,8 @@ internal sealed class Tut
             var b = sp.RoadButton(cmd);
             targets = b != null && b.IsVisible ? new() { b } : null;
         }
+        // ★[JACK 1119] 4단원 종단도 · 횡단도 — 계획지표면 종횡단도 창이 떠 있으면 누를 단추가 든 탭으로(덮개 없음 · 글만인 것은 그대로)
+        if ((s is Step.Prof or Step.Xsec) && SectionPalette.SiteOpenPanel is SectionPanel ssp) ssp.ShowTab(s == Step.Xsec);
         Spot(root, targets, n);
 
         // 리본 빛 테

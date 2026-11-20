@@ -56,6 +56,8 @@ public static class SectionPalette
 
     /// <summary>★[튜토리얼 · JACK 1117] 진입도로 종횡단도 창 — 떠 있으면 창 안(튜토리얼이 단추를 비춤) · 아니면 null.</summary>
     internal static SectionPanel? RoadOpenPanel { get { try { return RoadH.Ps != null && RoadH.Ps.Visible ? RoadH.Panel : null; } catch { return null; } } }
+    /// <summary>★[튜토리얼 · JACK 1119] 계획지표면 종횡단도 창 — 떠 있으면 창 안(4단원 종단도 · 횡단도 단계가 탭을 돌림) · 아니면 null.</summary>
+    internal static SectionPanel? SiteOpenPanel { get { try { return Site.Ps != null && Site.Ps.Visible ? Site.Panel : null; } catch { return null; } } }
 
     /// <summary>리본이 계획면 · 찍기 상태를 다시 칠할 때 같이 부른다(떠 있는 창만).</summary>
     internal static void RefreshAll(bool hasPlan)
@@ -110,8 +112,6 @@ internal sealed class SectionPanel : UserControl
     public SectionPanel(bool road)
     {
         _road = road;
-        string g = road ? "도로종횡단창" : "종횡단창";   // 아코디언 묶음 — 정지 · 터파기 창과 다른 이름이어야 서로 안 닫는다
-        string k = road ? "도로종횡단:" : "종횡단:";
         var root = new StackPanel { Margin = new Thickness(10, 4, 10, 10) };
         DhBrand.Apply(this);
         Background = DhBrand.Wall;
@@ -122,12 +122,11 @@ internal sealed class SectionPanel : UserControl
         head.Background = Brushes.Transparent;
 
         var demo = new FixDemoView("단추에 마우스 → 예시", "pfProfile") { Margin = new Thickness(0, 0, 0, 8), HorizontalAlignment = HorizontalAlignment.Left, BenchRoad = road };
-        static FrameworkElement? HeadOf(TextBlock badge) => (badge.Parent as FrameworkElement)?.Parent as FrameworkElement;   // 요약칸 → 머리 줄 → 머리
-        void Hook(FrameworkElement? fe, string key) { if (fe == null) return; fe.MouseEnter += (_, __) => demo.Play(key); fe.MouseLeave += (_, __) => demo.Idle(); }
 
         // ── 1. 종단도 ──
-        var sec1 = GradingDialog.AddCollapsible(root, "1. 종단도", out var badge1, null, first: true, open: true, key: k + "1.종단도:열림", group: null);   // ★[v117.14.1 · JACK 1112 «종횡단도 팝업은 내용이 별로 없어서 모든 내용이 열림 상태면 좋겠어»] 늘 펼침 · 서로 안 닫음
-        Hook(HeadOf(badge1), "pfProfile");
+        // ★[JACK 1119 «종횡단도도 계획부지 생성 팝업처럼 — 종단도 생성 · 횡단도 생성 탭 · 해당 탭에 해당 기능»] 옛 늘 펼친 칸 «1. 종단도» → «종단도 생성» 탭 몸
+        var sec1 = new StackPanel();
+        root.Children.Add(sec1);
         var row1 = new WrapPanel { Margin = new Thickness(0, 0, 0, 6) };
         sec1.Children.Add(row1);
         if (road)
@@ -184,8 +183,9 @@ internal sealed class SectionPanel : UserControl
         }
 
         // ── 2. 횡단도 ──
-        var sec2 = GradingDialog.AddCollapsible(root, "2. 횡단도", out var badge2, null, open: true, key: k + "2.횡단도:열림", group: null);
-        Hook(HeadOf(badge2), "xsView");
+        // ★[JACK 1119] 옛 «2. 횡단도» 칸 → «횡단도 생성» 탭 몸(층따기 · 수량표 항목 · 검토선 포함)
+        var sec2 = new StackPanel { Visibility = Visibility.Collapsed };
+        root.Children.Add(sec2);
         var row2 = new WrapPanel { Margin = new Thickness(0, 0, 0, 6) };
         sec2.Children.Add(row2);
         if (road)
@@ -234,6 +234,7 @@ internal sealed class SectionPanel : UserControl
         var top = new StackPanel { Margin = new Thickness(10, 10, 10, 0) };
         top.Children.Add(head);
         top.Children.Add(DemoFrame.Wrap("Section", demo));   // ★[v117.14.1 · JACK 1112 «종횡단도 애니메이션 창 제각각 → 계획부지 생성처럼 고정 · 같은 크기»]
+        top.Children.Add(BuildTabs(sec1, sec2, demo));         // ★[JACK 1119] 종단도 생성 | 횡단도 생성 — 스크롤 밖 고정(정지 창과 같은 꼴)
         DockPanel.SetDock(top, Dock.Top);
         deck.Children.Add(top);
         deck.Children.Add(DhBrand.Watermark(new ScrollViewer
@@ -264,6 +265,44 @@ internal sealed class SectionPanel : UserControl
     internal FrameworkElement? SpotRoot { get; private set; }
     private readonly Dictionary<string, Button> _roadBtns = new();
     internal Button? RoadButton(string cmd) => _roadBtns.TryGetValue(cmd, out var b) ? b : null;
+
+    /// <summary>★[JACK 1119] 탭 머리 «종단도 생성 | 횡단도 생성» — 정지 창(<see cref="GradingPanel"/>) · 진입도로 창과 같은 도화 청록 분절 단추.
+    /// 도킹창이 살아 있는 동안 고른 탭을 기억 · 저절로 안 넘김. 탭 머리에 마우스 → 그 탭 설명(옛 칸 머리와 같음).</summary>
+    private FrameworkElement BuildTabs(Panel prof, Panel xsec, FixDemoView demo)
+    {
+        var grid = new Grid { Margin = new Thickness(0, 8, 0, 2) };
+        grid.ColumnDefinitions.Add(new ColumnDefinition()); grid.ColumnDefinitions.Add(new ColumnDefinition());
+        var tabs = new Border[2];
+        string[] names = { "종단도 생성", "횡단도 생성" }, keys = { "pfProfile", "xsView" };
+        void Paint()
+        {
+            for (int i = 0; i < 2; i++)
+            {
+                bool on = (i == 1) == _tabXsec;
+                tabs[i].Background = on ? DhBrand.Brand : DhBrand.BrandDim;
+                ((TextBlock)tabs[i].Child).Foreground = on ? Brushes.White : DhBrand.Brand;
+            }
+            prof.Visibility = _tabXsec ? Visibility.Collapsed : Visibility.Visible;
+            xsec.Visibility = _tabXsec ? Visibility.Visible : Visibility.Collapsed;
+        }
+        for (int i = 0; i < 2; i++)
+        {
+            int idx = i;
+            var tb = new TextBlock { Text = names[i], FontSize = 13, FontWeight = FontWeights.SemiBold, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
+            tabs[i] = new Border { Child = tb, Height = 30, Cursor = System.Windows.Input.Cursors.Hand, Focusable = true, CornerRadius = i == 0 ? new CornerRadius(6, 0, 0, 6) : new CornerRadius(0, 6, 6, 0), BorderBrush = DhBrand.Brand, BorderThickness = new Thickness(1) };
+            tabs[i].MouseLeftButtonUp += (_, __) => { _tabXsec = idx == 1; Paint(); };
+            tabs[i].MouseEnter += (_, __) => demo.Play(keys[idx]);
+            tabs[i].MouseLeave += (_, __) => demo.Idle();
+            Grid.SetColumn(tabs[i], i); grid.Children.Add(tabs[i]);
+        }
+        Paint();
+        _paintTabs = Paint;
+        return grid;
+    }
+    private bool _tabXsec;
+    private System.Action? _paintTabs;
+    /// <summary>★[튜토리얼] 누를 단추가 든 탭으로 돌리기(false = 종단도 생성 · true = 횡단도 생성).</summary>
+    internal void ShowTab(bool xsec) { if (_tabXsec == xsec) return; _tabXsec = xsec; _paintTabs?.Invoke(); }
 
     private void WireRoad()
     {
@@ -693,6 +732,7 @@ internal sealed class SectionPanel : UserControl
             tb.GotKeyboardFocus += (_, __) => { BenchToDemo(demo); demo.Play("benchVal"); };
             cell.MouseEnter += (_, __) => { BenchToDemo(demo); demo.Play("benchVal"); };
             cell.MouseLeave += (_, __) => demo.Idle();
+            cell.Children.Add(tb);   // ★[1119] 칸이 줄에 안 붙어 이름만 보이고 값 칸이 없었다(화면 그림으로 확인)
             wp.Children.Add(cell);
             _benchBoxes.Add(tb);
         }

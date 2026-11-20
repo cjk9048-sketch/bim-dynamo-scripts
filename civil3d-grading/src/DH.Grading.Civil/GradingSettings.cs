@@ -25,7 +25,7 @@ public static class GradingSettings
     /// <b>같은 번호를 단 빌드가 여러 개</b>가 되어, 어느 것이 깔렸는지 물으면 답할 수가 없었다.</para>
     /// <para><c>x.0</c> = 화면·명령이 바뀌어 <b>사용자가 다르게 일하게</b> 되는 판 ·
     /// <c>x.y</c> = 같은 화면에서 결함을 고친 판.</para></summary>
-    public const string Version = "v117.18.22 (2026-11-19)";
+    public const string Version = "v117.18.23 (2026-11-19)";
 
     /// <summary>★★[v32.20 · JACK 0812 판단] <b>이력 본문을 비웠다 — 이제 여기는 정본을 가리키는 이정표다.</b>
     /// <para>78,748자 한 줄이 이 파일에 얹혀 있었는데, <b>출력도 참조도 없었다</b>(코드 어디서도 안 읽는다).
@@ -827,7 +827,7 @@ public static class GradingSettings
         // ★★[v112.1 · JACK 1102 «도면설정 도면마다 저장»] 측점 간격 · 폭 · 축척 · 굴곡 · 화질 — 도면 기록이 있으면 그 값(없으면 지금 값 그대로 — 새 도면은 직전 값으로 시작)
         string prefNote = "";
         try { prefNote = SheetPrefs.Apply(db); }
-        catch (System.Exception exP) { prefNote = "⚠도면설정 기록을 못 읽음 — " + exP.Message; }
+        catch (System.Exception exP) { prefNote = "⚠종횡단도 설정 기록을 못 읽음 — " + exP.Message; }
 
         try { DiagLog.Append($"\n[도면 전환] 세션 설정을 '{System.IO.Path.GetFileName(key)}' 기준으로 맞춤(마지막 작업 기억 초기화)" + (prefNote.Length > 0 ? " · " + prefNote : "")); }
         catch { }

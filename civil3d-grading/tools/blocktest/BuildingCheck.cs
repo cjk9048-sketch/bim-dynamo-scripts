@@ -84,21 +84,21 @@ static class BuildingCheck
             var b1 = r.Items.FirstOrDefault(b => b.Id == "LT_C_BLDGINFO.1");
             var b4 = r.Items.FirstOrDefault(b => b.Id == "LT_C_BLDGINFO.4");
             var b5 = r.Items.FirstOrDefault(b => b.Id == "LT_C_BLDGINFO.5");
-            check("S184 ③ 그릴 것 3동 · 층수 없음 2 · 같은 id 1 · 받음 6", r.Items.Count == 3 && r.NoFloor == 2 && r.Dup == 1 && r.Raws == 6 && r.NoGround == 0, r.Text);
+            check("S184 ③ 그릴 것 2동(닿은 1동 철거로 뺌) · 층수 없음 2 · 같은 id 1 · 받음 6", r.Items.Count == 2 && r.Demolished == 1 && r.NoFloor == 2 && r.Dup == 1 && r.Raws == 6 && r.NoGround == 0, r.Text);
             check("S184 ③ 높이 = 층 × 3.5 m(3층 10.5 · 5층 17.5 · 2층 7.0)",
-                b1 != null && b4 != null && b5 != null && Math.Abs(b1.Height - 10.5) < 1e-9 && Math.Abs(b4.Height - 17.5) < 1e-9 && Math.Abs(b5.Height - 7.0) < 1e-9 && b1.Floors == 3,
+                b1 != null && b4 == null && b5 != null && Math.Abs(b1.Height - 10.5) < 1e-9 && Math.Abs(b5.Height - 7.0) < 1e-9 && b1.Floors == 3,
                 $"{b1?.Height} · {b4?.Height} · {b5?.Height}");
             check("S184 ③ 바닥 = 발자국 아래 가장 낮은 땅(서쪽 끝 · 두 조각이면 둘 중 낮은 것 · 뜰 안 깊은 땅은 안 셈)",
-                b1 != null && b4 != null && b5 != null && Math.Abs(b1.Base - 100.0) < 1e-9 && Math.Abs(b4.Base - 106.0) < 1e-9 && Math.Abs(b5.Base - 110.0) < 1e-9,
+                b1 != null && b5 != null && Math.Abs(b1.Base - 100.0) < 1e-9 && Math.Abs(b5.Base - 110.0) < 1e-9,
                 $"{b1?.Base} · {b4?.Base} · {b5?.Base}");
-            check("S184 ③ 닿음 — 안쪽 격자로 잡음(두 조각 건물) · 뜰 안 바뀜은 안 닿음 · 먼 건물 안 닿음",
-                b4 != null && b4.Touch && b5 != null && !b5.Touch && b1 != null && !b1.Touch && r.Touch == 1, $"{b1?.Touch} · {b4?.Touch} · {b5?.Touch}");
+            check("S184 ③ 닿은 건물은 철거로 빠짐 — 안쪽 격자로 잡음(두 조각 건물 4번 = 없음) · 뜰 안 바뀜은 안 닿음(5번 남음) · 먼 건물 남음(1번)",
+                b4 == null && b5 != null && b1 != null && r.Demolished == 1, $"{b1 != null} · {b4 != null} · {b5 != null}");
             bool orient = r.Items.All(b => b.Polys.All(p => Area2(p.Shell) > 0 && p.Holes.All(h => Area2(h) < 0)
                 && p.Holes.Prepend(p.Shell).All(q => q.Count >= 3 && (q[0].X != q[^1].X || q[0].Y != q[^1].Y))));
             check("S184 ③ 고리 방향(바깥 반시계 · 구멍 시계 — 받은 구멍은 반시계였음) · 닫는 점 없음", orient, "");
             var none = Web3DBuildings.Place(page.Items, (x, y) => x < 15 ? 10 : null, null);
             check("S184 ③ 땅 높이 없는 건물은 안 그림(한 점이라도 있으면 그림) · 바뀜 함수 없으면 닿음 없음",
-                none.Items.Count == 1 && none.NoGround == 2 && none.Items[0].Base == 10 && none.Touch == 0, none.Text);
+                none.Items.Count == 1 && none.NoGround == 2 && none.Items[0].Base == 10 && none.Demolished == 0, none.Text);
             // ★[검토 M] 원지반이 그 건물 밑에 없으면 보이는 지형(fallback)으로 다시 — 원지반이 있는 건물은 원지반 그대로
             var fb = Web3DBuildings.Place(page.Items, (x, y) => x < 15 ? 10 : null, null, (x, y) => 5);
             var fb1 = fb.Items.FirstOrDefault(b => b.Id == "LT_C_BLDGINFO.1");
@@ -107,7 +107,7 @@ static class BuildingCheck
             check("S184 ③ 뺀 까닭 글(숫자만)", fb.DropText == "층수 없음 2 · 땅 높이 없음 0 · 모양 이상 0", fb.DropText);
             // 경계 위 한 점만 바뀜 — 둘레 표본(2 m마다)이 잡는다
             var edgeHit = Web3DBuildings.Place(page.Items.Take(1), (x, y) => 0, (x, y) => Math.Abs(x - 10) < 1e-9 && Math.Abs(y - 4) < 1e-9);
-            check("S184 ③ 둘레 2 m 표본이 변 위 한 점의 바뀜을 잡음", edgeHit.Items.Count == 1 && edgeHit.Items[0].Touch, edgeHit.Text);
+            check("S184 ③ 둘레 2 m 표본이 변 위 한 점의 바뀜을 잡음(= 철거로 빠짐)", edgeHit.Items.Count == 0 && edgeHit.Demolished == 1, edgeHit.Text);
         }
 
         // ④ 닫는 점 · 겹친 점 · 넓이 0 · 큰 건물 표본 한도
@@ -164,9 +164,9 @@ static class BuildingCheck
         {
             var items = new List<Web3DBuildings.Bldg>
             {
-                new() { Id = "a", Floors = 2, Base = 10, Height = 7, Touch = false,
+                new() { Id = "a", Floors = 2, Base = 10, Height = 7,
                         Polys = new() { new VWorldParcels.Poly { Shell = new() { (1000, 2000), (1010, 2000), (1010, 2010) } } } },
-                new() { Id = "b", Floors = 1, Base = 20, Height = 3.5, Touch = true,
+                new() { Id = "b", Floors = 1, Base = 20, Height = 3.5,
                         Polys = new()
                         {
                             new VWorldParcels.Poly { Shell = new() { (1020, 2000), (1030, 2000), (1030, 2010), (1020, 2010) },
@@ -177,14 +177,14 @@ static class BuildingCheck
             var a = Web3DBuildings.Pack(items, 1000, 2000);
             bool ok = a.Xy.Length == (3 + 4 + 4 + 3) * 2 && a.Xy[0] == 0 && a.Xy[1] == 0 && a.Xy[2] == 10
                 && a.Ring.SequenceEqual(new[] { 0, 3, 7, 11, 14 }) && a.Poly.SequenceEqual(new[] { 0, 1, 3, 4 }) && a.Bldg.SequenceEqual(new[] { 0, 1, 3 })
-                && a.Z0.SequenceEqual(new[] { 10f, 20f }) && a.H.SequenceEqual(new[] { 7f, 3.5f }) && a.Hit.SequenceEqual(new byte[] { 0, 1 });
+                && a.Z0.SequenceEqual(new[] { 10f, 20f }) && a.H.SequenceEqual(new[] { 7f, 3.5f });
             check("S184 ⑤ 장면 배열(점 14 · 고리 4 · 다각형 3 · 건물 2 · 끝에 전체 수)", ok,
                 $"ring [{string.Join(",", a.Ring)}] poly [{string.Join(",", a.Poly)}] bldg [{string.Join(",", a.Bldg)}]");
             var e = Web3DBuildings.Pack(new List<Web3DBuildings.Bldg>(), 0, 0);
-            check("S184 ⑤ 빈 배열(표마다 0 하나)", e.Xy.Length == 0 && e.Ring.SequenceEqual(new[] { 0 }) && e.Poly.SequenceEqual(new[] { 0 }) && e.Bldg.SequenceEqual(new[] { 0 }) && e.Hit.Length == 0, "");
+            check("S184 ⑤ 빈 배열(표마다 0 하나)", e.Xy.Length == 0 && e.Ring.SequenceEqual(new[] { 0 }) && e.Poly.SequenceEqual(new[] { 0 }) && e.Bldg.SequenceEqual(new[] { 0 }), "");
             // 장면 묶음에 넣어 되읽기 — 머리 JSON이 깨지지 않는다
             var sc = new Web3DScene();
-            sc.Head["bldg"] = new Dictionary<string, object> { ["n"] = 2, ["xy"] = sc.F32(a.Xy), ["ring"] = sc.U32(a.Ring), ["hit"] = sc.U8(a.Hit), ["z0"] = sc.F32(a.Z0) };
+            sc.Head["bldg"] = new Dictionary<string, object> { ["n"] = 2, ["xy"] = sc.F32(a.Xy), ["ring"] = sc.U32(a.Ring), ["z0"] = sc.F32(a.Z0) };
             var (doc, buf, bo) = Web3DScene.Unpack(sc.PackGzip());
             var back = Web3DScene.ReadF32(doc.RootElement.GetProperty("bldg").GetProperty("z0"), buf, bo);
             check("S184 ⑤ 장면 묶음 되읽기(z0)", back.SequenceEqual(new[] { 10f, 20f }) && doc.RootElement.GetProperty("bldg").GetProperty("n").GetInt32() == 2, "");

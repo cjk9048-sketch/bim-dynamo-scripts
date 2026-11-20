@@ -4,7 +4,8 @@ namespace DH.Grading.Core;
 
 /// <summary>★★[v112.1 · JACK 1104 인터뷰 «대안 저장»] <b>대안 = 도면 사본</b>(계획지표면 + 진입도로 함께 · 수량표 나란히).
 /// <para>폴더 = «도면이름_대안»(원본 옆) · 안에 대안마다 «이름.dwg» + 목록 «대안목록.json»(이름 · 파일 · 저장 시각 · 수량 · 메모).
-/// 대안 사본을 연 채 저장하면 같은 폴더(부모 이름이 «_대안»으로 끝나면 그 폴더).</para>
+/// 대안 사본을 연 채 저장하면 같은 폴더(부모 이름이 «_대안»으로 끝나면 그 폴더).
+/// ★[JACK 1119] 대안마다 대략 평면 그림 «이름.png»도 같은 폴더(줄의 <see cref="Row.Pic"/>).</para>
 /// <para>수량 = 참고 수치: 토공(최종지표면 − 원지반 · 도면화 토공량표와 같은 셈) · 옹벽 길이(앞면 선) · 사면 겉넓이(땅을 바꾼 자리 중 경사가 문턱보다 가파른 세모) · 도로 길이(노선).</para></summary>
 public static class Alternatives
 {
@@ -24,6 +25,8 @@ public static class Alternatives
         public double? SlopeArea { get; set; }
         public double? RoadLen { get; set; }
         public string Memo { get; set; } = "";
+        /// <summary>★[JACK 1119 «대안 평면 그림»] 저장할 때 함께 그린 평면 그림 파일 이름(사본 옆 «이름.png») — 옛 줄 = null(그림 없음).</summary>
+        public string? Pic { get; set; }
     }
 
     public sealed class Book

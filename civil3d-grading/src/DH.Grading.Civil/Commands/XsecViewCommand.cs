@@ -725,7 +725,7 @@ public sealed partial class XsecViewCommand
         double sheetW = SheetCommand.SheetW * sc, sheetH = SheetCommand.SheetH * sc;
         double innerW = SheetCommand.InnerW * sc, innerH = XsecInnerH * sc;
         double cellW = cellWmm * sc, cellH = cellHmm * sc;
-        log.AppendLine($"  ★축척 1:{scale:F0}({(fixedScale ? (t != null && t.Kept ? "자동 — 그린 축척 그대로" : "도면설정에서 고정") : "자동 — 칸에 맞춤")})"
+        log.AppendLine($"  ★축척 1:{scale:F0}({(fixedScale ? (t != null && t.Kept ? "자동 — 그린 축척 그대로" : "종횡단도 설정에서 고정") : "자동 — 칸에 맞춤")})"
                      + $" · 표는 {(tableRight ? "그림 오른쪽" : "그림 아래")}"
                      + $" (필요 가로 1:{mv.W * 1000.0 / graphWmm:F0} · 세로 1:{mv.H * 1000.0 / graphHmm:F0}"
                      + $" · 오른쪽 1:{sRight:F0} vs 아래 1:{sBelow:F0})");

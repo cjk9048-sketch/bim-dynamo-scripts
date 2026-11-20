@@ -28,6 +28,7 @@ internal static class DockClose
         DockPanel.SetDock(bar, Dock.Bottom);
         dp.Children.Add(bar);
         dp.Children.Add(panel);
-        return dp;
+        // 아래 줄 단추(초기화)도 튜토리얼 덮개가 뚫을 수 있게 — 바깥 판에 덮개 자리(패널 안 덮개 자리는 아래 줄을 못 봄)
+        return new System.Windows.Documents.AdornerDecorator { Child = dp };
     }
 }

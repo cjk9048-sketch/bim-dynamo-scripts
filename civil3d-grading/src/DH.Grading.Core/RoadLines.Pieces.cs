@@ -317,6 +317,32 @@ public static partial class RoadLines
             return Polys(gc.Buffer(0));
         }
 
+        /// <summary>★[lf3 · JACK 1119b 굽이 안쪽 송곳 · 구멍] 덮개 면(C 곁 원 안 · 둘레 점만) → C를 꼭지로 한 부채(둘레 점마다 C와 이음). 둘레 점만으로 제약 들로네를 하면
+        ///   C 곁 높이(겉면 다리 · 마구리 면이 만나는 꼭지)가 빠져 원 안이 둘레 높이로 평평하게 걸려 턱 · 송곳처럼 보였다. C가 면 안이 아니거나 별 모양이 아니면 null(종전 들로네).</summary>
+        static List<Coordinate[]>? CoreFan(Polygon f, List<(double CX, double CY)> cs, double r)
+        {
+            var ring = f.ExteriorRing.Coordinates; int n = ring.Length - 1; if (n < 3) return null;
+            foreach (var (cx, cy) in cs)
+            {
+                bool all = true;
+                for (int k = 0; k < n && all; k++) { double dx = ring[k].X - cx, dy = ring[k].Y - cy; if (dx * dx + dy * dy > (r + 1e-3) * (r + 1e-3)) all = false; }
+                if (!all) continue;
+                var c = new Coordinate(cx, cy);
+                if (!f.Contains(new Point(c))) return null;
+                double sa = 0; for (int k = 0; k < n; k++) sa += ring[k].X * ring[k + 1].Y - ring[k + 1].X * ring[k].Y;
+                var o = new List<Coordinate[]>(n);
+                for (int k = 0; k < n; k++)
+                {
+                    var p = ring[k]; var q = ring[k + 1];
+                    double cr = (p.X - cx) * (q.Y - cy) - (p.Y - cy) * (q.X - cx);
+                    if (cr * Math.Sign(sa) <= 1e-10) return null;
+                    o.Add(new[] { c, p, q });
+                }
+                return o;
+            }
+            return null;
+        }
+
         /// <summary>세모(§2.6) — 보이는 조각 ∩ 지은 자리(절토 판 조각은 절토 자리 · 성토는 성토 자리) 둘레 + 도로 둘레 → 0.1 mm 마디 넣기 → 면마다 제약 들로네 · 꼭짓점 높이 = 판 겉면 · 땅 · 도로 면.</summary>
         List<WallDaylight.Tri>? Tin2(out string why)
         {
@@ -416,7 +442,11 @@ public static partial class RoadLines
                 _footOut.Add(q); return q;
             }
             bool DayPt(double x, double y) { var pt = new Point(x, y); return _dayDist != null && _dayDist.Distance(pt) < 2e-4 && _deckDist.Distance(pt) > MergeTol; }
-            var faces = Faces(geos, _deckPin, SnapEnds, 0, Onto, DayPt, KeepFoot);
+            // ★[lf3] 덮개 둘레 곁 마디(둘레 32각 변은 원 안쪽 4.7 mm까지)
+            var coreC = Rays.Where(r => double.IsFinite(r.CX)).Select(r => (r.CX, r.CY)).Distinct().ToList();
+            double rimR = CoreR * 1.3;
+            bool RimPt(double x, double y) { foreach (var (cx, cy) in coreC) { double dd = Math.Sqrt((x - cx) * (x - cx) + (y - cy) * (y - cy)); if (dd > rimR - 6e-3 && dd < rimR + 1e-3) return true; } return false; }
+            var faces = Faces(geos, _deckPin, SnapEnds, 0, Onto, DayPt, KeepFoot, core != null ? RimPt : null);
             long tFaces = swT.ElapsedMilliseconds;
             var zc = new Dictionary<(double, double), double>();
             var tris = new List<WallDaylight.Tri>();
@@ -432,8 +462,9 @@ public static partial class RoadLines
                 if (!isCut && !isFill && !isGnd) continue;
                 // 볼록 · 구멍 없는 작은 면(판 조각 대부분)은 바로 부채로 — NTS 제약 들로네는 면마다 준비 비용이 커서 6천 면에 30초
                 var ring = f.ExteriorRing.Coordinates;
-                List<Coordinate[]> triList;
-                if (f.NumInteriorRings == 0 && (ring.Length == 4 || (ring.Length == 5 && Convex(ring, strict: true)))) { triList = new(); for (int k = 1; k + 2 < ring.Length; k++) triList.Add(new[] { ring[0], ring[k], ring[k + 1] }); }
+                List<Coordinate[]>? triList = core != null && f.NumInteriorRings == 0 ? CoreFan(f, coreC, rimR) : null;
+                if (triList != null) Out.CoreFans++;
+                else if (f.NumInteriorRings == 0 && (ring.Length == 4 || (ring.Length == 5 && Convex(ring, strict: true)))) { triList = new(); for (int k = 1; k + 2 < ring.Length; k++) triList.Add(new[] { ring[0], ring[k], ring[k + 1] }); }
                 else
                 {
                     Geometry tg;

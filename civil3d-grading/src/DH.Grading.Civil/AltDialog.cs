@@ -26,6 +26,8 @@ public sealed class AltDialog : Window
         public string Road { get; init; } = "";
         public string Memo { get; set; } = "";
         public bool IsNow { get; init; }
+        /// <summary>★[JACK 1119] 평면 그림(없으면 null) — 줄 앞 작은 그림 · 위 미리보기가 같은 것을 씀.</summary>
+        public System.Windows.Media.ImageSource? Pic { get; init; }
         internal Alternatives.Row? Row { get; init; }
     }
 
@@ -36,6 +38,8 @@ public sealed class AltDialog : Window
 
     readonly DataGrid _grid;
     readonly TextBox _name, _memo;
+    readonly System.Windows.Controls.Image _picView;
+    readonly TextBlock _picNone, _picCap;
     readonly List<Line> _lines = new();
     readonly IReadOnlyList<string> _taken;
 
@@ -48,21 +52,25 @@ public sealed class AltDialog : Window
         return Math.Abs(n).ToString("N0", CultureInfo.InvariantCulture) + (n > 0 ? " 반입" : n < 0 ? " 반출" : "");
     }
 
-    static Line LineOf(Alternatives.Row r, bool now, string savedText) => new()
+    static Line LineOf(Alternatives.Row r, bool now, string savedText, System.Windows.Media.ImageSource? pic) => new()
     {
         Name = r.Name, Saved = savedText, Cut = N0(r.Cut), Fill = N0(r.Fill), Net = NetOf(r.Cut, r.Fill),
-        Wall = N1(r.WallLen), Slope = N0(r.SlopeArea), Road = N1(r.RoadLen), Memo = r.Memo, IsNow = now, Row = now ? null : r,
+        Wall = N1(r.WallLen), Slope = N0(r.SlopeArea), Road = N1(r.RoadLen), Memo = r.Memo, IsNow = now, Row = now ? null : r, Pic = pic,
     };
 
     /// <param name="now">지금 도면 수량(이름 = 도면 파일 이름).</param>
     /// <param name="noSave">사본 저장을 못 하는 까닭(빈 글 = 할 수 있음 · 아니면 저장 칸을 잠그고 그 글을 보임).</param>
     /// <param name="openFile">지금 연 도면이 이 목록의 대안이면 그 파일 이름(그 줄에 ● 표시).</param>
     /// <param name="missing">파일이 없는 대안 파일 이름들.</param>
-    internal AltDialog(Alternatives.Book book, Alternatives.Row now, string noSave, string folder, string? openFile, ISet<string> missing)
+    /// <param name="nowPic">★[JACK 1119] 지금 도면 평면 그림 PNG(없으면 null).</param>
+    internal AltDialog(Alternatives.Book book, Alternatives.Row now, string noSave, string folder, string? openFile, ISet<string> missing, byte[]? nowPic = null)
     {
         bool canSave = noSave.Length == 0;
         Title = "DH 대안";
-        Width = 980; Height = 460; MinWidth = 720; MinHeight = 300;
+        // 작은 화면(1080p · 150 % = 작업 영역 약 720) — 창 높이를 작업 영역 − 40에 맞추고 위 그림 칸을 줄여 표 · 아래 단추가 보이게
+        double hMax = Math.Max(400, SystemParameters.WorkArea.Height - 40);
+        Width = Math.Min(980, Math.Max(600, SystemParameters.WorkArea.Width - 40)); Height = Math.Min(820, hMax); MinWidth = Math.Min(720, Width); MinHeight = Math.Min(560, Height);
+        double picH = Height >= 760 ? 300 : Math.Max(140, 300 - (760 - Height)), picW = Math.Round(picH * 1.4);
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
         ShowInTaskbar = false;
         _taken = book.Rows.Select(r => r.Name).ToList();
@@ -71,6 +79,20 @@ public sealed class AltDialog : Window
         var head = new StackPanel();
         DockPanel.SetDock(head, Dock.Top);
         GradingDialog.AddSection(head, "대안", "대안 = 도면 사본(계획지표면 + 진입도로 함께). 폴더: " + folder, first: true);
+        // ★[JACK 1119 «대안을 눌렀을 때 평면뷰 — 눈으로 골라 선택»] 위 미리보기 칸 = 다른 창 설명 칸과 같은 틀(그림 420 × 300 + 글 한 줄)
+        _picView = new System.Windows.Controls.Image { Stretch = System.Windows.Media.Stretch.Uniform };
+        System.Windows.Media.RenderOptions.SetBitmapScalingMode(_picView, System.Windows.Media.BitmapScalingMode.HighQuality);
+        _picNone = new TextBlock { FontSize = 12, Foreground = DhBrand.Sub, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
+        var slot = new Grid { Width = picW, Height = picH };
+        slot.Children.Add(_picView); slot.Children.Add(_picNone);
+        _picCap = new TextBlock { MaxWidth = picW, FontSize = 11, Foreground = DhBrand.Ink, TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(2, 4, 2, 0) };
+        var card = new StackPanel();
+        card.Children.Add(slot); card.Children.Add(_picCap);
+        head.Children.Add(new Border
+        {
+            BorderBrush = DhBrand.Line, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(6), Background = DhBrand.Card,
+            Padding = new Thickness(4), Margin = new Thickness(0, 0, 0, 10), HorizontalAlignment = HorizontalAlignment.Center, Child = card,
+        });
         root.Children.Add(head);
 
         // 아래 — 저장 줄 · 단추
@@ -98,20 +120,28 @@ public sealed class AltDialog : Window
         root.Children.Add(foot);
 
         // 표
-        _lines.Add(LineOf(now, true, "● 지금 도면"));
+        _lines.Add(LineOf(now, true, "● 지금 도면", AltPlanPic.FromBytes(nowPic)));
         foreach (var r in book.Rows.OrderBy(r => r.Saved))
         {
             string st = r.Saved.ToString("MM-dd HH:mm", CultureInfo.InvariantCulture);
             if (missing.Contains(r.File)) st += " (파일 없음)";
             else if (openFile != null && string.Equals(openFile, r.File, StringComparison.OrdinalIgnoreCase)) st += " ● 열림";
-            _lines.Add(LineOf(r, false, st));
+            _lines.Add(LineOf(r, false, st, Commands.AltCommand.PicOf(folder, r) is string pf ? AltPlanPic.Load(pf) : null));   // 그림은 창을 열 때 파일만 읽음(다시 안 그림)
         }
         _grid = new DataGrid
         {
             AutoGenerateColumns = false, CanUserAddRows = false, CanUserDeleteRows = false, CanUserReorderColumns = false, CanUserSortColumns = false,
             SelectionMode = DataGridSelectionMode.Single, HeadersVisibility = DataGridHeadersVisibility.Column,
-            GridLinesVisibility = DataGridGridLinesVisibility.Horizontal, ItemsSource = _lines, RowHeight = 26,
+            GridLinesVisibility = DataGridGridLinesVisibility.Horizontal, ItemsSource = _lines, RowHeight = 38,
         };
+        // ★[JACK 1119] 줄 앞 작은 평면 그림
+        var thumb = new FrameworkElementFactory(typeof(System.Windows.Controls.Image));
+        thumb.SetBinding(System.Windows.Controls.Image.SourceProperty, new Binding(nameof(Line.Pic)) { Mode = BindingMode.OneWay });
+        thumb.SetValue(FrameworkElement.WidthProperty, 51.0);
+        thumb.SetValue(FrameworkElement.HeightProperty, 34.0);
+        thumb.SetValue(System.Windows.Controls.Image.StretchProperty, System.Windows.Media.Stretch.Uniform);
+        thumb.SetValue(System.Windows.Media.RenderOptions.BitmapScalingModeProperty, System.Windows.Media.BitmapScalingMode.HighQuality);
+        _grid.Columns.Add(new DataGridTemplateColumn { Header = "", Width = 58, IsReadOnly = true, CellTemplate = new DataTemplate { VisualTree = thumb } });
         DataGridTextColumn Col(string head, string path, double w, bool right = true, bool ro = true)
         {
             var c = new DataGridTextColumn { Header = head, Binding = new Binding(path) { Mode = ro ? BindingMode.OneWay : BindingMode.TwoWay, UpdateSourceTrigger = UpdateSourceTrigger.PropertyChanged }, IsReadOnly = ro, Width = w };
@@ -141,7 +171,17 @@ public sealed class AltDialog : Window
             var r = Sel();
             btnOpen.IsEnabled = r != null && !missing.Contains(r.File);
             btnDel.IsEnabled = r != null;
+            ShowPic(_grid.SelectedItem as Line);
         };
+        // ★[JACK 1119] 마우스가 올라간 줄 그림 · 벗어나면 고른 줄(없으면 지금 도면)
+        _grid.MouseMove += (_, e) =>
+        {
+            var d = e.OriginalSource as DependencyObject;
+            while (d != null && d is not DataGridRow) d = d is System.Windows.Media.Visual ? System.Windows.Media.VisualTreeHelper.GetParent(d) : LogicalTreeHelper.GetParent(d);
+            ShowPic((d as DataGridRow)?.Item as Line ?? _grid.SelectedItem as Line);
+        };
+        _grid.MouseLeave += (_, __) => ShowPic(_grid.SelectedItem as Line);
+        ShowPic(null);
         _grid.MouseDoubleClick += (_, __) => { if (btnOpen.IsEnabled) Done(Act.Open, Sel()); };
         btnOpen.Click += (_, __) => Done(Act.Open, Sel());
         btnDel.Click += (_, __) =>
@@ -157,6 +197,19 @@ public sealed class AltDialog : Window
             if (why.Length > 0) { MessageBox.Show(this, why, "대안 저장", MessageBoxButton.OK, MessageBoxImage.Warning); _name.Focus(); _name.SelectAll(); return; }
             Done(Act.Save, null);
         };
+    }
+
+    Line? _shown;
+
+    /// <summary>★[JACK 1119] 위 미리보기에 그 줄 그림(null = 지금 도면 줄) · 그림 없는 옛 대안은 짧은 글만.</summary>
+    void ShowPic(Line? l)
+    {
+        l ??= _lines.Count > 0 ? _lines[0] : null;
+        if (l == null || ReferenceEquals(l, _shown)) return;
+        _shown = l;
+        _picView.Source = l.Pic;
+        _picNone.Text = l.Pic != null ? "" : l.IsNow ? "그림 없음" : "그림 없음 — 다시 저장하면 생김";
+        _picCap.Text = $"{l.Name} · 절토 {l.Cut} · 성토 {l.Fill} ㎥";
     }
 
     /// <summary>창이 닫힐 때 메모 고친 것이 있었나(줄 기록에 이미 넣음).</summary>

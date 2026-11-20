@@ -627,7 +627,7 @@ static class ForestCheck
         };
         H["walls"] = new List<object>(); H["patterns"] = new List<object>();
         var ar = Web3DBuildings.Pack(pr.Items, ox, oy);
-        H["bldg"] = new Dictionary<string, object> { ["n"] = pr.Items.Count, ["xy"] = sc.F32(ar.Xy), ["ring"] = sc.U32(ar.Ring), ["poly"] = sc.U32(ar.Poly), ["bldg"] = sc.U32(ar.Bldg), ["z0"] = sc.F32(ar.Z0), ["h"] = sc.F32(ar.H), ["hit"] = sc.U8(ar.Hit), ["note"] = "시험 건물" };
+        H["bldg"] = new Dictionary<string, object> { ["n"] = pr.Items.Count, ["xy"] = sc.F32(ar.Xy), ["ring"] = sc.U32(ar.Ring), ["poly"] = sc.U32(ar.Poly), ["bldg"] = sc.U32(ar.Bldg), ["z0"] = sc.F32(ar.Z0), ["h"] = sc.F32(ar.H), ["note"] = "시험 건물" };
         H["forest"] = ForestScatter.Head(sc, fr, ox, oy, (2020, 2024));
         H["geo"] = new Dictionary<string, object> { ["lat"] = 37.5, ["lon"] = 127.0 };
         H["warn"] = new List<string>();

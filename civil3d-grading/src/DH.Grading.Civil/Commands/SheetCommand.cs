@@ -654,7 +654,7 @@ public static class SheetCommand
                 if (s0 > 0 && v0 > s0 + 1e-9)
                     log.AppendLine($"⚠V 1:{v0:F0}가 H 1:{s0:F0}보다 작게 그림(과장 {s0 / v0:0.##}배 < 1 — 고정값이라 그대로)");
                 if (pinned > 0)
-                    log.AppendLine($"축척 {(plan.FromAuto ? "H(앞 판 자동)" : "고정 H")} 1:{pinned:F0}{(plan.FromAuto ? "" : " (도면설정)")}"
+                    log.AppendLine($"축척 {(plan.FromAuto ? "H(앞 판 자동)" : "고정 H")} 1:{pinned:F0}{(plan.FromAuto ? "" : " (종횡단도 설정)")}"
                                  + (overflow
                                     ? $" ⚠자리에 안 들어간다(필요 폭 1:{needW:F0} · 높이 1:{needH0:F0}) — 도곽을 넘칠 수 있다"
                                     : $" · 자리의 {want / pinned * 100:F0}% 사용"));

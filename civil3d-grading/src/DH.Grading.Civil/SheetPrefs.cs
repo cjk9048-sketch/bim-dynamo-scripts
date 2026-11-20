@@ -82,7 +82,7 @@ internal static class SheetPrefs
         if (r == null)
         {
             // ★[v113.1] 기록 없는 옛 도면인데 부지 종단도가 이미 있으면 그 그림 그대로(V = H와 같게 · 옛 규칙) — 새 도면은 지금 값
-            if (HasSiteProfile(db)) { GradingSettings.ProfileScaleV = DH.Grading.Core.ProfileScaleFit.SameAsH; GradingSettings.ProfileLegacy = true; return "도면설정 기록 없음 · 부지 종단도가 있어 종단 V = H와 같게(옛 그림 그대로)"; }
+            if (HasSiteProfile(db)) { GradingSettings.ProfileScaleV = DH.Grading.Core.ProfileScaleFit.SameAsH; GradingSettings.ProfileLegacy = true; return "종횡단도 설정 기록 없음 · 부지 종단도가 있어 종단 V = H와 같게(옛 그림 그대로)"; }
             // 옛 규칙은 옛 도면의 성질 — 앞 도면에서 물려받지 않음(새 도면 = 새 규칙 · 자동)
             if (GradingSettings.ProfileLegacy) { GradingSettings.ProfileLegacy = false; GradingSettings.ProfileScaleV = 0; }
             return "";
@@ -90,7 +90,7 @@ internal static class SheetPrefs
         var now = Now();
         var v = Clean(r.Value, now, out int bad);
         Set(v);
-        return $"도면설정 = 도면 값(측점 간격 {v.XsecInterval:0.#} m · 종단뷰 축척 {(v.ProfileScale > 0 ? $"1:{v.ProfileScale:0}" : "자동")}"
+        return $"종횡단도 설정 = 도면 값(측점 간격 {v.XsecInterval:0.#} m · 종단뷰 축척 {(v.ProfileScale > 0 ? $"1:{v.ProfileScale:0}" : "자동")}"
              + $" · V {(v.ProfileScaleV > 0 ? $"1:{v.ProfileScaleV:0}" : v.ProfileScaleV < 0 ? "H와 같게" : "자동")}{(v.ProfileLegacy ? " · 옛 규칙" : "")})"
              + (bad > 0 ? $" · ⚠이상한 값 {bad}칸은 지금 값으로" : "");
     }
@@ -152,9 +152,9 @@ internal static class SheetPrefs
         {
             // ★[v112.1 검토 H3] 세션 값이 이 도면 것일 때만 — 도면을 바꾼 뒤 맞추지 않고 들어온 길이면 앞 도면 값으로 이 도면 기록을 덮지 않음
             var doc = Autodesk.AutoCAD.ApplicationServices.Application.DocumentManager.GetDocument(db);
-            if (!GradingSettings.IsOwnedBy(doc)) { DiagLog.Append($"\n[도면설정] {where} — 세션 값이 이 도면 것이 아니라 도면에 안 적음"); return; }
+            if (!GradingSettings.IsOwnedBy(doc)) { DiagLog.Append($"\n[종횡단도 설정] {where} — 세션 값이 이 도면 것이 아니라 도면에 안 적음"); return; }
             Pin(db);
         }
-        catch (System.Exception ex) { try { DiagLog.Append($"\n[도면설정] {where} — 도면에 못 적음: {ex.Message}"); } catch { } }
+        catch (System.Exception ex) { try { DiagLog.Append($"\n[종횡단도 설정] {where} — 도면에 못 적음: {ex.Message}"); } catch { } }
     }
 }

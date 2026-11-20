@@ -208,7 +208,7 @@ internal sealed class SheetBookPanel : UserControl
         cc.Children.Add(new TextBlock { Text = "계곡선", FontSize = 11, Foreground = DhBrand.Sub, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(10, 0, 4, 0) });
         cc.Children.Add(_cMajor);
         cc.Children.Add(new TextBlock { Text = "m", FontSize = 11.5, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(4, 0, 0, 0) });
-        _cMinor.ToolTip = "모든 지형의 등고선 간격(도면설정 «3. 공통»과 같은 값)"; _cMajor.ToolTip = "굵은 등고선 간격 — 주곡선의 배수";
+        _cMinor.ToolTip = "모든 지형의 등고선 간격(공통설정과 같은 값)"; _cMajor.ToolTip = "굵은 등고선 간격 — 주곡선의 배수";
         Field(_planOpts, "등고선 간격", cc, null);
         var tg = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(80, 0, 0, 0) };
         tg.Children.Add(_cLabels); tg.Children.Add(_stations); tg.Children.Add(_stationsR);

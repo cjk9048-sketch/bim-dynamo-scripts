@@ -42,7 +42,7 @@ public sealed class SheetDialog : Window
     {
         NoriDraw = noriDraw;
         ContourMinor = contourMinor; ContourMajor = contourMajor;
-        Title = "DH 도면 설정";
+        Title = "DH 공통설정";
         Width = 560;   // ★머리띠(로고+제목)가 들어갈 만큼 넓혔다
         SizeToContent = SizeToContent.Height;
         ResizeMode = ResizeMode.NoResize;
@@ -52,7 +52,7 @@ public sealed class SheetDialog : Window
         var root = new StackPanel { Margin = new Thickness(18) };
 
         // ══ 1. 공통 ════════════════════════════════════════════════════
-        GradingDialog.AddSection(root, "1. 공통",
+        GradingDialog.AddSection(root, "공통",
             "종단 · 횡단 축척 · 배치 · 층따기 = 종횡단도 창."
           + " 배경지도 화질 = [위성지도] 사진 해상도(넓으면 자동으로 낮춤)."
           + " 등고선 · 계곡선 간격 = 원지반 · 정지면 · 최종지표면 · 진입도로 지표면(도면에 저장).",
@@ -80,12 +80,8 @@ public sealed class SheetDialog : Window
         _contourMinor.TextChanged += (_, __) => _contourMsg.Text = "";
         _contourMajor.TextChanged += (_, __) => _contourMsg.Text = "";
 
-        // ══ 2. 도곽 ════════════════════════════════════════════════════
-        //   ★★[v112.0 · 계획_도면화.md 4.10 · JACK 1103 «다른 도곽 DWG를 고르면 이 PC의 애드인에 저장»] —
-        //   도곽은 도면 값이 아니라 PC 값이라 고르는 순간 저장(아래 [저장]과 따로 — 내 판단 10)
-        GradingDialog.AddSection(root, "2. 도곽",
-            "[도면화] 배치탭이 쓰는 도곽 — 이 PC에 저장(도면과 따로 · 고르는 순간 저장).");
-        AddFrameRow(root);
+        // ★★[JACK 1119 «도면설정 → 공통설정 · 도곽은 도면생성 창 도곽과 같으니 없애»] «2. 도곽» 줄 없앰 —
+        //   도면생성 창 ■ 도곽이 같은 FrameLibrary(이 PC current.json)를 고름 · 추가(DHSHEETFRAMEADD = 옛 [바꾸기…]와 같은 Pick) · K-water(기본) 고름 = 옛 [기본으로](Reset)
 
         // ★★★[JACK 0908 "너무 옛스럽고 딱딱한데" · "회사로고 활용" · "도킹창도 일관성있는 색으로"]
         //   창의 껍데기(청록 띠·로고 머리띠·바닥 단추)와 컨트롤 모양은 <see cref="DhBrand"/>가 맡는다.
@@ -93,41 +89,9 @@ public sealed class SheetDialog : Window
         var (ok, cancel) = DhBrand.FooterButtons(okText);
         ok.Click += OnOk;
         root.Margin = new Thickness(18, 14, 18, 14);
-        DhBrand.Dress(this, "도면 설정", "도면을 어떻게 그릴지 — 정지면 형상은 바뀌지 않습니다", root, ok, cancel);
+        DhBrand.Dress(this, "공통설정", "노리선 · 배경지도 화질 · 등고선 간격 — 정지면 형상은 그대로", root, ok, cancel);
     }
 
-
-    /// <summary>★[v112.0] «2. 도곽» 줄 — 지금 도곽 이름 + ⚠ 딱지(풍선 글에 경로 · 해시 · 칸) + [바꾸기…] + [기본으로].</summary>
-    private void AddFrameRow(Panel parent)
-    {
-        var row = new DockPanel { Margin = new Thickness(0, 0, 0, 8), LastChildFill = false };
-        var lbl = new TextBlock { Text = "도곽", Width = 110, VerticalAlignment = VerticalAlignment.Center };
-        DockPanel.SetDock(lbl, Dock.Left); row.Children.Add(lbl);
-        var name = new TextBlock { VerticalAlignment = VerticalAlignment.Center, FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 0, 8, 0) };
-        var badge = new TextBlock { VerticalAlignment = VerticalAlignment.Center, Foreground = DhBrand.Warn, FontSize = 11, Margin = new Thickness(0, 0, 8, 0) };
-        var change = new Button { Content = "바꾸기…", Height = 26, Padding = new Thickness(10, 0, 10, 0), Margin = new Thickness(0, 0, 6, 0), ToolTip = "도곽 DWG를 골라 이 PC에 저장합니다(표제란 칸을 찾아 둡니다)" };
-        var reset = new Button { Content = "기본으로", Height = 26, Padding = new Thickness(10, 0, 10, 0), ToolTip = "K-water 기본 도곽으로 돌아갑니다(고른 도곽 사본은 남겨 둡니다)" };
-        foreach (var e in new UIElement[] { name, badge, change, reset }) { DockPanel.SetDock(e, Dock.Left); row.Children.Add(e); }
-        void Show()
-        {
-            var (n, b, tip) = FrameLibrary.Status();
-            name.Text = n;
-            badge.Text = b.Length > 0 ? "⚠" + b : "";
-            name.ToolTip = tip; badge.ToolTip = tip;
-            reset.IsEnabled = !n.Contains("기본") || b.Length > 0;
-        }
-        change.Click += (_, __) =>
-        {
-            var dlg = new Microsoft.Win32.OpenFileDialog { Filter = "도곽 DWG (*.dwg)|*.dwg", Title = "도곽 DWG 고르기" };
-            if (dlg.ShowDialog(this) != true) return;
-            var (ok, msg) = FrameLibrary.Pick(dlg.FileName);
-            if (!ok) MessageBox.Show(this, "도곽으로 쓸 수 없습니다 — " + msg, "도곽", MessageBoxButton.OK, MessageBoxImage.Warning);
-            Show();
-        };
-        reset.Click += (_, __) => { FrameLibrary.Reset(); Show(); };
-        Show();
-        parent.Children.Add(row);
-    }
 
     /// <summary>라벨 + 콤보 한 줄 — <see cref="GradingDialog.AddRow"/>와 같은 자리맞춤(라벨 110).</summary>
     private static ComboBox AddCombo(Panel parent, string label, string[] items, int index, string hint)

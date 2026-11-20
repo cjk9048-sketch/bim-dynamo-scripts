@@ -221,7 +221,7 @@ public sealed class ProfileCommand
     /// ②에서는 반대로 <b>꼭 다시 그려야</b> 한다.</para></summary>
     /// <param name="started">종단도를 <b>실제로 건드리기 시작</b>했으면 참
     /// (곧 <b>횡단도 딸려 지워졌을 수 있다</b>는 뜻).</param>
-    internal static bool Rebuild(Document doc, out bool started) => Rebuild(doc, out started, "도면 설정");
+    internal static bool Rebuild(Document doc, out bool started) => Rebuild(doc, out started, "종횡단도 설정");
 
     /// <param name="who">★[v116.10 · JACK 1110 «부지를 고쳐도 종단이 안 따라옴»] 명령줄 머리말 — 도면 설정 · 측점 · 종단 갱신(부지를 고친 뒤 저절로).</param>
     internal static bool Rebuild(Document doc, out bool started, string who)
@@ -2213,7 +2213,7 @@ public sealed class ProfileCommand
             {
                 string warn = $"측점이 {cuts.Count}개다(권장 상한 {SectionCommand.MaxSections}개)"
                             + " — 도면이 무거워지고 횡단면도도 그만큼 생긴다."
-                            + $" 도면설정의 '종단 원지반 굴곡'을 더 단순한 쪽으로 옮기면 줄어든다(지금 {GradingSettings.GroundBreakTolZ:0.###}m).";
+                            + $" 종횡단도 창의 '원지반 굴곡'을 더 단순한 쪽으로 옮기면 줄어든다(지금 {GradingSettings.GroundBreakTolZ:0.###}m).";
                 log.AppendLine("  ⚠" + warn);
                 ed.WriteMessage("\n  ⚠" + warn);
             }

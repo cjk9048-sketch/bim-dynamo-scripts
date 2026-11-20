@@ -476,22 +476,21 @@ public sealed class RibbonApp : IExtensionApplication
             //   가른 기준: <b>흙의 모양을 바꾸는가(정지옵션), 도면의 모양을 바꾸는가(여기).</b>
             // ★[v111.6 · JACK 1102] 창 안이 «1. 계획지표면 · 2. 진입도로 · 3. 공통»으로 갈렸다 — 풍선 글도 그 차례로
             var btnSheetSet = MakeButton(
-                "도면\n설정", "DHSHEETSET ", "노리선 · 배경지도 화질 · 등고선 간격 · 도곽", "도면설정");
-            btnSheetSet.ToolTip = MakeTip("도면 설정 (DHSHEETSET)",
-                "**도면을 어떻게 그릴지**를 정합니다 — 흙의 모양(정지옵션)과는 별개입니다.\n\n" +
-                "· 1. 공통 — 노리선 · 배경지도 화질 · 등고선 간격\n" +
-                "· 2. 도곽\n\n" +
+                "공통\n설정", "DHSHEETSET ", "노리선 · 배경지도 화질 · 등고선 간격", "도면설정");   // ★[JACK 1119] 이름 = 공통설정 · 도곽은 [도면생성] 창(명령 · 아이콘 키 그대로)
+            btnSheetSet.ToolTip = MakeTip("공통설정 (DHSHEETSET)",
+                "**노리선 · 배경지도 화질 · 등고선 간격** — 흙 모양(정지옵션)과 별개\n\n" +
                 "축척 · 배치 · 측점 간격 · 층따기 → 종횡단도 창(부지 · 진입도로)\n" +
+                "도곽 → [도면생성] 창\n" +
                 "정지면 다시 만들 필요 없음", null);
             var btnNori = MakeButton(
                 "노리선", "DHNORI ", "정지 결과(번들)로 사면선·소단선·노리선을 한 번에 작도 — DHGRADE 실행 후 사용", "노리선");
             // [JACK 0731] 배경지도·지도끄기는 도면화 중분류로 이동(별도 패널 폐지).
             var btnMap = MakeButton(
-                "위성지도\n추가", "DHMAP ", "두 점으로 범위를 찍으면 그 범위의 위성사진을 도면 좌표계에 맞춰 깔아줍니다(화질=도면설정)", "지도");
+                "위성지도\n추가", "DHMAP ", "두 점으로 범위를 찍으면 그 범위의 위성사진을 도면 좌표계에 맞춰 깔아줍니다(화질=공통설정)", "지도");
             btnMap.ToolTip = MakeTip("배경지도 (DHMAP)",
                 "범위 두 모서리를 클릭하면 브이월드 위성사진을 받아\n" +
                 "도면 좌표계([기타 설정]의 좌표계)에 정확히 맞춰 깔아줍니다.\n" +
-                "여러 번 눌러 여러 곳에 깔 수 있고, 화질은 [도면설정]에서 선택합니다.", null);
+                "여러 번 눌러 여러 곳에 깔 수 있고, 화질은 [공통설정]에서 선택합니다.", null);
             var btnMapOff = MakeButton(
                 "지도끄기", "DHMAPOFF ", "이 기능으로 깐 위성사진을 한 번에 전부 제거", "지도끄기");
             btnMapOff.ToolTip = MakeTip("지도끄기 (DHMAPOFF)",
@@ -928,7 +927,7 @@ public sealed class RibbonApp : IExtensionApplication
             var btnRoadNew = MakeButton("진입도로\n생성", "DHROADNEW ", "진입도로 창을 엽니다 — 도로 설정을 정하고 [진입도로 생성](경로 그리기 / 폴리선 선택)으로 만듭니다", "노리선");
             btnRoadNew.ToolTip = MakeTip("진입도로 생성 (DHROADNEW)",
                 "**진입도로 창**이 열립니다.\n" +
-                "창의 ■ 도로 설정(곡선 반경 · 횡단 · 사면) · ■ 종단 값을 정한 뒤 창 맨 위\n" +
+                "창 «진입도로 생성» 탭에서 도로 설정(곡선 반경 · 횡단 · 포장 · 사면)을 정한 뒤\n" +
                 "[진입도로 생성] — **경로 그리기**(점을 찍어 노선) 또는 **폴리선 선택**(그려 둔 폴리선 · Civil 노선)으로 만듭니다.\n" +
                 "· 처음 값은 이 도면에서 마지막에 만든 도로의 값입니다", null);
             // ★★[계획 8단계 · JACK 지시 3 "UI에서 사면수정버튼은 없애고"]
@@ -981,7 +980,7 @@ public sealed class RibbonApp : IExtensionApplication
                 "모형의 종단도 · 횡단도로 **배치탭(도곽 · 표제란)**을 만듭니다.\n\n" +
                 "· 탭 = 전체 계획평면도 · 부지 종단면도 · 부지 횡단면도 · 진입도로 종단면도 · 진입도로 횡단면도\n" +
                 "· 장마다 페이지 설정(A1 · A3 맞춤)\n" +
-                "· 도곽 바꾸기는 [도면설정] «4. 도곽»", null);
+                "· 도곽 고르기 · 추가 = 창 안 ■ 도곽", null);
             pExport.Items.Add(Spacer());
             pExport.Items.Add(btnBook);
             pExport.Items.Add(Spacer());

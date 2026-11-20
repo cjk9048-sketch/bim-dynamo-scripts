@@ -138,6 +138,7 @@ static class WallGate
                 var bends = Bends(b0.Deck);
                 Console.WriteLine($"\n===== [LFW] {name} {e} — 바탕 지문 {fp0} · 고를 선 {cands.Count}({pst.Text}) · 굽이 {bends.Count}: " + string.Join(" · ", bends.Select(bb => string.Format(Ci, "{0} 측점 {1:F1}~{2:F1} 안쪽 {3}", bb.No, bb.S0, bb.S1, bb.Inner < 0 ? "좌" : "우"))));
                 if (what.Contains('C')) fail += GateC(name, e, inp, b0, fp0, cands, bends, outDir);
+                if (what.Contains('U')) fail += GateU(name, e, inp, b0, rr0);
                 if (what.Contains('D')) fail += GateD(name, e, inp, b0, rr0, dn.TryGetValue(name, out int nD) ? nD : 20);
                 Console.WriteLine($"[LFW] {name} {e} 물러섬(새 엔진 못 지음) {RoadRing.LinesFallbacks - fb0}{(RoadRing.LinesFallbacks != fb0 ? " — " + RoadRing.LinesFallback : "")}");
                 if (e == "new" && RoadRing.LinesFallbacks != fb0) fail++;
@@ -187,6 +188,7 @@ static class WallGate
             if (Environment.GetEnvironmentVariable("BLOCKTEST_LFV") == "1")
             {
                 Console.WriteLine($"[LFV] {Key(line)} {line.Side} {row.S0:F1}~{row.S1:F1} · 물러섬 {(row.NewEng ? "" : RoadRing.LinesFallback)} · {bw.Lf?.Stats} · 노트 {(bw.Note.Length > 300 ? bw.Note[..300] : bw.Note)}");
+                Console.WriteLine("[LFV]   기록 " + string.Join(";", recs.Select(r => string.Format(Ci, "{0:R},{1:R},{2},{3},{4:R}", r.S0, r.S1, r.Side, r.Tier, r.BenchL))));
                 foreach (var (tx, ty, ar, inf) in _slv.OrderByDescending(q => q.Item3).Take(8)) Console.WriteLine(string.Format(Ci, "[LFV]   남음 ({0:F2},{1:F2}) {2:F3} ㎡ {3}", tx % 1000, ty % 1000, ar, inf));
                 foreach (var l in wl) Console.WriteLine(string.Format(Ci, "[LFV]   옹벽선 묶음 {0} 쪽 {1} 점 {2} 측점 {3:F1}~{4:F1} ({5:F1},{6:F1})→({7:F1},{8:F1})", l.Group, l.Side, l.Pts.Count, l.Pts.Min(p => p.S), l.Pts.Max(p => p.S), l.Pts[0].X % 1000, l.Pts[0].Y % 1000, l.Pts[^1].X % 1000, l.Pts[^1].Y % 1000));
             }
@@ -262,7 +264,8 @@ static class WallGate
         try
         {
             var c = JsonSerializer.Deserialize<RoadGrade.Input>(JsonSerializer.Serialize(inp, jo), jo)!;
-            c.Base = g; c.TierWalls = recs.ToList();
+            // [lf3] BLOCKTEST_LFKEEPRECS=1 — 덤프에 든 기록(앞서 한 변환)을 두고 그 위에 더함(JACK 두 번째 변환 재현)
+            c.Base = g; c.TierWalls = Environment.GetEnvironmentVariable("BLOCKTEST_LFKEEPRECS") == "1" ? inp.TierWalls.Concat(recs).ToList() : recs.ToList();
             return c;
         }
         finally { inp.Base = g; }
@@ -274,6 +277,99 @@ static class WallGate
         using (var w = new StreamWriter(pre + "_lines.txt")) foreach (var l in lines) w.WriteLine($"{(l.Cut ? 1 : 0)} {l.Side} {l.K} {(int)l.Role} " + string.Join(" ", l.Pts.Select(p => string.Format(Ci, "{0:R},{1:R},{2:R}", p.X, p.Y, p.Z))));
         using (var w = new StreamWriter(pre + "_day.txt")) foreach (var l in b.Daylight) w.WriteLine(string.Join(" ", l.Select(p => string.Format(Ci, "{0:R},{1:R}", p.X, p.Y))));
         using (var w = new StreamWriter(pre + "_deck.txt")) foreach (var p in b.Deck.B) w.WriteLine(string.Format(Ci, "{0:R} {1:R}", p.X, p.Y));
+    }
+
+    // ───────────── U: [옹벽 추가] 사용자 같은 선 — Civil RoadWallLine.Try와 같은 길(다단 모양 · 단높이 · 소단 = 도로 값 · 끝 1 m 늘임 ExtendSafe) · «계산 실패(프로그램 문제)» 셈
+    //   BLOCKTEST_LFUSER = "x,y;x,y;…|…"(절대 좌표 · 클릭 점) · BLOCKTEST_LFUSERN = 자동 선 수(기본 40) · BLOCKTEST_LFUSERV=1 = 거절 로그
+    const double UserSnap = 0.5;
+    static int GateU(string name, string e, RoadGrade.Input inp, RoadRing.Built b, RoadGrade.Result rr)
+    {
+        var (bd, band, _, whyO) = RoadGrade.OutlineOf(rr, b.Tris);
+        if (bd == null) { Console.WriteLine($"[LFU] {name} {e} 경계 못 셈 {whyO}"); return 1; }
+        var ctx = BoundaryDraw.Prepare(bd, band);
+        if (ctx == null) { Console.WriteLine($"[LFU] {name} {e} 경계 준비 못 함"); return 1; }
+        var gf = new GeometryFactory();
+        var ring = gf.CreatePolygon(bd.Append(bd[0]).Select(q => new Coordinate(q.X, q.Y)).ToArray()).ExteriorRing;
+        var ringIx = new NetTopologySuite.Operation.Distance.IndexedFacetDistance(ring);
+        (double X, double Y) Snap(double x, double y) { var c = ringIx.NearestPoints(gf.CreatePoint(new Coordinate(x, y)))[0]; return (c.X, c.Y); }
+        var lines = new List<(string Tag, List<(double X, double Y)> P)>();
+        var userEnv = Environment.GetEnvironmentVariable("BLOCKTEST_LFUSER");
+        if (!string.IsNullOrEmpty(userEnv))
+            foreach (var (ln, li) in userEnv.Split('|').Select((v, i) => (v, i)))
+                lines.Add(($"손 {li + 1}", ln.Split(';').Select(q => q.Split(',').Select(v => double.Parse(v, Ci)).ToArray()).Select(v => (v[0], v[1])).ToList()));
+        int nAuto = int.TryParse(Environment.GetEnvironmentVariable("BLOCKTEST_LFUSERN"), out int nu) ? nu : 40;
+        if (nAuto > 0)
+        {
+            // 자동 — 쪽마다 · 시작 측점 차례 · 길이(12 · 25 · 45 · 70 m) · 사면 속 비율(0.35 · 0.65) · 두 끝 = 데이라잇 곁 경계 위(객체 스냅처럼) · 가운데 = 사면 속
+            var auto = new List<(string Tag, List<(double X, double Y)> P)>();
+            double L = b.Deck.Length; double[] spans = { 12, 25, 45, 70 }; double[] fr = { 0.35, 0.65 }; int k = 0;
+            for (double s0 = 2; s0 < L - 10; s0 += 9)
+                foreach (int sd in new[] { -1, 1 })
+                {
+                    double span = spans[k % spans.Length], f = fr[(k / spans.Length) % 2]; k++;
+                    double s1 = Math.Min(L - 2, s0 + span);
+                    var sl = rr.Slopes.Where(q => q.Side == sd && q.Width > 3 && double.IsFinite(q.Dx) && q.S >= s0 && q.S <= s1).OrderBy(q => q.S).ToList();
+                    if (sl.Count < 4) continue;
+                    int nm = span < 20 ? 1 : span < 50 ? 2 : 3;
+                    var pts = new List<(double X, double Y)> { Snap(sl[0].Dx, sl[0].Dy) };
+                    for (int m = 1; m <= nm; m++)
+                    {
+                        var q = sl[(int)Math.Round((sl.Count - 1) * m / (double)(nm + 1))];
+                        pts.Add((q.X + (q.Dx - q.X) * f, q.Y + (q.Dy - q.Y) * f));
+                    }
+                    { var q = sl[^1]; double ux = (q.Dx - q.X) / q.Width, uy = (q.Dy - q.Y) / q.Width; pts.Add((q.Dx + ux * 2, q.Dy + uy * 2)); }   // 끝 = 경계 밖 클릭(그 쪽 첫 건넘에서 끝)
+                    if (!gf.CreateLineString(pts.Select(p => new Coordinate(p.X, p.Y)).ToArray()).IsSimple) continue;
+                    auto.Add((string.Format(Ci, "자동 {0} {1:F0}~{2:F0} {3}", sd < 0 ? "좌" : "우", s0, s1, f), pts));
+                }
+            int take = Math.Min(nAuto, auto.Count);
+            for (int i = 0; i < take; i++) lines.Add(auto[(int)((long)i * auto.Count / take)]);
+        }
+        int tried = 0, ok = 0, bug = 0, geo = 0; var codes = new Dictionary<string, int>();
+        Console.WriteLine(string.Format(Ci, "[LFU] {0} {1} 경계 넓이 {2:F1} ㎡ · 띠 {3}", name, e, gf.CreatePolygon(bd.Append(bd[0]).Select(q => new Coordinate(q.X, q.Y)).ToArray()).Area, band?.Count ?? 0));
+        foreach (var (tag, p) in lines.Where(l => l.Tag.StartsWith("손")))
+            Console.WriteLine($"[LFU]   {tag} 점 경계까지: " + string.Join(" · ", p.Select(q => string.Format(Ci, "{0:F4}", ringIx.Distance(gf.CreatePoint(new Coordinate(q.X, q.Y)))))));
+        var onlyU = Environment.GetEnvironmentVariable("BLOCKTEST_LFUSERONLY");
+        if (Environment.GetEnvironmentVariable("BLOCKTEST_LFUSERMESH") == "1") CivilSafeMesh.DebugLog = m => Console.WriteLine("    [MESH] " + m);
+        foreach (var (tag, p) in lines)
+        {
+            if (!string.IsNullOrEmpty(onlyU) && !onlyU.Split(';').Contains(tag)) continue;
+            // 클릭 점 → Civil WallLineDraw와 같은 걸음(첫 점 = 가장 가까운 경계 점 · 다음 점 = 경계 곁 · 밖이면 끝) → 끝 1 m 늘임
+            var drawn = new List<(double X, double Y)>(); bool endHit = false; string noWhy = "";
+            foreach (var c in p)
+            {
+                var stp = drawn.Count == 0 ? BoundaryDraw.First(ctx, c.X, c.Y, double.MaxValue) : BoundaryDraw.Next(ctx, drawn, c.X, c.Y, UserSnap);
+                if (stp.Kind == BoundaryDraw.Kind.No) { noWhy = stp.Why; continue; }
+                drawn.Add((stp.X, stp.Y));
+                if (stp.Kind == BoundaryDraw.Kind.End) { endHit = true; break; }
+            }
+            // 끝이 안 났으면 사용자처럼 마지막 클릭 곁 경계를 클릭(가장 가까운 경계 점 — 경계 곁 클릭은 끝)
+            if (!endHit && drawn.Count >= 1)
+            {
+                var (sx, sy) = Snap(p[^1].X, p[^1].Y);
+                var stp = BoundaryDraw.Next(ctx, drawn, sx, sy, UserSnap);
+                if (stp.Kind == BoundaryDraw.Kind.No) noWhy = stp.Why; else { drawn.Add((stp.X, stp.Y)); endHit = stp.Kind == BoundaryDraw.Kind.End; }
+            }
+            // Civil은 끝 점(경계 위 · 밖 클릭 = 끝)이 나와야 그리기를 마침 — 끝이 안 나온 점 목록은 사용자가 만들 수 없는 선
+            if (drawn.Count < 2 || !endHit) { Console.WriteLine($"[LFU] {name} {e} -- {tag} | 그리기에서 끝 점이 안 나옴(사용자가 못 그리는 선 · 셈 안 함 · {noWhy})"); continue; }
+            var ext = BoundaryDraw.ExtendSafe(ctx, drawn, 1.0, out _, out _);
+            var lw = new RoadGrade.LineWall(900 + tried, ext.Select(q => q.X).ToArray(), ext.Select(q => q.Y).ToArray(), inp.Cut.BenchW, inp.Fill.BenchW, 40, false, 0, WallByLine.WallShape.Tiered);
+            tried++;
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            RoadGrade.WallState st;
+            try { st = RoadGrade.ApplyWalls(inp, rr, b.Tris, b.Lines, "고리 면", new[] { lw }, ring: b).Walls[0]; }
+            catch (Exception ex) { Console.WriteLine($"[LFU] {name} {e} {tried,2} {tag} | 예외 {ex.Message}"); bug++; codes["예외"] = codes.GetValueOrDefault("예외") + 1; continue; }
+            bool sOk = st.Ok; string code = st.Code ?? "", why = st.Why ?? "";
+            string easy = sOk ? "" : WallEasy.Build(code, why, road: true);
+            bool isBug = !sOk && easy == WallEasy.Bug;
+            if (sOk) ok++; else if (isBug) bug++; else geo++;
+            if (!sOk) { string key = (isBug ? "기술:" : "") + code; codes[key] = codes.GetValueOrDefault(key) + 1; }
+            string txt = sOk ? st.Text : "";
+            Console.WriteLine(string.Format(Ci, "[LFU] {0} {1} {2,2} {3,-22} 점 {4} | {5} | {6} ms", name, e, tried, tag, ext.Count,
+                sOk ? "○ " + (txt.Length > 120 ? txt[..120] : txt) : (isBug ? "× 기술 " : "× 땅 ") + code + " — " + (why.Length > 240 ? why[..240] : why) + (isBug ? "" : " ⇒ " + easy), sw.ElapsedMilliseconds));
+            if (!sOk && Environment.GetEnvironmentVariable("BLOCKTEST_LFUSERV") == "1") Console.WriteLine("[LFU]   클릭 " + string.Join(";", p.Select(q => string.Format(Ci, "{0:F4},{1:F4}", q.X, q.Y))) + Environment.NewLine + st.Log);
+        }
+        Console.WriteLine($"[LFU] {name} {e} 합계 — 시도 {tried} · 성공 {ok} · 땅 거절 {geo} · 기술 거절(계산 실패) {bug} · " + string.Join(" · ", codes.OrderByDescending(kv => kv.Value).Select(kv => $"{kv.Key} {kv.Value}")));
+        return bug > 0 ? 1 : 0;
     }
 
     // ───────────── D: [옹벽 추가] 자동 선

@@ -13,6 +13,7 @@ import { Build } from './build.js';
 import { Sun, sunPosition } from './sun.js';
 import { photo, video, download, fileName } from './capture.js';
 import { inHost, post, onHost } from './host.js';
+import { Walk } from './walk.js';
 
 // ★[JACK 1103] 'align' = 부지 측점 · 'ralign' = 진입도로 측점(도로가 있을 때만)
 // ★[v115 · JACK 1105 임상도] 'tree' = 수목(임상도) — 건물 다음
@@ -127,9 +128,11 @@ async function main() {
   let fitState = '';
   const fitTo = (box, mode, tag) => { view.fit(box, mode); fitState = tag; };
   view.controls.addEventListener('start', () => { fitState = ''; });
-  document.getElementById('fitBtn').onclick = () => (fitState === 'focus' ? fitTo(b, 'iso', 'all') : fitTo(focus, 'iso', 'focus'));
-  document.getElementById('topBtn').onclick = () => (fitState === 'focusTop' ? fitTo(b, 'top', 'allTop') : fitTo(focus, 'top', 'focusTop'));
-  document.getElementById('compass').onclick = () => view.north();
+  // 사진기를 옮기는 단추는 시야 검토(걷기)부터 끝낸다(걷기 중에는 궤도 조작이 꺼져 있고 끝낼 때 옛 자리로 되돌린다) — walk는 아래에서 만듦(누를 때 부름)
+  const endWalk = () => { if (walk.active) walk.stop(); };
+  document.getElementById('fitBtn').onclick = () => { endWalk(); return fitState === 'focus' ? fitTo(b, 'iso', 'all') : fitTo(focus, 'iso', 'focus'); };
+  document.getElementById('topBtn').onclick = () => { endWalk(); return fitState === 'focusTop' ? fitTo(b, 'top', 'allTop') : fitTo(focus, 'top', 'focusTop'); };
+  document.getElementById('compass').onclick = () => { endWalk(); view.north(); };
   const shBtn = document.getElementById('shadowBtn');
   shBtn.onclick = () => { const on = !shBtn.classList.contains('on'); shBtn.classList.toggle('on', on); view.setShadows(on); };
   view.onDraw(() => ui.compass(view.heading()));
@@ -138,6 +141,9 @@ async function main() {
   const sun = new Sun(view, L, head, focus);
   const build = new Build(view, L, head);
   build.onExit = () => { picker.enabled = true; refreshLayers(); };
+  // 시야 검토 — 눈높이(지표면 + 1.70 m)로 걷기 · 켜 있는 동안 정보 누르기 · 해 · 시공 등 다른 칸은 그대로 두되 키보드는 여기서만 받는다
+  const walk = new Walk(view, L, picker, document.getElementById('walkBtn'));
+  walk.onChange = (m) => { if (m !== 'off') { fitState = ''; ui.hideInfo(); picker.clearMarks(); } };
   const sunBtn = document.getElementById('sunBtn'), buildBtn = document.getElementById('buildBtn');
   const videoBtn = document.getElementById('videoBtn'), photoBtn = document.getElementById('photoBtn');
   if (!sun.available) { sunBtn.disabled = true; sunBtn.title = '해 그림자 — 도면 좌표계(위경도)를 모릅니다'; }
@@ -147,9 +153,10 @@ async function main() {
     // 해 그림자 보기에서는 그림자가 늘 켜짐 — 그동안 [그림자] 단추를 막아 끝날 때 단추와 실제가 어긋나지 않게(설치 전 검토 낮음)
     shBtn.disabled = k === 'sun';
   };
-  const openSun = () => { if (dock.kind === 'sun') return dock.close(); sun.panel(dock); };
+  const openSun = () => { if (dock.kind === 'sun') return dock.close(); endWalk(); sun.panel(dock); };
   const openBuild = () => {
     if (dock.kind === 'build') return dock.close();
+    endWalk();
     ui.hideInfo(); picker.clearMarks();
     build.panel(dock);
     build.enter();
@@ -160,6 +167,7 @@ async function main() {
   buildBtn.onclick = openBuild;
   // ★[JACK 1103] A = 자를 노선(부지 선형 · 진입도로 하나 — 없으면 지금 노선) · 노선이 바뀌면 칸을 다시 연다(막대 범위 · ◀ ▶ 측점이 그 노선 것)
   const cutAt = (where, A) => {
+    endWalk();
     picker.hover(null);
     // 다른 칸(시공 재생)을 먼저 닫는다 — 닫힐 때 옹벽 재료의 자르는 면을 걷으므로 자르기 뒤에 닫으면 자르기가 풀린다
     if (dock.kind !== 'cut' || (A && A !== section.A)) { dock.close(); section.start(where, true, A); section.panel(dock); }
@@ -190,6 +198,7 @@ async function main() {
   // [영상] — 현장을 20초에 한 바퀴 · 1080p
   videoBtn.onclick = async () => {
     if (capturing) return;
+    endWalk();
     capturing = true;
     let stop = false;
     if (dock.kind === 'build') dock.close();
@@ -244,6 +253,7 @@ async function main() {
       } else if (m.t === 'focus' && Array.isArray(m.box)) {
         const o = head.origin || [0, 0];
         const z0 = b[2], z1 = b[5];
+        endWalk();
         view.fit([m.box[0] - o[0], m.box[1] - o[1], z0, m.box[2] - o[0], m.box[3] - o[1], z1]);
       }
     });
@@ -289,7 +299,7 @@ async function main() {
     head: {
       origin: head.origin, bbox: b, walls: (head.walls || []).length, patterns: (head.patterns || []).length, warn: head.warn || [],
       drain: L.drain ? L.drain.summary : null, slope: L.slope ? { n: L.slope.n, step: L.slope.step } : null, cad: L.cad ? (L.cad.missing ? 'missing' : (head.cad.labels || []).length) : null,
-      bldg: L.bldg ? (L.bldg.missing ? { missing: L.bldg.missing, quiet: !!L.bldg.quiet } : { n: L.bldg.n, hit: L.bldg.hit }) : null,
+      bldg: L.bldg ? (L.bldg.missing ? { missing: L.bldg.missing, quiet: !!L.bldg.quiet } : { n: L.bldg.n }) : null,
       struct: L.struct ? { n: L.struct.n } : null,
       // ★[JACK 1111 옹벽 겉모습] 무늬 메시마다 옹벽 번호 · 층 · 겉모습(null = 옛 한 색) · 조각 수 — 시험(키트)이 형식별 겉모습을 확인
       faces: L.pattern ? L.pattern.obj.children.map(m => ({ wall: m.userData.wall, pat: m.userData.pat, face: m.userData.face || null, pieces: m.userData.pieces || 0 })) : [],
@@ -338,6 +348,14 @@ async function main() {
     photo: async () => { const bl = await photo(view); return { bytes: bl.size, type: bl.type, ...(await (async () => { const bm = await createImageBitmap(bl); const r = { w: bm.width, h: bm.height }; bm.close(); return r; })()) }; },
     video: async (frames) => { const t = performance.now(); const r = await video(view, { focus, frames: frames || 30 }); return r ? { bytes: r.blob.size, ext: r.ext, codec: r.codec, frames: r.frames, ms: Math.round(performance.now() - t) } : null; },
     dock: () => dock.kind,
+    // 시야 검토 시험 — at = 도면 좌표 [X, Y] · 바로 서기(날지 않음) · 걷기 m 만큼 · 지금 눈 · 땅 높이(도면 좌표 Z)
+    walk: {
+      enter: (at) => { const o = head.origin || [0, 0]; return walk.enterAt(at[0] - o[0], at[1] - o[1], true); },
+      by: (f, s) => walk.walkBy(f, s || 0),
+      turn: (deg) => { walk.st.yaw += deg * Math.PI / 180; walk._apply(); },
+      state: () => { const o = head.origin || [0, 0], c = view.camera; return { mode: walk.mode, eye: [c.position.x + o[0], c.position.y + o[1], c.position.z], ground: walk.st.gz, fov: c.fov, pitch: walk.pitch, heading: view.heading() }; },
+      stop: () => walk.stop(),
+    },
     // ★[v115] 수목 — 덩이 상태 수(자세히 · 대리 · 숨김) · 그린 호출 · 세모(마지막 장 · 그림자 포함) · 밀도
     forest: () => (L.tree && L.tree.stats ? { ...L.tree.stats(), calls: view.renderer.info.render.calls, tris: view.renderer.info.render.triangles, on: !!L.tree.on } : null),
     // 나무 i의 밑동(도면 좌표) — 시험이 숲 안 보기 자리를 고를 때

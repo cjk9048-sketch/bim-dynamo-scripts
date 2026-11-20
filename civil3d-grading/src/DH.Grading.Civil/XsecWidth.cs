@@ -40,7 +40,7 @@ internal static class XsecWidth
         double curR = System.Math.Max(0.0, GradingSettings.XsecRight);
         if (!GradingSettings.XsecWidthAuto)
         {
-            log?.AppendLine($"  절단선 폭 — <b>수동</b> 좌{curL:0.#}/우{curR:0.#}m(도면설정 값)");
+            log?.AppendLine($"  절단선 폭 — <b>수동</b> 좌{curL:0.#}/우{curR:0.#}m(종횡단도 설정 값)");
             return (curL, curR);
         }
 
@@ -89,7 +89,7 @@ internal static class XsecWidth
 
         log?.AppendLine($"  절단선 폭 — <b>자동</b> 좌{w:0.#}/우{w:0.#}m"
                       + $" (정지 결과에서 가장 먼 점 {far:F1}m + 여유 {MarginM:0.#}m → {StepM:0.#}m 단위 올림"
-                      + $" · 잰 점 {nPts}개) · 도면설정에도 적었다" + perNote);
+                      + $" · 잰 점 {nPts}개) · 종횡단도 설정에도 적었다" + perNote);
         // ★★[검토 0908] <b>경고는 사람에게 닿아야 한다.</b>
         //   종전엔 <c>log</c>가 <c>null</c>인 자리(검토선 생성·단면)에서는 <b>아예 안 떴고</b>,
         //   떠도 로그 <b>파일</b>에만 갔다. 폭이 폭주하는 유일한 안전망인데 아무도 못 봤다.

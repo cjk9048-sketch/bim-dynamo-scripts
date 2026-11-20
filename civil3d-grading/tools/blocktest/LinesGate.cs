@@ -142,9 +142,51 @@ static class LinesGate
                 {
                     var fin = FinalSurface.Compose(gr.T, new[] { new FinalSurface.Layer(br.Tris, "도로", 1) }, new FinalSurface.Options(), out var frep);
                     Console.WriteLine($"[FIN] 최종면 {(fin == null ? "못 지음" : fin.Count + " 세모")} · 가파른 띠 {frep.Steep.Count}");
+                    Console.WriteLine("[FIN] " + frep.Text.Replace("\n", "\n[FIN] "));
+                    if (fin != null && !string.IsNullOrEmpty(outDir)) using (var w = new StreamWriter(Path.Combine(outDir, $"{name}_final_tris.txt"))) foreach (var t in fin) w.WriteLine(string.Format(Ci, "{0:R} {1:R} {2:R} {3:R} {4:R} {5:R} {6:R} {7:R} {8:R}", t.A.X, t.A.Y, t.A.Z, t.B.X, t.B.Y, t.B.Z, t.C.X, t.C.Y, t.C.Z));
                     foreach (var sr in frep.Steep) Console.WriteLine(string.Format(Ci, "[FIN]   ({0:F2},{1:F2})~({2:F2},{3:F2}) {4:F2} m · 최대 {5:F3} m · 변 {6:F2} 끝 {7:F4}{8}", sr.X0 % 1000, sr.Y0 % 1000, sr.X1 % 1000, sr.Y1 % 1000, sr.Length, sr.MaxDv, sr.EdgeLen, sr.EdgeEndDv, sr.Crease ? " (꺾임)" : ""));
                 }
 
+                // [lf3] 이긴 판 지도 — BLOCKTEST_LFGRID = "cx,cy,half,n"(1000 나머지 좌표) → <out>/<name>_grid.txt: x y | 성토 z 띠 토막 종류 | 절토 z 띠 토막 종류(종류 0 보통 · 1 오목 무리 · 2 덮개 · 3 다리 늘림)
+                var grd = Environment.GetEnvironmentVariable("BLOCKTEST_LFGRID");
+                if (!string.IsNullOrEmpty(grd) && br.Lf?.C != null && !string.IsNullOrEmpty(outDir))
+                {
+                    var c = br.Lf.C;
+                    double bx0 = Math.Floor(inpR.X[0] / 1000) * 1000, by0 = Math.Floor(inpR.Y[0] / 1000) * 1000;
+                    // "auto,half,n" = 오목 굽이 C마다
+                    var specs = grd.StartsWith("auto") ? c.Rays.Where(r => double.IsFinite(r.CX)).Select(r => (r.CX, r.CY)).Distinct().Select(cc => new[] { cc.CX % 1000, cc.CY % 1000, double.Parse(grd.Split(',')[1], Ci), double.Parse(grd.Split(',')[2], Ci) }).ToList()
+                                                   : new List<double[]> { grd.Split(',').Select(v => double.Parse(v, Ci)).ToArray() };
+                    for (int si = 0; si < specs.Count; si++) {
+                    var q = specs[si]; int gn = (int)q[3];
+                    string Kind(RoadLines.Sheet sh, int f)
+                    {
+                        if (f < 0) return "NaN -1 -1 -1";
+                        var fc = sh.F[f]; var st = c.Strips[fc.Strip]; var ra = c.Rays[st.A]; var rb = c.Rays[st.B];
+                        int kd = ra.Ext ? 3 : double.IsFinite(ra.CX) && double.IsFinite(rb.CX) ? (Enumerable.Range(0, fc.N).Any(k => Math.Abs(fc.X[k] - ra.CX) < 1e-9 && Math.Abs(fc.Y[k] - ra.CY) < 1e-9) ? 2 : 1) : 0;
+                        return string.Format(Ci, "{0:F4} {1} {2} {3}", c.Zf(fc, 0, 0) * 0 + 0, fc.Strip, fc.Seg, kd);
+                    }
+                    using var w = new StreamWriter(Path.Combine(outDir, specs.Count > 1 ? $"{name}_grid{si + 1}.txt" : $"{name}_grid.txt"));
+                    Console.WriteLine(string.Format(Ci, "[GRID] {0} {1:F2} {2:F2}", si + 1, q[0], q[1]));
+                    for (int gi = 0; gi <= gn; gi++)
+                        for (int gj = 0; gj <= gn; gj++)
+                        {
+                            double x = bx0 + q[0] - q[2] + 2 * q[2] * gi / gn, y = by0 + q[1] - q[2] + 2 * q[2] * gj / gn;
+                            var hf = c.Top(c.Fill, x, y); var hc = c.Top(c.Cut, x, y);
+                            w.WriteLine(string.Format(Ci, "{0:F4} {1:F4} {2:F4} {3} {4:F4} {5} {6}", x % 1000, y % 1000, hf.Z, Kind(c.Fill, hf.F), hc.Z, Kind(c.Cut, hc.F), c.KindAt(x, y)));
+                        }
+                    }
+                }
+                var rys = Environment.GetEnvironmentVariable("BLOCKTEST_LFRAYS");
+                if (!string.IsNullOrEmpty(rys) && br.Lf?.C != null)
+                {
+                    var q = rys.Split(',').Select(int.Parse).ToArray(); var c = br.Lf.C;
+                    for (int ri = 0; ri < c.Rays.Count; ri++)
+                    {
+                        var r = c.Rays[ri]; if (r.V < q[0] || r.V > q[1]) continue;
+                        Console.WriteLine(string.Format(Ci, "[RAY] {0} v{1} ({2:F3},{3:F3}) z {4:F3} u({5:F3},{6:F3}) T {7:F2} ext {8} C {9}", ri, r.V, r.OX % 1000, r.OY % 1000, r.Z, r.UX, r.UY, r.T, r.Ext, double.IsFinite(r.CX)));
+                    }
+                    for (int si = 0; si < c.Strips.Count; si++) { var st = c.Strips[si]; var ra = c.Rays[st.A]; if (ra.V >= q[0] && ra.V <= q[1]) Console.WriteLine(string.Format(Ci, "[STR] {0} rays {1}-{2} T {3:F2}/{4:F2} start {5:F2}", si, st.A, st.B, st.TA, st.TB, c.Start[si])); }
+                }
                 var prb = Environment.GetEnvironmentVariable("BLOCKTEST_LFPROBE");
                 if (!string.IsNullOrEmpty(prb) && br.Lf?.C != null)
                 {
@@ -160,6 +202,9 @@ static class LinesGate
                             return string.Format(Ci, "띠 {0} 토막 {1} [a v{2} ({3:F2},{4:F2}) u({5:F3},{6:F3}) T{7:F1} · b v{8} ({9:F2},{10:F2}) u({11:F3},{12:F3}) T{13:F1} · X {14:F2}/{15:F2}]", sh.F[f].Strip, sh.F[f].Seg, ra.V, ra.OX % 1000, ra.OY % 1000, ra.UX, ra.UY, ra.T, rb.V, rb.OX % 1000, rb.OY % 1000, rb.UX, rb.UY, rb.T, cx.A, cx.B);
                         }
                         Console.WriteLine("[PRB]   성토 덮는 세모: " + string.Join(" · ", c.Covering(c.Fill, x, y).OrderByDescending(v => v.Z).Take(12).Select(v => $"띠{v.Strip}/{v.Seg} {v.Z:F3}")));
+                        Console.WriteLine("[PRB]   절토 덮는 세모: " + string.Join(" · ", c.Covering(c.Cut, x, y).OrderBy(v => v.Z).Take(12).Select(v => $"띠{v.Strip}/{v.Seg} {v.Z:F3}")));
+                        foreach (var (shN, shG) in new[] { ("성토", c.Fill), ("절토", c.Cut) })
+                            Console.WriteLine($"[PRB]   {shN} 뺀 세모: " + string.Join(" · ", shG.Gone.Where(f => f.MinX <= x && f.MaxX >= x && f.MinY <= y && f.MaxY >= y).Take(12).Select(f => string.Format(Ci, "띠{0}/{1} {2:F3}", f.Strip, f.Seg, c.Zf(f, x, y)))));
                         Console.WriteLine(string.Format(Ci, "[PRB] ({0},{1}) HI {2:F3}({3}) LO {4:F3}({5}) 땅 {6:F3} 종류 {7}", q[0], q[1], hc.Z, fi(c.Cut, hc.F), hf.Z, fi(c.Fill, hf.F), g, c.KindAt(x, y)));
                     }
                 }

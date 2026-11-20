@@ -49,13 +49,19 @@ public static partial class RoadLines
         public int Facets, Rays, CreaseSegs, ZeroSegs, Bends;
         /// <summary>★[2단계] 땅과 못 만나 뺀 판 세모 수.</summary>
         public int FacetsDropped;
+        /// <summary>★[lf3] 다리 늘림 판 시작선 마구리 면 세모 수.</summary>
+        public int Skirts;
+        /// <summary>마구리 면 네모가 꼬여(자기 교차) 건너뛴 수.</summary>
+        public int SkirtsBad;
+        /// <summary>★[lf3] C를 꼭지로 부채로 나눈 덮개 면 수.</summary>
+        public int CoreFans;
         /// <summary>★[2단계] 절토 1단 시작선(도로 가장자리 중 절토 자리와 맞닿은 줄 · 묶음 번호) — [옹벽 변환] 고를 선만(<see cref="RoadGrade.EdgeStartLines"/>) · 면 · 그림 선 아님.</summary>
         public readonly List<RoadGrade.TierLine> EdgeStart = new();
         /// <summary>단계 ms.</summary>
         public long MsSheet, MsEnv, MsZero, MsRegion, MsLines, MsTin, MsFix, MsAll;
         public string Stats => string.Format(CultureInfo.InvariantCulture,
-            "오목 굽이(한 점으로 모은 광선 무리) {17} · 광선 {0:N0} · 판 세모 {1:N0}(땅과 못 만나 뺌 {18:N0}) · 골 토막 {2:N0} · 영선 토막 {3:N0} · 섬 메움 {4}({5:F1} ㎡ · 섞임 {6}) · 이음 못 한 끝 {7}{8} · ms 판 {9} · 덮음 {10} · 영선 {11} · 자리 {12} · 선 {13} · 세모 {14} · 맞춤 {15} · 전체 {16}",
-            Rays, Facets, CreaseSegs, ZeroSegs, Isles, IsleArea, IslesMixed, OpenEnds, OpenAt.Length > 0 ? " @" + OpenAt : "", MsSheet, MsEnv, MsZero, MsRegion, MsLines, MsTin, MsFix, MsAll, Bends, FacetsDropped);
+            "오목 굽이(한 점으로 모은 광선 무리) {17}(마구리 면 {19}{21} · 부채 덮개 {20}) · 광선 {0:N0} · 판 세모 {1:N0}(땅과 못 만나 뺌 {18:N0}) · 골 토막 {2:N0} · 영선 토막 {3:N0} · 섬 메움 {4}({5:F1} ㎡ · 섞임 {6}) · 이음 못 한 끝 {7}{8} · ms 판 {9} · 덮음 {10} · 영선 {11} · 자리 {12} · 선 {13} · 세모 {14} · 맞춤 {15} · 전체 {16}",
+            Rays, Facets, CreaseSegs, ZeroSegs, Isles, IsleArea, IslesMixed, OpenEnds, OpenAt.Length > 0 ? " @" + OpenAt : "", MsSheet, MsEnv, MsZero, MsRegion, MsLines, MsTin, MsFix, MsAll, Bends, FacetsDropped, Skirts, CoreFans, SkirtsBad > 0 ? " · 꼬여 건너뜀 " + SkirtsBad : "");
     }
 
     /// <summary>한 조각 짓기 — <paramref name="tin"/> 거짓 = 미리보기(선 · 데이라잇 · 토량까지 · Civil 맞춤 안 함). 못 지으면 Ok = false · Note에 까닭.</summary>

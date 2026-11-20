@@ -30,11 +30,11 @@ public static class ProfileSheetRules
             if (s > 0)
             {
                 string note = $"부지 종단도 축척 1:{s:0} 따름({(byCanno ? "도면 주석 축척" : "부지 도곽 폭")})";
-                if (okPin && Math.Abs(pinned - s) > 1e-6) note += $" · ⚠도면설정 고정 1:{pinned:0}과 다름 — 한 도면 한 축척이라 부지 축척으로";
+                if (okPin && Math.Abs(pinned - s) > 1e-6) note += $" · ⚠종횡단도 설정 고정 1:{pinned:0}과 다름 — 한 도면 한 축척이라 부지 축척으로";
                 return (s, note);
             }
         }
-        if (okPin) return (pinned, $"도면설정 고정 1:{pinned:0}");
+        if (okPin) return (pinned, $"종횡단도 설정 고정 1:{pinned:0}");
         double f = double.IsFinite(fallback) && fallback > 0 ? fallback : DefaultScale;
         return (f, $"기본 1:{f:0}(부지 종단도 · 고정 축척 없음)");
     }

@@ -84,6 +84,7 @@ svg{width:16px;height:16px;flex:none}
 #legend{margin:6px 4px 2px;display:none}
 #legend .bar{height:10px;border-radius:5px;background:linear-gradient(90deg,#cc2a1f,#f4f4f0,#265ccc)}
 #legend .ends{display:flex;justify-content:space-between;color:var(--dim);font-size:11px;margin-top:2px}
+#walkHint{position:absolute;left:50%;top:64px;transform:translateX(-50%);padding:6px 14px;font-size:13px;pointer-events:none;z-index:7;white-space:nowrap}
 #nav{position:absolute;right:10px;bottom:10px;display:flex;align-items:center;gap:2px;padding:4px}
 #compass{width:34px;height:34px;padding:0;justify-content:center}
 #compass svg{width:28px;height:28px;transition:none}
@@ -164,6 +165,7 @@ body.inhost .host{display:inline-flex}
   <button id="buildBtn" title="시공 순서"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 20h18"/><path d="M5 20v-5h4v5M10 20V10h4v10M15 20V5h4v15"/></svg></button>
   <button id="videoBtn" title="드론 비행 영상(20초)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="m16 10 5-3v10l-5-3"/></svg></button>
   <button id="photoBtn" title="사진(3D만)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 8h3l2-3h6l2 3h3v11H4Z"/><circle cx="12" cy="13" r="3.5"/></svg></button>
+  <button id="walkBtn" title="시야 검토"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg></button>
 </div>
 <div id="dock" class="pnl"></div>
 
