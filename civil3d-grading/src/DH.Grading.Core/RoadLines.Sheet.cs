@@ -12,12 +12,16 @@ public static partial class RoadLines
     const double FanSag = 0.005, FanGap = 0.5, FanMaxRad = 3.0 * Math.PI / 180, FanMinRad = 0.02 * Math.PI / 180;
     /// <summary>골 · 등성이를 끊김선으로 넣는 꺾임(두 판 기울기 벡터 차) — 굽이 원호 0.25 m 마디의 작은 꺾임(≈ 0.02)은 안 넣음.</summary>
     const double CreaseGrad = 0.05;
-    /// <summary>오목 굽이 모으는 점 C 곁 비운 반지름(m) — 단차 면 세모 크기.</summary>
-    const double CoreR = 0.75;
-    /// <summary>★[lf3] 다리 늘림 시작선 마구리 면 길이 — 시작 거리(C까지)의 비율.</summary>
-    const double SkirtFrac = 0.75;
+    /// <summary>★[JACK 1120] 다리 늘림 판이 도로 면을 벗어나는 자리에서 도로 가장자리보다 적어도 이만큼 위(절토) · 아래(성토) — 가장자리는 늘 원호(진짜 원천) 판 몫
+    /// (같은 높이면 µm 다툼으로 가장자리에 절토 · 성토 실 조각이 생겨 성토 0단 윗선이 굽이에서 끊겼다 — 덤프 B 굽이 1 · 4).</summary>
+    const double ExtLift = 0.05;
 
-    internal sealed class Ray { public double OX, OY, UX, UY, Z, S, T, CX = double.NaN, CY = double.NaN; public int V; public sbyte Side; public bool Ext;
+    /// <summary>원천 광선 — E = 판이 시작하는 거리(다리 늘림 광선은 뿌리가 도로 면 안이라 도로 면을 벗어나는 거리 · 그 밖 0) ·
+    /// ZE = 다리 늘림 광선이 도로 면을 벗어나는 자리의 도로 가장자리 높이(그 밖 NaN) · Lift = 그 자리에서 판이 가장자리를 비켜설 높이 ·
+    /// TC = 그 다리의 C까지 거리(다리 늘림 광선의 가장자리 맞춤이 0이 되는 거리 — <see cref="Sheet.Corr"/>) ·
+    /// Run = 오목 굽이 무리 번호(−1 = 아님 — 무리 안 이웃 광선끼리는 만나는 점에서 띠가 끝남) · XT = 그 만나는 점까지 거리(가장 가까운 쪽 · 길잡이 광선 끝) ·
+    /// ExtId = 다리 늘림 번호(−1 = 아님 — 세모 나눌 때 늘림 판마다 따로 띠).</summary>
+    internal sealed class Ray { public double OX, OY, UX, UY, Z, S, T, E, ZE = double.NaN, Lift, TC, XT = double.PositiveInfinity; public int V, Run = -1, ExtId = -1; public sbyte Side; public bool Ext;
         /// <summary>★[2단계] 이 광선의 단면 번호(도로 면 <see cref="RoadRing.Deck.ProfKeys"/> — 0 = 기본 · 1.. = [옹벽 변환] 기록 단면).</summary>
         public int P; }
 
@@ -58,6 +62,11 @@ public static partial class RoadLines
         public bool FlatOf(Fac f) => V[f.Pr].Flat[f.Seg];
         /// <summary>세모마다 그것을 (일부라도) 가리는 세모와 겹친 볼록 다각형.</summary>
         public readonly Dictionary<int, List<(int Q, List<(double X, double Y)> P)>> Occ = new();
+        /// <summary>★[JACK 1120] 광선마다 이 판의 가장자리 맞춤(m) — 다리 늘림 광선만 · 도로 면을 벗어나는 자리(E)에서 판이 도로 가장자리보다 낮지(절토) · 높지(성토) 않게
+        /// (<see cref="ExtLift"/> 넉넉히) 올림 · 내림 → C까지 거리(TC)에서 0(그 너머는 다리 평면 그대로 · <see cref="Ctx.SrcZ"/>).
+        /// 굽이 안쪽 가장자리는 종단 경사가 R중심/R안쪽 배로 가팔라 다리 경사로 늘린 평면이 가장자리를 파고들었다(덤프 B 굽이 1 · 6 cm 부딪힘) ·
+        /// 맞춤을 광선 끝까지 두면 C 너머 다리 평면이 13 cm 우묵해져 소단이 패였다(덤프 B′ 굽이 2).</summary>
+        public double[] Corr = null!;
     }
 
     /// <summary>바탕 세모(상자로 꺼낸 것) — 점 높이 · 상자 질의 · 평면.</summary>
@@ -213,8 +222,16 @@ public static partial class RoadLines
             if ((a.V + 1) % m == b.V && a.V < D.SegProf.Length) return D.SegProf[a.V];
             return a.P;
         }
-        /// <summary>오목 굽이 무리(시작 · 끝 꼭짓점 · C · 두 다리 법선 위 C까지 거리).</summary>
+        /// <summary>오목 굽이 무리(시작 · 끝 꼭짓점 · 두 다리 마지막 법선이 만나는 점 C — 광선을 모으지 않음 · 기록 · 하네스용).</summary>
         readonly List<(int V0, int V1, double CX, double CY, double TA, double TB)> _runs = new();
+        /// <summary>★[JACK 1121] 오목 굽이 곁 자리(C마다 원) — 세모 나누기에서 고른 그물 · 약한 골 안 넣음.</summary>
+        Geometry? _zone; NetTopologySuite.Geometries.Prepared.IPreparedGeometry? _zonePrep; NetTopologySuite.Algorithm.Locate.IPointOnGeometryLocator? _zoneLoc;
+        /// <summary>굽이 곁에서 끊김선으로 넣는 골의 기울기 차 문턱.</summary>
+        const double ZoneCreaseGrad = 0.2;
+        /// <summary>[하네스] 굽이 곁 자리.</summary>
+        internal Geometry? BendZone => _zone;
+        /// <summary>[하네스] 오목 굽이 C 점들.</summary>
+        internal IEnumerable<(double X, double Y)> BendC => _runs.Select(r => (r.CX, r.CY));
         public Sheet Cut = null!, Fill = null!;
         public Ground G = null!;
         readonly IGroundTris _gt;
@@ -243,12 +260,13 @@ public static partial class RoadLines
         {
             var d = D; int m = d.B.Count;
             double step = Math.Min(FanMaxRad, Math.Min(FanGap / Dlim, Math.Sqrt(2 * FanSag / Dlim)));
-            // ★ 오목 굽이(안쪽) — 꺾임 &lt; −0.057°인 꼭짓점이 이어진 무리마다 들어오는 변 법선 · 나가는 변 법선 두 줄이 만나는 점 C로 모든 광선을 모음
-            //   (굽이 원호 Catmull–Rom 꼭짓점 법선은 C 곁에서 제각각 만나 판이 접힌 끝(갈래 곡선) 너머가 비고 다른 다리 판으로 높이가 1 m 뛰었다 — 1119 덤프 B 굽이 3 ·
-            //    모두 C에서 만나면 원호처럼 앞 부채 · 뒤집힌 부채가 빈틈 없이 덮고 무리 첫 · 끝 광선 = 다리 법선이라 다리 판과 그대로 이어짐)
+            // ★★[JACK 1120 «굽이 안쪽 동그라미 · 부채 · 보타이» — 모으기 없앰] 오목 굽이(안쪽) — 꺾임 &lt; −0.057°인 꼭짓점이 이어진 무리(꺾임 합 10° 넘음)마다
+            //   첫 꼭짓점 광선 = 들어오는 다리 법선 · 끝 꼭짓점 광선 = 나가는 다리 법선(다리 판 · 다리 늘림 판과 같은 선에서 이어짐 — 틈 없음) · 가운데는 제 꼭짓점 법선 그대로(한 점으로 모으지 않음).
+            //   두 다리 판은 굽이 안쪽 전체로 평면 그대로 늘려(AddExt — 도로 면을 벗어나는 데서 시작) 원호 판 · 서로와 겉면 다툼(덮음)으로 만나 골선에서 끝남 —
+            //   옛 길(모든 광선을 C로 모음 → C 곁 0.75 m 원 마개 · 부채 덮개 · C에서 시작하는 늘림 판 · 마구리 면)은 종단 경사로 C에서 광선 높이가 달라 원 · 방사 부채 · 세로 절벽(보타이)을 냈다.
             var turnA = new double[m];
             for (int v = 0; v < m; v++) { int pv = (v - 1 + m) % m; turnA[v] = Math.Atan2(d.NX[pv] * d.NY[v] - d.NY[pv] * d.NX[v], d.NX[pv] * d.NX[v] + d.NY[pv] * d.NY[v]); }
-            var toC = new (double X, double Y)?[m];
+            var legN = new (double X, double Y)?[m]; var runOf = Enumerable.Repeat(-1, m).ToArray();
             for (int v0 = 0; v0 < m; v0++)
             {
                 if (!(turnA[v0] < -1e-3) || turnA[(v0 - 1 + m) % m] < -1e-3) continue;   // 무리 시작
@@ -259,7 +277,7 @@ public static partial class RoadLines
                 int pa = (v0 - 1 + m) % m; double ax = d.B[v0].X, ay = d.B[v0].Y, aux = d.NX[pa], auy = d.NY[pa], bx = d.B[v1].X, by = d.B[v1].Y, bux = d.NX[v1], buy = d.NY[v1];
                 double den = aux * buy - auy * bux; if (Math.Abs(den) < 1e-9) continue;
                 double wx = bx - ax, wy = by - ay, t = (wx * buy - wy * bux) / den, u = (wx * auy - wy * aux) / den;
-                if (!(t > 0.05 && u > 0.05)) { Debug?.Invoke($"오목 무리 v {v0}~{v1} 못 모음(t {t:F2} u {u:F2})"); continue; }
+                if (!(t > 0.05 && u > 0.05)) { Debug?.Invoke($"오목 무리 v {v0}~{v1} 다리 법선이 안쪽에서 안 만남(t {t:F2} u {u:F2}) — 늘림 없음"); continue; }
                 double cx = ax + aux * t, cy = ay + auy * t;
                 bool ok = true;
                 for (int v = v0; ; v = (v + 1) % m)
@@ -269,8 +287,9 @@ public static partial class RoadLines
                     if (gl < 1e-6 || (gx * nbx + gy * nby) / gl / Math.Max(1e-9, Math.Sqrt(nbx * nbx + nby * nby)) < 0.5) { ok = false; break; }
                     if (v == v1) break;
                 }
-                if (!ok) { Debug?.Invoke($"오목 무리 v {v0}~{v1} 못 모음(C 쪽이 안쪽 아님)"); continue; }
-                for (int v = v0; ; v = (v + 1) % m) { toC[v] = (cx, cy); if (v == v1) break; }
+                if (!ok) { Debug?.Invoke($"오목 무리 v {v0}~{v1} 늘림 없음(C 쪽이 안쪽 아님)"); continue; }
+                legN[v0] = (aux, auy); legN[v1] = (bux, buy);
+                for (int v = v0; ; v = (v + 1) % m) { runOf[v] = _runs.Count; if (v == v1) break; }
                 Out.Bends++; _runs.Add((v0, v1, cx, cy, t, u));
                 Debug?.Invoke(string.Format(System.Globalization.CultureInfo.InvariantCulture, "오목 무리 v {0}~{1} 꺾임 {2:F1}° · C ({3:F2},{4:F2}) 거리 {5:F2}/{6:F2}", v0, v1, tot * 180 / Math.PI, cx % 1000, cy % 1000, t, u));
             }
@@ -281,18 +300,14 @@ public static partial class RoadLines
                 double turn = Math.Atan2(n1x * n2y - n1y * n2x, n1x * n2x + n1y * n2y);
                 sbyte side = SideOf(v);
                 int pv0 = v < d.VtxProf.Length ? d.VtxProf[v] : 0;
-                void Add(double ux, double uy) => Rays.Add(new Ray { OX = d.B[v].X, OY = d.B[v].Y, UX = ux, UY = uy, Z = d.B[v].Z, S = d.BS[v], V = v, Side = side, T = Dlim, P = pv0 });
+                void Add(double ux, double uy) => Rays.Add(new Ray { OX = d.B[v].X, OY = d.B[v].Y, UX = ux, UY = uy, Z = d.B[v].Z, S = d.BS[v], V = v, Side = side, T = Dlim, P = pv0, Run = runOf[v] });
                 // 부채는 꺾임이 0.02° 넘을 때만 — 곧은 다리의 아주 작은 볼록 꺾임(0.003°)은 가운데 광선 하나(부채 칸 0.5 mm 토막이 바늘 세모가 됐다) · 굽이 바깥은 부채(먼 단 마디 0.5 m · A4)
                 if (turn > FanMinRad)
                 {
                     int ns = Math.Max(1, (int)Math.Ceiling(turn / step)); double a1 = Math.Atan2(n1y, n1x);
                     for (int t = 0; t <= ns; t++) { double a = a1 + turn * t / ns; Add(Math.Cos(a), Math.Sin(a)); }
                 }
-                else if (toC[v] is { } cc)
-                {
-                    double gx = cc.X - d.B[v].X, gy = cc.Y - d.B[v].Y, gl = Math.Sqrt(gx * gx + gy * gy);
-                    Add(gx / gl, gy / gl); Rays[^1].CX = cc.X; Rays[^1].CY = cc.Y;
-                }
+                else if (legN[v] is { } ln) Add(ln.X, ln.Y);
                 else
                 {
                     double bx = n1x + n2x, by = n1y + n2y, bl = Math.Sqrt(bx * bx + by * by);
@@ -311,12 +326,18 @@ public static partial class RoadLines
                     if (t > 1e-6 && t < r.T && u >= -1e-9 && u <= 1 + 1e-9) r.T = t;
                 }
             if (Debug != null) foreach (var r in Rays.Where(r => r.T < Dlim)) Debug(string.Format(System.Globalization.CultureInfo.InvariantCulture, "광선 끝 v {0} ({1:F2},{2:F2}) 쪽 {3} 방향 ({4:F3},{5:F3}) T {6:F2}", r.V, r.OX % 1000, r.OY % 1000, r.Side, r.UX, r.UY, r.T));
-            // 띠 — 이웃 광선 둘(마지막 → 처음 포함). 모이는 광선(굽이 안쪽)은 만나는 점 X를 적어 둠 — 판은 X 너머(뒤집힌 쪽)까지 그대로 이어짐
-            //   (X에서 끊으면 이웃 띠와 끝 길이가 달라 그 너머 다른 원천 판으로 높이가 뛰어 영선이 끊기고 데이라잇이 뛰는 선을 따랐다 — 1119 덤프 B 굽이 3 안쪽 송곳)
+            // 띠 — 이웃 광선 둘(마지막 → 처음 포함). 모이는 광선(굽이 안쪽)은 만나는 점 X를 적어 둠 — 오목 굽이 무리 밖(10° 아래 작은 꺾임)은 판이 X 너머(뒤집힌 쪽)까지 그대로 이어짐
+            //   (X에서 끊으면 이웃 띠와 끝 길이가 달라 그 너머 다른 원천 판으로 높이가 뛰어 영선이 끊기고 데이라잇이 뛰는 선을 따랐다 — 1119 덤프 B 굽이 3 안쪽 송곳 ·
+            //    무리 안은 C 너머를 다리 늘림 판이 덮으므로 X · C에서 끝냄 — 아래)
             int R = Rays.Count;
+            // ★[JACK 1120] 오목 굽이 무리 안 광선 — C(두 다리 마지막 법선이 만나는 점)에 가장 가까운 거리에서 끝(C 너머는 두 다리 늘림 판 몫 · 원호 끝 완화 구간의
+            //   느리게 도는 법선이 C 너머 16 m까지 다리 판과 µm로 다투며 겹쳐 옹벽 윗선이 두 줄 · 토막이 됐다 — 덤프 B′ 굽이 2)
+            double RunEnd(Ray r) { var (_, _, cx, cy, _, _) = _runs[r.Run]; return Math.Min(r.T, Math.Max(1e-3, (cx - r.OX) * r.UX + (cy - r.OY) * r.UY)); }
             for (int i = 0; i < R; i++)
             {
                 int k = (i + 1) % R; var a = Rays[i]; var b = Rays[k];
+                bool run = a.Run >= 0 && a.Run == b.Run;
+                double ta = run ? RunEnd(a) : a.T, tb = run ? RunEnd(b) : b.T;
                 double xa = double.NaN, xb = double.NaN;
                 if (!(a.V == b.V))
                 {
@@ -324,77 +345,104 @@ public static partial class RoadLines
                     if (Math.Abs(den) > 1e-12)
                     {
                         double wx = b.OX - a.OX, wy = b.OY - a.OY, t = (wx * b.UY - wy * b.UX) / den, u = (wx * a.UY - wy * a.UX) / den;
-                        if (t > 1e-9 && u > 1e-9 && t < a.T && u < b.T) { xa = t; xb = u; }
+                        if (t > 1e-9 && u > 1e-9 && t < ta && u < tb) { xa = t; xb = u; }
                     }
                 }
-                // 오목 굽이 무리 안 띠 — 모으는 점 C 앞 ρ에서 끝(C에서는 두 다리 높이가 달라(종단 경사) 모든 띠가 한 점에서 다른 높이로 만남 — 바늘 · Civil 뒤집기 1.75 m ·
-                //   C 곁 ρ 구멍은 섬으로 메워 둘레 점 높이로 세모(단차 면) · C 너머 뒤집힌 쪽은 두 다리 판이 덮음)
-                if (double.IsFinite(a.CX) && double.IsFinite(b.CX) && Math.Abs(a.CX - b.CX) < 1e-9 && Math.Abs(a.CY - b.CY) < 1e-9)
-                {
-                    double da = Math.Sqrt((a.CX - a.OX) * (a.CX - a.OX) + (a.CY - a.OY) * (a.CY - a.OY)), db = Math.Sqrt((b.CX - b.OX) * (b.CX - b.OX) + (b.CY - b.OY) * (b.CY - b.OY));
-                    double rho = Math.Min(CoreR, 0.25 * Math.Min(da, db));
-                    Strips.Add((i, k, Math.Min(a.T, da - rho), Math.Min(b.T, db - rho)));
-                    Cross.Add((double.NaN, double.NaN)); Start.Add(0); StripP.Add(PStrip(i, k));
-                    continue;
-                }
-                Strips.Add((i, k, a.T, b.T));
+                // ★[JACK 1120] 무리 안 이웃 광선이 C 앞에서 만나면 그 점 X에서 띠가 끝남(뒤집힌 쪽은 안 지음 · 광선은 골선에서 멈춤)
+                if (run) { a.XT = Math.Min(a.XT, double.IsFinite(xa) ? xa : ta); b.XT = Math.Min(b.XT, double.IsFinite(xb) ? xb : tb); }
+                Strips.Add((i, k, ta, tb));
                 Cross.Add((xa, xb)); Start.Add(0); StripP.Add(PStrip(i, k));
             }
-            // ★ 다리 늘림(JACK 1118 «굽이 안쪽 = 곧은 다리마다 제 코리더 값 · 다른 다리는 후보») — 오목 굽이 C 너머, 다리 마지막 법선 바깥(굽이 쪽)으로 그 다리 판을 평면 그대로 이어 붙임.
-            //   법선만 쓰는 판은 다리 띠가 마지막 법선에서 끝나 C 너머에서 높은 다리(성토) · 낮은 다리(절토)가 갑자기 끊겨 1.5 m 뜀(1119 덤프 B 굽이 3) — 이어 붙이면 덮음이 이어지고 골에서 단차로 만남
-            foreach (var (v0, v1, cx, cy, tA, tB) in _runs)
+            // 무리 첫 · 끝 광선(다리 법선)은 다리 띠와 같이 쓰는 선 — 길잡이 광선은 끝까지
+            for (int i = 0; i < R; i++) { var r = Rays[i]; if (r.Run >= 0 && (Rays[(i - 1 + R) % R].Run != r.Run || Rays[(i + 1) % R].Run != r.Run)) r.XT = double.PositiveInfinity; }
+            // ★ 다리 늘림(JACK 1118 «굽이 안쪽 = 곧은 다리마다 제 코리더 값 · 다른 다리는 후보» · ★★JACK 1120) — 오목 굽이마다 두 다리 판을 다리 곧은 선 그대로 굽이 쪽으로 평면 이어 붙임.
+            //   원호 판(제 법선)과 겉면 다툼 — 도로 곁은 가까운 원호 판이 이기고 · 종단 경사로 원호 광선 높이가 갈리는 C 곁은 겉면 쪽 다리 판(성토 = 높은 · 절토 = 낮은)이 덮어
+            //   원호 광선이 다리 판과 만나는 골선에서 끝남 · C 너머는 두 다리 판이 골선에서 만남(소단선도 골선에서 꺾여 이어짐)
+            foreach (var (v0, v1, _, _, tA, tB) in _runs)
             {
                 int pa = (v0 - 1 + m) % m, nb = (v1 + 1) % m;
                 double eax = d.B[v0].X - d.B[pa].X, eay = d.B[v0].Y - d.B[pa].Y, eal = Math.Sqrt(eax * eax + eay * eay);
                 double ebx = d.B[nb].X - d.B[v1].X, eby = d.B[nb].Y - d.B[v1].Y, ebl = Math.Sqrt(ebx * ebx + eby * eby);
                 if (eal < 1e-9 || ebl < 1e-9) continue;
-                AddExt(v0, eax / eal, eay / eal, d.NX[pa], d.NY[pa], tA, (d.B[v0].Z - d.B[pa].Z) / eal, pa < d.SegProf.Length ? d.SegProf[pa] : 0);
-                AddExt(v1, -ebx / ebl, -eby / ebl, d.NX[v1], d.NY[v1], tB, (d.B[v1].Z - d.B[nb].Z) / ebl, v1 < d.SegProf.Length ? d.SegProf[v1] : 0);
+                AddExt(v0, eax / eal, eay / eal, d.NX[pa], d.NY[pa], (d.B[v0].Z - d.B[pa].Z) / eal, pa < d.SegProf.Length ? d.SegProf[pa] : 0, tA);
+                AddExt(v1, -ebx / ebl, -eby / ebl, d.NX[v1], d.NY[v1], (d.B[v1].Z - d.B[nb].Z) / ebl, v1 < d.SegProf.Length ? d.SegProf[v1] : 0, tB);
             }
-            Out.Rays = Rays.Count;
+            Out.Rays = Rays.Count; Out.ExtRays = Rays.Count(r => r.Ext);
+            // ★[JACK 1121] 굽이 곁 — C마다 반지름 = 두 다리 C까지 거리 큰 쪽 + 3 m 원(세모 나누기 · 골 끊김선에서 따로 다룸)
+            if (_runs.Count > 0)
+            {
+                var discs = _runs.Select(r => (Geometry)new Point(r.CX, r.CY).Buffer(Math.Max(r.TA, r.TB) + 3.0, 16)).ToList();
+                _zone = discs.Count == 1 ? discs[0] : UnionAll(discs);
+                _zonePrep = NetTopologySuite.Geometries.Prepared.PreparedGeometryFactory.Prepare(_zone);
+                _zoneLoc = new NetTopologySuite.Algorithm.Locate.IndexedPointInAreaLocator(_zone);
+            }
         }
 
-        /// <summary>다리 늘림 띠 — 꼭짓점 v에서 다리 방향 (tx, ty)로 1 m마다 광선(법선 (nx, ny) · 높이 = v 높이 + 경사 × 늘린 길이) · 판은 C까지 거리 start부터 · 남의 도로 면에서 끝.</summary>
-        const double ExtGap = 1.0;
-        void AddExt(int v, double tx, double ty, double nx, double ny, double start, double g, int prof)
+        /// <summary>다리 늘림 띠 — 꼭짓점 v에서 다리 곧은 선 (tx, ty)로 <see cref="ExtGap"/>마다 광선(법선 (nx, ny) · 높이 = v 높이 + 경사 × 늘린 길이).
+        /// 뿌리(곧은 선 위)는 굽이 안쪽 도로 면 안 → 판은 광선이 도로 면을 벗어나는 거리(E)부터 · 다시 도로 면을 만나면(남의 도로 면) 끝 ·
+        /// 벗어나는 거리가 C까지 거리(tC — 옛 늘림 판 시작선)를 넘는 광선(다른 다리 도로 면 속을 따라가다 멀리서 나옴)부터 그침 · 곧은 선이 도로 면 밖으로 나가면(길 건너편) 그침.</summary>
+        /// <remarks>★[JACK 1120] 간격 0.25 m(굽이 원호 마디와 같음) — 1 m면 두 광선 사이 판이 굽은 가장자리를 가로지르며 현 처짐(4.5 cm × 사면 기울기)만큼 가장자리를 파고들었다
+        /// (성토 0단 윗선 끊김 — 튜토리얼 · 덤프 V4 굽이 4) · 첫 0.1 m는 더 촘촘히(원호가 곧은 선에서 갈라지는 곳은 가장자리 높이가 다리 경사와 곧바로(1차) 다름) ·
+        /// 비켜설 높이는 0에서 1 m까지 <see cref="ExtLift"/>로 늘림(다리 판과 이음매 없음).</remarks>
+        const double ExtGap = 0.25;
+        static readonly double[] ExtNear = { 0, 0.05, 0.1 };
+        static IEnumerable<double> ExtStations(double lim) { foreach (var s in ExtNear) yield return s; for (double s = ExtGap; s <= lim + 1e-9; s += ExtGap) yield return s; }
+        int _extN;
+        void AddExt(int v, double tx, double ty, double nx, double ny, double g, int prof, double tC)
         {
+            int extId = _extN++;
             var d = D; int m = d.B.Count; int first = Rays.Count;
-            double px0 = d.B[v].X + nx * start, py0 = d.B[v].Y + ny * start;
-            for (double s = 0; s <= Dlim + 1e-9; s += ExtGap)
+            double px0 = d.B[v].X, py0 = d.B[v].Y;
+            var hits = new List<(double T, int J, double U)>(); bool any = false;
+            foreach (double s in ExtStations(Dlim))
             {
                 double ox = d.B[v].X + tx * s, oy = d.B[v].Y + ty * s;
-                // 판 시작선(C를 지나 다리 방향)이 도로 면에 닿으면 거기서 그침 — 길 건너편(바깥)까지 다리 판을 늘리지 않음
-                double sx = ox + nx * start, sy = oy + ny * start;
                 if (s > 0)
                 {
-                    bool cross = D.Poly.Contains(new Point(sx, sy));
+                    bool cross = !D.Poly.Contains(new Point(ox, oy));
                     for (int j = 0; j < m && !cross; j++)
                     {
                         var p = d.B[j]; var q = d.B[(j + 1) % m];
-                        double ex = q.X - p.X, ey = q.Y - p.Y, fx = sx - px0, fy = sy - py0, den = fx * ey - fy * ex; if (Math.Abs(den) < 1e-15) continue;
+                        double ex = q.X - p.X, ey = q.Y - p.Y, fx = ox - px0, fy = oy - py0, den = fx * ey - fy * ex; if (Math.Abs(den) < 1e-15) continue;
                         double wx = p.X - px0, wy = p.Y - py0, t = (wx * ey - wy * ex) / den, u = (wx * fy - wy * fx) / den;
-                        if (t > 1e-9 && t <= 1 + 1e-9 && u >= -1e-9 && u <= 1 + 1e-9) cross = true;
+                        if (t > 1e-6 && t <= 1 + 1e-9 && u >= -1e-9 && u <= 1 + 1e-9) cross = true;
                     }
                     if (cross) break;
                 }
-                px0 = sx; py0 = sy;
-                var r = new Ray { OX = ox, OY = oy, UX = nx, UY = ny, Z = d.B[v].Z + g * s, S = d.BS[v], V = v, Side = SideOf(v), T = Dlim, Ext = true, P = prof };
-                // 판 시작점이 도로 면 안이면 이 광선은 못 씀 · 아니면 시작 너머 첫 도로 둘레
-                if (D.Poly.Contains(new Point(ox + nx * start, oy + ny * start))) { r.T = start; }
+                px0 = ox; py0 = oy;
+                var r = new Ray { OX = ox, OY = oy, UX = nx, UY = ny, Z = d.B[v].Z + g * s, S = d.BS[v], V = v, Side = SideOf(v), T = Dlim, Ext = true, P = prof, TC = tC, ExtId = extId };
+                // 도로 둘레와 만나는 거리들 — s = 0(뿌리 = 꼭짓점 v)은 곁 두 변을 빼고 · 그 밖은 뿌리가 도로 면 안이라 첫 만남 = 벗어남(E) · 다음 만남 = 남의 도로 면(T)
+                hits.Clear();
+                for (int j = 0; j < m; j++)
+                {
+                    if (s == 0 && (j == v || j == (v - 1 + m) % m)) continue;
+                    var p = d.B[j]; var q = d.B[(j + 1) % m];
+                    double ex = q.X - p.X, ey = q.Y - p.Y, den = r.UX * ey - r.UY * ex; if (Math.Abs(den) < 1e-15) continue;
+                    double wx = p.X - r.OX, wy = p.Y - r.OY, t = (wx * ey - wy * ex) / den, u = (wx * r.UY - wy * r.UX) / den;
+                    if (t > 1e-6 && t < Dlim && u >= -1e-9 && u <= 1 + 1e-9) hits.Add((t, j, Math.Clamp(u, 0, 1)));
+                }
+                hits.Sort((p, q) => p.T.CompareTo(q.T));
+                if (s == 0) { r.E = 0; if (hits.Count > 0) r.T = hits[0].T; }
+                else if (hits.Count == 0 || hits[0].T >= tC)
+                {
+                    // C 앞에서 도로 면을 못 벗어남 — 못 씀 · 쓸 광선이 이미 있었으면 곧은 선이 굽이를 지나 다른 다리 도로 면 속 깊이 → 그침
+                    if (any) break;
+                    r.E = r.T = Dlim;
+                }
                 else
-                    for (int j = 0; j < m; j++)
-                    {
-                        var p = d.B[j]; var q = d.B[(j + 1) % m];
-                        double ex = q.X - p.X, ey = q.Y - p.Y, den = r.UX * ey - r.UY * ex; if (Math.Abs(den) < 1e-15) continue;
-                        double wx = p.X - r.OX, wy = p.Y - r.OY, t = (wx * ey - wy * ex) / den, u = (wx * r.UY - wy * r.UX) / den;
-                        if (t > start + 1e-6 && t < r.T && u >= -1e-9 && u <= 1 + 1e-9) r.T = t;
-                    }
+                {
+                    var (te, je, ue) = hits[0]; var p = d.B[je]; var q = d.B[(je + 1) % m];
+                    r.E = te; r.ZE = p.Z + (q.Z - p.Z) * ue; r.Lift = ExtLift * Math.Min(1, s / 1.0); any = true;
+                    r.T = Dlim; foreach (var h in hits) if (h.T > te + 1e-6) { r.T = h.T; break; }
+                }
                 Rays.Add(r);
             }
             for (int i = first; i + 1 < Rays.Count; i++)
             {
-                if (Rays[i].T <= start + 1e-6 && Rays[i + 1].T <= start + 1e-6) continue;
-                Strips.Add((i, i + 1, Math.Max(start, Rays[i].T), Math.Max(start, Rays[i + 1].T))); Cross.Add((double.NaN, double.NaN)); Start.Add(start); StripP.Add(prof);
+                var a = Rays[i]; var b = Rays[i + 1];
+                if (a.T <= a.E + 1e-6 && b.T <= b.E + 1e-6) continue;
+                double st = Math.Min(a.E, b.E);
+                Strips.Add((i, i + 1, Math.Max(st, a.T), Math.Max(st, b.T))); Cross.Add((double.NaN, double.NaN)); Start.Add(st); StripP.Add(prof);
             }
         }
 
@@ -450,90 +498,51 @@ public static partial class RoadLines
             var sh = new Sheet { Cut = cut, V = new SP[np] };
             for (int p = 0; p < np; p++) sh.V[p] = MakeSP(cut, p);
             double sg = cut ? 1 : -1;
+            sh.Corr = new double[Rays.Count];
+            for (int i = 0; i < Rays.Count; i++)
+            {
+                var r = Rays[i];
+                if (!r.Ext || !double.IsFinite(r.ZE)) continue;
+                double fe = sh.V[r.P].P.F(r.E);
+                sh.Corr[i] = cut ? Math.Max(0, r.ZE - fe + r.Lift - r.Z) : Math.Min(0, r.ZE + fe - r.Lift - r.Z);
+            }
             for (int s = 0; s < Strips.Count; s++)
             {
-                var (ia, ib, ta, tb) = Strips[s]; var a = Rays[ia]; var b = Rays[ib];
+                var (ia, ib, ta, tb) = Strips[s]; var a = Rays[ia]; var b = Rays[ib]; double za = a.Z, zb = b.Z;
                 var sv = sh.V[StripP[s]]; var pr = sv.P;
+                if (sh.Corr[ia] != 0 || sh.Corr[ib] != 0) { CorrStrip(sh, s); continue; }
                 bool fan = a.V == b.V && !a.Ext; double tmax = Math.Max(ta, tb), tmin = Math.Min(ta, tb), st0 = Start[s];
                 double cx0 = a.OX + a.UX * ta, cy0 = a.OY + a.UY * ta, cx1 = b.OX + b.UX * tb, cy1 = b.OY + b.UY * tb;
                 double rx = (a.OX + b.OX) / 2 + (a.UX + b.UX) / 2 * st0, ry = (a.OY + b.OY) / 2 + (a.UY + b.UY) / 2 * st0;
+                var (xa, xb) = Cross[s];
+                bool trunc = a.Run >= 0 && a.Run == b.Run && double.IsFinite(xa);
                 for (int k = 0; k < sv.NSeg; k++)
                 {
                     double d0 = Math.Max(sv.D[k], st0), d1 = sv.D[k + 1];
                     if (d1 <= st0 + 1e-9) continue;
                     if (d0 >= tmax - 1e-9) break;
+                    if (trunc && d0 >= Math.Max(xa, xb) - 1e-9) break;
                     double r0 = d0 == sv.D[k] ? sv.R[k] : pr.F(d0);
-                    var A0 = (X: a.OX + a.UX * d0, Y: a.OY + a.UY * d0, Z: a.Z + sg * r0);
-                    var B0 = (X: b.OX + b.UX * d0, Y: b.OY + b.UY * d0, Z: b.Z + sg * r0);
-                    var A1 = (X: a.OX + a.UX * d1, Y: a.OY + a.UY * d1, Z: a.Z + sg * sv.R[k + 1]);
-                    var B1 = (X: b.OX + b.UX * d1, Y: b.OY + b.UY * d1, Z: b.Z + sg * sv.R[k + 1]);
+                    var A0 = (X: a.OX + a.UX * d0, Y: a.OY + a.UY * d0, Z: za + sg * r0);
+                    var B0 = (X: b.OX + b.UX * d0, Y: b.OY + b.UY * d0, Z: zb + sg * r0);
+                    var A1 = (X: a.OX + a.UX * d1, Y: a.OY + a.UY * d1, Z: za + sg * sv.R[k + 1]);
+                    var B1 = (X: b.OX + b.UX * d1, Y: b.OY + b.UY * d1, Z: zb + sg * sv.R[k + 1]);
                     bool clip = d1 > tmin - 1e-9;
-                    var (xa, xb) = Cross[s];
                     if (double.IsFinite(xa) && ((xa > d0 && xa < d1) || (xb > d0 && xb < d1)))
                     {
                         // 광선이 이 토막 안에서 만남 — 만나는 점 X 앞 세모 · 뒤(뒤집힌) 세모 · X 높이는 두 광선 값이 달라(종단 경사) 둘 다 넣음(겉면이 고름)
                         double X = a.OX + a.UX * xa, Y = a.OY + a.UY * xa;
-                        var Xa = (X, Y, Z: a.Z + sg * pr.F(xa)); var Xb = (X, Y, Z: b.Z + sg * pr.F(xb));
+                        var Xa = (X, Y, Z: za + sg * pr.F(xa)); var Xb = (X, Y, Z: zb + sg * pr.F(xb));
                         foreach (var xp in new[] { Xa, Xb })
                         {
                             if (!(fan && k == 0)) AddFac(sh, s, k, A0, B0, xp, clip, cx0, cy0, cx1, cy1, rx, ry, a, b);
-                            AddFac(sh, s, k, xp, B1, A1, clip, cx0, cy0, cx1, cy1, rx, ry, a, b);
+                            if (!trunc) AddFac(sh, s, k, xp, B1, A1, clip, cx0, cy0, cx1, cy1, rx, ry, a, b);
                         }
                         continue;
                     }
                     if (!(fan && k == 0)) AddFac(sh, s, k, A0, B0, B1, clip, cx0, cy0, cx1, cy1, rx, ry, a, b);
                     AddFac(sh, s, k, A0, B1, A1, clip, cx0, cy0, cx1, cy1, rx, ry, a, b);
                 }
-            }
-            // 오목 굽이 무리 C 곁 덮개 — 띠 끝(C 앞 ρ) 현과 C를 잇는 세모 · ★[lf3] 꼭지 높이 = 무리 광선이 C에 닿는 높이 중 겉면 쪽(성토 = 가장 높은 · 절토 = 가장 낮은 = 겉면 다리)
-            //   (평균이면 겉면 다리의 마지막 광선을 따라 덮개 변이 그 다리 판보다 0.3 ~ 0.4 m 낮아 C 곁에 턱 — 1119b 굽이 2 · 아래 마구리 면과 C에서 이어짐)
-            //   (덮개가 없으면 C 곁을 멀리서 온 다른 굽이 띠가 덮어 9 m 뜀 — 1119 덤프 B 굽이 3)
-            var apex = new Dictionary<(double, double), (double Z, int N)>();
-            foreach (var r in Rays) if (double.IsFinite(r.CX)) { var key = (r.CX, r.CY); double dC = Math.Sqrt((r.CX - r.OX) * (r.CX - r.OX) + (r.CY - r.OY) * (r.CY - r.OY)); var (sm, nn) = apex.GetValueOrDefault(key); double zc0 = r.Z + sg * sh.V[r.P].P.F(dC); apex[key] = (nn == 0 ? zc0 : sg > 0 ? Math.Min(sm, zc0) : Math.Max(sm, zc0), nn + 1); }
-            for (int s = 0; s < Strips.Count; s++)
-            {
-                var (ia, ib, ta, tb) = Strips[s]; var a = Rays[ia]; var b = Rays[ib];
-                if (!(double.IsFinite(a.CX) && double.IsFinite(b.CX) && a.CX == b.CX && a.CY == b.CY)) continue;
-                var (sm, nn) = apex[(a.CX, a.CY)]; if (nn == 0) continue;
-                var sv = sh.V[StripP[s]];
-                var P1 = (X: a.OX + a.UX * ta, Y: a.OY + a.UY * ta, Z: a.Z + sg * sv.P.F(ta)); var P2 = (X: b.OX + b.UX * tb, Y: b.OY + b.UY * tb, Z: b.Z + sg * sv.P.F(tb));
-                var Cp = (X: a.CX, Y: a.CY, Z: sm);
-                int k = 0; while (k + 1 < sv.NSeg && sv.D[k + 1] <= Math.Min(ta, tb)) k++;
-                AddFac(sh, s, k, P1, P2, Cp, false, 0, 0, 0, 0, 0, 0, a, b);
-            }
-            // ★[lf3 · JACK 1119b 굽이 안쪽 깨짐] 다리 늘림 판 시작선 마구리 사면 — 늘림 판은 C를 지나는 시작선에서 갑자기 시작해, 그 다리가 겉면(성토 = 높은 다리 · 절토 = 낮은 다리)이면
-            //   시작선 안쪽(다른 다리 판만 덮은 자리)과 0.9 m 절벽이 C에서 2.3 m 이어졌다(세로 바늘 세모 · 하얀 빗금 · 꼭지 송곳). 시작선에서 안쪽(도로 쪽)으로 그 면 기울기(평평하면 사면 기울기)로
-            //   내려가는(절토 = 올라가는) 마구리 면을 붙여 절벽 대신 사면으로 만남 — 겉면이 아니면 다른 판에 가려 결과는 그대로.
-            for (int s = 0; s < Strips.Count; s++)
-            {
-                var (ia, ib, ta, tb) = Strips[s]; var a = Rays[ia]; var b = Rays[ib]; double st0 = Start[s];
-                if (!a.Ext || !b.Ext || st0 <= 1e-6 || ta <= st0 + 1e-6 || tb <= st0 + 1e-6) continue;
-                var sv = sh.V[StripP[s]]; var pr = sv.P;
-                int k = 0; while (k + 1 < sv.NSeg && sv.D[k + 1] <= st0 + 1e-9) k++;
-                double gr = (sv.R[k + 1] - sv.R[k]) / Math.Max(1e-9, sv.D[k + 1] - sv.D[k]);
-                double gs = Math.Max(gr, 1.0 / Math.Max(0.1, (cut ? Inp.Cut : Inp.Fill).Slope));
-                double ls = SkirtFrac * st0, r0 = pr.F(st0);
-                var A0 = (X: a.OX + a.UX * st0, Y: a.OY + a.UY * st0, Z: a.Z + sg * r0);
-                var B0 = (X: b.OX + b.UX * st0, Y: b.OY + b.UY * st0, Z: b.Z + sg * r0);
-                // 도로 면에 닿지 않게 길이를 줄임(빼면 이웃 띠 마구리 면과 사이에 절벽 — 1119b 굽이 1 · 0.45 m)
-                Polygon Quad(double l) => Gf.CreatePolygon(new[] { new Coordinate(A0.X, A0.Y), new Coordinate(B0.X, B0.Y), new Coordinate(B0.X - b.UX * l, B0.Y - b.UY * l), new Coordinate(A0.X - a.UX * l, A0.Y - a.UY * l), new Coordinate(A0.X, A0.Y) });
-                //   네모가 꼬이면(두 광선이 엇갈림 · 자기 교차) 닿은 것처럼 줄임 — 끝까지 꼬이면 건너뜀(셈만)
-                bool bad = false;
-                bool Hits(double l)
-                {
-                    var q = Quad(l);
-                    bad = !q.IsValid;
-                    if (bad) return true;
-                    try { return D.Poly.Intersects(q); } catch (TopologyException) { bad = true; return true; }
-                }
-                for (int it = 0; it < 12 && ls > 0.02 && Hits(ls); it++) ls *= 0.7;
-                if (ls <= 0.02 || Hits(ls)) { if (bad) Out.SkirtsBad++; continue; }
-                var A1 = (X: A0.X - a.UX * ls, Y: A0.Y - a.UY * ls, Z: A0.Z + sg * gs * ls);
-                var B1 = (X: B0.X - b.UX * ls, Y: B0.Y - b.UY * ls, Z: B0.Z + sg * gs * ls);
-                int n0 = sh.F.Count;
-                AddFac(sh, s, k, A0, B0, B1, false, 0, 0, 0, 0, 0, 0, a, b);
-                AddFac(sh, s, k, A0, B1, A1, false, 0, 0, 0, 0, 0, 0, a, b);
-                Out.Skirts += sh.F.Count - n0;
             }
             // ★[2단계 · 속도] 땅과 못 만나는 세모는 뺌 — 절토 세모가 곁 땅 가장 높은 점보다 다 위(성토 = 다 아래)면 지어질 수 없고(절토 = 땅이 판 위 자리만),
             //   그 세모가 가리는 다른 세모 자리도 더 위라 역시 안 지어짐 → 결과(지은 자리 · 선 · 세모)는 같고 판 세모 수만 줄어듦(옹벽 단면 1:0.01 띠가 찾는 거리 끝까지 수십만 개 — 덤프 B 29만 → )
@@ -560,6 +569,39 @@ public static partial class RoadLines
             for (int i = 0; i < sh.F.Count; i++) { var f = sh.F[i]; sh.Tree.Insert(new Envelope(f.MinX, f.MaxX, f.MinY, f.MaxY), i); }
             sh.Tree.Build();
             return sh;
+        }
+
+        /// <summary>★[JACK 1120] 광선 ri의 이 판 원천 높이(거리 d에서) — 다리 늘림 광선의 가장자리 맞춤은 E에서 다 · TC에서 0(1차).</summary>
+        internal double SrcZ(Sheet sh, int ri, double d)
+        {
+            var r = Rays[ri]; double c = sh.Corr[ri];
+            if (c == 0) return r.Z;
+            double w = r.TC > r.E + 1e-9 ? Math.Clamp((r.TC - d) / (r.TC - r.E), 0, 1) : 0;
+            return r.Z + c * w;
+        }
+        /// <summary>★[JACK 1120] 가장자리 맞춤이 있는 다리 늘림 띠 — 단면 토막마다(맞춤이 0이 되는 거리 TC에서 한 번 더 나눔) 네 모서리 높이 = 원천(맞춤) + 단면.</summary>
+        void CorrStrip(Sheet sh, int s)
+        {
+            var (ia, ib, ta, tb) = Strips[s]; var a = Rays[ia]; var b = Rays[ib];
+            var sv = sh.V[StripP[s]]; var pr = sv.P; double sg = sh.Cut ? 1 : -1;
+            double tmax = Math.Max(ta, tb), tmin = Math.Min(ta, tb), st0 = Start[s], tc = Math.Max(a.TC, b.TC);
+            double cx0 = a.OX + a.UX * ta, cy0 = a.OY + a.UY * ta, cx1 = b.OX + b.UX * tb, cy1 = b.OY + b.UY * tb;
+            double rx = (a.OX + b.OX) / 2 + (a.UX + b.UX) / 2 * st0, ry = (a.OY + b.OY) / 2 + (a.UY + b.UY) / 2 * st0;
+            (double X, double Y, double Z) P(Ray r, int ri, double dd) => (r.OX + r.UX * dd, r.OY + r.UY * dd, SrcZ(sh, ri, dd) + sg * pr.F(dd));
+            for (int k = 0; k < sv.NSeg; k++)
+            {
+                double d0 = Math.Max(sv.D[k], st0), d1 = sv.D[k + 1];
+                if (d1 <= st0 + 1e-9) continue;
+                if (d0 >= tmax - 1e-9) break;
+                foreach (var (e0, e1) in tc > d0 + 1e-6 && tc < d1 - 1e-6 ? new[] { (d0, tc), (tc, d1) } : new[] { (d0, d1) })
+                {
+                    if (e0 >= tmax - 1e-9) break;
+                    bool clip = e1 > tmin - 1e-9;
+                    var A0 = P(a, ia, e0); var B0 = P(b, ib, e0); var A1 = P(a, ia, e1); var B1 = P(b, ib, e1);
+                    AddFac(sh, s, k, A0, B0, B1, clip, cx0, cy0, cx1, cy1, rx, ry, a, b);
+                    AddFac(sh, s, k, A0, B1, A1, clip, cx0, cy0, cx1, cy1, rx, ry, a, b);
+                }
+            }
         }
 
         void AddFac(Sheet sh, int s, int k, (double X, double Y, double Z) p, (double X, double Y, double Z) q, (double X, double Y, double Z) r,
@@ -775,8 +817,9 @@ public static partial class RoadLines
                 {
                     if (sv.Lv[i].Count == 0 || sv.D[i] < Start[s] - 1e-9) continue;
                     double d = sv.D[i]; if (d >= tmax - 1e-9) break;
+                    if (a.Run >= 0 && a.Run == b.Run && double.IsFinite(Cross[s].A) && d >= Math.Min(Cross[s].A, Cross[s].B)) break;   // 무리 안 띠는 만나는 점에서 끝
                     double x0 = a.OX + a.UX * d, y0 = a.OY + a.UY * d, x1 = b.OX + b.UX * d, y1 = b.OY + b.UY * d;
-                    double z0 = a.Z + sg * sv.R[i], z1 = b.Z + sg * sv.R[i];
+                    double z0 = SrcZ(sh, ia, d) + sg * sv.R[i], z1 = SrcZ(sh, ib, d) + sg * sv.R[i];
                     double u0 = 0, u1 = 1;
                     if (d > tmin - 1e-9)
                     {

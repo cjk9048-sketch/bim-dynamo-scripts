@@ -161,10 +161,8 @@ public sealed class StrataPanel : UserControl
         var head1 = MakeHead("① 지층 높이 설정",
             "시추주상도를 어떻게 읽어 오실지 고르세요.");
         c1.Children.Add(head1);
-        // ★[JACK 1119] 설명 칸 — 칸 머리 · 안내 = 지금 고른 쪽 장면 · 선택지마다 제 장면
-        string ModeScene() => Mode == StrataHeightMode.Elevation ? "stGl" : "stTh";
-        HookDemo(head1, ModeScene);
-        HookDemo(_modeHint, ModeScene);
+        // ★[JACK 1121 «지층 높이 설정 칸에서는 정확히 층별 GL값 · 층별 두께 그 항목에 마우스를 올릴 때만»]
+        //   칸 머리 · 안내 글 · 층 표 · 빈 자리에는 설명 장면을 안 건다 — 아래 두 선택지(RadioButton)에만 건다(Rb 안 HookDemo).
 
         // ★★★[JACK 0901] <b>모드는 도면 전체에서 하나</b> — 층마다 고르면 헷갈린다.
         var modeBox = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 4, 0, 2) };
@@ -235,7 +233,8 @@ public sealed class StrataPanel : UserControl
         // ★★[JACK 1119] 맨 위 설명 칸 — 다른 도킹창과 같은 틀(DemoFrame · «도움말» 체크로 접힘)
         _demo.Source = DemoInput;
         var demoBox = DemoFrame.Wrap("Strata", _demo);
-        demoBox.HorizontalAlignment = HorizontalAlignment.Left;
+        // ★[JACK 1121 «애니메이션이 왼쪽으로 치우침»] 다른 도킹창(진입도로 · 계획부지)과 같게 — 틀 최대 폭(DemoFrame MaxWidth) 안에서는 창 폭에 맞추고 넓으면 가운데
+        demoBox.HorizontalAlignment = HorizontalAlignment.Stretch;
         Grid.SetRow(demoBox, 1); root.Children.Add(demoBox);
         var card1 = MakeCard(c1, 2);
         root.Children.Add(card1);
@@ -252,6 +251,18 @@ public sealed class StrataPanel : UserControl
         c2.Children.Add(head2);
         // ★★[JACK 1119 «2번 보링공에서 입력받은 값에 따라 실시간으로»] 표 = 미리보기 뷰 — 마우스 · 칸 선택 · 글자 바뀜마다 바로(값은 표에서만 읽음)
         HookDemo(head2, () => "stLive");
+        // ★[JACK 1121] 줄에 마우스 · 줄 고름 = 미니맵 · 기둥에서 그 공 강조(나가면 고른 줄만)
+        _gBore.MouseMove += (_, e) =>
+        {
+            int i = -1;
+            for (var d = e.OriginalSource as DependencyObject; d != null && d != _gBore; d = VisualTreeHelper.GetParent(d))
+                if (d is DataGridRow row) { i = _gBore.ItemContainerGenerator.IndexFromContainer(row); break; }
+            if (i == _hoverRow) return;
+            _hoverRow = i;
+            _demo.Redraw();
+        };
+        _gBore.MouseLeave += (_, _) => _hoverRow = -1;   // HookDemo의 Idle보다 먼저 — Idle 그림이 강조 없이(고른 줄만)
+        _gBore.SelectionChanged += (_, _) => _demo.Redraw();
         HookDemo(_gBore, () => "stLive");
         _gBore.GotKeyboardFocus += (_, _) => _demo.Play("stLive");
         _gBore.AddHandler(System.Windows.Controls.Primitives.TextBoxBase.TextChangedEvent,
@@ -417,8 +428,12 @@ public sealed class StrataPanel : UserControl
         ByGl = Mode == StrataHeightMode.Elevation,
         Names = Layers.Select(l => l.Name ?? "").ToArray(),
         IsRock = Layers.Select(l => l.Rock != RockClass.Soil).ToArray(),
-        Bores = Bores.Select(b => new StrataDemoView.Bore { Name = b.Name, Gl = b.Gl, Water = b.Water, V = b.Th.ToArray() }).ToList(),
+        Bores = Bores.Select(b => new StrataDemoView.Bore { Name = b.Name, X = b.X, Y = b.Y, Gl = b.Gl, Water = b.Water, V = b.Th.ToArray() }).ToList(),
+        Hi = _hoverRow >= 0 && _hoverRow < Bores.Count ? _hoverRow : _gBore.SelectedIndex,
     };
+
+    /// <summary>★[JACK 1121] 표에서 마우스가 올라간 줄(-1 = 없음) — 미리보기에서 그 공 강조.</summary>
+    private int _hoverRow = -1;
 
     // ── 겉모습 ★★[JACK 0828 "도킹바 UI를 좀 예쁘게 못하나? 너무 각져서"] ──────────────
     //   기본 WPF는 <b>90년대 회색 상자</b>다. 색을 요란하게 쓰는 대신

@@ -141,7 +141,7 @@ public static partial class RoadLines
         }
         foreach (var l in b.Lines) for (int j = 0; j + 1 < l.Pts.Count; j++) AddSeg(l.Pts[j].X, l.Pts[j].Y, l.Pts[j + 1].X, l.Pts[j + 1].Y);
         foreach (var l in b.Daylight) for (int j = 0; j + 1 < l.Count; j++) AddSeg(l[j].X, l[j].Y, l[j + 1].X, l[j + 1].Y);
-        foreach (var l in b.Lf.Creases.Concat(b.Lf.CoreCreases)) for (int j = 0; j + 1 < l.Count; j++) AddSeg(l[j].X, l[j].Y, l[j + 1].X, l[j + 1].Y);
+        foreach (var l in b.Lf.Creases) for (int j = 0; j + 1 < l.Count; j++) AddSeg(l[j].X, l[j].Y, l[j + 1].X, l[j + 1].Y);
         { int m = d.B.Count; for (int i = 0; i < m; i++) { int k = (i + 1) % m; AddSeg(d.B[i].X, d.B[i].Y, d.B[k].X, d.B[k].Y); } }
         double FirstHit(double x0, double y0, double x1, double y1, double tMin)
         {

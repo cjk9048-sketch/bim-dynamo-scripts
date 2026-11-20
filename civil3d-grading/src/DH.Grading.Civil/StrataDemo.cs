@@ -12,7 +12,8 @@ namespace DH.Grading.Civil;
 /// <summary>★★[JACK 1119 «지층구성 팝업도 애니메이션을 최상단에 다른 팝업창과 같은 규격 · 층별 GL값 · 층별 두께 애니메이션 ·
 /// 2번 보링공에서 입력받은 값에 따라 실시간으로»] 지층 구성 도킹창 맨 위 설명 칸 — <see cref="FixDemoView"/>와 같은 틀(420 × 300 그림 + 두 줄 설명 · <see cref="DemoFrame"/>).
 /// <para>장면: <c>stLive</c> = ② 보링공 표 값 미리보기(숫자 칸 = 미리보기 뷰 · 완성 그림 · 값이 바뀌면 바로 다시) ·
-/// <c>stGl</c> · <c>stTh</c> = 두 선택지 각자 장면(왜 고르나 — 암층이 표고대로 눕나 · 지형 따라 내려가나) · <c>stPick</c> · <c>stMake</c> = 단추 장면.
+/// <c>stGl</c> · <c>stTh</c> = 두 선택지 각자 장면(층 상단 표고 · 지반에서 두께) · <c>stPick</c> · <c>stMake</c> = 단추 장면.
+/// ★[JACK 1121] stLive · stGl · stTh = 평면 미니맵(실제 X · Y 자리) + 공마다 독립 주상도 기둥(같은 표고 축 · 공끼리 안 이음).
 /// 단추 · 선택지 장면은 한 번 돌고 끝 그림에서 멈춤(되감기 없음).</para>
 /// <para>AutoCAD 타입 없음 · 지표면 · 지층 모델 셈 없음 — <see cref="Source"/>가 넘긴 표 숫자만 그린다(가벼움).
 /// 색 = 종단 · 횡단 지층선 색표(ACI 30 · 42 · 2 · 224 · 190 · 22 · 94 · 214 — 층 차례 k의 상단선 = k+1번 색) · 원지반 초록 · 지하수위 파랑.</para></summary>
@@ -23,6 +24,8 @@ internal sealed class StrataDemoView : Border
     {
         public string Name = "";
         public double Gl = double.NaN, Water = double.NaN;
+        /// <summary>평면 자리(미니맵) — 표 X · Y.</summary>
+        public double X = double.NaN, Y = double.NaN;
         /// <summary>층별 GL값 모드 = 암층 상단 표고 · 층별 두께 모드 = 두께(m).</summary>
         public double[] V = Array.Empty<double>();
     }
@@ -34,6 +37,8 @@ internal sealed class StrataDemoView : Border
         public string[] Names = Array.Empty<string>();
         public bool[] IsRock = Array.Empty<bool>();
         public List<Bore> Bores = new();
+        /// <summary>강조할 공(표에서 마우스 올린 줄 · 없으면 고른 줄) — -1 = 없음.</summary>
+        public int Hi = -1;
     }
 
     /// <summary>지금 표 값(부를 때마다 새로 읽음).</summary>
@@ -52,9 +57,9 @@ internal sealed class StrataDemoView : Border
 
     static readonly Dictionary<string, (double Period, string Caption)> Spec = new()
     {
-        ["stLive"] = (1.0, "② 보링공 — 칸 값대로 공 사이 지층 · 같은 층끼리 이음"),
-        ["stGl"] = (6.4, "층별 GL값 — 암층 상단 표고 → 같은 층끼리 이음 · 지형과 따로 · 위는 토사(자동)"),
-        ["stTh"] = (6.6, "층별 두께 — 지반에서 아래로 두께 → 지형 따라 이음"),
+        ["stLive"] = (1.0, "② 보링공 — 평면 위치 · 공마다 주상도(같은 표고 축 · 공끼리 안 이음)"),
+        ["stGl"] = (5.2, "층별 GL값 — 공마다 암층 상단 표고(EL) · 지반~첫 암 = 토사(자동)"),
+        ["stTh"] = (5.0, "층별 두께 — 공마다 지반고에서 아래로 층 두께(m)"),
         ["stPick"] = (5.0, "평면에서 찍기 — 평면 클릭 → BH 표식 · 지반고 자동"),
         ["stMake"] = (5.8, "확인 — 지층면 생성 → 종단 · 횡단에만 보임"),
     };
@@ -62,6 +67,8 @@ internal sealed class StrataDemoView : Border
     static readonly HashSet<string> StaticKeys = new() { "stLive" };
     /// <summary>설명 글 앞에 단추 모양을 붙이는 장면.</summary>
     static readonly HashSet<string> ButtonKeys = new() { "stPick", "stMake" };
+    /// <summary>① 지층 높이 설정 선택지 장면 — 그 선택지 위에 마우스가 있을 때만(나가면 기본 장면).</summary>
+    static readonly HashSet<string> ModeKeys = new() { "stGl", "stTh" };
 
     public string Current => _key;
     public bool Playing => _tm.IsEnabled || _held;
@@ -107,6 +114,7 @@ internal sealed class StrataDemoView : Border
         bool stat = StaticKeys.Contains(key);
         if (!stat && Playing && _key == key && !(IsLoaded && !IsVisible)) return;   // 같은 장면이 돌거나 멈춘 채면 되감지 않음
         _key = key; _played = true; _held = false;
+        if (ModeKeys.Contains(key)) _scene = null;   // 장면 값은 들어올 때 한 번 읽음(타이머마다 표를 안 읽음)
         SetCaption(key);
         if (stat)
         {
@@ -130,6 +138,14 @@ internal sealed class StrataDemoView : Border
     public void Idle()
     {
         _tm.Stop(); _sw.Reset(); _held = false;
+        // ★[JACK 1121 «층별 GL값 · 층별 두께 장면은 그 항목에 마우스가 있을 때만»] 나가면 그 장면을 남기지 않고 기본 장면으로 —
+        //   공이 있으면 미리보기(stLive) · 없으면 로고
+        if (ModeKeys.Contains(_key))
+        {
+            int nb = 0;
+            try { nb = Source?.Invoke()?.Bores.Count ?? 0; } catch { }
+            _key = "stLive"; _played = nb > 0;
+        }
         try { if (_played) Draw(_key, Spec[_key].Period - 0.01); else DrawLogo(); } catch { }
         _cap.Text = _idle; _cap.Foreground = DhBrand.Sub;
         _chip.Visibility = Visibility.Collapsed;
@@ -279,234 +295,357 @@ internal sealed class StrataDemoView : Border
         }
     }
 
-    // ══ stLive — ② 보링공 표 값 미리보기 ══
+    // ══ stLive · stGl · stTh — 평면 미니맵 + 공마다 따로 선 주상도 기둥 ══
+    // ★★[JACK 1121 «보링공을 가로로 늘어놓고 선으로 이으니 평면에 흩어진 공이 한 줄 단면처럼 보여 지층이 이상»]
+    //   왼쪽 = 작은 평면도(보링공 실제 X · Y 상대 자리) · 오른쪽 = 공마다 독립 기둥(층 색 띠) — 같은 표고 축 하나로 높이만 비교.
+    //   ★공끼리 선 · 띠로 잇지 않는다(단면처럼 안 보이게). 빈칸(NaN)은 이웃 공에서 채우지 않는다 — 친 값만 그린다.
 
-    /// <summary>공 하나의 층 경계(표고) — <c>Top[k]</c> = 층 k 상단 · <c>Top[m]</c> = 마지막 층 바닥(<c>-∞</c> = 열림 · 그림 바닥까지).
-    /// <c>Skip</c> = 지반고를 몰라 지층에 안 씀(Core 모델도 지반고 없는 공은 안 씀) — 자리만 «GL ?».</summary>
+    /// <summary>기둥 한 칸(층 띠) — <c>K</c> = 색 · 이름 차례(GL 모드: 0 = 토사(자동) · j+1 = 암층 j / 두께 모드: j).
+    /// <c>Open</c> = 아래 경계를 모름(GL 모드 맨 아래 암층) — 그림 바닥 쪽으로 흐리게.</summary>
+    sealed class Band { public int K; public double Top, Bot; public bool Open; }
+
+    /// <summary>공 하나 = 독립 기둥.</summary>
     sealed class Col
     {
-        public double G = double.NaN; public bool GlKnown, Skip; public double[] Top = Array.Empty<double>(); public double WaterZ = double.NaN; public string Name = "";
+        public string Name = ""; public double X = double.NaN, Y = double.NaN, G = double.NaN, WaterZ = double.NaN;
+        public bool GlKnown, Waiting;
+        public readonly List<Band> Bands = new();
     }
 
-    /// <summary>값 없을 때 보여 주는 예시(공 셋).</summary>
-    static Input Example(Input? cur)
+    /// <summary>값 없을 때 보여 주는 예시(공 넷 · 평면에 흩어 둠). <paramref name="byGl"/> 모드의 층 목록 — 지금 표가 같은 모드면 그 층 이름.</summary>
+    static Input Example(Input? cur, bool byGl)
     {
-        bool byGl = cur?.ByGl ?? true;
-        var names = cur != null && cur.Names.Length > 0 ? cur.Names : new[] { "풍화암", "연암", "보통암", "경암" };
-        var rock = cur != null && cur.IsRock.Length == names.Length ? cur.IsRock : names.Select(_ => true).ToArray();
-        var ex = new Input { ByGl = byGl, Names = names, IsRock = rock };
-        double[] gl = { 52.4, 55.1, 50.8 };
-        for (int b = 0; b < 3; b++)
+        bool same = cur != null && cur.ByGl == byGl && cur.Names.Length > 0;
+        var names = same ? cur!.Names : byGl ? new[] { "풍화암", "연암", "보통암", "경암" } : new[] { "표토", "풍화토", "풍화암", "연암", "보통암", "경암" };
+        var rock = same && cur!.IsRock.Length == names.Length ? cur.IsRock : names.Select((_, i) => byGl || i >= 2).ToArray();
+        var ex = new Input { ByGl = byGl, Names = names, IsRock = rock, Hi = -1 };
+        (double X, double Y, double Gl)[] at = { (0, 0, 52.4), (62, 14, 55.1), (26, -46, 50.8), (88, -38, 47.9) };
+        for (int b = 0; b < at.Length; b++)
         {
             var v = new double[names.Length];
             for (int i = 0; i < v.Length; i++)
-                v[i] = byGl ? gl[b] - 2.2 - 2.6 * i - 0.6 * b - (b == 1 ? 1.4 : 0) : 1.2 + 0.5 * ((i + b) % 3);
-            ex.Bores.Add(new Bore { Name = "BH" + (b + 1), Gl = gl[b], Water = byGl ? gl[b] - 3.1 : 3.1, V = v });
+                v[i] = byGl ? at[b].Gl - 2.0 - 2.4 * i - ((b * 7 + i * 3) % 5) * 0.4 : 0.8 + ((b + i) % 3) * 0.6 + (i >= 4 ? 1.0 : 0);
+            ex.Bores.Add(new Bore { Name = "BH" + (b + 1), X = at[b].X, Y = at[b].Y, Gl = at[b].Gl, Water = byGl ? at[b].Gl - 3.1 : 3.1, V = v });
         }
         return ex;
     }
 
-    /// <summary>표 값 → 공마다 경계.
-    /// <para>맞지 않는 값(GL 모드 = 지반 위 · 위 암층보다 높은 상단 / 두께 모드 = 음수) = 뺌(<paramref name="bad"/>) ·
-    /// 빈칸 = 모름 → 표 차례 이웃 공 값에서 곧게(한쪽만 있으면 그 값) — Core 모델도 모르는 칸은 다른 공에서 채움(그림은 단면 하나로 줄인 것).
-    /// 어느 공도 모르는 층 = 없음(두께 0).</para></summary>
-    static List<Col> Columns(Input inp, out int bad, out bool anyGl)
+    /// <summary>공 값 하나라도 있나(층 칸).</summary>
+    static bool AnyValue(Input? inp) => inp != null && inp.Bores.Any(b => b.V != null && b.V.Any(double.IsFinite));
+
+    /// <summary>표 값 → 공마다 기둥(공끼리 섞지 않음).
+    /// <para>맞지 않는 값(GL 모드 = 지반 위 · 위 암층보다 높은 상단 / 두께 모드 = 음수) = 뺌(<paramref name="bad"/>).
+    /// 빈칸 = 모름 → 그 층은 그 기둥에 안 그림(Core 모델은 다른 공에서 채우지만 이 그림은 친 값 확인용).
+    /// 층 값이 하나도 없으면 <c>Waiting</c> = 지반고만 있는 빈 기둥.</para></summary>
+    static List<Col> Columns(Input inp, out int bad)
     {
         bad = 0;
-        int n = inp.Names.Length, m = inp.ByGl ? n + 1 : n, nb = inp.Bores.Count;
-        anyGl = inp.Bores.Any(b => double.IsFinite(b.Gl));
-        var val = new double[nb, n];
+        int n = inp.Names.Length;
         var cols = new List<Col>();
-        for (int bi = 0; bi < nb; bi++)
+        foreach (var b in inp.Bores)
         {
-            var b = inp.Bores[bi];
-            var c = new Col { Name = b.Name ?? "", GlKnown = double.IsFinite(b.Gl), Top = new double[m + 1] };
-            double lim = c.GlKnown ? b.Gl : double.PositiveInfinity;
-            for (int j = 0; j < n; j++)
-            {
-                double v = b.V != null && j < b.V.Length ? b.V[j] : double.NaN;
-                if (double.IsFinite(v) && (inp.ByGl ? v > lim + 1e-6 : v < 0)) { bad++; v = double.NaN; }
-                if (inp.ByGl && double.IsFinite(v)) lim = v;
-                val[bi, j] = double.IsFinite(v) ? v : double.NaN;
-            }
-            if (c.GlKnown) c.G = b.Gl;
-            else if (anyGl) c.Skip = true;   // 다른 공은 지반고가 있음 — 이 공은 자리만
-            else
-            {
-                // 지반고를 하나도 모름(원지반 없음) — 모양만이라도: GL 모드 = 첫 암 상단 · 두께 모드 = 0(깊이)
-                double first = double.NaN;
-                for (int j = 0; j < n && inp.ByGl; j++) if (double.IsFinite(val[bi, j])) { first = val[bi, j]; break; }
-                c.G = inp.ByGl ? first : 0;
-                if (!double.IsFinite(c.G)) c.Skip = true;
-            }
-            if (!c.Skip) c.WaterZ = !double.IsFinite(b.Water) ? double.NaN : inp.ByGl ? b.Water : c.G - b.Water;
-            cols.Add(c);
-        }
-        // 빈칸 = 이웃 공에서(쓰는 공끼리 · 표 차례)
-        var use = Enumerable.Range(0, nb).Where(i => !cols[i].Skip).ToList();
-        for (int j = 0; j < n; j++)
-        {
-            var known = use.Where(i => double.IsFinite(val[i, j])).ToList();
-            if (known.Count == 0) continue;
-            foreach (int i in use)
-            {
-                if (double.IsFinite(val[i, j])) continue;
-                int l = known.LastOrDefault(k => k < i, -1), r = known.FirstOrDefault(k => k > i, -1);
-                val[i, j] = l < 0 ? val[r, j] : r < 0 ? val[l, j] : val[l, j] + (val[r, j] - val[l, j]) * (i - l) / (double)(r - l);
-            }
-        }
-        foreach (int i in use)
-        {
-            var c = cols[i];
-            c.Top[0] = c.G;
+            var c = new Col { Name = b.Name ?? "", X = b.X, Y = b.Y, G = b.Gl, GlKnown = double.IsFinite(b.Gl) };
+            double V(int j) => b.V != null && j < b.V.Length ? b.V[j] : double.NaN;
             if (inp.ByGl)
             {
-                // 암층 상단 — 위 층보다 높지 않게 · 없는 층 = 다음 아래 층 상단(두께 0) · 아래가 없으면 열림
-                double up = c.G;
+                double lim = c.GlKnown ? c.G : double.PositiveInfinity;
+                var known = new List<(int J, double T)>();
                 for (int j = 0; j < n; j++)
                 {
-                    double t = val[i, j];
-                    if (double.IsFinite(t)) { t = Math.Min(t, up); up = t; }
-                    c.Top[j + 1] = t;
+                    double v = V(j);
+                    if (!double.IsFinite(v)) continue;
+                    if (v > lim + 1e-6) { bad++; continue; }
+                    known.Add((j, v)); lim = v;
                 }
-                double below = double.NegativeInfinity;
-                for (int j = n - 1; j >= 0; j--)
+                if (known.Count == 0) c.Waiting = true;
+                else
                 {
-                    if (double.IsFinite(c.Top[j + 1])) below = c.Top[j + 1];
-                    else c.Top[j + 1] = below;
+                    if (c.GlKnown && c.G - known[0].T > 1e-6) c.Bands.Add(new Band { K = 0, Top = c.G, Bot = known[0].T });
+                    for (int q = 0; q < known.Count; q++)
+                        c.Bands.Add(new Band { K = known[q].J + 1, Top = known[q].T, Bot = q + 1 < known.Count ? known[q + 1].T : double.NaN, Open = q + 1 == known.Count });
                 }
-                c.Top[m] = double.NegativeInfinity;
-                if (double.IsNegativeInfinity(c.Top[1])) for (int k = 1; k <= m; k++) c.Top[k] = c.G;   // 암층 값이 하나도 없음 = 지반만
+                c.WaterZ = double.IsFinite(b.Water) ? b.Water : double.NaN;
             }
             else
-                for (int k = 0; k < n; k++) c.Top[k + 1] = c.Top[k] - (double.IsFinite(val[i, k]) ? val[i, k] : 0);
+            {
+                bool any = false;
+                double cur = c.G;
+                for (int j = 0; j < n; j++)
+                {
+                    double v = V(j);
+                    if (!double.IsFinite(v)) continue;
+                    if (v < 0) { bad++; continue; }
+                    any = true;
+                    if (v > 0 && c.GlKnown) { c.Bands.Add(new Band { K = j, Top = cur, Bot = cur - v }); cur -= v; }
+                }
+                c.Waiting = !any || !c.GlKnown;   // 지반고를 모르면 두께를 어디서부터 쌓을지 모름
+                c.WaterZ = double.IsFinite(b.Water) && c.GlKnown ? c.G - b.Water : double.NaN;
+            }
+            cols.Add(c);
         }
         return cols;
     }
 
+    string LayerName(Input inp, int k) => inp.ByGl ? (k == 0 ? "토사(자동)" : Nm(k - 1 < inp.Names.Length ? inp.Names[k - 1] : "", k - 1)) : Nm(k < inp.Names.Length ? inp.Names[k] : "", k);
+    static Color BandC(Input inp, int k) => inp.ByGl && k == 0 ? SoilC : LayerC(k);
+
+    // 자리 — 왼쪽 평면 · 오른쪽 기둥
+    const double MX0 = 8, MY0 = 22, MX1 = 150, MY1 = 238;
+    const double CX0 = 186, CX1 = 414, CT = 52, CB = 238;
+
+    /// <summary>미리보기 — 표 값 그대로 · 완성 그림.</summary>
     void Live()
     {
         Input? cur = null;
         try { cur = Source?.Invoke(); } catch { }
         bool example = cur == null || cur.Bores.Count == 0;
-        var inp = example ? Example(cur) : cur!;
-        int n = inp.Names.Length, m = inp.ByGl ? n + 1 : n;
-        var cols = Columns(inp, out int bad, out bool anyGl);
+        var inp = example ? Example(cur, cur?.ByGl ?? true) : cur!;
+        Plot(inp, example, inp.ByGl ? 1 : 2, 99);
+    }
 
-        // 그림 자리 · 공 자리(표 차례대로 고르게 — 지반고 모르는 공도 자리는 둠)
-        const double L = 52, R = 404, T = 40, B = 252;
+    Input? _scene;
+    bool _sceneEx;
+    /// <summary>설명 장면이 쓸 값 — 지금 표가 그 모드이고 층 값이 있으면 그 값 · 아니면 예시.</summary>
+    void PrepScene(bool byGl)
+    {
+        Input? cur = null;
+        try { cur = Source?.Invoke(); } catch { }
+        _sceneEx = !(cur != null && cur.ByGl == byGl && AnyValue(cur));
+        _scene = _sceneEx ? Example(cur, byGl) : cur;
+    }
+
+    void SceneGl(double t) { if (_scene == null || !_scene.ByGl) PrepScene(true); Plot(_scene!, _sceneEx, 1, t); }
+    void SceneTh(double t) { if (_scene == null || _scene.ByGl) PrepScene(false); Plot(_scene!, _sceneEx, 2, t); }
+
+    /// <summary>그림 하나 — <paramref name="labels"/> 1 = 층 상단 표고(EL) · 2 = 두께 치수선. <paramref name="t"/> = 장면 시간(99 = 완성).</summary>
+    void Plot(Input inp, bool example, int labels, double t)
+    {
+        var cols = Columns(inp, out int bad);
         int na = cols.Count;
-        var xa = new double[na];
-        for (int i = 0; i < na; i++) xa[i] = na == 1 ? (L + R) / 2 : L + 34 + (R - L - 68) * i / (na - 1);
-        var draw = new List<Col>(); var xs = new List<double>();
-        for (int i = 0; i < na; i++) if (!cols[i].Skip) { draw.Add(cols[i]); xs.Add(xa[i]); }
-        int nb = draw.Count;
-        bool tight = na > 1 && (xa[1] - xa[0]) < 40;
-        // 지반고 모르는 공 — 자리 · 이름 · «GL ?»
+        double mapA = Seg(t, 0, 0.5), grow = Seg(t, 0.5, 1.5);
+        Brush brand = DhBrand.Brand;
+        Color brandC = DhBrand.Brand.Color;
+
+        // ── 왼쪽 평면 미니맵 ──
+        Tx(MX0 + 2, 4, "평면 위치", 10, Txt, true, mapA);
+        Rc(MX0, MY0, MX1 - MX0, MY1 - MY0, A(Rgb(0xF4, 0xF7, 0xF7), 1), DhBrand.Line, 1, mapA);
+        for (int g = 1; g < 4; g++)
+        {
+            Ln(MX0 + (MX1 - MX0) * g / 4, MY0 + 1, MX0 + (MX1 - MX0) * g / 4, MY1 - 1, Faint, 1, false, mapA);
+            Ln(MX0 + 1, MY0 + (MY1 - MY0) * g / 4, MX1 - 1, MY0 + (MY1 - MY0) * g / 4, Faint, 1, false, mapA);
+        }
+        // 북쪽
+        Pl(new[] { new Point(MX1 - 12, MY0 + 6), new Point(MX1 - 16, MY0 + 15), new Point(MX1 - 8, MY0 + 15) }, Dim, null, 0, true, mapA);
+        TxC(MX1 - 12, MY0 + 15, "N", 8, Dim, true, mapA);
+        var xyOk = cols.Where(c => double.IsFinite(c.X) && double.IsFinite(c.Y)).ToList();
+        var mp = new Dictionary<Col, Point>();
+        if (xyOk.Count > 0)
+        {
+            double x0 = xyOk.Min(c => c.X), x1 = xyOk.Max(c => c.X), y0 = xyOk.Min(c => c.Y), y1 = xyOk.Max(c => c.Y);
+            const double padX = 30, padT = 30, padB = 34;
+            double bw = MX1 - MX0 - 2 * padX, bh = MY1 - MY0 - padT - padB;
+            double sc = Math.Min(x1 - x0 > 1e-6 ? bw / (x1 - x0) : double.PositiveInfinity, y1 - y0 > 1e-6 ? bh / (y1 - y0) : double.PositiveInfinity);
+            if (double.IsInfinity(sc)) sc = 1;
+            double cxm = (MX0 + MX1) / 2, cym = MY0 + padT + bh / 2, wx = (x0 + x1) / 2, wy = (y0 + y1) / 2;
+            foreach (var c in xyOk) mp[c] = new Point(cxm + (c.X - wx) * sc, cym - (c.Y - wy) * sc);
+            // 축척 막대
+            if (xyOk.Count > 1)
+            {
+                double len = 0;
+                foreach (var s in new[] { 1.0, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000 }) if (s * sc <= 56) len = s;
+                if (len > 0)
+                {
+                    double px = len * sc, bx = MX0 + 8, by = MY1 - 10;
+                    Ln(bx, by, bx + px, by, Txt, 1.4, false, mapA);
+                    Ln(bx, by - 3, bx, by + 1, Txt, 1.2, false, mapA); Ln(bx + px, by - 3, bx + px, by + 1, Txt, 1.2, false, mapA);
+                    Tx(bx + px + 4, by - 8, len.ToString("0") + " m", 8.5, Dim, false, mapA);
+                }
+            }
+        }
         for (int i = 0; i < na; i++)
         {
-            if (!cols[i].Skip) continue;
-            Ln(xa[i], T, xa[i], B, Dim, 1, true);
-            TxC(xa[i], 4, cols[i].Name, tight ? 9 : 11, Dim, true);
-            TxC(xa[i], 18, "GL ?", 9, Fz(RedC));
+            var c = cols[i];
+            if (!mp.TryGetValue(c, out var p)) continue;
+            bool hi = i == inp.Hi;
+            double pop = Seg(t, 0.15 + 0.08 * i, 0.45 + 0.08 * i);
+            if (hi) { var ring = new Ellipse { Width = 16, Height = 16, Stroke = Fz(RedC), StrokeThickness = 2, Opacity = pop }; Canvas.SetLeft(ring, p.X - 8); Canvas.SetTop(ring, p.Y - 8); _cv.Children.Add(ring); }
+            var e = new Ellipse { Width = 9, Height = 9, Stroke = hi ? Fz(RedC) : brand, StrokeThickness = 1.8, Fill = hi ? Fz(RedC) : Brushes.White, Opacity = pop };
+            Canvas.SetLeft(e, p.X - 4.5); Canvas.SetTop(e, p.Y - 4.5); _cv.Children.Add(e);
+            string gl = c.GlKnown ? c.G.ToString("0.00") : "GL ?";
+            double nw = Measure(c.Name, 9.5, true), gw = Measure(gl, 8.5, false), lw = Math.Max(nw, gw);
+            double lx = p.X + 7 + lw > MX1 - 3 ? p.X - 7 - lw : p.X + 7;
+            Tx(lx, p.Y - 13, c.Name, 9.5, hi ? Fz(RedC) : Txt, true, pop);
+            Tx(lx, p.Y - 1, gl, 8.5, c.GlKnown ? Dim : Fz(RedC), false, pop);
         }
-        if (nb == 0)
-        {
-            TxC(W / 2, H / 2 - 10, "지반고 · 층 값 없음", 12, Dim);
-            return;
-        }
-        // 표고 범위
-        double zMax = draw.Max(c => c.G), zMin = zMax;
-        bool open = false;
-        foreach (var c in draw)
-        {
-            foreach (var z in c.Top) if (double.IsFinite(z)) zMin = Math.Min(zMin, z); else if (double.IsNegativeInfinity(z)) open = true;
-            if (double.IsFinite(c.WaterZ)) { zMin = Math.Min(zMin, c.WaterZ); zMax = Math.Max(zMax, c.WaterZ); }
-        }
-        double span = Math.Max(2.0, zMax - zMin);
-        if (open || zMax - zMin < 2.0) zMin = zMax - span - (open ? Math.Max(1.5, 0.18 * span) : 0);
-        zMax += 0.06 * (zMax - zMin);
-        double Y(double z) => double.IsNegativeInfinity(z) ? B : T + (zMax - z) / (zMax - zMin) * (B - T);
+        if (xyOk.Count == 0) TxC((MX0 + MX1) / 2, (MY0 + MY1) / 2 - 8, "좌표 없음", 10, Dim, false, mapA);
 
-        // 구간 끝점(양끝 바깥은 첫 · 끝 공 값 그대로)
-        var segX = new List<double> { L + 8 }; segX.AddRange(xs); segX.Add(R - 8);
-        Col At(int s) => draw[Math.Clamp(s - 1, 0, nb - 1)];
+        // ── 오른쪽 기둥 — 같은 표고 축 ──
+        Tx(CX0 - 30, 4, "주상도 · EL.(m)", 10, Txt, true, mapA);
+        if (na == 0) return;
+        double zMax = double.NegativeInfinity, zMin = double.PositiveInfinity, openTop = double.PositiveInfinity;
+        void Take(double z) { if (double.IsFinite(z)) { zMax = Math.Max(zMax, z); zMin = Math.Min(zMin, z); } }
+        foreach (var c in cols)
+        {
+            if (c.GlKnown) Take(c.G);
+            Take(c.WaterZ);
+            foreach (var b in c.Bands) { Take(b.Top); Take(b.Bot); if (b.Open) openTop = Math.Min(openTop, b.Top); }
+        }
+        if (!double.IsFinite(zMax)) { TxC((CX0 + CX1) / 2, (CT + CB) / 2 - 8, "지반고 · 층 값 없음", 11, Dim); return; }
+        double span = Math.Max(4.0, zMax - zMin);
+        double openExt = Math.Max(1.5, 0.18 * span);
+        if (double.IsFinite(openTop)) zMin = Math.Min(zMin, openTop - openExt);
+        if (cols.Any(c => c.Waiting && c.GlKnown)) zMin = Math.Min(zMin, cols.Where(c => c.Waiting && c.GlKnown).Min(c => c.G) - 0.12 * span);
+        if (zMax - zMin < 4.0) { double mid = (zMax + zMin) / 2; zMax = mid + 2; zMin = mid - 2; }
+        double rng = zMax - zMin;
+        zMax += 0.05 * rng; zMin -= 0.03 * rng;
+        double Y(double z) => CT + (zMax - z) / (zMax - zMin) * (CB - CT);
 
-        // 눈금(EL 또는 깊이)
         double step = NiceStep((zMax - zMin) / 5);
         for (double z = Math.Ceiling(zMin / step) * step; z <= zMax + 1e-9; z += step)
         {
             double y = Y(z);
-            if (y < T - 2 || y > B + 2) continue;
-            Ln(L, y, R, y, Faint, 1);
-            Tx(4, y - 7, z.ToString(step < 1 ? "0.0" : "0"), 9, Dim);   // 지반고를 하나도 모르는 두께 모드 = 지반 0 기준 깊이
+            if (y < CT - 2 || y > CB + 2) continue;
+            Ln(CX0, y, CX1, y, Faint, 1, false, mapA);
+            var tb = new TextBlock { Text = z.ToString(step < 1 ? "0.0" : "0"), FontSize = 9, Foreground = Dim, Opacity = mapA };
+            tb.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+            Canvas.SetLeft(tb, CX0 - 4 - tb.DesiredSize.Width); Canvas.SetTop(tb, y - 7); if (mapA > 0.01) _cv.Children.Add(tb);
         }
-        Tx(4, T - 26, anyGl || inp.ByGl ? "EL.(m)" : "깊이(m)", 9, Dim);
+        Ln(CX0, CT - 4, CX0, CB, Dim, 1, false, mapA);
 
-        // 층 띠 + 상단선
-        string NameOf(int k) => inp.ByGl ? (k == 0 ? "토사" : Nm(inp.Names[k - 1], k - 1)) : Nm(inp.Names[k], k);
-        bool RockOf(int k) => inp.ByGl ? k > 0 : (k < inp.IsRock.Length && inp.IsRock[k]);
-        var shown = new List<(string, Color, bool)>();
-        for (int k = 0; k < m; k++)
+        double sp = (CX1 - CX0) / na;
+        bool tight = sp < 40, roomy = sp >= 50;
+        double cw = Math.Clamp(sp * 0.30, 7, 16);
+        var shown = new SortedDictionary<int, (string, Color)>();
+        bool anyWater = false, anyWait = false;
+        for (int i = 0; i < na; i++)
         {
-            Color c = inp.ByGl && k == 0 ? SoilC : LayerC(k);
-            bool any = false;
-            for (int s = 0; s + 1 < segX.Count; s++)
+            var c = cols[i];
+            double cx = CX0 + sp * (i + 0.5), xl = cx - cw / 2;
+            bool hi = i == inp.Hi;
+            if (hi) Rc(cx - sp / 2 + 2, CT - 32, sp - 4, CB - CT + 34, A(brandC, 0.07), null);
+            TxC(cx, CT - 34, c.Name, tight ? 8.5 : 10, hi ? Fz(RedC) : Txt, true, mapA);
+            if (!tight) TxC(cx, CT - 21, c.GlKnown ? c.G.ToString("0.00") : "GL ?", 8.5, c.GlKnown ? Dim : Fz(RedC), false, mapA);
+
+            if (c.Waiting || c.Bands.Count == 0)
             {
-                Col a = At(s), b = At(s + 1);
-                double ta = Y(a.Top[k]), tb = Y(b.Top[k]), ba = Y(a.Top[k + 1]), bb = Y(b.Top[k + 1]);
-                if (ba - ta < 0.3 && bb - tb < 0.3) continue;
-                any = true;
-                Pl(new[] { new Point(segX[s], ta), new Point(segX[s + 1], tb), new Point(segX[s + 1], bb), new Point(segX[s], ba) }, A(c, 0.30), null, 0, true);
+                // 층 값 입력 대기 — 지반고만 있는 빈 기둥
+                anyWait = true;
+                if (c.GlKnown)
+                {
+                    double yt = Y(c.G), h = Math.Max(18, Math.Min(46, CB - yt - 4)) * grow;
+                    var r = new Rectangle { Width = cw, Height = Math.Max(1, h), Stroke = Dim, StrokeThickness = 1, StrokeDashArray = new DoubleCollection { 3, 2 }, Fill = Brushes.White, Opacity = mapA };
+                    Canvas.SetLeft(r, xl); Canvas.SetTop(r, yt); _cv.Children.Add(r);
+                    Ln(xl - 4, yt, xl + cw + 4, yt, Fz(GroundC), 2.2, false, mapA);
+                    if (!tight) { TxC(cx, yt + h + 3, "입력", 8.5, Dim, false, grow); TxC(cx, yt + h + 14, "대기", 8.5, Dim, false, grow); }
+                    else TxC(cx, yt + h + 3, "?", 9, Dim, true, grow);
+                }
+                else TxC(cx, (CT + CB) / 2 - 6, "?", 12, Fz(RedC), true, mapA);
+                continue;
             }
-            if (any) shown.Add((NameOf(k), c, false));
-        }
-        for (int k = 1; k < m; k++)
-        {
-            Color c = LayerC(k);
-            var pts = new List<Point>();
-            for (int s = 0; s < segX.Count; s++) pts.Add(new Point(segX[s], Y(At(s).Top[k])));
-            if (pts.All(p => p.Y >= B - 0.5)) continue;
-            Pl(pts, null, Fz(LineC(c)), RockOf(k) ? 1.8 : 1.0, false, 1, !RockOf(k));
-        }
-        // 마지막 층 바닥(두께 모드 — 실제 바닥)
-        if (!inp.ByGl && m > 0)
-        {
-            var pts = new List<Point>();
-            for (int s = 0; s < segX.Count; s++) pts.Add(new Point(segX[s], Y(At(s).Top[m])));
-            Pl(pts, null, Fz(LineC(LayerC(m - 1))), 1.0, false, 0.8, true);
-        }
-        // 지하수위
-        var wPts = new List<Point>();
-        for (int i = 0; i < nb; i++) if (double.IsFinite(draw[i].WaterZ)) wPts.Add(new Point(xs[i], Y(draw[i].WaterZ)));
-        if (wPts.Count > 1) Pl(wPts, null, Fz(WaterC), 1.3, false, 1, true);
-        foreach (var p in wPts)
-            Pl(new[] { new Point(p.X + 8, p.Y - 7), new Point(p.X + 18, p.Y - 7), new Point(p.X + 13, p.Y - 1) }, Fz(WaterC), null, 0, true);
-        if (wPts.Count > 0) shown.Add(("지하수위", WaterC, true));
-        // 원지반
-        var gPts = new List<Point>();
-        for (int s = 0; s < segX.Count; s++) gPts.Add(new Point(segX[s], Y(At(s).G)));
-        Pl(gPts, null, Fz(GroundC), 2.0, false);
 
-        // 공 기둥 + 이름 · 지반고
-        for (int i = 0; i < nb; i++)
-        {
-            var c = draw[i];
-            double yt = Y(c.G), yb = Y(c.Top[m]);
-            Rc(xs[i] - 4, yt, 8, Math.Max(1, yb - yt), Brushes.White, Rod, 1);
-            for (int k = 0; k < m; k++)
+            double top = c.GlKnown ? c.G : c.Bands[0].Top;
+            double bottom = c.Bands.Min(b => b.Open ? b.Top - openExt : b.Bot);
+            double yTop = Y(top), yLim = yTop + (Y(bottom) - yTop) * grow;
+            // 기둥 바탕 · 층 띠(위에서 아래로 자람)
+            Rc(xl - 1, yTop, cw + 2, Math.Max(1, yLim - yTop), Brushes.White, Rod, 1);
+            foreach (var b in c.Bands)
             {
-                double a = Y(c.Top[k]), b = Y(c.Top[k + 1]);
-                if (b - a < 0.3) continue;
-                Rc(xs[i] - 3.5, a, 7, b - a, Fz(inp.ByGl && k == 0 ? SoilC : LayerC(k)), null, 0, 0.9);
+                double ya = Y(b.Top), yb = Y(b.Open ? b.Top - openExt : b.Bot);
+                yb = Math.Min(yb, yLim);
+                if (yb - ya < 0.3) continue;
+                if (b.Open)
+                {
+                    // 아래 경계 모름 — 위는 진하게 · 아래로 옅어짐
+                    var lg = new LinearGradientBrush(Color.FromArgb(235, LayerC(b.K).R, LayerC(b.K).G, LayerC(b.K).B), Color.FromArgb(30, LayerC(b.K).R, LayerC(b.K).G, LayerC(b.K).B), 90);
+                    lg.Freeze();
+                    Rc(xl, ya, cw, yb - ya, lg, null);
+                }
+                else Rc(xl, ya, cw, yb - ya, Fz(BandC(inp, b.K)), null, 0, 0.92);
+                if (b.K > 0 || !inp.ByGl) Ln(xl - 2, ya, xl + cw + 2, ya, Fz(LineC(BandC(inp, b.K))), 1.6);
+                shown[b.K] = (LayerName(inp, b.K), BandC(inp, b.K));
             }
-            TxC(xs[i], 4, c.Name, tight ? 9 : 11, Txt, true);
-            if (!tight) TxC(xs[i], 18, c.GlKnown ? c.G.ToString("0.00") : "GL ?", 9, c.GlKnown ? Dim : Fz(RedC));
+            if (c.GlKnown) Ln(xl - 4, Y(c.G), xl + cw + 4, Y(c.G), Fz(GroundC), 2.2, false, mapA);
+            if (double.IsFinite(c.WaterZ) && Y(c.WaterZ) <= yLim + 0.5)
+            {
+                anyWater = true;
+                double yw = Y(c.WaterZ);
+                Ln(xl - 3, yw, xl + cw + 3, yw, Fz(WaterC), 1.3, true);
+                Pl(new[] { new Point(xl - 11, yw - 7), new Point(xl - 3, yw - 7), new Point(xl - 7, yw - 1) }, Fz(WaterC), null, 0, true);
+            }
+
+            // ── 글 — 1 = 층 상단 표고 · 2 = 두께 치수선 ──
+            bool lab = roomy || hi || na <= 4;
+            if (!lab) continue;
+            double lastY = double.NegativeInfinity;
+            var bands = c.Bands.ToList();
+            for (int q = 0; q < bands.Count; q++)
+            {
+                var b = bands[q];
+                double la = labels == 1 ? Seg(t, 1.7 + 0.45 * Math.Max(0, b.K - 1), 2.1 + 0.45 * Math.Max(0, b.K - 1)) : Seg(t, 1.7 + 0.42 * q, 2.1 + 0.42 * q);
+                if (la <= 0.01) continue;
+                Brush lc = Fz(LineC(BandC(inp, b.K)));
+                if (labels == 1)
+                {
+                    if (inp.ByGl && b.K == 0) continue;   // 토사 위 = 지반고(머리에 있음)
+                    double y = Y(b.Top);
+                    Ln(xl - 3, y, xl + cw + 5, y, lc, 2.4, false, la);
+                    double ty = Math.Max(y - 6, lastY + 10);
+                    Tx(xl + cw + 6, ty - 1, b.Top.ToString("0.0"), 8.5, lc, true, la);
+                    lastY = ty;
+                }
+                else
+                {
+                    if (b.Open) continue;
+                    double ya = Y(b.Top), yb = Y(b.Bot), dx = xl + cw + 4;
+                    Ln(dx, ya, dx, yb, lc, 1.1, false, la);
+                    Ln(dx - 2.5, ya, dx + 2.5, ya, lc, 1.1, false, la); Ln(dx - 2.5, yb, dx + 2.5, yb, lc, 1.1, false, la);
+                    if (yb - ya >= 9)
+                    {
+                        double ty = Math.Max((ya + yb) / 2 - 6, lastY + 10);
+                        Tx(dx + 3, ty - 1, (b.Top - b.Bot).ToString("0.0#"), 8.5, lc, true, la);
+                        lastY = ty;
+                    }
+                }
+            }
+        }
+        // 토사(자동) 꼬리표 — GL 장면 끝(두께 장면은 지반고 초록 띠에서 치수선이 바로 시작해 따로 안 붙임)
+        if (labels == 1 && inp.ByGl && t < 99)
+        {
+            double so = Seg(t, 4.0, 4.6);
+            // 토사가 가장 두꺼운 공(첫 기둥은 왼쪽 자리가 좁아 뒤로 미룸)
+            var c0 = cols.Select((c, i) => (c, i)).Where(x => x.c.Bands.Any(b => b.K == 0))
+                .OrderBy(x => x.i == 0 ? 1 : 0).ThenByDescending(x => x.c.Bands.Where(b => b.K == 0).Sum(b => b.Top - b.Bot)).FirstOrDefault();
+            if (so > 0 && c0.c != null)
+            {
+                var b = c0.c.Bands.First(x => x.K == 0);
+                double cx = CX0 + sp * (c0.i + 0.5);
+                SideTag(cx - cw / 2 - 4, (Y(b.Top) + Y(b.Bot)) / 2, "토사(자동)", so);
+            }
         }
 
-        if (example) { Rc(L + 2, T + 2, 34, 16, A(ChipBgC, 1), Fz(ChipLineC), 1); Tx(L + 8, T + 3, "예시", 10, Fz(ChipInkC), true); }
-        if (bad > 0) Tx(R - 120, T + 3, $"⚠ 맞지 않는 값 {bad}개 뺌", 10, Fz(RedC), true);
-        Legend(8, B + 14, shown);
+        if (example) { Rc(MX0 + 4, MY0 + 4, 34, 16, A(ChipBgC, 1), Fz(ChipLineC), 1); Tx(MX0 + 10, MY0 + 5, "예시", 10, Fz(ChipInkC), true); }
+        if (bad > 0) Tx(CX1 - 118, CB + 2, $"⚠ 맞지 않는 값 {bad}개 뺌", 9.5, Fz(RedC), true);
+        else if (anyWait && !example) Tx(CX1 - 92, CB + 2, "층 값 입력 대기", 9.5, Fz(RedC), true, mapA);
+        var leg = shown.Select(kv => (kv.Value.Item1, kv.Value.Item2, false)).ToList();
+        if (anyWater) leg.Add(("지하수위", WaterC, true));
+        if (cols.Any(c => c.GlKnown)) leg.Insert(0, ("지반고", GroundC, true));
+        Legend(MX0, CB + 16, leg);
+    }
+
+    /// <summary>작은 꼬리표 — 오른쪽 끝이 <paramref name="right"/> · 세로 가운데 <paramref name="cy"/>(기둥 왼쪽에 붙임).</summary>
+    void SideTag(double right, double cy, string s, double alpha)
+    {
+        if (alpha <= 0.01) return;
+        var b = new Border { Background = A(ChipBgC, alpha), BorderBrush = A(ChipLineC, alpha), BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(3), Padding = new Thickness(4, 0, 4, 1), Child = new TextBlock { Text = s, FontSize = 9.5, FontWeight = FontWeights.Bold, Foreground = A(ChipInkC, alpha) } };
+        b.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+        Canvas.SetLeft(b, Math.Max(CX0 + 2, right - b.DesiredSize.Width)); Canvas.SetTop(b, cy - b.DesiredSize.Height / 2); _cv.Children.Add(b);
+    }
+
+    static double Measure(string s, double size, bool bold)
+    {
+        var tb = new TextBlock { Text = s, FontSize = size, FontWeight = bold ? FontWeights.Bold : FontWeights.Normal };
+        tb.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+        return tb.DesiredSize.Width;
     }
 
     static string Nm(string s, int i) => string.IsNullOrWhiteSpace(s) ? $"층{i + 1}" : s.Trim();
@@ -514,133 +653,6 @@ internal sealed class StrataDemoView : Border
     {
         foreach (var s in new[] { 0.5, 1, 2, 5, 10, 20, 50, 100 }) if (raw <= s) return s;
         return 200;
-    }
-
-    // ══ 설명 장면 공용 바탕 — 단면 하나 · 공 셋 ══
-    static readonly double[] BX = { 100, 220, 340 };
-    const double SceneB = 256;
-    static double GroundY(double x) => 74 - 24 * Math.Exp(-Math.Pow((x - 236) / 88, 2)) + 5 * Math.Sin(x / 31);
-    /// <summary>x에서 공 값 사이를 곧게 잇기(양끝 바깥은 끝 공 값 그대로).</summary>
-    static double Lerp3(double x, double[] v)
-    {
-        if (x <= BX[0]) return v[0];
-        if (x >= BX[2]) return v[2];
-        int i = x < BX[1] ? 0 : 1;
-        double u = (x - BX[i]) / (BX[i + 1] - BX[i]);
-        return v[i] + (v[i + 1] - v[i]) * u;
-    }
-    /// <summary>x0 → xs까지 쓸어 가며 그린 선.</summary>
-    List<Point> Sweep(Func<double, double> y, double xs)
-    {
-        var l = new List<Point>();
-        for (double x = 30; x <= Math.Min(xs, 404); x += 6) l.Add(new Point(x, y(x)));
-        if (xs > 30 && xs < 404) l.Add(new Point(xs, y(xs)));
-        return l;
-    }
-    void SceneBase(double t, double a)
-    {
-        // 원지반 + 공 기둥(위에서 아래로 자람)
-        var g = Sweep(GroundY, 404);
-        var fill = new List<Point>(g) { new Point(404, SceneB), new Point(30, SceneB) };
-        Pl(fill, A(SoilC, 0.10 * a), null, 0, true);
-        Pl(g, null, Fz(GroundC), 2, false, a);
-        Tx(34, GroundY(34) - 18, "원지반", 10, Fz(GroundC), false, a);
-        double grow = Seg(t, 0.2, 0.9);
-        for (int i = 0; i < 3; i++)
-        {
-            double yt = GroundY(BX[i]);
-            Rc(BX[i] - 4, yt, 8, (SceneB - yt) * grow, Brushes.White, Rod, 1, a);
-            TxC(BX[i], yt - 34, "BH" + (i + 1), 11, Txt, true, a);
-        }
-    }
-
-    // 층별 GL값 — 암층 상단 표고(지형과 따로 눕는 선)
-    static readonly string[] GlNames = { "풍화암", "연암", "경암" };
-    static readonly double[][] GlTops = { new[] { 108.0, 100, 116 }, new[] { 146.0, 140, 158 }, new[] { 194.0, 186, 204 } };
-    static double ElOf(double y) => 70 - (y - 50) / 8;
-
-    void SceneGl(double t)
-    {
-        double a = Seg(t, 0, 0.6);
-        SceneBase(t, a);
-        // ① 공마다 암층 상단 표고 표시
-        for (int i = 0; i < 3; i++)
-        {
-            double o = Seg(t, 0.9 + i * 0.45, 1.25 + i * 0.45);
-            for (int j = 0; j < 3; j++)
-            {
-                double y = GlTops[j][i];
-                Ln(BX[i] - 9, y, BX[i] + 9, y, Fz(LineC(LayerC(j + 1))), 2.4, false, o);
-                Tx(BX[i] + 11, y - 13, ElOf(y).ToString("0.0"), 9.5, Fz(LineC(LayerC(j + 1))), true, o);
-            }
-        }
-        // ② 같은 암층끼리 이음(왼쪽 → 오른쪽)
-        double xs = 30 + 374 * Seg(t, 2.4, 3.9);
-        double fo = Seg(t, 3.6, 4.4);
-        for (int j = 0; j < 3; j++)
-        {
-            int jj = j;
-            double Top(double x) => Lerp3(x, GlTops[jj]);
-            double Bot(double x) => jj < 2 ? Lerp3(x, GlTops[jj + 1]) : SceneB;
-            if (fo > 0)
-            {
-                var band = Sweep(Top, 404);
-                var bot = Sweep(Bot, 404); bot.Reverse(); band.AddRange(bot);
-                Pl(band, A(LayerC(j + 1), 0.30 * fo), null, 0, true);
-            }
-            if (t > 2.4) Pl(Sweep(Top, xs), null, Fz(LineC(LayerC(j + 1))), 1.8, false);
-            Tx(352, GlTops[j][2] + 3, GlNames[j], 10, Fz(LineC(LayerC(j + 1))), true, Seg(t, 3.9, 4.4));
-        }
-        // ③ 지반 ~ 첫 암선 = 토사(저절로)
-        double so = Seg(t, 4.4, 5.2);
-        if (so > 0)
-        {
-            var band = Sweep(GroundY, 404);
-            var bot = Sweep(x => Lerp3(x, GlTops[0]), 404); bot.Reverse(); band.AddRange(bot);
-            Pl(band, A(SoilC, 0.55 * so), null, 0, true);
-            TxC(272, 72, "토사(자동)", 10.5, Txt, true, so);
-        }
-    }
-
-    // 층별 두께 — 지반에서 아래로(지형 따라 내려가는 선)
-    static readonly string[] ThNames = { "표토", "풍화토", "풍화암", "연암", "경암" };
-    static readonly double[][] ThPx = { new[] { 10.0, 24, 30, 34, 40 }, new[] { 12.0, 20, 34, 30, 44 }, new[] { 9.0, 26, 28, 38, 36 } };
-    double Depth(int i, int k) { double d = 0; for (int q = 0; q < k; q++) d += ThPx[i][q]; return d; }
-
-    void SceneTh(double t)
-    {
-        double a = Seg(t, 0, 0.6);
-        SceneBase(t, a);
-        int nl = ThNames.Length;
-        // ① 공마다 지반에서 아래로 두께를 차례로 쌓음
-        for (int k = 0; k < nl; k++)
-        {
-            double t0 = 0.8 + k * 0.42, grow = Seg(t, t0, t0 + 0.35);
-            if (grow <= 0) continue;
-            for (int i = 0; i < 3; i++)
-            {
-                double y0 = GroundY(BX[i]) + Depth(i, k), h = ThPx[i][k] * grow;
-                Rc(BX[i] - 3.5, y0, 7, h, Fz(LayerC(k)), null, 0, 0.95);
-                if (grow > 0.6 && ThPx[i][k] >= 12)
-                    Tx(BX[i] + 8, y0 + h / 2 - 7, (ThPx[i][k] / 10).ToString("0.0"), 9.5, Fz(LineC(LayerC(k))), true, Seg(t, t0 + 0.2, t0 + 0.35));
-            }
-        }
-        // ② 같은 층 바닥끼리 이음 — 깊이를 이어 지반 모양 따라
-        double xs = 30 + 374 * Seg(t, 3.3, 4.6), fo = Seg(t, 4.5, 5.3);
-        for (int k = 0; k < nl; k++)
-        {
-            int kk = k;
-            double Top(double x) => GroundY(x) + Lerp3(x, new[] { Depth(0, kk), Depth(1, kk), Depth(2, kk) });
-            double Bot(double x) => GroundY(x) + Lerp3(x, new[] { Depth(0, kk + 1), Depth(1, kk + 1), Depth(2, kk + 1) });
-            if (fo > 0)
-            {
-                var band = Sweep(Top, 404);
-                var bot = Sweep(Bot, 404); bot.Reverse(); band.AddRange(bot);
-                Pl(band, A(LayerC(k), 0.30 * fo), null, 0, true);
-            }
-            if (t > 3.3) Pl(Sweep(Bot, xs), null, Fz(LineC(LayerC(Math.Min(k + 1, nl - 1)))), k >= 1 ? 1.8 : 1.0, false, 1, k < 1);
-            Tx(376, (Top(380) + Bot(380)) / 2 - 7, ThNames[k], 10, Fz(LineC(LayerC(k))), true, Seg(t, 4.6, 5.1));
-        }
     }
 
     // 평면에서 찍기 — 평면 클릭 → 표식 · 표 한 줄(지반고 자동)

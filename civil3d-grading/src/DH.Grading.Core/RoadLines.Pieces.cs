@@ -305,6 +305,8 @@ public static partial class RoadLines
         const double GuideRad = 3.0 * Math.PI / 180;
         /// <summary>곧은 판 길잡이 광선 간격(m) — 사다리처럼 고른 세모(긴 부채 세모 없이 · 코리더 모양).</summary>
         const double GuideGap = 2.0;
+        /// <summary>★[JACK 1121] 오목 굽이 고른 그물 점 간격(m · 정삼각 격자) — 굽이 곁(<see cref="BendZone"/>) 면 안에 넣어 겉면(판 다툼)을 고르게 표본(<see cref="ZoneTris"/>).</summary>
+        const double ZoneH = 0.5;
         static Geometry UnionAll(List<Geometry> gs)
         {
             var l = gs.Where(g => g != null && !g.IsEmpty).ToList();
@@ -317,30 +319,85 @@ public static partial class RoadLines
             return Polys(gc.Buffer(0));
         }
 
-        /// <summary>★[lf3 · JACK 1119b 굽이 안쪽 송곳 · 구멍] 덮개 면(C 곁 원 안 · 둘레 점만) → C를 꼭지로 한 부채(둘레 점마다 C와 이음). 둘레 점만으로 제약 들로네를 하면
-        ///   C 곁 높이(겉면 다리 · 마구리 면이 만나는 꼭지)가 빠져 원 안이 둘레 높이로 평평하게 걸려 턱 · 송곳처럼 보였다. C가 면 안이 아니거나 별 모양이 아니면 null(종전 들로네).</summary>
-        static List<Coordinate[]>? CoreFan(Polygon f, List<(double CX, double CY)> cs, double r)
+        /// <summary>★[JACK 1121] 제약 들로네 세모(면 둘레 = 제약 변)에 안쪽 점을 하나씩 넣음 — 든 세모를 셋으로 나누고 둘레 아닌 변은 외접원 검사로 뒤집기(Lawson).
+        /// 변 위에 놓인 점은 건너뜀. 둘레 변은 안 나눔(이웃 면 꼭짓점 그대로).</summary>
+        static List<Coordinate[]> InsertPoints(List<Coordinate[]> tris, List<Coordinate> add)
         {
-            var ring = f.ExteriorRing.Coordinates; int n = ring.Length - 1; if (n < 3) return null;
-            foreach (var (cx, cy) in cs)
+            var V = new List<(double X, double Y)>(); var id = new Dictionary<(double, double), int>();
+            int Vid(Coordinate c) { var k = (c.X, c.Y); if (!id.TryGetValue(k, out int v)) { v = V.Count; id[k] = v; V.Add(k); } return v; }
+            double Orient(int a, int b, int c) => (V[b].X - V[a].X) * (V[c].Y - V[a].Y) - (V[b].Y - V[a].Y) * (V[c].X - V[a].X);
+            var T = new List<int[]>(); var alive = new List<bool>(); var E = new Dictionary<(int, int), int>();
+            void AddT(int a, int b, int c) { int t = T.Count; T.Add(new[] { a, b, c }); alive.Add(true); E[(a, b)] = t; E[(b, c)] = t; E[(c, a)] = t; }
+            void DelT(int t) { var q = T[t]; alive[t] = false; for (int k = 0; k < 3; k++) { var e = (q[k], q[(k + 1) % 3]); if (E.TryGetValue(e, out int tt) && tt == t) E.Remove(e); } }
+            foreach (var c in tris) { int a = Vid(c[0]), b = Vid(c[1]), d = Vid(c[2]); if (Orient(a, b, d) < 0) (b, d) = (d, b); if (Orient(a, b, d) <= 0) continue; AddT(a, b, d); }
+            var fixedE = new HashSet<(int, int)>();
+            foreach (var e in E.Keys) if (!E.ContainsKey((e.Item2, e.Item1))) fixedE.Add(e.Item1 < e.Item2 ? e : (e.Item2, e.Item1));
+            bool InCircle(int a, int b, int c, int d)
             {
-                bool all = true;
-                for (int k = 0; k < n && all; k++) { double dx = ring[k].X - cx, dy = ring[k].Y - cy; if (dx * dx + dy * dy > (r + 1e-3) * (r + 1e-3)) all = false; }
-                if (!all) continue;
-                var c = new Coordinate(cx, cy);
-                if (!f.Contains(new Point(c))) return null;
-                double sa = 0; for (int k = 0; k < n; k++) sa += ring[k].X * ring[k + 1].Y - ring[k + 1].X * ring[k].Y;
-                var o = new List<Coordinate[]>(n);
-                for (int k = 0; k < n; k++)
-                {
-                    var p = ring[k]; var q = ring[k + 1];
-                    double cr = (p.X - cx) * (q.Y - cy) - (p.Y - cy) * (q.X - cx);
-                    if (cr * Math.Sign(sa) <= 1e-10) return null;
-                    o.Add(new[] { c, p, q });
-                }
-                return o;
+                double ax = V[a].X - V[d].X, ay = V[a].Y - V[d].Y, bx = V[b].X - V[d].X, by = V[b].Y - V[d].Y, cx = V[c].X - V[d].X, cy = V[c].Y - V[d].Y;
+                return (ax * ax + ay * ay) * (bx * cy - cx * by) - (bx * bx + by * by) * (ax * cy - cx * ay) + (cx * cx + cy * cy) * (ax * by - bx * ay) > 1e-12;
             }
-            return null;
+            void Legal(int a, int b)
+            {
+                if (fixedE.Contains(a < b ? (a, b) : (b, a))) return;
+                if (!E.TryGetValue((a, b), out int t1) || !E.TryGetValue((b, a), out int t2)) return;
+                int p = T[t1].First(v => v != a && v != b), q = T[t2].First(v => v != a && v != b);
+                if (!InCircle(a, b, p, q)) return;
+                if (Orient(a, q, p) <= 0 || Orient(q, b, p) <= 0) return;
+                DelT(t1); DelT(t2); AddT(a, q, p); AddT(q, b, p);
+                Legal(a, q); Legal(q, b);
+            }
+            foreach (var c in add)
+            {
+                int p = Vid(c), hit = -1;
+                for (int t = 0; t < T.Count && hit < 0; t++)
+                {
+                    if (!alive[t]) continue; var q = T[t];
+                    if (Orient(q[0], q[1], p) > 1e-12 && Orient(q[1], q[2], p) > 1e-12 && Orient(q[2], q[0], p) > 1e-12) hit = t;
+                }
+                if (hit < 0) continue;
+                var (a, b, d) = (T[hit][0], T[hit][1], T[hit][2]);
+                DelT(hit); AddT(a, b, p); AddT(b, d, p); AddT(d, a, p);
+                Legal(a, b); Legal(b, d); Legal(d, a);
+            }
+            var o = new List<Coordinate[]>();
+            for (int t = 0; t < T.Count; t++) if (alive[t]) { var q = T[t]; o.Add(new[] { new Coordinate(V[q[0]].X, V[q[0]].Y), new Coordinate(V[q[1]].X, V[q[1]].Y), new Coordinate(V[q[2]].X, V[q[2]].Y) }); }
+            return o;
+        }
+
+        /// <summary>★★[JACK 1121 «굽이 안쪽 자글자글 · 톱니 · 잔 세모»] 굽이 곁 면 — 면 둘레(선 · 데이라잇 · 도로 둘레 그대로) + 굽이 곁 안에 정삼각 격자 점(간격 <see cref="ZoneH"/> ·
+        /// 둘레에서 0.3 H 넘게 안)을 넣고 제약 들로네(둘레 변은 안 나눔 — 이웃 면과 꼭짓점 그대로). 꼭짓점 높이는 판 겉면(VertZ)이라 원호 판 · 다리 늘림 판이 만나는 약한 골은
+        /// 격자가 고르게 표본(차 mm) · 강한 골(기울기 차 ≥ <see cref="ZoneCreaseGrad"/>)과 단 선은 면 둘레로 그대로. 격자 점이 없으면 null(종전 길).</summary>
+        List<Coordinate[]>? ZoneTris(Polygon f)
+        {
+            var env = f.EnvelopeInternal.Intersection(_zone!.EnvelopeInternal); if (env.IsNull) return null;
+            var bnd = new IndexedFacetDistance(f.Boundary); var loc = new IndexedPointInAreaLocator(f);
+            var pts = new List<Coordinate>();
+            double h = ZoneH, dy = h * Math.Sqrt(3) / 2;
+            // 격자는 고정 원점(OX, OY) 기준 — 같은 자리는 늘 같은 점(면이 달라도 · 다시 지어도)
+            int j0 = (int)Math.Floor((env.MinY - OY) / dy), j1 = (int)Math.Ceiling((env.MaxY - OY) / dy);
+            for (int j = j0; j <= j1; j++)
+            {
+                double y = OY + j * dy, off = (j & 1) == 0 ? 0 : h / 2;
+                int i0 = (int)Math.Floor((env.MinX - OX - off) / h), i1 = (int)Math.Ceiling((env.MaxX - OX - off) / h);
+                for (int i = i0; i <= i1; i++)
+                {
+                    var c = new Coordinate(OX + off + i * h, y);
+                    if (_zoneLoc!.Locate(c) == Location.Exterior || loc.Locate(c) != Location.Interior) continue;
+                    if (bnd.Distance(new Point(c)) < 0.3 * h) continue;
+                    pts.Add(c);
+                }
+            }
+            if (pts.Count == 0) return null;
+            Geometry tg0;
+            try { tg0 = NetTopologySuite.Triangulate.Polygon.ConstrainedDelaunayTriangulator.Triangulate(f); } catch { return null; }
+            var baseT = new List<Coordinate[]>();
+            for (int i = 0; i < tg0.NumGeometries; i++) if (tg0.GetGeometryN(i) is Polygon t && t.ExteriorRing.Coordinates.Length >= 4) { var cs = t.ExteriorRing.Coordinates; baseT.Add(new[] { cs[0], cs[1], cs[2] }); }
+            var o = InsertPoints(baseT, pts);
+            // 넓이 맞춤(면 넓이와 같아야 — 아니면 종전 길)
+            double a = o.Sum(c => Math.Abs((c[1].X - c[0].X) * (c[2].Y - c[0].Y) - (c[1].Y - c[0].Y) * (c[2].X - c[0].X)) / 2);
+            if (Math.Abs(a - f.Area) > 1e-6 * Math.Max(1, f.Area)) return null;
+            return o;
         }
 
         /// <summary>세모(§2.6) — 보이는 조각 ∩ 지은 자리(절토 판 조각은 절토 자리 · 성토는 성토 자리) 둘레 + 도로 둘레 → 0.1 mm 마디 넣기 → 면마다 제약 들로네 · 꼭짓점 높이 = 판 겉면 · 땅 · 도로 면.</summary>
@@ -349,10 +406,6 @@ public static partial class RoadLines
             why = "";
             var geos = new List<Geometry> { _deckRing, _u.ExteriorRing };
             if (!Out.RegionGround!.IsEmpty) geos.Add(Out.RegionGround.Boundary);
-            // 오목 굽이 모으는 점 C 곁(덮개 반지름 1.3배) — 조각 선을 넣지 않고 둘레 점만으로 한 면(두 다리 높이 차 단차 면 · 조각 겹치기가 남긴 바늘 · Civil 뒤집기 1.9 m를 없앰)
-            var cores = Rays.Where(r => double.IsFinite(r.CX)).Select(r => (r.CX, r.CY)).Distinct().Select(c => (Geometry)new Point(c.CX, c.CY).Buffer(CoreR * 1.3, 8)).ToList();
-            Geometry? core = cores.Count > 0 ? Inter(UnionAll(cores), Out.Region!) : null;
-            if (core != null && !core.IsEmpty) geos.Add(core.Boundary); else core = null;
             // 단 띠(같은 단면 토막의 보이는 조각 합집합)의 둘레 = 단 선 · 골 · 지은 자리 둘레 — 광선 변(빗살)은 넣지 않음(계획 §2.6 «선만으로» · 볼록 부채 꼭지 0.7° 세모 없음)
             var bands = new Dictionary<(bool, int, int), List<Geometry>>();
             foreach (var (sh, reg) in new[] { (Cut, Out.RegionCut!), (Fill, Out.RegionFill!) })
@@ -369,7 +422,6 @@ public static partial class RoadLines
                     var v = Vis(sh, fi);
                     if (v.IsEmpty) return;
                     Geometry piece = prep.ContainsProperly(fp) ? v : Inter(v, reg);
-                    if (core != null && piece.EnvelopeInternal.Intersects(core.EnvelopeInternal)) piece = Diff(piece, core);
                     if (piece.IsEmpty || piece.Area < 1e-10) return;
                     pcs[fi] = piece;
                 });
@@ -383,17 +435,17 @@ public static partial class RoadLines
             foreach (var kv in bands) { var u = UnionAll(kv.Value); if (!u.IsEmpty) geos.Add(u.Boundary); }
             foreach (var cr in Out.Creases) if (cr.Count >= 2) geos.Add(Gf.CreateLineString(cr.Select(p => new Coordinate(p.X, p.Y)).ToArray()));
             // 길잡이 광선 — 굽은 판(볼록 부채 · 오목 원호)은 3°마다 · 곧은 판은 2 m마다(띠 면 하나를 제약 들로네가 부채를 가로질러 이어 원뿔면에서 0.58 m 뜸 — 튜토리얼 도로 끝 모서리 · 절토 −19 % ·
-            //   굽이 안쪽 C 곁으로 모인 긴 부채 세모 — 덤프 B 굽이 2) ·
-            //   광선은 그 판이 겉면인 토막만(가려진 광선끼리 엇갈려 잔 세모가 생기지 않게) · 그 쪽 지은 자리 안(C 곁 빼고)
-            foreach (var (sh, reg) in new[] { (Cut, Out.RegionCut!), (Fill, Out.RegionFill!) })
+            //   굽이 안쪽 원호 판의 긴 부채 세모 — 덤프 B 굽이 2) ·
+            //   광선은 그 판이 겉면인 토막만(가려진 광선끼리 엇갈려 잔 세모가 생기지 않게 · 다른 판과 만나는 골선에서 멈춤) · 그 쪽 지은 자리 안
+            foreach (var (sh, rg) in new[] { (Cut, Out.RegionCut!), (Fill, Out.RegionFill!) })
             {
-                var rg = core != null ? Diff(reg, core) : reg;
                 if (rg.IsEmpty) continue;
                 var prepR = PreparedGeometryFactory.Prepare(rg);
                 double lastA = double.NaN, lastX = double.NaN, lastY = double.NaN, sg = sh.Cut ? 1 : -1;
                 var guides = new List<Geometry>();
-                foreach (var r in Rays)
+                for (int ri = 0; ri < Rays.Count; ri++)
                 {
+                    var r = Rays[ri];
                     double ang = Math.Atan2(r.UY, r.UX);
                     if (double.IsFinite(lastA))
                     {
@@ -404,17 +456,20 @@ public static partial class RoadLines
                     var whole = Gf.CreateLineString(new[] { new Coordinate(r.OX, r.OY), new Coordinate(r.OX + r.UX * r.T, r.OY + r.UY * r.T) });
                     if (!prepR.Intersects(whole)) continue;
                     var rv = sh.V[r.P];
-                    for (int k = 0; k < rv.NSeg; k++)
+                    // 단면 꺾임마다(다리 늘림 광선은 가장자리 맞춤이 0이 되는 거리에서도 나눔 — <see cref="SrcZ"/>)
+                    var ds = new List<double>(rv.D); if (sh.Corr[ri] != 0 && r.TC > 0 && r.TC < rv.D[^1]) { ds.Add(r.TC); ds.Sort(); }
+                    for (int k = 0; k + 1 < ds.Count; k++)
                     {
-                        double d0 = rv.D[k], d1 = Math.Min(rv.D[k + 1], r.T); if (d1 <= d0 + 1e-6) break;
+                        double d0 = ds[k], d1 = Math.Min(Math.Min(ds[k + 1], r.T), r.XT); if (d1 <= d0 + 1e-6) { if (sh.Corr[ri] == 0 || ds[k + 1] >= Math.Min(r.T, r.XT)) break; continue; }
                         double x0 = r.OX + r.UX * d0, y0 = r.OY + r.UY * d0, x1 = r.OX + r.UX * d1, y1 = r.OY + r.UY * d1;
-                        double z0 = r.Z + sg * rv.P.F(d0), z1 = r.Z + sg * rv.P.F(d1);
+                        double z0 = SrcZ(sh, ri, d0) + sg * rv.P.F(d0), z1 = SrcZ(sh, ri, d1) + sg * rv.P.F(d1);
                         foreach (var (t0, t1) in Vis(sh, x0, y0, z0, x1, y1, z1))
                             if ((t1 - t0) * (d1 - d0) > 1e-3) guides.Add(Gf.CreateLineString(new[] { new Coordinate(x0 + (x1 - x0) * t0, y0 + (y1 - y0) * t0), new Coordinate(x0 + (x1 - x0) * t1, y0 + (y1 - y0) * t1) }));
                     }
                 }
                 if (guides.Count == 0) continue;
-                var g = InterL(Gf.BuildGeometry(guides), rg);
+                // ★[JACK 1121] 굽이 곁(BendZone)은 길잡이 광선 대신 고른 그물 점(ZoneTris) — 길잡이 · 약한 골이 µm 다툼 경계를 따라 톱니 · 잔 세모를 냈다
+                var g = InterL(Gf.BuildGeometry(guides), _zone != null ? Diff(rg, _zone) : rg);
                 for (int gi = 0; gi < g.NumGeometries; gi++) if (g.GetGeometryN(gi) is LineString l && l.Length > 1e-3) geos.Add(l);
             }
             var swT = System.Diagnostics.Stopwatch.StartNew();
@@ -442,11 +497,7 @@ public static partial class RoadLines
                 _footOut.Add(q); return q;
             }
             bool DayPt(double x, double y) { var pt = new Point(x, y); return _dayDist != null && _dayDist.Distance(pt) < 2e-4 && _deckDist.Distance(pt) > MergeTol; }
-            // ★[lf3] 덮개 둘레 곁 마디(둘레 32각 변은 원 안쪽 4.7 mm까지)
-            var coreC = Rays.Where(r => double.IsFinite(r.CX)).Select(r => (r.CX, r.CY)).Distinct().ToList();
-            double rimR = CoreR * 1.3;
-            bool RimPt(double x, double y) { foreach (var (cx, cy) in coreC) { double dd = Math.Sqrt((x - cx) * (x - cx) + (y - cy) * (y - cy)); if (dd > rimR - 6e-3 && dd < rimR + 1e-3) return true; } return false; }
-            var faces = Faces(geos, _deckPin, SnapEnds, 0, Onto, DayPt, KeepFoot, core != null ? RimPt : null);
+            var faces = Faces(geos, _deckPin, SnapEnds, 0, Onto, DayPt, KeepFoot);
             long tFaces = swT.ElapsedMilliseconds;
             var zc = new Dictionary<(double, double), double>();
             var tris = new List<WallDaylight.Tri>();
@@ -462,8 +513,8 @@ public static partial class RoadLines
                 if (!isCut && !isFill && !isGnd) continue;
                 // 볼록 · 구멍 없는 작은 면(판 조각 대부분)은 바로 부채로 — NTS 제약 들로네는 면마다 준비 비용이 커서 6천 면에 30초
                 var ring = f.ExteriorRing.Coordinates;
-                List<Coordinate[]>? triList = core != null && f.NumInteriorRings == 0 ? CoreFan(f, coreC, rimR) : null;
-                if (triList != null) Out.CoreFans++;
+                List<Coordinate[]>? triList = !isGnd && _zonePrep != null && _zonePrep.Intersects(f) ? ZoneTris(f) : null;
+                if (triList != null) Out.ZoneFaces++;
                 else if (f.NumInteriorRings == 0 && (ring.Length == 4 || (ring.Length == 5 && Convex(ring, strict: true)))) { triList = new(); for (int k = 1; k + 2 < ring.Length; k++) triList.Add(new[] { ring[0], ring[k], ring[k + 1] }); }
                 else
                 {

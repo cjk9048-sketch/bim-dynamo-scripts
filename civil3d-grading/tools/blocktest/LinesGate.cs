@@ -147,14 +147,14 @@ static class LinesGate
                     foreach (var sr in frep.Steep) Console.WriteLine(string.Format(Ci, "[FIN]   ({0:F2},{1:F2})~({2:F2},{3:F2}) {4:F2} m · 최대 {5:F3} m · 변 {6:F2} 끝 {7:F4}{8}", sr.X0 % 1000, sr.Y0 % 1000, sr.X1 % 1000, sr.Y1 % 1000, sr.Length, sr.MaxDv, sr.EdgeLen, sr.EdgeEndDv, sr.Crease ? " (꺾임)" : ""));
                 }
 
-                // [lf3] 이긴 판 지도 — BLOCKTEST_LFGRID = "cx,cy,half,n"(1000 나머지 좌표) → <out>/<name>_grid.txt: x y | 성토 z 띠 토막 종류 | 절토 z 띠 토막 종류(종류 0 보통 · 1 오목 무리 · 2 덮개 · 3 다리 늘림)
+                // [lf3] 이긴 판 지도 — BLOCKTEST_LFGRID = "cx,cy,half,n"(1000 나머지 좌표) → <out>/<name>_grid.txt: x y | 성토 z 띠 토막 종류 | 절토 z 띠 토막 종류(종류 0 보통 · 3 다리 늘림)
                 var grd = Environment.GetEnvironmentVariable("BLOCKTEST_LFGRID");
                 if (!string.IsNullOrEmpty(grd) && br.Lf?.C != null && !string.IsNullOrEmpty(outDir))
                 {
                     var c = br.Lf.C;
                     double bx0 = Math.Floor(inpR.X[0] / 1000) * 1000, by0 = Math.Floor(inpR.Y[0] / 1000) * 1000;
                     // "auto,half,n" = 오목 굽이 C마다
-                    var specs = grd.StartsWith("auto") ? c.Rays.Where(r => double.IsFinite(r.CX)).Select(r => (r.CX, r.CY)).Distinct().Select(cc => new[] { cc.CX % 1000, cc.CY % 1000, double.Parse(grd.Split(',')[1], Ci), double.Parse(grd.Split(',')[2], Ci) }).ToList()
+                    var specs = grd.StartsWith("auto") ? c.BendC.Select(cc => new[] { cc.X % 1000, cc.Y % 1000, double.Parse(grd.Split(',')[1], Ci), double.Parse(grd.Split(',')[2], Ci) }).ToList()
                                                    : new List<double[]> { grd.Split(',').Select(v => double.Parse(v, Ci)).ToArray() };
                     for (int si = 0; si < specs.Count; si++) {
                     var q = specs[si]; int gn = (int)q[3];
@@ -162,7 +162,7 @@ static class LinesGate
                     {
                         if (f < 0) return "NaN -1 -1 -1";
                         var fc = sh.F[f]; var st = c.Strips[fc.Strip]; var ra = c.Rays[st.A]; var rb = c.Rays[st.B];
-                        int kd = ra.Ext ? 3 : double.IsFinite(ra.CX) && double.IsFinite(rb.CX) ? (Enumerable.Range(0, fc.N).Any(k => Math.Abs(fc.X[k] - ra.CX) < 1e-9 && Math.Abs(fc.Y[k] - ra.CY) < 1e-9) ? 2 : 1) : 0;
+                        int kd = ra.Ext ? 3 : 0;
                         return string.Format(Ci, "{0:F4} {1} {2} {3}", c.Zf(fc, 0, 0) * 0 + 0, fc.Strip, fc.Seg, kd);
                     }
                     using var w = new StreamWriter(Path.Combine(outDir, specs.Count > 1 ? $"{name}_grid{si + 1}.txt" : $"{name}_grid.txt"));
@@ -176,6 +176,20 @@ static class LinesGate
                         }
                     }
                 }
+                // [진단 · JACK 1120] BLOCKTEST_LFREGBOX = "x,y,r"(1000 나머지) — 그 네모 안 지은 자리(절토 · 성토 · 땅) 조각 좌표
+                var rgb = Environment.GetEnvironmentVariable("BLOCKTEST_LFREGBOX");
+                if (!string.IsNullOrEmpty(rgb) && br.Lf?.RegionCut != null)
+                {
+                    var q = rgb.Split(',').Select(v => double.Parse(v, Ci)).ToArray();
+                    double bx0 = Math.Floor(inpR.X[0] / 1000) * 1000, by0 = Math.Floor(inpR.Y[0] / 1000) * 1000;
+                    var box = new GeometryFactory().ToGeometry(new Envelope(bx0 + q[0] - q[2], bx0 + q[0] + q[2], by0 + q[1] - q[2], by0 + q[1] + q[2]));
+                    foreach (var (nm, rg) in new[] { ("절토", br.Lf.RegionCut), ("성토", br.Lf.RegionFill!), ("땅", br.Lf.RegionGround!) })
+                    {
+                        var g = rg.Intersection(box);
+                        for (int gi = 0; gi < g.NumGeometries; gi++)
+                            Console.WriteLine($"[REG] {nm} {g.GetGeometryN(gi).Area:F6} ㎡ " + string.Join(" ", g.GetGeometryN(gi).Coordinates.Select(c => string.Format(Ci, "{0:F4},{1:F4}", c.X % 1000, c.Y % 1000))));
+                    }
+                }
                 var rys = Environment.GetEnvironmentVariable("BLOCKTEST_LFRAYS");
                 if (!string.IsNullOrEmpty(rys) && br.Lf?.C != null)
                 {
@@ -183,7 +197,7 @@ static class LinesGate
                     for (int ri = 0; ri < c.Rays.Count; ri++)
                     {
                         var r = c.Rays[ri]; if (r.V < q[0] || r.V > q[1]) continue;
-                        Console.WriteLine(string.Format(Ci, "[RAY] {0} v{1} ({2:F3},{3:F3}) z {4:F3} u({5:F3},{6:F3}) T {7:F2} ext {8} C {9}", ri, r.V, r.OX % 1000, r.OY % 1000, r.Z, r.UX, r.UY, r.T, r.Ext, double.IsFinite(r.CX)));
+                        Console.WriteLine(string.Format(Ci, "[RAY] {0} v{1} ({2:F3},{3:F3}) z {4:F3} u({5:F3},{6:F3}) T {7:F2} ext {8} E {9:F2} ZE {10:F3} TC {11:F2} 맞춤 절 {12:F3} 성 {13:F3}", ri, r.V, r.OX % 1000, r.OY % 1000, r.Z, r.UX, r.UY, r.T, r.Ext, r.E, r.ZE, r.TC, c.Cut.Corr[ri], c.Fill.Corr[ri]));
                     }
                     for (int si = 0; si < c.Strips.Count; si++) { var st = c.Strips[si]; var ra = c.Rays[st.A]; if (ra.V >= q[0] && ra.V <= q[1]) Console.WriteLine(string.Format(Ci, "[STR] {0} rays {1}-{2} T {3:F2}/{4:F2} start {5:F2}", si, st.A, st.B, st.TA, st.TB, c.Start[si])); }
                 }

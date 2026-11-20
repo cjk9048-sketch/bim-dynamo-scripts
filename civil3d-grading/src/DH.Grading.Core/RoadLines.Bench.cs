@@ -73,8 +73,8 @@ public static partial class RoadLines
             if (f == null || !double.IsFinite(z)) return (-1, double.NaN, double.NaN, double.NaN, 0, 0);
             var (u, d) = _c.Locate(f.Strip, x, y);
             // 원천 높이 = 그 띠 두 광선 원천 높이를 띠 비율로(판 높이에서 F(d)를 빼면 오목 굽이 덮개 · 다리 늘림 띠에서 거리 뜻이 꺾여 2 m 어긋났다 — 덤프 B 굽이 1 안쪽)
-            var (ia, ib, _, _) = _c.Strips[f.Strip]; var ra = _c.Rays[ia]; var rb = _c.Rays[ib];
-            double uu = Math.Clamp(u, 0, 1), src = ra.Z + (rb.Z - ra.Z) * uu;
+            var (ia, ib, _, _) = _c.Strips[f.Strip];
+            double uu = Math.Clamp(u, 0, 1), src = _c.SrcZ(_sh, ia, d) + (_c.SrcZ(_sh, ib, d) - _c.SrcZ(_sh, ia, d)) * uu;
             var (s, side) = _c.StripStation(f.Strip, x, y);
             return (f.Strip, d, src, s, side, f.Pr);
         }

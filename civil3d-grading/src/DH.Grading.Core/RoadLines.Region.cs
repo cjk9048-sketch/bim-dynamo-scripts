@@ -191,9 +191,7 @@ public static partial class RoadLines
         const double SnapEnds = 5e-3;
         /// <summary>데이라잇 마디 합침 거리(m).</summary>
         const double DayMerge = 5e-3;
-        /// <summary>★[lf3] 오목 굽이 덮개 둘레 위 마디 합침 거리(m) — 길잡이 광선 간격(3° · 둘레에서 5 cm)보다 작게.</summary>
-        const double RimMerge = 1.5e-2;
-        static List<Polygon> Faces(List<Geometry> geos, ICollection<(double, double)>? pin = null, double snapEnds = 0, int pass = 0, Func<double, double, (double X, double Y)?>? onto = null, Func<double, double, bool>? dayPt = null, Func<double, double, int>? keep = null, Func<double, double, bool>? rim = null)
+        static List<Polygon> Faces(List<Geometry> geos, ICollection<(double, double)>? pin = null, double snapEnds = 0, int pass = 0, Func<double, double, (double X, double Y)?>? onto = null, Func<double, double, bool>? dayPt = null, Func<double, double, int>? keep = null)
         {
             // 토막으로 풀어 0.1 mm 격자에 맞춘 뒤 같은 토막은 하나로(이웃 조각이 같이 쓰는 변이 두 번 들어옴) → 스냅 라운딩 마디 넣기(새 SnapRoundingNoder — 옛 GeometryNoder는 겹친 변이 많으면 30초)
             var segSet = new HashSet<(double, double, double, double)>(); var nss = new List<NetTopologySuite.Noding.ISegmentString>();
@@ -266,23 +264,6 @@ public static partial class RoadLines
                     if (Find(i) == i) { if (!dcell.TryGetValue((kx, ky), out var l0)) dcell[(kx, ky)] = l0 = new List<int>(); l0.Add(i); }
                 }
             }
-            // ★[lf3 · JACK 1119b 굽이 안쪽 부채 바늘] 오목 굽이 C 곁 덮개 둘레 위 마디끼리는 RimMerge 안이면 하나로 — 둘레(32각) 꼭짓점 · 길잡이 광선 · 단 띠 둘레가
-            //   둘레를 2 ~ 7 mm 사이로 따로 건너 둘레 점 쌍이 생겨(높이 4 ~ 80 cm 다름) 둘레에서 길로 뻗는 긴 바늘 세모 · 세로 실 세모가 됐다(Civil 음영에서 하얀 빗금)
-            if (pass == 0 && rim != null)
-            {
-                var rcell = new Dictionary<(long, long), List<int>>(); int nMerge = 0;
-                for (int i = 0; i < pts.Count; i++)
-                {
-                    if (Find(i) != i || Pinned(i) || !rim(pts[i].X, pts[i].Y)) continue;
-                    long kx = (long)Math.Floor(pts[i].X / (2 * RimMerge)), ky = (long)Math.Floor(pts[i].Y / (2 * RimMerge));
-                    for (long dx = -1; dx <= 1; dx++) for (long dy = -1; dy <= 1; dy++)
-                            if (rcell.TryGetValue((kx + dx, ky + dy), out var l))
-                                foreach (int j in l)
-                                    if (Find(i) == i && Find(j) == j && Math.Max(Math.Abs(pts[i].X - pts[j].X), Math.Abs(pts[i].Y - pts[j].Y)) < RimMerge) { par[i] = j; nMerge++; }
-                    if (Find(i) == i) { if (!rcell.TryGetValue((kx, ky), out var l0)) rcell[(kx, ky)] = l0 = new List<int>(); l0.Add(i); }
-                }
-                if (nMerge > 0) Debug?.Invoke($"덮개 둘레 마디 합침 {nMerge}");
-            }
             var seen = new HashSet<(int, int)>();
             var segs = new List<Geometry>(); var pairs = new List<(int A, int C)>();
             foreach (var (a0, c0) in raw)
@@ -315,7 +296,7 @@ public static partial class RoadLines
                     }
                     if (best is { } bp && bd > 1e-9) add.Add(Gf.CreateLineString(new[] { new Coordinate(e.X, e.Y), new Coordinate(bp.X, bp.Y) }));
                 }
-                if (add.Count > 0) { Debug?.Invoke($"매달린 끝 이음 {add.Count}"); return Faces(segs.Concat(add).ToList(), pin, 0, 0, keep: keep, rim: rim); }
+                if (add.Count > 0) { Debug?.Invoke($"매달린 끝 이음 {add.Count}"); return Faces(segs.Concat(add).ToList(), pin, 0, 0, keep: keep); }
             }
             var pz = new Polygonizer(); pz.Add(segs);
             var res = pz.GetPolygons().OfType<Polygon>().Where(p => p.Area > 1e-9).ToList();
@@ -479,7 +460,9 @@ public static partial class RoadLines
         List<Geometry> MajorCreases(Sheet sh, List<Crease> crs, Geometry region)
         {
             var o = new List<Geometry>(); if (region.IsEmpty) return o;
-            var segs = crs.Where(c => c.Grad > CreaseGrad).Select(c => new Seg { X0 = c.X0, Y0 = c.Y0, Z0 = c.Z0, X1 = c.X1, Y1 = c.Y1, Z1 = c.Z1 }).ToList();
+            // ★[JACK 1121] 굽이 곁(BendZone)은 약한 골(기울기 차 &lt; ZoneCreaseGrad — 원호 판 · 다리 늘림 판이 거의 맞닿는 자리 · µm 다툼으로 톱니)을 끊김선으로 안 넣음(고른 그물이 표본)
+            bool Keep(Crease c) => c.Grad > CreaseGrad && (_zoneLoc == null || c.Grad >= ZoneCreaseGrad || _zoneLoc.Locate(new Coordinate((c.X0 + c.X1) / 2, (c.Y0 + c.Y1) / 2)) == Location.Exterior);
+            var segs = crs.Where(Keep).Select(c => new Seg { X0 = c.X0, Y0 = c.Y0, Z0 = c.Z0, X1 = c.X1, Y1 = c.Y1, Z1 = c.Z1 }).ToList();
             foreach (var ch in Chain(segs))
             {
                 if (ch.Count < 2) continue;
@@ -495,7 +478,6 @@ public static partial class RoadLines
                         var loc = li.Project(cc); int si = Math.Min(loc.SegmentIndex, ch.Count - 2); double fr = loc.SegmentIndex >= ch.Count - 1 ? 1 : loc.SegmentFraction;
                         p3.Add(new Point3(RoadRing.Snap4(cc.X), RoadRing.Snap4(cc.Y), ch[si].Z + (ch[si + 1].Z - ch[si].Z) * fr));
                     }
-                    if (p3.Any(q => Rays.Any(r => double.IsFinite(r.CX) && (q.X - r.CX) * (q.X - r.CX) + (q.Y - r.CY) * (q.Y - r.CY) < Sq(CoreR * 1.3)))) { Out.CoreCreases.Add(p3); continue; }   // 오목 굽이 C 곁(한 면으로 세모) 골은 그리지 않음(노리선 멈춤에만)
                     Out.Creases.Add(p3);
                     o.Add(Gf.CreateLineString(p3.Select(p => new Coordinate(p.X, p.Y)).ToArray()));
                 }
