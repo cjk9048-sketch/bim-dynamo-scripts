@@ -12,6 +12,27 @@ namespace DH.Grading.Civil;
 /// <para>자리(종이 mm · K-water 그림 자리 기준): 위 40 제목 · 오른쪽 140 띠(방위표 · 범례 · 토공량표) · 나머지 656 × 484 = 뷰포트(내 판단 5 — 띠 폭은 Core 한 줄).</para></summary>
 internal static class PlanSheet
 {
+    /// <summary>★[v117.20] 옹벽 평면선 층 — 부지(DH-옹벽선 · [옹벽 변환] · [옹벽 추가]) · 진입도로(<see cref="RoadSession.LayWall"/>).</summary>
+    static bool IsWallLayer(string n) => n.StartsWith("DH-옹벽선", StringComparison.Ordinal) || n == RoadSession.LayWall;
+
+    /// <summary>★[v117.20] 옹벽 굵은 점선 선종류 — DASHED(없으면 표준 파일에서 불러옴 · 못 하면 HIDDEN) · 못 하면 Null(굵은 실선).</summary>
+    static ObjectId WallLinetype(Database db, Transaction tr)
+    {
+        try
+        {
+            var lt = (LinetypeTable)tr.GetObject(db.LinetypeTableId, OpenMode.ForRead);
+            foreach (string nm in new[] { "DASHED", "HIDDEN" })
+            {
+                if (lt.Has(nm)) return lt[nm];
+                try { db.LoadLineTypeFile(nm, "acadiso.lin"); } catch { }
+                try { if (!lt.Has(nm)) db.LoadLineTypeFile(nm, "acad.lin"); } catch { }
+                if (lt.Has(nm)) return lt[nm];
+            }
+        }
+        catch { }
+        return ObjectId.Null;
+    }
+
     internal const string NorthBlock = "DH_방위표";
 
     /// <summary>범례 줄 — (이름, 레이어들) · 평면 창에 실제로 있는 것만 그린다.</summary>
@@ -535,7 +556,8 @@ internal static class PlanSheet
         // ⑤ 뷰포트 색 — ★[v112.6 · JACK 1104 «노리선 · 소단선 · 사면선 · 부지경계 · 외곽선 다 검정으로 통일해서 잘 보이게 — 진입도로도»] 설계 선 = 검정(7) · 0.25 mm · 현황 등고선 = 회색
         try
         {
-            int nBlack = 0, nGray = 0;
+            int nBlack = 0, nGray = 0, nWall = 0;
+            var wallLt = WallLinetype(db, tr);
             var ltv = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
             foreach (ObjectId lid in ltv)
             {
@@ -549,11 +571,15 @@ internal static class PlanSheet
                     ltr.UpgradeOpen();
                     var ov = ltr.GetViewportOverrides(vp.ObjectId);
                     ov.Color = Autodesk.AutoCAD.Colors.Color.FromColorIndex(Autodesk.AutoCAD.Colors.ColorMethod.ByAci, design ? (short)7 : (short)8);
-                    if (design) { try { ov.LineWeight = LineWeight.LineWeight025; } catch { } nBlack++; } else nGray++;
+                    // ★[v117.20 · JACK 1121 밤 «옹벽(추가 · 변환)이 부지나 진입도로에 있으면 배치 평면도에도 옹벽선 — 굵은 점선»] 옹벽 층 = 0.70 mm 점선
+                    bool wallLay = IsWallLayer(n);
+                    if (wallLay && !wallLt.IsNull) { try { ov.LinetypeObjectId = wallLt; } catch { } }
+                    if (design) { try { ov.LineWeight = wallLay ? LineWeight.LineWeight070 : LineWeight.LineWeight025; } catch { } nBlack++; } else nGray++;
+                    if (wallLay) nWall++;
                 }
                 catch (System.Exception exL) { log.AppendLine("  ⚠뷰포트 색 못 바꾼 층 — " + exL.Message); }
             }
-            log.AppendLine($"  뷰포트 색 — 검정(사면 · 소단 · 노리선 · 경계 · 옹벽) {nBlack}층 · 회색(현황 등고선) {nGray}층");
+            log.AppendLine($"  뷰포트 색 — 검정(사면 · 소단 · 노리선 · 경계 · 옹벽) {nBlack}층 · 회색(현황 등고선) {nGray}층 · 옹벽 굵은 점선 {nWall}층{(wallLt.IsNull ? "(⚠점선 선종류 못 불러옴 — 굵은 실선)" : "")}");
         }
         catch (System.Exception exC) { warns.Add("평면 뷰포트 색 못 바꿈 — " + exC.Message); }
 
@@ -685,6 +711,13 @@ internal static class PlanSheet
             var ln = new Line(new Point3d(B[0] + 10, y, 0), new Point3d(B[0] + 30, y, 0));
             Add(ln);
             ln.Color = SlopeLayer(ltr.Name) ? Autodesk.AutoCAD.Colors.Color.FromColorIndex(Autodesk.AutoCAD.Colors.ColorMethod.ByAci, 7) : ltr.Color; ln.LinetypeId = ltr.LinetypeObjectId; ln.LinetypeScale = 1.0;
+            if (IsWallLayer(ltr.Name))
+            {
+                // ★[v117.20] 범례 옹벽 견본 = 평면 창과 같은 검정 굵은 점선
+                ln.Color = Autodesk.AutoCAD.Colors.Color.FromColorIndex(Autodesk.AutoCAD.Colors.ColorMethod.ByAci, 7);
+                var wl = WallLinetype(db, tr); if (!wl.IsNull) ln.LinetypeId = wl;
+                ln.LineWeight = LineWeight.LineWeight070;
+            }
             Text(label, B[0] + 36, y, 3.0, TextHorizontalMode.TextLeft);
             y -= 7;
         }

@@ -226,7 +226,7 @@ internal static class WallLineDraw
             foreach (var (x, y) in r.HitLabels) Label(wd, x, y, HitText, px, 13);
             // ★[v117.14.1 · JACK 1112 «단수 포함»] 단 수 — 커서 오른쪽 위(이름표 카드는 오른쪽 아래) · 침범이면 빨강
             tr.Color = (short)(r.Hit.Count > 0 ? 1 : GuideAci);
-            Label(wd, cur.X + 34 * px, cur.Y + 16 * px, TierText(r.N), px, 14);
+            Label(wd, cur.X + 34 * px, cur.Y + 16 * px, TierText(r.N) + (r.HMax > 0.05 ? $" · 높이 {r.HMax:F1} m" : ""), px, 14);   // ★[v117.20] 높이도
         }
         while (true)
         {
@@ -285,6 +285,14 @@ internal static class WallLineDraw
                         return;
                     }
                     var to = st.Ok ? new Point3d(st.X, st.Y, 0) : cf;
+                    // ★★[v117.20 · JACK 1121 밤 «미리보기 옹벽이 선만 나와 · 해치 말고 아예 다른 방식»] 그은 선 + 커서까지를 옹벽 기호(굵은 주황 몸통 + 흙 쪽 눈금)로 —
+                    //   계획지표면 · 진입도로 · 수직/다단 모두. 흙 쪽 = 소단 미리보기 판정 부호(없으면 앞서 판정한 부호 · 모르면 몸통만).
+                    {
+                        int sd = br != null ? br.Side : sideKnown != 0 && sideFrom == drawn[0] ? sideKnown : 0;
+                        var wp = drawn.Select(q => new Point3d(q.X, q.Y, 0)).ToList();
+                        if (st.Ok || (st.Floor && br != null && br.Hit.Count > 0)) wp.Add(to);   // 거절(빨간 고무줄) 자리는 커서까지 안 늘임
+                        WallSymbol(wd, wp, sd, CursorLabel.PixelUnit());
+                    }
                     // ★[v117.14.1 · JACK 1112 «부지에 겹치면 … 지금은 그냥 빨간선만 나오고 X»] 부지 바닥에 닿아 거절된 자리는 빨간 칠(겹친 몫)이 알려 준다 — 고무줄은 안내색 · X 없음
                     //   (칠이 없을 때 — 0.1 m 안으로 붙기만 함 등 — 와 다른 거절은 종전대로 빨간 선 + X)
                     bool red = !st.Ok && !(st.Floor && br != null && br.Hit.Count > 0);
@@ -393,6 +401,41 @@ internal static class WallLineDraw
         }
         catch { }
     }
+
+    /// <summary>★[v117.20 · JACK 1121 밤 «옹벽 추가 미리보기가 선만 나와 · 해치는 깨져서 별로 · 아예 다른 방식»] 옹벽 기호 —
+    /// 굵은 벽 몸통(열린 폴리선 · 폭 = 화면 px — 해치 · 칠 없음이라 커서를 움직여도 안 깨짐) + 안쪽(받치는 흙 쪽) 짧은 눈금(도면 옹벽 기호 꼴).
+    /// side = +1 선 왼쪽 · −1 오른쪽 · 0 = 모름(눈금 없이 몸통만). 눈금은 화면 14 px마다 · 최대 300개.</summary>
+    static void WallSymbol(WorldDraw wd, IReadOnlyList<Point3d> path, int side, double px)
+    {
+        if (path.Count < 2 || !(px > 0)) return;
+        try
+        {
+            using var pl = new AcadPoly();
+            for (int i = 0; i < path.Count; i++) pl.AddVertexAt(i, new Point2d(path[i].X, path[i].Y), 0, 7 * px, 7 * px);
+            pl.Color = WallBody;
+            wd.Geometry.Draw(pl);
+        }
+        catch { }
+        if (side == 0) return;
+        var tr = wd.SubEntityTraits;
+        tr.TrueColor = new Autodesk.AutoCAD.Colors.EntityColor(WallBody.Red, WallBody.Green, WallBody.Blue);
+        double step = 14 * px, len = 9 * px, off = 3.5 * px, carry = step / 2;
+        int n = 0;
+        for (int i = 0; i + 1 < path.Count && n < 300; i++)
+        {
+            double dx = path[i + 1].X - path[i].X, dy = path[i + 1].Y - path[i].Y, L = System.Math.Sqrt(dx * dx + dy * dy);
+            if (L < 1e-9) continue;
+            double ux = dx / L, uy = dy / L, nx = -uy * side, ny = ux * side;
+            double t = carry;
+            for (; t < L && n < 300; t += step, n++)
+            {
+                double x = path[i].X + ux * t + nx * off, y = path[i].Y + uy * t + ny * off;
+                wd.Geometry.WorldLine(new Point3d(x, y, 0), new Point3d(x + nx * len, y + ny * len, 0));
+            }
+            carry = t - L;
+        }
+    }
+    static readonly Autodesk.AutoCAD.Colors.Color WallBody = Autodesk.AutoCAD.Colors.Color.FromRgb(230, 120, 30);
 
     static void Label(WorldDraw wd, double x, double y, string text, double px, double sizePx)
     {
