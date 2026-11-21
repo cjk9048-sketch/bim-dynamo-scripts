@@ -45,6 +45,8 @@ using AcadApp = Autodesk.AutoCAD.ApplicationServices.Application;
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.MapPickCommand))]            // DHMAPPICK(지도에서 범위 고르기)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.MapPalette))]                // DHCONTOURBOX(지도 도킹바가 넘긴 범위로 지표면 가져오기)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.NgiiCommand))]               // DHNGII(수치지도 DXF → 원지반)
+[assembly: CommandClass(typeof(DH.Grading.Civil.GroundPalette))]                       // ★[JACK 1121] DHGROUNDPANEL(원지반 가져오기 도킹창 — 리본 스플릿 대신)
+[assembly: CommandClass(typeof(DH.Grading.Civil.Commands.SurveyFixCommand))]          // ★[JACK 1121] DHSURVEYFIX(측량도 보정 — 백판 위 측량 범위만 바꿔 원지반 새로)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.GroundContourCommand))]      // ★[v113.0] DHGNDCONTOUR(도면의 등고선 → 원지반)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.CropGroundCommand))]         // DHCROP(원지형 자르기)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.SelfCheckCommand))]          // DHSELFCHECK(자가점검 — 읽기만 · v103.1.7)
@@ -235,6 +237,7 @@ public sealed class RibbonApp : IExtensionApplication
                     GradingPalette.RefreshReset();
                     RoadPalette.RefreshReset();
                     SheetBookPalette.Refresh();   // ★[v112.0] 도면화 창 — 장 수 · 축척 · 옛것(창이 보일 때만)
+                    GroundPalette.Refresh();      // ★[JACK 1121] 원지반 가져오기 창 — [측량도 보정하기] 켜짐 · 지금 원지반(창이 보일 때만)
                 }
                 // ★[v111.10 · 계획 3.5] 초기화를 U로 되돌려도 단추가 꺼진 채 남지 않게 — 실행 취소 · 다시 실행도(RefreshEnabled는 빼고)
                 else if (c3 == "U" || c3 == "UNDO" || c3 == "REDO" || c3 == "MREDO")
@@ -242,6 +245,7 @@ public sealed class RibbonApp : IExtensionApplication
                     GradingPalette.RefreshReset();
                     RoadPalette.RefreshReset();
                     SheetBookPalette.Refresh();   // ★[v112.0] 도면화 창 — 장 수 · 축척 · 옛것(창이 보일 때만)
+                    GroundPalette.Refresh();      // ★[JACK 1121] 되돌려 원지반이 생기거나 없어져도 [측량도 보정하기]가 따라감
                 }
             };
         }
@@ -595,77 +599,21 @@ public sealed class RibbonApp : IExtensionApplication
                 "소유 구분은 옅은 색 칠입니다(국공유 하늘 · 일부 국공유 옅은 하늘 · 사유 모래 · 자료 없음 회색).\n" +
                 "필지를 고르면 특성 창에 소유 구분 · 공시지가가 보입니다.\n" +
                 "출처: VWorld(연속지적 · 토지소유정보)", null);
-            var btnContour = MakeButton(
-                "서버\n지표면", "DHCONTOUR ", "지도 도킹바가 열립니다 — 지도에서 박스로 범위를 고르면 그 자리의 수치지형도 등고선을 3D로 가져오고 '원지반' 지표면까지 자동 생성(지적도 동시 가능)", "서버지표면");
-            btnContour.ToolTip = MakeTip("서버지표면 (DHCONTOUR)",
-                "누르면 오른쪽에 <b>지도 도킹바</b>가 열립니다(항공사진·지적도).\n" +
-                "지도에서 모서리 두 곳을 클릭해 범위를 정하고 [이 범위 가져오기]를 누르면\n" +
-                "그 자리의 등고선이 도면 좌표로 들어오고 도킹바는 스스로 닫힙니다.\n\n" +
-                "빈 도면에서 시작할 때 쓰세요 — 검은 화면에서 찍을 곳을 찾지 않아도 됩니다.\n\n" +
-                "· [지적도도 같이]를 체크하면 같은 범위의 지적도까지 한 번에 들어옵니다.\n" +
-                "· 사내 서버의 수치지형도 등고선을 표고가 들어간 3D 선으로 가져오고,\n" +
-                "  곧바로 '원지반' 지표면을 만듭니다(등고선 표시 주 10m·보조 2m).\n" +
-                "· 만들어진 원지반으로 바로 [정지면 생성]을 실행하면 됩니다.", null);
-
-            // ★★★[JACK 0901] 브이월드에서 내려받은 <b>수치지도 DXF</b>로 원지반을 만든다.
-            //   사내망이 없거나 서버에 없는 자리에서도 쓸 수 있는 두 번째 길이다.
-            var btnNgii = MakeButton(
-                "수치지도\nDXF", "DHNGII ", "국토지리정보원 수치지도 DXF를 골라 등고선·표고점만 읽어 '원지반' 지표면을 만듭니다(도엽 여러 장 동시 선택 가능)", "수치지도");
-            btnNgii.ToolTip = MakeTip("수치지도 DXF (DHNGII)",
-                "브이월드에서 받은 수치지도 DXF를 고르면 <b>도면을 열지 않고</b>\n" +
-                "등고선·표고점만 읽어 '원지반' 지표면을 만듭니다.\n\n" +
-                "· 도엽이 여러 장이면 <b>한 번에 골라</b> 이어진 지표면 하나로 만듭니다.\n" +
-                "· 읽는 레이어: 등고선(F001…) · 표고점(F002…). 표고를 적어 둔 글자는 뺍니다.\n" +
-                "· <b>표고가 0인 등고선·표고점은 버립니다</b> — 측량이 안 된 자리라\n" +
-                "  그대로 두면 지표면에 절벽이 생깁니다.\n\n" +
-                "좌표계는 [공통설정]을 따릅니다(DXF에는 좌표계가 안 담겨 있습니다).", null);
-            // ★[v113.0 · JACK 1104 «원지반 — 등고선으로 작성»] 도면에 이미 가져온 표고 든 등고선을 골라 만든다.
-            var btnGndContour = MakeButton(
-                "등고선으로\n작성", "DHGNDCONTOUR ", "도면에 있는 표고 든 등고선을 골라(ALL 가능) '원지반' 지표면을 만듭니다", "등고선작성");
-            btnGndContour.ToolTip = MakeTip("등고선으로 작성 (DHGNDCONTOUR)",
-                "도면에 가져온 <b>고도(표고)가 든 등고선</b>을 고르면(창 · 걸침 · ALL)\n" +
-                "그것으로 '원지반' 지표면을 만듭니다.\n\n" +
-                "· 쓰는 것: 폴리선 · 2D/3D 폴리선 · 선 · 호 · 원 · 스플라인(표고가 한결같으면 등고선,\n" +
-                "  제각각인 3D 선은 브레이크라인) · 표고 든 점(POINT)은 표고점.\n" +
-                "· <b>표고가 0인 선은 뺍니다</b> · 블록 안의 선은 못 씁니다(분해 후 고르기).\n" +
-                "· 고른 원본은 그대로 둡니다 — 사본을 원지반 재료 레이어에 넣어 씁니다.\n" +
-                "· 이미 원지반이 있으면 새것으로 바꿉니다(다른 가져오기와 같음).", null);
-            // ★★★[JACK 0901 "원지반 가져오기 스플릿 버튼 만들고 그 안에 수치지도 DXF, 서버 지표면 넣어 줘"]
-            //   원지반을 얻는 길이 둘이 됐다 — 나란히 두면 <b>어느 것을 눌러야 하나</b>가 된다.
-            //   하나로 묶고 화살표로 고르게 한다.
-            // ★★[v105.1.3 · JACK 1023 «원지반 가져오기 스플릿 단추 안에 맨 마지막에 원지반 삭제»] [초기화]가 원지반을 남기게 되면서(v105.1.2) 버리는 길을 여기에
-            var btnGroundOff = MakeButton(
-                "원지반\n삭제", "DHGROUNDOFF ", "[원지반 가져오기]로 만든 '원지반'과 그 등고선·표고점을 지웁니다", "원지반삭제");
-            btnGroundOff.ToolTip = MakeTip("원지반 삭제 (DHGROUNDOFF)",
-                "[원지반 가져오기]로 만든 <b>'원지반' 지표면</b>과 그 재료(등고선·계곡선·표고점)를 지웁니다.\n" +
-                "· 직접 고른 다른 지표면은 지우지 않습니다.\n" +
-                "· 원지반으로 만든 정지·터파기 결과가 있으면 <b>같이 지웁니다</b>([전체 초기화]와 같음) — 지우기 전에 물어봅니다.", null);
-            var splitGround = new RibbonSplitButton
-            {
-                Text = "원지반\n가져오기",
-                ShowText = true,
-                ShowImage = true,
-                // ★스플릿 버튼은 <b>자기 이미지를 따로 줘야</b> 한다 — 항목 이미지를 안 물려받는다(§v32 그 자리).
-                LargeImage = MakeGlyph("원지반"),
-                Image = MakeGlyph("원지반"),
-                Size = RibbonItemSize.Large,
-                Orientation = System.Windows.Controls.Orientation.Vertical,
-                IsSplit = true,
-                IsSynchronizedWithCurrentItem = false,
-                ListStyle = RibbonSplitButtonListStyle.List,
-                ToolTip = MakeTip("원지반 가져오기",
-                    "**수치지도 DXF** — 브이월드에서 내려받은 파일로 만듭니다(사내망 없어도 됨).\n" +
-                    "**서버 지표면** — 지도에서 범위를 골라 사내 서버에서 받습니다(VPN 필요).\n" +
-                    "**등고선으로 작성** — 도면에 가져온 표고 든 등고선을 골라 만듭니다.\n\n" +
-                    "둘 다 결과는 같은 '원지반' 지표면입니다 — 이후 공정은 똑같습니다.\n" +
-                    "**원지반 삭제** — 가져온 원지반과 등고선·표고점을 지웁니다.\n" +
-                    "아래 화살표를 눌러 고릅니다.", null),
-            };
-            splitGround.Items.Add(btnNgii);
-            splitGround.Items.Add(btnContour);
-            splitGround.Items.Add(btnGndContour);
-            splitGround.Items.Add(btnGroundOff);
-            splitGround.Current = btnNgii;
+            // ★★★[JACK 0901] 원지반을 얻는 길(서버 지표면 DHCONTOUR · 수치지도 DXF DHNGII · ★[v113.0] 등고선으로 작성 DHGNDCONTOUR · ★[v105.1.3] 원지반 삭제 DHGROUNDOFF)을 스플릿 하나로 묶었었다.
+            // ★★[JACK 1121 «스플릿이 아니라 단추 하나 → 누르면 도킹 팝업 · 그 안에 수치지도 DXF · 서버 · 등고선 단추 · 단추마다 애니메이션으로 설명 · 원지반 삭제는 창 아래 작은 단추»]
+            //   단추 하나 → [원지반 가져오기] 도킹창(<see cref="GroundPalette"/> · DHGROUNDPANEL). 창 안 단추는 옛 명령을 그대로 보낸다(명령 · 명령줄 · 튜토리얼 감시 그대로).
+            //   창 네 번째 단추 = 새 [측량도 보정하기](DHSURVEYFIX — 원지반이 있을 때만 켜짐).
+            //   ★글자 «원지반\n가져오기»는 그대로 — 튜토리얼 빛 테가 이 글자로 단추를 찾는다(TutorialRun).
+            var btnGround = MakeButton(
+                "원지반\n가져오기", "DHGROUNDPANEL ", "원지반 가져오기 창 — 수치지도 DXF · 서버 · 등고선으로 작성 · 측량도 보정 · 원지반 삭제", "원지반");
+            btnGround.ToolTip = MakeTip("원지반 가져오기 (DHGROUNDPANEL)",
+                "누르면 오른쪽에 <b>원지반 가져오기 창</b>이 열립니다 — 단추에 마우스를 올리면 그림으로 설명합니다.\n" +
+                "**수치지도 DXF 가져오기** — 브이월드에서 내려받은 파일로 만듭니다(사내망 없어도 됨).\n" +
+                "**서버에서 가져오기** — 지도에서 범위를 골라 사내 서버에서 받습니다(VPN 필요).\n" +
+                "**등고선으로 작성하기** — 도면에 가져온 표고 든 등고선을 골라 만듭니다.\n" +
+                "**측량도 보정하기** — 만든 원지반(백판) 위에 측량도를 얹어 그 범위만 측량 자료로 바꿉니다.\n\n" +
+                "결과는 같은 '원지반' 지표면입니다 — 이후 공정은 똑같습니다.\n" +
+                "**원지반 삭제**는 창 아래 작은 단추입니다.", null);
 
             var pExport = new RibbonPanelSource { Title = "내보내기" };
             // ★★★[v107 · JACK 1027 «인프라웍스 내보내기기능을 3D 웹뷰 기능으로 업그레이드»] INFRA WORKS → 3D 보기(InfraWorks 파일은 3D 창 [저장] 안에서)
@@ -877,7 +825,7 @@ public sealed class RibbonApp : IExtensionApplication
             var pGround = new RibbonPanelSource { Title = "원지반 작성" };
             tab.Panels.Add(new RibbonPanel { Source = pGround });
             pGround.Items.Add(Spacer());
-            pGround.Items.Add(splitGround);
+            pGround.Items.Add(btnGround);
             pGround.Items.Add(Spacer());
 
             tab.Panels.Add(new RibbonPanel { Source = pGrade });
