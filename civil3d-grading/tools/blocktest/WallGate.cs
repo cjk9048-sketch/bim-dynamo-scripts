@@ -323,6 +323,26 @@ static class WallGate
                 }
             int take = Math.Min(nAuto, auto.Count);
             for (int i = 0; i < take; i++) lines.Add(auto[(int)((long)i * auto.Count / take)]);
+            // ★[roadsurf 0단계 W2 · 재설계 계획 5.3] 흔들기 — 자동 선마다 결정적 변형 ①끝점 ±1 cm ②첫 점 중심 ±0.1° 돌림 ③가운데 꼭짓점 하나 ±5 cm ④평행 이동 ±3 cm ⑤클릭 차례 뒤집기
+            if (int.TryParse(Environment.GetEnvironmentVariable("BLOCKTEST_LFJIT"), out int nJit) && nJit > 0)
+            {
+                var baseAuto = lines.Where(l => l.Tag.StartsWith("자동")).ToList();
+                var rnd = new Random(1121);
+                foreach (var (tag, p) in baseAuto)
+                    for (int v = 0; v < Math.Min(nJit, 5); v++)
+                    {
+                        var q = p.ToList(); double sg = rnd.Next(2) == 0 ? -1 : 1;
+                        switch (v)
+                        {
+                            case 0: q[0] = (q[0].X + 0.01 * sg, q[0].Y - 0.01 * sg); q[^1] = (q[^1].X - 0.01 * sg, q[^1].Y + 0.01 * sg); break;
+                            case 1: { double a = sg * 0.1 * Math.PI / 180, c = Math.Cos(a), s = Math.Sin(a); var o = q[0]; q = q.Select(t => (o.X + (t.X - o.X) * c - (t.Y - o.Y) * s, o.Y + (t.X - o.X) * s + (t.Y - o.Y) * c)).ToList(); break; }
+                            case 2: { int m = Math.Max(1, q.Count / 2); if (m < q.Count - 1) q[m] = (q[m].X + 0.05 * sg, q[m].Y + 0.05 * sg); break; }
+                            case 3: { double dx = q[^1].X - q[0].X, dy = q[^1].Y - q[0].Y, l = Math.Max(1e-9, Math.Sqrt(dx * dx + dy * dy)); q = q.Select(t => (t.X - dy / l * 0.03 * sg, t.Y + dx / l * 0.03 * sg)).ToList(); break; }
+                            case 4: q.Reverse(); break;
+                        }
+                        lines.Add(($"{tag} 흔{v + 1}", q));
+                    }
+            }
         }
         int tried = 0, ok = 0, bug = 0, geo = 0; var codes = new Dictionary<string, int>();
         Console.WriteLine(string.Format(Ci, "[LFU] {0} {1} 경계 넓이 {2:F1} ㎡ · 띠 {3}", name, e, gf.CreatePolygon(bd.Append(bd[0]).Select(q => new Coordinate(q.X, q.Y)).ToArray()).Area, band?.Count ?? 0));
@@ -356,16 +376,25 @@ static class WallGate
             tried++;
             var sw = System.Diagnostics.Stopwatch.StartNew();
             RoadGrade.WallState st;
-            try { st = RoadGrade.ApplyWalls(inp, rr, b.Tris, b.Lines, "고리 면", new[] { lw }, ring: b).Walls[0]; }
+            RoadGrade.WallSurface? wsU = null;
+            try { wsU = RoadGrade.ApplyWalls(inp, rr, b.Tris, b.Lines, "고리 면", new[] { lw }, ring: b); st = wsU.Walls[0]; }
             catch (Exception ex) { Console.WriteLine($"[LFU] {name} {e} {tried,2} {tag} | 예외 {ex.Message}"); bug++; codes["예외"] = codes.GetValueOrDefault("예외") + 1; continue; }
             bool sOk = st.Ok; string code = st.Code ?? "", why = st.Why ?? "";
+            // [그림 재료] BLOCKTEST_LFUSERDUMP = 폴더 — 손 선의 바뀐 세모(ZoneTris) · 로그
+            var dumpDir = Environment.GetEnvironmentVariable("BLOCKTEST_LFUSERDUMP");
+            if (!string.IsNullOrEmpty(dumpDir) && tag.StartsWith("손"))
+            {
+                Directory.CreateDirectory(dumpDir);
+                File.WriteAllLines(Path.Combine(dumpDir, $"{name}_{tag.Replace(' ', '_')}_zone.txt"), st.ZoneTris.Select(t => string.Format(Ci, "{0:R} {1:R} {2:R} {3:R} {4:R} {5:R} {6:R} {7:R} {8:R}", t.A.X, t.A.Y, t.A.Z, t.B.X, t.B.Y, t.B.Z, t.C.X, t.C.Y, t.C.Z)));
+                File.WriteAllText(Path.Combine(dumpDir, $"{name}_{tag.Replace(' ', '_')}_log.txt"), st.Log + Environment.NewLine + st.Why);
+            }
             string easy = sOk ? "" : WallEasy.Build(code, why, road: true);
             bool isBug = !sOk && easy == WallEasy.Bug;
             if (sOk) ok++; else if (isBug) bug++; else geo++;
             if (!sOk) { string key = (isBug ? "기술:" : "") + code; codes[key] = codes.GetValueOrDefault(key) + 1; }
             string txt = sOk ? st.Text : "";
             Console.WriteLine(string.Format(Ci, "[LFU] {0} {1} {2,2} {3,-22} 점 {4} | {5} | {6} ms", name, e, tried, tag, ext.Count,
-                sOk ? "○ " + (txt.Length > 120 ? txt[..120] : txt) : (isBug ? "× 기술 " : "× 땅 ") + code + " — " + (why.Length > 240 ? why[..240] : why) + (isBug ? "" : " ⇒ " + easy), sw.ElapsedMilliseconds));
+                sOk ? "○ " + ((st.Log ?? "").Contains("옛 합성으로 물러섬") ? "[물러섬] " : "") + (txt.Length > 120 ? txt[..120] : txt) + (Environment.GetEnvironmentVariable("BLOCKTEST_LFUSERVOL") == "1" && wsU != null ? string.Format(Ci, " ‖VOL {0:R} {1:R}‖", wsU.Tris.Sum(t => Math.Abs((t.B.X - t.A.X) * (t.C.Y - t.A.Y) - (t.B.Y - t.A.Y) * (t.C.X - t.A.X)) / 2 * (t.A.Z + t.B.Z + t.C.Z) / 3), wsU.Tris.Sum(t => Math.Abs((t.B.X - t.A.X) * (t.C.Y - t.A.Y) - (t.B.Y - t.A.Y) * (t.C.X - t.A.X)) / 2)) : "") : (isBug ? "× 기술 " : "× 땅 ") + code + " — " + (why.Length > 240 ? why[..240] : why) + (isBug ? "" : " ⇒ " + easy), sw.ElapsedMilliseconds));
             if (!sOk && Environment.GetEnvironmentVariable("BLOCKTEST_LFUSERV") == "1") Console.WriteLine("[LFU]   클릭 " + string.Join(";", p.Select(q => string.Format(Ci, "{0:F4},{1:F4}", q.X, q.Y))) + Environment.NewLine + st.Log);
         }
         Console.WriteLine($"[LFU] {name} {e} 합계 — 시도 {tried} · 성공 {ok} · 땅 거절 {geo} · 기술 거절(계산 실패) {bug} · " + string.Join(" · ", codes.OrderByDescending(kv => kv.Value).Select(kv => $"{kv.Key} {kv.Value}")));

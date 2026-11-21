@@ -17,19 +17,23 @@ namespace DH.Grading.Civil.Commands;
 public sealed class SheetSettingsCommand
 {
     [CommandMethod("DHSHEETSET")]
-    public void Run()
+    public void Run() => Open(openMisc: false);
+
+    /// <summary>창 열기 · [저장] 뒤 — DHSHEETSET(«기타» 칸은 지난번 접은 상태) · DHMISCSET(★[v117.19] 옛 기타 설정 → «기타» 칸을 펼쳐서)가 함께 쓴다.</summary>
+    internal static void Open(bool openMisc)
     {
         Document doc = AcadApp.DocumentManager.MdiActiveDocument;
         if (doc == null) return;
         // [도면 전환 0803] 도면이 바뀌었으면 그 도면이 저장한 값을 보여준다(정지옵션과 같은 규칙).
         GradingSettings.SyncToDocument(doc);
+        int prevEpsg = MiscSettingsCommand.Prepare(doc);   // ★[v117.19] 옛 기타 설정 — 콤보를 도면 좌표계로 맞춤(리뷰 0731 D-1)
 
         // ★★[JACK 1117 «도면설정엔 노리선 · 배경지도 화질 · 도곽만»] 종단 · 횡단 축척 · 배치 · 측점 간격 · 검토선 · 원지반 굴곡 · 층따기 = 종횡단도 창(SectionPanel [설정 적용] → DHSECSHEETAPPLY → 아래 Saved · SavedRoadVH · 층따기는 바로 저장)
         //   여기 값은 종단도 · 횡단도 모양을 안 바꿈 → [저장]이 종단 · 횡단을 다시 그리지 않음(배경지도 화질은 도면 기록에만)
         var (cm0, cM0) = ContourInterval.Read(doc.Database);
         bool nori0 = NoriSetting.IsOn(doc.Database);
         double bm0 = GradingSettings.BasemapRes;
-        var dlg = new SheetDialog("저장", cm0, cM0, nori0);
+        var dlg = new SheetDialog("저장", cm0, cM0, nori0, openMisc);
         AcadApp.ShowModalWindow(dlg);
         if (dlg.DialogResult != true) return;
         SavedNori(doc, nori0, dlg.NoriDraw);
@@ -37,6 +41,9 @@ public sealed class SheetSettingsCommand
         SheetPrefs.TryPin(doc.Database, "저장");   // 배경지도 화질(DH_SHEETPREFS · 같으면 안 씀)
         if (System.Math.Abs(GradingSettings.BasemapRes - bm0) > 1e-9)
             doc.Editor.WriteMessage("\n[공통설정] 배경지도 화질 " + GradingSettings.BasemapRes.ToString("0.##") + " m/픽셀 — 다음 [위성지도]부터");
+        // ★[v117.19] «기타» 칸 — 옛 DHMISCSET은 [저장]마다 사슬을 돌았다(그대로) · DHSHEETSET은 «기타» 값을 바꿨을 때만(등고선만 고쳤는데 지표면 재작성까지 돌지 않게)
+        if (openMisc || dlg.MiscChanged)
+            MiscSettingsCommand.AfterSaved(doc, prevEpsg, dlg.KeyChanged);
     }
 
     /// <summary>★[JACK 1116 «층따기»] [저장] 뒤 — 바뀌었을 때만 도면에 적는다(다음 [횡단도 생성]부터 반영). 창 없이 시험이 같은 길을 부른다.</summary>

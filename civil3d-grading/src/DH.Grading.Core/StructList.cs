@@ -16,6 +16,11 @@ public sealed class StructRec
     /// <summary>xref 삽입(BlockReference) 핸들.</summary>
     public string XrefHandle = "";
     public int Parts, Tris, OpenParts;
+
+    /// <summary>★★[v117.19 · JACK 1121 «박스 구조물 직접 배치»] 박스 표식 — <see cref="Sha16"/>가 «box:»로 시작(원본 파일 없음 · 형상 = 도면 안 블록의 솔리드).
+    /// 뒤 = 제원(외곽 · 높이 · 바닥고) 해시 — 고치면 바뀌어 캐시 · 솔리드 열쇠가 저절로 새로 됨. 목록 판(<see cref="StructList.Version"/>)은 그대로.</summary>
+    public const string BoxPrefix = "box:";
+    public bool IsBox => (Sha16 ?? "").StartsWith(BoxPrefix, StringComparison.Ordinal);
 }
 
 /// <summary>목록 머리 — 다음 번호 · 부지 횡단 축척(다시 반영이 해치 간격 · 글자 높이에 쓴다 · 0 = 모름).</summary>

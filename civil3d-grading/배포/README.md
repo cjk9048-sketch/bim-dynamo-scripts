@@ -78,16 +78,55 @@ Windows에서 PC를 보호했습니다   →  [추가 정보]를 누르고  → 
 
 문제가 나면 `%LOCALAPPDATA%\DHGrading\` 폴더의 `DHGRADE_진단.log` · `DH_자가점검.log` 를 함께 보내 주시면 원인을 짚을 수 있습니다.
 
+## 새 판 올리는 법 (JACK) — 설치한 사람에게 «새 판 있음»이 뜬다
+
+1. `GradingSettings.Version` 을 올리고 `src/DH.Grading.Civil/Resources/ReleaseNotes.txt` 맨 위에 그 판 칸을 적는다
+   (`# v117.19.0 (2026-11-24)` 아래 `- 바뀐 점` 한 줄씩 — [정보] 창과 알림에 그대로 나온다).
+2. 아래 «다시 만들기» 순서대로 빌드 → 설치 exe → `python tools/setup/mklatest.py` (→ `배포/latest.json` —
+   판 · 날짜 · sha256 · 노트는 전부 파일에서 잰다 · 꼭 깔아야 하는 판이면 `--mandatory`).
+3. 공유 위치에 **exe 먼저, latest.json 나중에** 복사한다(반대로 하면 잠깐 동안 없는 exe를 가리킨다).
+4. 끝 — 받은 사람의 Civil 3D가 켜질 때(하루 한 번 · 3초 · 회사망 밖이면 조용히 넘어감) 오른쪽 아래 알림 + 명령줄 한 줄,
+   리본 [기타 › 정보]에 «새 판». [설치 파일 열기] → Civil 3D를 닫고 exe 실행.
+
+**확인 위치 넣기** — 위치 값은 저장소에 안 남긴다. 설치 묶음을 만들 때만 넣는다(원본 `dh.keys.json`은 그대로):
+
+```
+python tools/setup/mkbundle.py --update \\회사PC\DH정지\latest.json [--update https://…/latest.json]
+python tools/setup/mkzip.py    --update \\회사PC\DH정지\latest.json
+```
+
+(이 PC에 한 번만 해 두려면 환경 변수 `DH_GRADING_UPDATE` = 위치들을 `;`로 이어서 — `--update`가 없을 때 쓴다.)
+여러 곳이면 차례로 보되 **전부 합쳐 3초**. 공유 PC가 꺼져 있으면 조용히 넘어간다. 위치가 하나도 없으면 알림 기능이 꺼지고
+[정보] 창에 «업데이트 위치 미설정»이 뜬다(창의 «위치 바꾸기(고급)»에서 사람마다 직접 넣을 수도 있다).
+
+**위치를 옮길 때** — 옛 자리의 latest.json에 `"moved": ["\\\\새서버\\DH정지\\latest.json"]`을 더해 둔다.
+한 번이라도 그것을 읽은 PC는 새 위치를 사용자 기록(`%APPDATA%\DH.Grading\update.json`)에 저장하고, 다음부터 새 위치를 먼저 본다.
+옛 자리는 모두가 한 번씩 켤 때까지(한두 주) 남겨 둔다.
+
+**latest.json 꼴** — `mklatest.py` 가 만든다(손으로 고칠 때만 참고):
+
+```json
+{ "version": "117.19.0", "date": "2026-11-24", "mandatory": false,
+  "notes": ["바뀐 점 하나", "바뀐 점 둘"],
+  "installer": "DH정지플러그인_설치_v117.19.0.exe",
+  "sha256": "64자 16진(설치 exe의 SHA-256)" }
+```
+
+- `installer` — 상대 경로면 latest.json 자리 기준 · UNC/절대 경로 · `https://` 주소(받아서 sha256을 맞춘 뒤 안내 — https만 · sha256 필수).
+- `moved` — (선택) 새 확인 위치 목록(UNC · 절대 경로 · https). 위 «위치를 옮길 때».
+- 판 비교는 숫자로(117.9 < 117.10) · 같거나 낮은 판은 안 알린다 · «이 판 알리지 않기»는 그 판만(`mandatory`면 늘 알림).
+
 ## 다시 만들기
 
 ```
 dotnet build src/DH.Grading.Civil/DH.Grading.Civil.csproj -c Release
 python tools/setup/pkg.py         # PackageContents 버전·명령 목록 맞추기
-python tools/setup/mkbundle.py    # src의 .bundle → tools/setup/bundle.zip
+python tools/setup/mkbundle.py --update <위치>   # src의 .bundle → tools/setup/bundle.zip(확인 위치는 묶음에만)
 dotnet publish tools/setup/DHGradingSetup.csproj -c Release -r win-x64 \
   --self-contained true -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true
-python tools/setup/mkzip.py       # 수동 설치 zip
+python tools/setup/mkzip.py --update <위치>      # 수동 설치 zip
 python tools/setup/relnote.py     # 이 문서(숫자는 전부 파일에서 잰다)
+python tools/setup/mklatest.py    # 새 판 알림 배포/latest.json(판 · 날짜 · sha256 · 노트) — 공유 위치에 exe 다음에 복사
 ```
 
 ## 지문 (SHA-256)

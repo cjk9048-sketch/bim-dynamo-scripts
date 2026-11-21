@@ -344,6 +344,44 @@ public static partial class RoadGrade
                 }
         }
         st.FootMax = built.FootMax; st.FootAt = built.FootAt;
+        if (site)
+        {
+            // ★★★[v117.18.27 · wallzone 1121 · 축소안 ①] 수직 · 다단 = 영향 구역 한 번 다시 짓기(한 번 스냅 · 조각 들로네 · 주인 높이) — 관문은 검사만(다듬기 · FlipThin · FoldNeedles 안 함)
+            var before0 = new HashSet<Tri>(cur);
+            // 계획 2.4 MinFeatureLength(2 칸 묶음)로 먼저 짓고, 그 묶음이 가파른 면 곁 점을 옮겨 조각 대조 · 관문에 걸리면 묶음 없이 한 번 더(같은 짓기 · 관문은 둘 다 검사만)
+            ZoneResult zr = null!; List<Tri> keptZ = null!; bool passZ = false; string firstWhy = ""; int thz = 0, gpz = 0, nmz = 0, prz = 0; (double X, double Y)? prAtZ = null;
+            foreach (bool mf in new[] { true, false })
+            {
+                zr = RebuildZone(cur, built, gn, cut.CutRing, mf);
+                log.Append("  ⓒ " + zr.Summary + "\n");
+                if (zr.All == null) { if (firstWhy.Length == 0) firstWhy = "합성을 못 함 — " + zr.Fail; continue; }
+                keptZ = zr.All;
+                var changedZ = new HashSet<(double, double)>(); foreach (var t in zr.New) { changedZ.Add((t.A.X, t.A.Y)); changedZ.Add((t.B.X, t.B.Y)); changedZ.Add((t.C.X, t.C.Y)); }
+                (thz, gpz, nmz, prz) = WallHealth(keptZ, changedZ, out prAtZ);
+                log.Append(string.Format(ci, "  ⓓ 관문(검사만) 바늘 {0} · 0.1 mm 변 {1} · 세 세모 변 {2} · 0.1 mm 점 쌍 {3} · F 건넌 세모 {4}\n", thz, gpz, nmz, prz, zr.Straddle));
+                if (thz + gpz + nmz + prz + zr.Straddle == 0) { passZ = true; break; }
+                if (firstWhy.Length == 0)
+                {
+                    var tmp = new WallState(); GateRest(tmp, keptZ, thz, gpz, nmz, prz, zr.Straddle, prAtZ, new System.Text.StringBuilder());
+                    firstWhy = "관문:" + tmp.Why;
+                }
+            }
+            if (!passZ)
+            {
+                // 계획 S9 «이행 중엔 지금 엔진으로 물러섬» — 새 짓기가 관문(검사만)에 걸리면 까닭을 적고 옛 합성 길(아래)로
+                log.Append("  ⓒ′ 구역 다시 짓기 못 함 — " + (firstWhy.StartsWith("관문:", StringComparison.Ordinal) ? firstWhy[3..] : firstWhy) + " → 옛 합성으로 물러섬\n");
+            }
+            else
+            {
+            st.Thin = thz; st.GapE = gpz; st.NonManifold = nmz; st.Pairs = prz;
+            st.Removed = zr.Removed; st.Straddle = zr.Straddle;
+            log.Append(string.Format(ci, "  ⓔ R_out∖Zone 뺌 {0} · F 건넌 세모 0 · 남은 세모 {1}\n", zr.Removed, keptZ.Count));
+            st.ZoneTris = keptZ.Where(t => !before0.Contains(t)).ToList();
+            cur = keptZ;
+            st.Ok = true; st.Code = "통과"; st.Log = log.ToString();
+            return;
+            }
+        }
         // 합성 — L 위만 테두리 턱 관문(바깥 호는 뒤에서 뺌 · 도로 면 끝 너머는 정지면이 없다)
         var gfz = new GeometryFactory();
         var lG = gfz.CreateLineString(cut.Line.Select(q => new Coordinate(q.X, q.Y)).ToArray());
@@ -409,7 +447,17 @@ public static partial class RoadGrade
             else log.Append($"  ⓓ 관문 흉내 바늘 {thin} · 0.1 mm 변 {gapE} · 세 세모 변 {nm} · 0.1 mm 점 쌍 {prs} → 다듬기 못 함({zr.Fail})\n");
         }
         st.Thin = thin; st.GapE = gapE; st.NonManifold = nm; st.Pairs = prs;
-        if (thin + gapE + nm + prs + straddle > 0)
+        if (thin + gapE + nm + prs + straddle > 0) { GateRest(st, kept, thin, gapE, nm, prs, straddle, prAt, log); return; }
+        log.Append(string.Format(ci, "  ⓔ R_out∖Zone 뺌 {0} · F 건넌 세모 0 · 남은 세모 {1}\n", removed, kept.Count));
+        st.ZoneTris = kept.Where(t => !before.Contains(t)).ToList();
+        cur = kept;
+        st.Ok = true; st.Code = "통과"; st.Log = log.ToString();
+    }
+
+    /// <summary>관문 흉내에 걸려 쉼 — 까닭 · 자리(센 바늘만).</summary>
+    static void GateRest(WallState st, List<Tri> kept, int thin, int gapE, int nm, int prs, int straddle, (double X, double Y)? prAt, System.Text.StringBuilder log)
+    {
+        var ci = CultureInfo.InvariantCulture;
         {
             st.Rest = true; st.Code = "관문";
             string at = "";
@@ -427,12 +475,8 @@ public static partial class RoadGrade
             }
             if (at.Length == 0 && prs > 0 && prAt is { } pa) at = string.Format(ci, " @({0:F2}, {1:F2}) 0.1 mm 안 점 쌍", pa.X, pa.Y);   // ★[v115 · 검토 L4]
             st.Why = $"이음매 바늘 {thin} · 0.1 mm 변 {gapE} · 0.1 mm 점 쌍 {prs} · 세 세모 변 {nm} · F 건넌 세모 {straddle}{at} — 이 벽은 쉽니다(도로 면은 그대로)";
-            st.Log = log.ToString(); return;
+            st.Log = log.ToString();
         }
-        log.Append(string.Format(ci, "  ⓔ R_out∖Zone 뺌 {0} · F 건넌 세모 0 · 남은 세모 {1}\n", removed, kept.Count));
-        st.ZoneTris = kept.Where(t => !before.Contains(t)).ToList();
-        cur = kept;
-        st.Ok = true; st.Code = "통과"; st.Log = log.ToString();
     }
 
     /// <summary>★[v114.3 · 관문 흉내] Civil이 실제로 건드리는 것만 — 바늘 = 가장 긴 변을 이웃 세모와 나누고(테두리 긴 변은 Civil도 못 뒤집음 — 합성 다듬기 ThinLeft와 같은 뜻) 높이 &lt; 122 µm(Civil 뒤집기 문턱 실측 · 부지 합성이 보내는 면과 같은 잣대) ·

@@ -342,6 +342,7 @@ internal static class StructDraw
             t.AlignmentPoint = new Point3d(pcs[i].Lx, pcs[i].Ly, 0);
             Add(t);
         }
+        try { StructBox.PlanInner(db, tr, L, Add); } catch { }   // ★[v117.19] 박스 — 안쪽 벽 선(점선)
         log?.AppendLine($"  [구조물] {L.Rec.Name} 평면 — {note} · 객체 {n}");
         return pcs.Count;
     }

@@ -10,7 +10,7 @@ using AcadApp = Autodesk.AutoCAD.ApplicationServices.Application;
 [assembly: ExtensionApplication(typeof(DH.Grading.Civil.RibbonApp))]
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.CreateGradingCommand))]
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.GradingSettingsCommand))]
-[assembly: CommandClass(typeof(DH.Grading.Civil.Commands.MiscSettingsCommand))]                     // DHMISCSET(기타 설정 — 좌표계·표시)
+[assembly: CommandClass(typeof(DH.Grading.Civil.Commands.MiscSettingsCommand))]                     // DHMISCSET(옛 기타 설정 → v117.19 [공통설정] «기타» 칸을 엶)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.SurfaceIntersectionCommand))] // DHXSEC(지표면 교선 TEST)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.SlopeLineCommand))]           // DHSLOPELINE(노리선 수동, 레거시)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.NoriCommand))]                // DHNORI(노리선 버튼 — 번들 기반)
@@ -48,12 +48,14 @@ using AcadApp = Autodesk.AutoCAD.ApplicationServices.Application;
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.GroundContourCommand))]      // ★[v113.0] DHGNDCONTOUR(도면의 등고선 → 원지반)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.CropGroundCommand))]         // DHCROP(원지형 자르기)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.SelfCheckCommand))]          // DHSELFCHECK(자가점검 — 읽기만 · v103.1.7)
+[assembly: CommandClass(typeof(DH.Grading.Civil.AboutCommand))]                          // ★[v117.19 · 사내 배포] DHABOUT(정보 — 판 · 지문 · 바뀐 점 · 새 판 확인)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.RoadCommand))]               // ★[v110] DHROAD · DHROADWALL · DHROADREDRAFT · DHROADOFF(진입도로) · ★[v111.6] DHROADPANEL(진입도로 창)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.AltCommand))]                // ★[v112.1] DHALT(대안 — 도면 사본 저장 · 수량표 · 열기 · 지우기)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.SheetBookCommand))]          // ★[v112.0] DHSHEETBOOK(도킹창 «도면화») · DHSHEETMAKE([작성하기] — 배치탭 · 도곽 · 표제란)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.ProfileFlipCommand))]        // ★[v113.1] DHPROFILEREV · DHROADREV(종단 시점 ↔ 종점 바꾸기)
 [assembly: CommandClass(typeof(DH.Grading.Civil.UndoGuard))]                          // ★[v114.2] DHUNDOCLR(명령 뒤 되돌리기 기록 비움 — Civil 결함 회피)
-[assembly: CommandClass(typeof(DH.Grading.Civil.Commands.StructCommand))]             // ★[v115 · JACK 1105] DHSTRUCT · DHSTRUCTPTS(v116.9 좌표계 내보내기) · DHSTRUCTOFF(Revit 구조물)
+[assembly: CommandClass(typeof(DH.Grading.Civil.Commands.StructBoxCommand))]          // ★[v117.19 · JACK 1121] DHSTRUCTBOX(팝업) · DHSTRUCTBOXADD · DHSTRUCTBOXEDIT(명령줄) — 박스 구조물
+[assembly: CommandClass(typeof(DH.Grading.Civil.Commands.StructCommand))]           // ★[v115 · JACK 1105] DHSTRUCT · DHSTRUCTPTS(v116.9 좌표계 내보내기) · DHSTRUCTOFF(Revit 구조물)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.UDitchCommand))]             // ★[배수지 U형 측구 1단계] DHUDITCH(창) · -DHUDITCH(명령줄)
 [assembly: CommandClass(typeof(DH.Grading.Civil.SectionPalette))]                         // ★[JACK 1112] DHSECPANEL · DHROADSECPANEL(종횡단도 도킹창 — 종단도 · 횡단도 단추를 하나로)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.WallMigrateCommand))]        // ★[v117.9] DHWALLMIGRATE(옛 옹벽 옮기기 — 키트에서 «알 수 없는 명령»으로 찾음)
@@ -107,6 +109,8 @@ public sealed class RibbonApp : IExtensionApplication
         // ★★★[v103.1.7 · JACK 1014 «최대한 현장확인말고 로그로 확인할수있게 해줘»] 자가점검 세션 — 지난 세션이 정상 종료됐나 · 끝나지 않은 작업(그 도중에 Civil이 죽었다)이 있나를
         //   DH_자가점검.log 첫 줄로 · 어느 빌드가 도는지(DLL 지문)도. 시작 도중이 아니라 첫 Idle에(위 다른 일들과 같은 까닭)
         AcadApp.Idle += OnIdleSelfCheck;
+        // ★[v117.19 · 사내 배포 1123 · JACK 1121 «새 판을 올리면 설치한 사람에게 알림»] 시작 뒤 첫 Idle — 확인은 뒤 실에서(하루 한 번 · 3초 · 실패는 로그만 · 화면 없는 Civil은 안 함)
+        AcadApp.Idle += OnIdleUpdate;
         // ★[v114.2 · JACK 1105 «명령 뒤 되돌리기 기록 비움»] 화면 없는 Civil은 Idle이 안 와서 HookDoc이 안 불린다 — NETLOAD(도면이 열린 뒤)라 여기서 바로 단다
         if (SelfCheckLog.Headless) try { foreach (Document d0 in AcadApp.DocumentManager) UndoGuard.Hook(d0); } catch { }
         // ★[v103.1.7 · 검토 열린 물음 2] 끝내기 들머리에서도 세션 끝을 적는다(Terminate가 안 불리는 끝내기가 있어도 «비정상 종료»로 잘못 알리지 않게) · 끝내기를 무르면 지운다
@@ -155,6 +159,12 @@ public sealed class RibbonApp : IExtensionApplication
             });
         }
         catch { }
+    }
+
+    private void OnIdleUpdate(object? sender, System.EventArgs e)
+    {
+        AcadApp.Idle -= OnIdleUpdate;
+        try { UpdateUi.StartupCheck(); } catch { }
     }
 
     /// <summary>★[v117.14.1 · JACK 1112 «명령창 메뉴를 마우스 옆에 띄우는 걸 디폴트로»] 동적 입력 켬 — DYNMODE(0이면 3 · F12로 끈 음수면 양수로) · DYNPROMPT 1(커서 옆 묻는 글 · ↓ 고르기 메뉴).
@@ -476,9 +486,10 @@ public sealed class RibbonApp : IExtensionApplication
             //   가른 기준: <b>흙의 모양을 바꾸는가(정지옵션), 도면의 모양을 바꾸는가(여기).</b>
             // ★[v111.6 · JACK 1102] 창 안이 «1. 계획지표면 · 2. 진입도로 · 3. 공통»으로 갈렸다 — 풍선 글도 그 차례로
             var btnSheetSet = MakeButton(
-                "공통\n설정", "DHSHEETSET ", "노리선 · 배경지도 화질 · 등고선 간격", "도면설정");   // ★[JACK 1119] 이름 = 공통설정 · 도곽은 [도면생성] 창(명령 · 아이콘 키 그대로)
+                "공통\n설정", "DHSHEETSET ", "노리선 · 배경지도 화질 · 등고선 간격 · 좌표계 · VWorld 키 · 임상도", "도면설정");   // ★[JACK 1119] 이름 = 공통설정 · 도곽은 [도면생성] 창(명령 · 아이콘 키 그대로)
             btnSheetSet.ToolTip = MakeTip("공통설정 (DHSHEETSET)",
-                "**노리선 · 배경지도 화질 · 등고선 간격** — 흙 모양(정지옵션)과 별개\n\n" +
+                "**노리선 · 배경지도 화질 · 등고선 간격** — 흙 모양(정지옵션)과 별개\n" +
+                "**기타** — 좌표계(내보내기 원점) · 결과지표면만 표시 · 지적 속성 · VWorld 키 · 임상도\n\n" +
                 "축척 · 배치 · 측점 간격 · 층따기 → 종횡단도 창(부지 · 진입도로)\n" +
                 "도곽 → [도면생성] 창\n" +
                 "정지면 다시 만들 필요 없음", null);
@@ -489,7 +500,7 @@ public sealed class RibbonApp : IExtensionApplication
                 "위성지도\n추가", "DHMAP ", "두 점으로 범위를 찍으면 그 범위의 위성사진을 도면 좌표계에 맞춰 깔아줍니다(화질=공통설정)", "지도");
             btnMap.ToolTip = MakeTip("배경지도 (DHMAP)",
                 "범위 두 모서리를 클릭하면 브이월드 위성사진을 받아\n" +
-                "도면 좌표계([기타 설정]의 좌표계)에 정확히 맞춰 깔아줍니다.\n" +
+                "도면 좌표계([공통설정]의 좌표계)에 정확히 맞춰 깔아줍니다.\n" +
                 "여러 번 눌러 여러 곳에 깔 수 있고, 화질은 [공통설정]에서 선택합니다.", null);
             var btnMapOff = MakeButton(
                 "지도끄기", "DHMAPOFF ", "이 기능으로 깐 위성사진을 한 번에 전부 제거", "지도끄기");
@@ -575,14 +586,7 @@ public sealed class RibbonApp : IExtensionApplication
             // ★[JACK 0901] 가져오기 → <b>기타</b>. 원지반 가져오기가 부지정지로 올라가면서
             //   여기 남는 것은 보조 기능뿐이 됐다.
             var pMisc = new RibbonPanelSource { Title = "기타" };
-            // ★★★[계획 8단계 · JACK 지시 14] 좌표계와 표시 옵션은 <b>여기</b>로 옮겼다.
-            var btnMisc = MakeButton(
-                "기타\n설정", "DHMISCSET ", "좌표계(내보내기 원점) · 결과지표면만 표시", "설정");
-            btnMisc.ToolTip = MakeTip("기타 설정 (DHMISCSET)",
-                "<b>좌표계</b> — 도면이 어느 평면직각좌표계로 작성됐는지.\n" +
-                "  위성사진·지형·지적도가 이 원점으로 맞춰집니다.\n" +
-                "  바꾸면 이미 가져온 자료가 안 맞으므로 지울지 물어봅니다.\n\n" +
-                "<b>결과지표면만 표시</b> — 만든 뒤 정지면_DH만 남기고 나머지는 숨김.", null);
+            // ★★[v117.19 · JACK 1121] [기타 설정] 단추 없앰 — 좌표계 · 표시 · VWorld 키 · 임상도는 [공통설정] «기타» 칸(DHMISCSET은 남겨 그 칸을 엶)
             var btnParcel = MakeButton(
                 "지적도", "DHPARCEL ", "두 점으로 범위를 찍으면 그 범위 필지 경계 · 지번 · 국공유지를 도면 좌표계로 가져옵니다", "지적");
             btnParcel.ToolTip = MakeTip("지적도 가져오기 (DHPARCEL)",
@@ -614,7 +618,7 @@ public sealed class RibbonApp : IExtensionApplication
                 "· 읽는 레이어: 등고선(F001…) · 표고점(F002…). 표고를 적어 둔 글자는 뺍니다.\n" +
                 "· <b>표고가 0인 등고선·표고점은 버립니다</b> — 측량이 안 된 자리라\n" +
                 "  그대로 두면 지표면에 절벽이 생깁니다.\n\n" +
-                "좌표계는 [기타 설정]을 따릅니다(DXF에는 좌표계가 안 담겨 있습니다).", null);
+                "좌표계는 [공통설정]을 따릅니다(DXF에는 좌표계가 안 담겨 있습니다).", null);
             // ★[v113.0 · JACK 1104 «원지반 — 등고선으로 작성»] 도면에 이미 가져온 표고 든 등고선을 골라 만든다.
             var btnGndContour = MakeButton(
                 "등고선으로\n작성", "DHGNDCONTOUR ", "도면에 있는 표고 든 등고선을 골라(ALL 가능) '원지반' 지표면을 만듭니다", "등고선작성");
@@ -1006,8 +1010,6 @@ public sealed class RibbonApp : IExtensionApplication
                 "· 누를 곳만 밝게 · 하면 다음 단계로 · [그만두기]로 끝", null);
             pMisc.Items.Add(btnTut);
             pMisc.Items.Add(Spacer());
-            pMisc.Items.Add(btnMisc);            // ★[8단계] 좌표계·표시 — 정지옵션에서 옮겨 왔다
-            pMisc.Items.Add(Spacer());
             pMisc.Items.Add(btnCrop);
             pMisc.Items.Add(Spacer());
             pMisc.Items.Add(splitParcel);
@@ -1018,13 +1020,16 @@ public sealed class RibbonApp : IExtensionApplication
                 Text = "구조물", ShowText = true, ShowImage = true, LargeImage = MakeGlyph("구조물"), Image = MakeGlyphSmall("구조물"),
                 Size = RibbonItemSize.Large, Orientation = System.Windows.Controls.Orientation.Vertical,
                 IsSplit = true, IsSynchronizedWithCurrentItem = false, ListStyle = RibbonSplitButtonListStyle.List,
-                ToolTip = MakeTip("구조물", "Revit 3D DWG(공유 좌표)를 xref로 붙이고\n평면 외곽 · 종단 · 횡단에 자른 면을 넣습니다.", null),
+                ToolTip = MakeTip("구조물", "Revit 3D DWG(공유 좌표)를 xref로 붙이고\n평면 외곽 · 종단 · 횡단에 자른 면을 넣습니다.\n[박스 구조물 배치] — Revit 모델 없이 평면 외곽 × 높이로 직접(같은 수량 · 그림).", null),
             };
             var btnStructIn = MakeButton("구조물\n불러오기", "DHSTRUCT ", "Revit 3D DWG 불러오기", "구조물");
             // ★[v116.9 · JACK 1110 «구조물 좌표계 내보내기 단추 만들고 다시 반영은 없애»] 원본이 바뀌면 [구조물 불러오기]로 같은 파일을 다시 고름(같은 경로 = 바꿔치기)
             var btnStructPts = MakeButton("구조물\n좌표계 내보내기", "DHSTRUCTPTS ", "두 점을 찍어 Revit 애드인이 읽는 기준점 파일(JSON · m · WCS)로 저장합니다", "구조물");
             var btnStructOff = MakeButton("구조물\n지우기", "DHSTRUCTOFF ", "그린 것 · xref · 기록을 지웁니다(원본 파일은 그대로)", "구조물");
+            // ★[v117.19 · JACK 1121] 박스 구조물 직접 배치(Revit 모델 없는 초기 설계 — 같은 기록 · 수량 · 그림 길)
+            var btnStructBox = MakeButton("박스 구조물\n배치", "DHSTRUCTBOX ", "이름 · 높이 · 바닥고로 평면에 박스를 그려 구조물로 넣습니다(개략 되메우기 · 토공)", "구조물");
             splitStruct.Items.Add(btnStructIn);
+            splitStruct.Items.Add(btnStructBox);
             splitStruct.Items.Add(btnStructPts);
             splitStruct.Items.Add(btnStructOff);
             splitStruct.Current = btnStructIn;
@@ -1032,12 +1037,61 @@ public sealed class RibbonApp : IExtensionApplication
             pMisc.Items.Add(Spacer());
             pMisc.Items.Add(btnReset);           // ★[v111.6] 위성지도는 [공통]으로 옮김
             pMisc.Items.Add(Spacer());
+            // ★[v117.19 · 사내 배포 1123] [정보] — 지금 판 · 지문 · 이번 판 바뀐 점 · 업데이트 확인(새 판이 있으면 주황 점 · «새 판»)
+            _btnInfo = MakeButton("정보", "DHABOUT ", "지금 설치된 판 · 바뀐 점 · 새 판 확인", "default");
+            _btnInfo.ToolTip = MakeTip("정보 (DHABOUT)",
+                "지금 설치된 **판 · 날짜 · 빌드 지문** · 이번 판 바뀐 점\n" +
+                "**업데이트 확인** — 새 판이 있으면 여기서 설치 파일을 엽니다(Civil 3D를 닫고 설치).\n" +
+                "Civil 3D를 켜면 하루 한 번 저절로 확인합니다.", null);
+            MarkUpdate(UpdateUi.RibbonNewer);
+            pMisc.Items.Add(_btnInfo);
+            pMisc.Items.Add(Spacer());
             try { ToneRibbon(tab); } catch { }   // ★[v117.12 · JACK 1112] 칸마다 색 계열 하나(모양 그대로)
         }
         catch
         {
             // 리본 구성 실패해도 명령(DHGRADE/DHGRADESET)은 직접 입력으로 동작
         }
+    }
+
+    private static RibbonButton? _btnInfo;
+
+    /// <summary>★[v117.19 · 사내 배포] [정보] 단추에 «새 판» 표시(주 실에서만 — <see cref="UpdateUi"/>가 부른다).</summary>
+    internal static void MarkUpdate(bool newer)
+    {
+        var b = _btnInfo;
+        if (b == null) return;
+        try
+        {
+            b.Text = newer ? "정보\n새 판" : "정보";
+            b.LargeImage = InfoGlyph(newer);
+        }
+        catch { }
+    }
+
+    /// <summary>[정보] 그림 — 파란 원 + i · 새 판이 있으면 오른쪽 위 주황 점.</summary>
+    private static ImageSource? InfoGlyph(bool dot)
+    {
+        try
+        {
+            var g = new DrawingGroup();
+            g.Children.Add(new GeometryDrawing(Brushes.Transparent, null, new RectangleGeometry(new Rect(0, 0, 32, 32))));
+            var fill = new LinearGradientBrush(Color.FromRgb(0x62, 0xA8, 0xF0), Color.FromRgb(0x2F, 0x68, 0xB8), 90);
+            g.Children.Add(new GeometryDrawing(new SolidColorBrush(Color.FromRgb(0x17, 0x38, 0x6F)), null, new EllipseGeometry(new Point(16, 17.2), 12, 12)));
+            g.Children.Add(new GeometryDrawing(fill, null, new EllipseGeometry(new Point(16, 16), 12, 12)));
+            g.Children.Add(new GeometryDrawing(Brushes.White, null, new EllipseGeometry(new Point(16, 9.6), 2.1, 2.1)));
+            g.Children.Add(new GeometryDrawing(Brushes.White, null, new RectangleGeometry(new Rect(14.2, 13, 3.6, 10.5), 1, 1)));
+            if (dot)
+            {
+                g.Children.Add(new GeometryDrawing(Brushes.White, null, new EllipseGeometry(new Point(26, 6), 6, 6)));
+                g.Children.Add(new GeometryDrawing(new SolidColorBrush(Color.FromRgb(0xE8, 0x6A, 0x1C)), null, new EllipseGeometry(new Point(26, 6), 4.6, 4.6)));
+            }
+            g.Freeze();
+            var img = new DrawingImage(g);
+            img.Freeze();
+            return img;
+        }
+        catch { return null; }
     }
 
     /// <summary>버튼 사이 빈 여백(선 없는 Spacer) — 리본 버튼이 다닥다닥 붙는 것 방지(JACK 0724).</summary>

@@ -24,6 +24,8 @@ internal static class DhKeys
         public Db GisDb = new();
         public string GisApi = "";   // ★[v117.19] 회사 GIS 데이터 API 주소(저장소 밖 · 로그 · 화면에 안 적음)
         public string Note = "";   // 파일을 못 읽은 까닭(값은 안 적음)
+        /// <summary>★[v117.19 · 사내 배포 1123] 새 판 확인 위치(<c>"update"</c> — 문자열 하나 또는 목록 · 차례로 시도 · https 주소 또는 UNC/로컬 경로의 latest.json) — <see cref="UpdateCheck"/>.</summary>
+        public List<string> Update = new();
     }
 
     internal static string? TestDir =>
@@ -46,6 +48,13 @@ internal static class DhKeys
             static string S(JsonElement e, string k) => e.ValueKind == JsonValueKind.Object && e.TryGetProperty(k, out var v) && v.ValueKind == JsonValueKind.String ? (v.GetString() ?? "").Trim() : "";
             b.VWorld = S(r, "vworld");
             b.GisApi = S(r, "gisapi");
+            if (r.TryGetProperty("update", out var up))
+            {
+                if (up.ValueKind == JsonValueKind.String && (up.GetString() ?? "").Trim() is { Length: > 0 } u1) b.Update.Add(u1);
+                else if (up.ValueKind == JsonValueKind.Array)
+                    foreach (var e in up.EnumerateArray())
+                        if (e.ValueKind == JsonValueKind.String && (e.GetString() ?? "").Trim() is { Length: > 0 } u2) b.Update.Add(u2);
+            }
             if (r.TryGetProperty("gisdb", out var g) && g.ValueKind == JsonValueKind.Object)
             {
                 b.GisDb.Host = S(g, "host"); b.GisDb.Database = S(g, "database"); b.GisDb.User = S(g, "user"); b.GisDb.Password = S(g, "password");
@@ -123,8 +132,8 @@ internal static class VWorldKey
         || body.Contains("locator=\"key\"", System.StringComparison.OrdinalIgnoreCase)
         || body.Contains("인증키", System.StringComparison.Ordinal);
 
-    internal const string KeyHelp = "VWorld 키가 맞지 않습니다(등록 안 됐거나 만료) — [기타 설정]에서 키를 확인하세요";
-    internal const string NoKeyHelp = "VWorld 키가 없습니다 — [기타 설정]에서 내 키를 넣으세요";
+    internal const string KeyHelp = "VWorld 키가 맞지 않습니다(등록 안 됐거나 만료) — [공통설정] «기타»에서 키를 확인하세요";
+    internal const string NoKeyHelp = "VWorld 키가 없습니다 — [공통설정] «기타»에서 내 키를 넣으세요";
 
     // ── [키 시험] — 공개 장소(서울시청 둘레) 고정 좌표로 네 가지를 한 번씩(조사 1028에서 성공한 꼴 그대로) ──
     // 15초 — VWorld 지적 그림(WMS)은 때때로 10초를 넘긴다(1028 화면 없는 시험: 같은 키로 한 번은 ✓ · 한 번은 10초 넘김)

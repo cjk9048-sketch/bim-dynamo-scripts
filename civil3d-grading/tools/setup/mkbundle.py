@@ -8,6 +8,12 @@ import io
 import os
 import zipfile
 import hashlib
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import updloc  # noqa: E402  ★새 판 확인 위치(--update) — 묶음에만 넣는다
+
+LOCS = updloc.locations()
 
 SRC = "src/DH.Grading.Civil/DH.Grading.bundle"
 OUT = "tools/setup/bundle.zip"
@@ -30,7 +36,12 @@ if os.path.exists(OUT):
     os.remove(OUT)
 with zipfile.ZipFile(OUT, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as z:
     for full, rel in files:
-        z.write(full, rel)
+        if rel == "Contents/dh.keys.json":
+            data = updloc.merged_keys(full, LOCS)   # 원본 파일은 안 고친다
+            z.writestr(rel, data)
+            updloc.report(data)
+        else:
+            z.write(full, rel)
 
 total = sum(os.path.getsize(f) for f, _ in files)
 print("bundle.zip = %d files · raw %.1f MB · zip %.1f MB"

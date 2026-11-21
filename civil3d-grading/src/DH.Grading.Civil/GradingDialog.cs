@@ -51,7 +51,7 @@ public sealed class GradingDialog : Window
     /// <summary>⚠★★★[계획 8단계] <b>이 창은 이제 아무 데서도 안 열린다.</b>
     ///
     /// <para><c>DHGRADESET</c>은 도킹창(<see cref="GradingPalette"/>)을 열고,
-    /// 좌표계·표시는 <see cref="MiscSettingsDialog"/>로 갔다.
+    /// 좌표계·표시는 <see cref="SheetDialog"/>(공통설정 «기타» 칸 — v117.19 전엔 기타 설정)로 갔다.
     /// <b>여기를 고쳐도 화면에는 아무 변화가 없다</b> — 고칠 곳은 <see cref="GradingPanel"/>이다.</para>
     ///
     /// <para>★<b>그런데 클래스는 지우지 않는다.</b> 이 파일의 <see cref="EpsgCodes"/>·<see cref="CoordLabels"/>

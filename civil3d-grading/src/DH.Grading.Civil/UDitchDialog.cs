@@ -85,7 +85,7 @@ internal sealed class UDitchDialog : Window
         // 부지
         var site = new TextBlock { Text = v.SiteText, Foreground = DhBrand.Ink, VerticalAlignment = VerticalAlignment.Center, TextWrapping = TextWrapping.Wrap };
         if (v.SiteWarn.Length > 0) site.Inlines.Add(new System.Windows.Documents.Run("  ⚠ " + v.SiteWarn) { Foreground = Amber });
-        Row("부지", site, "계획부지 경계의 무게중심 · 좌표계(기타 설정) · 경위도(WGS84)");
+        Row("부지", site, "계획부지 경계의 무게중심 · 좌표계(공통설정) · 경위도(WGS84)");
         Rule();
 
         // 강우

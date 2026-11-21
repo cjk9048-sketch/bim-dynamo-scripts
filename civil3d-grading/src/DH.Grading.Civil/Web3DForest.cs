@@ -93,7 +93,7 @@ internal static class Web3DForest
                                                      Func<double, double, double?> surfZ, double ox, double oy, Web3DScene sc, System.Text.StringBuilder log)
     {
         var st = ForestSettings.Load();
-        if (!st.On) { log.AppendLine("  수목: 꺼짐(기타 설정)"); return null; }
+        if (!st.On) { log.AppendLine("  수목: 꺼짐(공통설정 «기타»)"); return null; }
         try
         {
             if (c.Epsg <= 0) { log.AppendLine("  수목: 도면 좌표계 없음"); return Missing("도면 좌표계를 몰라 수목을 못 넣었습니다", false); }
@@ -133,7 +133,7 @@ internal static class Web3DForest
             if (pick.Source == null)
             {
                 log.AppendLine($"  수목: 창고 없음 — {pick.Log} · 설정 {(st.IsDefault ? "기본 경로" : "지정 경로")}{(st.Seen ? " · 전에 찾은 적 있음" : "")}");
-                if (pick.Warn) c.Warn.Add(pick.Missing + " — 3D에 수목 없음([기타 설정] 임상도 타일)");
+                if (pick.Warn) c.Warn.Add(pick.Missing + " — 3D에 수목 없음([공통설정] «기타» 임상도)");
                 return Missing(pick.Missing, pick.Quiet);
             }
             if (!pick.FromCopy && !pick.FromApi && !st.Seen) { st.Seen = true; try { st.Save(); } catch (System.Exception ex) { log.AppendLine("  수목: 설정 저장 못 함 — " + ex.GetType().Name); } }

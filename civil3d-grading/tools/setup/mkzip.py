@@ -10,7 +10,11 @@ import io
 import os
 import re
 import shutil
+import sys
 import zipfile
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import updloc  # noqa: E402  ★새 판 확인 위치(--update) — 묶음에만 넣는다
 
 SRC = "src/DH.Grading.Civil/DH.Grading.bundle"
 STAGE = "배포/DH.Grading_설치"
@@ -40,6 +44,10 @@ for root, dirs, names in os.walk(SRC):
 # ★[v109 · 설치 전 검토 중간 ②] 내장 VWorld 키 · 사내 DB 접속 정보(설치 전용 · git에 없음)가 빠지면 멈춘다 — 이 ZIP은 사내 배포만
 if not os.path.isfile(os.path.join(dstb, "Contents", "dh.keys.json")):
     raise SystemExit("Contents/dh.keys.json 이 없습니다 — 수동 설치 ZIP을 만들지 않습니다")
+_k = os.path.join(dstb, "Contents", "dh.keys.json")   # 스테이징 사본만 고친다(원본 그대로)
+_d = updloc.merged_keys(_k, updloc.locations())
+io.open(_k, "wb").write(_d)
+updloc.report(_d)
 
 # ② 읽어보세요.txt
 readme = os.path.join(STAGE, "읽어보세요.txt")

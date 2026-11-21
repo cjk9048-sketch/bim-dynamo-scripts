@@ -71,14 +71,14 @@ public sealed partial class StructCommand
     /// <summary>구조물 하나를 지운다 — 그린 것(평면 · 종단 · 횡단 · 도로 장 것 포함) · xref · 기록. 원본 파일은 그대로.</summary>
     internal static bool Remove(Database db, int id, System.Text.StringBuilder log)
     {
-        ObjectId btr = ObjectId.Null; int n = 0; string name = "";
+        ObjectId btr = ObjectId.Null; int n = 0; string name = ""; bool box = false;
         try
         {
             using var tr = db.TransactionManager.StartTransaction();
             if (!StructImport.TryLoad(db, tr, out var head, out var recs, out _)) { tr.Commit(); return false; }
             var r = recs.FirstOrDefault(x => x.Id == id);
             if (r == null) { tr.Commit(); return false; }
-            name = r.Name;
+            name = r.Name; box = r.IsBox;
             n = StructDraw.EraseTagged(db, tr, (_, _, sid, _) => sid == id);
             try
             {
@@ -86,6 +86,12 @@ public sealed partial class StructCommand
                 { btr = br.BlockTableRecord; br.Erase(); }
             }
             catch { }
+            // ★[v117.19] 박스 = 도면 안 블록(xref 아님) — 정의도 여기서 지움(아래 DetachXref 안 탐)
+            if (box && !btr.IsNull)
+            {
+                try { if (tr.GetObject(btr, OpenMode.ForWrite) is BlockTableRecord bb && !bb.IsFromExternalReference && bb.GetBlockReferenceIds(true, false).Count == 0) bb.Erase(); } catch { }
+                btr = ObjectId.Null;
+            }
             recs.Remove(r);
             StructImport.Save(db, tr, head, recs);
             tr.Commit();

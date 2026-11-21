@@ -156,7 +156,7 @@ public sealed class UDitchCommand
     static string SiteWarn(Ctx c)
     {
         var w = new List<string>();
-        if (!double.IsFinite(c.Rec.Site.Lat)) w.Add("경위도 변환 못 함 — 좌표계 확인([기타 설정])");
+        if (!double.IsFinite(c.Rec.Site.Lat)) w.Add("경위도 변환 못 함 — 좌표계 확인([공통설정] «기타»)");
         try { if (c.Db.Insunits != UnitsValue.Meters && c.Db.Insunits != UnitsValue.Undefined) w.Add($"도면 단위 {c.Db.Insunits} — m로 가정"); } catch { }
         return string.Join(" · ", w);
     }

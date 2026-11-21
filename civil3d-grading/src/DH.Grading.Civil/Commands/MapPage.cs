@@ -235,7 +235,7 @@ internal static class MapPage
   if (typeof L === 'undefined') { dead('지도 로드 실패'); return; }
 
   var KEY=(window.__DHKEY||'__KEY__');
-  if (!KEY) { dead('VWorld 키가 없습니다 — [기타 설정]에서 키를 넣으세요'); return; }
+  if (!KEY) { dead('VWorld 키가 없습니다 — [공통설정] «기타»에서 키를 넣으세요'); return; }
   var map=L.map('map',{center:[36.5,__LON0__],zoom:8});
   function tiles(layer,ext){
     return L.tileLayer('https://api.vworld.kr/req/wmts/1.0.0/'+KEY+'/'+layer+'/{z}/{y}/{x}.'+ext,
@@ -283,7 +283,7 @@ internal static class MapPage
   //   몇 장 연달아 실패하면 대놓고 말한다(검토 0901).
   var bad=0, good=0, told=false;
   function say(m){ if(EMBED){ try{ window.chrome.webview.postMessage(JSON.stringify({kind:'diag',text:m})); }catch(e){} } }
-  function watch(l){ l.on('tileerror',function(){ bad++; if(bad>=6&&good===0) dead('타일 수신 실패 — 인터넷 또는 VWorld 키([기타 설정] → 키 시험) 확인'); }); }
+  function watch(l){ l.on('tileerror',function(){ bad++; if(bad>=6&&good===0) dead('타일 수신 실패 — 인터넷 또는 VWorld 키([공통설정] «기타» → 키 시험) 확인'); }); }
   watch(base.Satellite); watch(base.Base); watch(labels);
   function ok(l){ l.on('tileload',function(){ good++; bad=0; }); }
   ok(base.Satellite); ok(base.Base); ok(labels);

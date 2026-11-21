@@ -8,7 +8,7 @@ namespace DH.Grading.Civil.Commands;
 ///
 /// <para>종전에는 팝업 하나에 다섯 덩어리가 들어 있었다. 그중 정지 제원은
 /// <see cref="DH.Grading.Civil.GradingPanel"/>(도킹창)으로, 좌표계·표시는
-/// <see cref="MiscSettingsCommand"/>(기타 설정)로 갈라 나갔다.</para>
+/// <see cref="MiscSettingsCommand"/>(기타 설정 — v117.19부터 [공통설정] «기타» 칸)로 갈라 나갔다.</para>
 ///
 /// <para>★<b>명령 이름은 그대로 둔다.</b> JACK이 손에 익었고, 문서·툴팁·매크로에 흩어져 있다.
 /// 이름을 바꾸면 <b>어제 쓰던 것이 오늘 안 되는</b> 종류의 변화다 — 얻는 것 없이 잃기만 한다.</para></summary>
@@ -26,7 +26,7 @@ public sealed class GradingSettingsCommand
             doc.Editor.WriteMessage(
                 // ★[JACK 0910] [값 저장]은 없어졌다 — 친 값은 바로 반영되고, 만들기는 그 칸 안에 있다.
                 "\n[정지 설정] 오른쪽 <계획부지 정지> 창에서 값을 고치면 바로 반영됩니다 — [계획부지생성하기]로 만드세요."
-              + "\n  · 좌표계·표시 옵션은 리본 [기타] → [기타 설정](DHMISCSET)에 있습니다. 옹벽 형태는 이 창의 «옹벽» 묶음에 있습니다.");
+              + "\n  · 좌표계·표시 옵션은 리본 [공통설정](DHSHEETSET) «기타» 칸에 있습니다. 옹벽 형태는 이 창의 «옹벽» 묶음에 있습니다.");
         }
         catch { }
     }
@@ -41,13 +41,14 @@ public sealed class GradingSettingsCommand
 /// 이 저장소가 "고친 것이 한 곳에만 들어갔다"로 여러 번 값을 치른 자리다(§77).</para></summary>
 public sealed class MiscSettingsCommand
 {
+    /// <summary>★★[v117.19 · JACK 1121 «기타 설정을 공통설정으로 합치고 기타 설정 없애»] 옛 명령은 남김(손 습관 · 옛 글) —
+    /// [공통설정] 창을 «기타» 칸을 펼친 채로 연다. 저장 뒤 사슬(좌표계 · 표시 · 키)은 아래 <see cref="Prepare"/> · <see cref="AfterSaved"/> 그대로.</summary>
     [CommandMethod("DHMISCSET")]
-    public void Run()
-    {
-        Document doc = AcadApp.DocumentManager.MdiActiveDocument;
-        if (doc == null) return;
-        GradingSettings.SyncToDocument(doc);   // [도면 전환 0803] 그 도면이 저장한 값을 보여준다
+    public void Run() => SheetSettingsCommand.Open(openMisc: true);
 
+    /// <summary>창을 열기 전 — 옵션 좌표계를 도면 좌표계로 맞추고(리뷰 0731 D-1) 그 값을 돌려준다(사용자가 콤보를 실제로 바꿨는지 판정용).</summary>
+    internal static int Prepare(Document doc)
+    {
         // [리뷰 0731 D-1] 창을 열기 전에 **도면 좌표계로 옵션 값을 맞춘다**.
         //   그러지 않으면 콤보가 하드코딩 기본값(중부 5186)을 보여주고, 사용자가 좌표계를 건드리지 않고
         //   [저장]만 눌러도 도면 좌표계가 중부로 덮어써져 배경지도가 통째로 딴 곳(최대 180km)으로 간다.
@@ -55,18 +56,18 @@ public sealed class MiscSettingsCommand
         var detected = KoreaCs.ResolveEpsgFromCode(KoreaCs.Read(doc.Database));
         if (detected.HasValue && KoreaCs.CodeForEpsg(GradingSettings.ExportEpsg) != null)
             GradingSettings.ExportEpsg = detected.Value;
-        int prevEpsg = GradingSettings.ExportEpsg;   // 사용자가 콤보를 실제로 바꿨는지 판정용
+        return GradingSettings.ExportEpsg;
+    }
 
-        var dlg = new MiscSettingsDialog();
-        AcadApp.ShowModalWindow(dlg); // [저장] 시 GradingSettings에 반영됨
+    /// <summary>[공통설정] [저장] 뒤 — 옛 기타 설정의 사슬(창이 GradingSettings에 이미 넣은 뒤).</summary>
+    internal static void AfterSaved(Document doc, int prevEpsg, bool keyChanged)
+    {
         // ★이 화면은 정지 <b>제원</b>(단높이·소단·구배)을 안 건드리므로 도킹창 값을 되채울 것이 없다.
-        //   ★[v103.3] 옹벽 형태는 도킹바로 옮겼다 — 맨 아래 그림 다시 그리기는 해롭지 않아 둔다.
-        if (dlg.DialogResult != true) return;
         // ★[v109] VWorld 키가 바뀌었으면 열린 지도 도킹바를 새 키로(위성 · 3D 보기는 다음에 받을 때 새 키)
-        if (dlg.KeyChanged)
+        if (keyChanged)
         {
             MapPalette.KeyChanged();
-            doc.Editor.WriteMessage("\n[기타 설정] VWorld 키: " + VWorldKey.Source);
+            doc.Editor.WriteMessage("\n[공통설정] VWorld 키: " + VWorldKey.Source);
         }
 
         // [JACK 0731 — 좌표계 연동] 사용자가 좌표계를 **실제로 바꿨을 때만** 도면 좌표계에 반영(MAPCSASSIGN 상당)
@@ -93,40 +94,40 @@ public sealed class MiscSettingsCommand
                 if (ans != System.Windows.MessageBoxResult.Yes)
                 {
                     GradingSettings.ExportEpsg = prevEpsg;   // 좌표계 변경 취소(나머지 설정은 저장됨)
-                    doc.Editor.WriteMessage("\n[기타 설정] 좌표계 변경을 취소했습니다(다른 설정은 저장됨).");
+                    doc.Editor.WriteMessage("\n[공통설정] 좌표계 변경을 취소했습니다(다른 설정은 저장됨).");
                     goto AfterCs;
                 }
                 try
                 {
                     var (s, e2, _) = ResetCommand.ResetCore(doc, includeImported: true);
-                    doc.Editor.WriteMessage($"\n[기타 설정] 좌표계 변경 — 가져온 자료·정지 결과 초기화(지표면 {s}·객체 {e2})");
+                    doc.Editor.WriteMessage($"\n[공통설정] 좌표계 변경 — 가져온 자료·정지 결과 초기화(지표면 {s}·객체 {e2})");
                     try { DiagLog.Append($"\n■ 좌표계 변경 초기화 — 지표면 {s} · 객체 {e2}\n"); } catch { }
                 }
                 catch (System.Exception rex)
-                { doc.Editor.WriteMessage("\n[기타 설정] 초기화 중 오류: " + rex.Message); }
+                { doc.Editor.WriteMessage("\n[공통설정] 초기화 중 오류: " + rex.Message); }
             }
 
             try
             {
                 // ★사용자가 <b>바꿨을 때</b>만 여기 온다 — 덮어써도 되는 자리다.
                 var (ok, note) = KoreaCs.Assign(doc.Database, GradingSettings.ExportEpsg);
-                doc.Editor.WriteMessage("\n[기타 설정] " + note);
+                doc.Editor.WriteMessage("\n[공통설정] " + note);
                 if (!ok)
                     AcadApp.ShowAlertDialog(
                         "도면 좌표계를 자동으로 바꾸지 못했습니다.\n" + note +
-                        "\n\n배경지도는 [기타 설정]에서 고른 좌표계로 만들어집니다.\n" +
+                        "\n\n배경지도는 [공통설정] «기타»에서 고른 좌표계로 만들어집니다.\n" +
                         "도면 좌표계까지 맞추려면 MAPCSASSIGN 명령으로 직접 지정하세요.");
                 try { DiagLog.Append($"\n■ DHMISCSET 좌표계 변경 — EPSG {prevEpsg} → {GradingSettings.ExportEpsg} · {note}\n"); } catch { }
 
                 // 좌표계가 바뀌면 같은 도면 좌표라도 실제 지구상 위치가 달라져 기존 위성사진은 더는 맞지 않는다.
                 int refreshed = BasemapCommand.RefreshAll(doc);
                 if (refreshed > 0)
-                    doc.Editor.WriteMessage($"\n[기타 설정] 배경지도 {refreshed}개를 새 좌표계로 다시 배치했습니다.");
+                    doc.Editor.WriteMessage($"\n[공통설정] 배경지도 {refreshed}개를 새 좌표계로 다시 배치했습니다.");
             }
             catch (System.Exception ex)
             {
                 // [리뷰 M-A] 조용히 삼키지 않는다 — 배경지도가 사라진 채 무음이 되는 것을 방지.
-                doc.Editor.WriteMessage("\n[기타 설정] 좌표계 반영 중 오류: " + ex.Message);
+                doc.Editor.WriteMessage("\n[공통설정] 좌표계 반영 중 오류: " + ex.Message);
                 try { DiagLog.Append($"\n■ DHMISCSET 좌표계 반영 오류 — {ex.Message}\n"); } catch { }
             }
         }
@@ -142,7 +143,7 @@ public sealed class MiscSettingsCommand
         try
         {
             var (setIt, csNote2) = KoreaCs.AssignIfMissing(doc.Database, GradingSettings.ExportEpsg);
-            if (setIt && csNote2.Contains("지정")) doc.Editor.WriteMessage("\n[기타 설정] " + csNote2);
+            if (setIt && csNote2.Contains("지정")) doc.Editor.WriteMessage("\n[공통설정] " + csNote2);
         }
         catch { }
 
@@ -192,7 +193,7 @@ public sealed class MiscSettingsCommand
             bool snapDead = GradingBuilder.MustAbort(rbNote);
             if (snapDead) tr.Abort(); else tr.Commit();
             try { DiagLog.Append($"\n■ {System.DateTime.Now:HH:mm:ss} 정지옵션 저장 — {rbNote}{(snapDead ? "\n  ⚠되찍기까지 실패했거나 되찍은 면이 바뀌어 표시 반영 · 재작성을 되돌렸다(커밋 안 함)" : "")}\n"); } catch { }
-            if (rbNote.Contains("⚠못 다룸")) try { doc.Editor.WriteMessage("\n[기타 설정] 지표면 재작성 — " + rbNote.Substring(rbNote.IndexOf("⚠못 다룸", System.StringComparison.Ordinal))); } catch { }
+            if (rbNote.Contains("⚠못 다룸")) try { doc.Editor.WriteMessage("\n[공통설정] 지표면 재작성 — " + rbNote.Substring(rbNote.IndexOf("⚠못 다룸", System.StringComparison.Ordinal))); } catch { }
             // ★[v103.1.6] 스냅샷을 못 다룬 면이 있으면(되찍지 못함 · 되찍은 뒤 바뀜 · 스냅샷 재작성 실패) 명령줄에도 한 줄 — 조용히 넘기지 않는다
             int snapBadAt = -1;
             foreach (string mk in new[] { "⚠되찍", "⚠스냅샷 재작성 실패" })
@@ -206,7 +207,7 @@ public sealed class MiscSettingsCommand
                 if (snapBadEnd < 0) snapBadEnd = rbNote.IndexOf("  ※", snapBadAt, System.StringComparison.Ordinal);
                 try
                 {
-                    doc.Editor.WriteMessage("\n[기타 설정] 지표면 재작성 — " + (snapBadEnd > snapBadAt ? rbNote.Substring(snapBadAt, snapBadEnd - snapBadAt) : rbNote.Substring(snapBadAt))
+                    doc.Editor.WriteMessage("\n[공통설정] 지표면 재작성 — " + (snapBadEnd > snapBadAt ? rbNote.Substring(snapBadAt, snapBadEnd - snapBadAt) : rbNote.Substring(snapBadAt))
                         + (snapDead ? " — 표시 반영을 되돌렸습니다. 도면을 저장해 두고 진단 로그를 보여 주세요." : ""));
                 }
                 catch { }
@@ -214,7 +215,7 @@ public sealed class MiscSettingsCommand
             // ★[검토 1012 2차 낮음 7] 옛 판(~v103.1.4)이 지은 옹벽 면을 <b>지금 모양 그대로</b> 굳혔으면 한 줄 알린다 — 옛 판에서 이미 바뀌어 버린 면이면 틀린 채 굳는다
             //   ★[v103.1.7 · 검토 1013 확인 낮음 3] 물렸으면(커밋 안 함) 굳힌 것도 되돌아갔다 — 알리지 않는다
             if (!snapDead && rbNote.Contains("지금 굳힌 옛 면"))
-                try { doc.Editor.WriteMessage("\n[기타 설정] 옛 판(v103.1.4 이하)이 지은 옹벽 면을 지금 모양 그대로 굳혔습니다 — 느낌표가 남을 수 있습니다(원본 파일이 없다는 뜻). 옹벽 변환 · 사면 변환을 한 번 하면 새로 지어집니다."); } catch { }
+                try { doc.Editor.WriteMessage("\n[공통설정] 옛 판(v103.1.4 이하)이 지은 옹벽 면을 지금 모양 그대로 굳혔습니다 — 느낌표가 남을 수 있습니다(원본 파일이 없다는 뜻). 옹벽 변환 · 사면 변환을 한 번 하면 새로 지어집니다."); } catch { }
             doc.Editor.Regen();
             // ★★★[v103.1.7] 자가점검 — 커밋(또는 물림) 뒤 <b>새 트랜잭션</b>에서 지문 · 상태를 다시 읽어 견준다(화면이 쓰는 값 — 트랜잭션 안의 값이 아니다)
             try

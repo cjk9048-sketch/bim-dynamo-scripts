@@ -328,7 +328,7 @@ public sealed class GroundOffCommand
 
     /// <summary>★[JACK 1117 «누르면 해당 원지반으로 줌인»] 원지반 범위(가장자리 8 % 여유)로 화면 이동 — 창이 떠 있는 채(명령 안).
     /// 먼저 SetCurrentView, 화면 가운데가 안 바뀌었으면(조용히 안 먹는 자리 — MapPalette 0901 메모) ZOOM 창(W)으로 한 번 더.</summary>
-    static void ZoomToExt(Editor ed, Extents3d e)
+    internal static void ZoomToExt(Editor ed, Extents3d e)
     {
         double w = System.Math.Max(1.0, e.MaxPoint.X - e.MinPoint.X), h = System.Math.Max(1.0, e.MaxPoint.Y - e.MinPoint.Y);
         double cx = (e.MinPoint.X + e.MaxPoint.X) / 2, cy = (e.MinPoint.Y + e.MaxPoint.Y) / 2;

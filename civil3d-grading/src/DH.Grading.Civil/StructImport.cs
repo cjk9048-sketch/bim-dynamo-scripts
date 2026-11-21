@@ -339,6 +339,8 @@ internal static class StructImport
                     {
                         var bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
                         if (bt.Has(BlockBase + r.Id) && tr.GetObject(bt[BlockBase + r.Id], OpenMode.ForRead) is BlockTableRecord ob && ob.IsFromExternalReference && ob.GetBlockReferenceIds(true, false).Count == 0) orphan.Add(ob.ObjectId);
+                        // ★[v117.19] 박스 블록(xref 아님)은 여기서 지움
+                        else if (r.IsBox && bt.Has(BlockBase + r.Id) && tr.GetObject(bt[BlockBase + r.Id], OpenMode.ForRead) is BlockTableRecord bb && !bb.IsFromExternalReference && bb.GetBlockReferenceIds(true, false).Count == 0) { bb.UpgradeOpen(); bb.Erase(); }
                     }
                     catch { }
                     continue;
@@ -370,6 +372,7 @@ internal static class StructImport
             if (TryLoad(db, tr, out _, out var recs, out _))
                 foreach (var r in recs)
                 {
+                    if (r.IsBox) continue;   // ★[v117.19] 박스 = 원본 파일 없음(도면 안 블록)
                     ObjectId btrId = ObjectId.Null;
                     try { if (db.TryGetObjectId(new Handle(System.Convert.ToInt64(r.XrefHandle, 16)), out var iid) && !iid.IsErased && tr.GetObject(iid, OpenMode.ForRead) is BlockReference br) btrId = br.BlockTableRecord; } catch { }
                     if (btrId.IsNull) continue;
@@ -428,6 +431,7 @@ internal static class StructImport
     /// <summary>바뀐 원본이 있나(크기 · 시각만 — 해시 안 셈) — 그리는 쪽이 «[다시 반영]» 한 줄을 남길지.</summary>
     internal static bool LooksChanged(Database db, Transaction tr, StructRec r, ObjectId btrId)
     {
+        if (r.IsBox) return false;   // ★[v117.19] 박스 = 원본 파일 없음
         try
         {
             string? p = ResolvePath(db, tr, btrId, r);

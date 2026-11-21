@@ -5136,7 +5136,7 @@ public sealed partial class XsecViewCommand
         if (StructImport.Any(db))
             try { structs = StructImport.LoadAll(db, null, out _).Where(x => !x.Model.Empty).Select(x => x.Model).ToList(); }
             catch (System.Exception exL) { log?.AppendLine("  ⚠구조물 공제 — 구조물을 못 읽음: " + exL.Message); }
-        var sded = new System.Collections.Generic.List<(double St, double F, double B)>();
+        var sded = new System.Collections.Generic.List<(double St, double F, double B)>(); int sHit = 0;
         var sdirty = new System.Collections.Generic.List<string>(); var sbelow = new System.Collections.Generic.List<string>();
         try
         {
@@ -5382,10 +5382,12 @@ public sealed partial class XsecViewCommand
                     if (stOut[3] > 0.1) sbelow.Add(s.Name);
                     if (!double.IsNaN(stOut[0]))
                     {
-                        sded.Add((s.St, stOut[0], stOut[1]));
+                        sded.Add((s.St, stOut[0], stOut[1])); sHit++;
                         led.Add(DH.Grading.Core.QtyKey.OfStructFill(), stOut[0]);
                         led.Add(DH.Grading.Core.QtyKey.OfStructBackfill(), stOut[1]);
                     }
+                    // ★[v117.19 · 박스 구조물 검산] 구조물이 안 걸친 측점도 0으로 — 평균단면법 부피가 끝 측점 반 칸씩을 빠뜨리지 않게(토적표와 같은 꼴)
+                    else if (structs != null && structs.Count > 0) sded.Add((s.St, 0, 0));
                     // ★[v111.5 · 검토 M5 · M6] 진입도로 — 도로 면이 부지 정지면(≠ 원지반)을 고친 측점 · 진입도로가 횡단 폭 끝에 닿는 측점
                     if (xt != null && SectionCommand.TryCut(al0, s.St, wl, wr, out var cutR))
                     {
@@ -5536,7 +5538,7 @@ public sealed partial class XsecViewCommand
             var sd = sded.OrderBy(w => w.St).ToList();
             double vF = 0, vB = 0;
             for (int i = 0; i + 1 < sd.Count; i++) { double L = sd[i + 1].St - sd[i].St; vF += (sd[i].F + sd[i + 1].F) / 2 * L; vB += (sd[i].B + sd[i + 1].B) / 2 * L; }
-            log?.AppendLine($"  구조물 공제(불러온 구조물 {structs.Count}개 · 바깥 껍질) — 단면이 걸친 측점 {sd.Count}개 · 성토에서 합 {sd.Sum(w => w.F):F2}㎡(약 {vF:F1}㎥)"
+            log?.AppendLine($"  구조물 공제(불러온 구조물 {structs.Count}개 · 바깥 껍질) — 단면이 걸친 측점 {sHit}개 · 성토에서 합 {sd.Sum(w => w.F):F2}㎡(약 {vF:F1}㎥)"
                           + $" · 되메우기에서 합 {sd.Sum(w => w.B):F2}㎡(약 {vB:F1}㎥) · 성토 · 되메우기 줄은 뺀 값");
             if (vF + vB > 0.05) wallFoot = (wallFoot.Length > 0 ? wallFoot + " · " : "") + $"불러온 구조물 공제 약 {vF + vB:F1}㎥(성토 {vF:F1} · 되메우기 {vB:F1})";
             // ★[계획 검토 MEDIUM 3] 잘림이 깨끗하지 않은 측점이 있으면 «미포함» 두 마디를 그대로 둔다
