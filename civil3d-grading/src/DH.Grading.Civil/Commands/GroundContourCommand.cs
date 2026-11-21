@@ -17,8 +17,8 @@ namespace DH.Grading.Civil.Commands;
 /// <para>지표면 짓기는 <see cref="ImportGisCommand.BuildGroundSurfaceFrom"/> 한 벌(이름 · 스타일 · 정밀도 · 원지반 추가(원지반_2 …) — 서버 · DXF처럼 묻지 않는다).</para></summary>
 public sealed class GroundContourCommand
 {
-    const double FlatTol = 0.001;   // 한 가닥 안 표고 차가 이 안이면 등고선
-    const double ZeroTol = 1e-6;    // 표고 0 판정
+    internal const double FlatTol = 0.001;   // 한 가닥 안 표고 차가 이 안이면 등고선(★[JACK 1121] 측량도 보정도 같은 값)
+    internal const double ZeroTol = 1e-6;    // 표고 0 판정
     const double Step = 1.0;        // 호 · 곡선을 꺾은선으로 펼 간격(m)
     const int MaxPtsPerCurve = 20000;
 
@@ -260,8 +260,9 @@ public sealed class GroundContourCommand
     }
 
     /// <summary>선을 꼭짓점 그대로 꺾은선으로 편다 — 곧은 마디는 꼭짓점만 · 호(볼록)는 <see cref="Step"/> 간격 · 스플라인 · 원 · 타원 · 맞춤 폴리선은 길이로 고르게.
-    /// 좌표는 WCS(폴리선 고도 · 기울어진 면 그대로). 이웃 점이 평면으로 0.1 mm 안이면 하나로(세로 마디 막기).</summary>
-    static List<Point3d>? Sample(Curve c, out bool closed)
+    /// 좌표는 WCS(폴리선 고도 · 기울어진 면 그대로). 이웃 점이 평면으로 0.1 mm 안이면 하나로(세로 마디 막기).
+    /// ★[JACK 1121 «측량도 보정하기»] 측량도(옆 DB) 읽기 · 백판 재료 자르기도 이 한 벌을 쓴다(<see cref="SurveyFix"/>).</summary>
+    internal static List<Point3d>? Sample(Curve c, out bool closed)
     {
         closed = false;
         var raw = new List<Point3d>();

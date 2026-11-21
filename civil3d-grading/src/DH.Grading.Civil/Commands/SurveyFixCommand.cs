@@ -1,0 +1,120 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using Autodesk.AutoCAD.ApplicationServices;
+using Autodesk.AutoCAD.DatabaseServices;
+using Autodesk.AutoCAD.EditorInput;
+using Autodesk.AutoCAD.Runtime;
+using AcadApp = Autodesk.AutoCAD.ApplicationServices.Application;
+
+namespace DH.Grading.Civil.Commands;
+
+/// <summary>★★★[JACK 1121 «측량도 보정하기»] DHSURVEYFIX — 측량도 DWG · DXF를 골라 미리보기 창에서 가져올 것을 고르고, 그 범위만 백판(원지반)에서 측량 자료로 바꿔 원지반을 새로 짓는다.
+/// <para>원지반이 있어야 한다([원지반 가져오기] 창의 네 번째 단추 — 원지반이 없으면 꺼져 있음). 본체는 <see cref="SurveyFix"/>.</para>
+/// <para>화면 없는 시험: <see cref="FileForTest"/>(한 번 쓰고 비움) · 창 없이 꺼진 레이어 빼고 전부 · 여유 <see cref="MarginForTest"/> · 틈 메움 <see cref="GapForTest"/>.</para></summary>
+public sealed class SurveyFixCommand
+{
+    internal static string? FileForTest;
+    internal static double MarginForTest = 2.0, GapForTest = 40.0;
+    /// <summary>창 기본값 — 한 세션 동안 마지막에 쓴 값.</summary>
+    static double _margin = 2.0, _gap = 40.0;
+    static string _lastDir = "";
+
+    [CommandMethod("DHSURVEYFIX")]
+    public void Run()
+    {
+        Document doc = AcadApp.DocumentManager.MdiActiveDocument;
+        if (doc == null) return;
+        GradingSettings.SyncToDocument(doc);
+        Editor ed = doc.Editor;
+        Database db = doc.Database;
+        try
+        {
+            var grounds = GroundSet.List(db);
+            if (grounds.Count == 0)
+            {
+                Refuse(ed, "원지반이 없습니다.\n\n먼저 [원지반 가져오기] 창의 [수치지도 DXF 가져오기] · [서버에서 가져오기] · [등고선으로 작성하기] 중 하나로 원지반(백판)을 만드세요.");
+                return;
+            }
+            string? path = AskFile();
+            if (string.IsNullOrEmpty(path)) { ed.WriteMessage("\n[측량도 보정] 취소"); return; }
+            string name = System.IO.Path.GetFileName(path);
+            ed.WriteMessage($"\n[측량도 보정] {name} 읽는 중…");
+            SurveyFix.Data data;
+            try { data = SurveyFix.Read(path); }
+            catch (System.Exception rex)
+            {
+                Refuse(ed, $"측량도를 읽지 못했습니다 — {name}\n\n{rex.Message}\n\n다른 프로그램이 쓰고 있지 않은지, DWG · DXF가 맞는지 확인하세요.");
+                return;
+            }
+            string skipped = data.Skipped();
+            if (data.Items.Count == 0)
+            {
+                Refuse(ed, $"측량도에 쓸 등고선 · 표고점이 없습니다 — {name}\n\n읽은 객체 {data.Read}개" + (skipped.Length > 0 ? " · " + skipped : "") +
+                           "\n\n표고(Z · 고도)가 든 선 · 점 · 블록이어야 합니다. 블록 안의 선은 분해(EXPLODE)한 뒤 저장해 주세요.");
+                return;
+            }
+            ed.WriteMessage($"\n  읽은 객체 {data.Read}개 → 등고선 {data.Items.Count(i => i.Kind == SurveyKind.Contour)} · 3D 선 {data.Items.Count(i => i.Kind == SurveyKind.Break)} · 표고점 {data.Items.Count(i => i.Kind == SurveyKind.Spot)}"
+                          + (skipped.Length > 0 ? " · " + skipped : ""));
+
+            int gi = grounds.Count - 1;   // 기본 = 가장 나중에 만든 원지반
+            List<SurveyItem> use;
+            double margin, gap;
+            bool test = FileForTestUsed;
+            FileForTestUsed = false;
+            if (test || SelfCheckLog.Headless)
+            {
+                use = data.Items.Where(i => !data.LayersOff.Contains(i.Layer)).ToList();
+                margin = MarginForTest; gap = GapForTest;
+            }
+            else
+            {
+                var w = new SurveyFixWindow(name, data.Items, data.LayersOff, grounds.Select(g => g.Name).ToList(), gi,
+                                            k => SurveyFix.BaseForView(db, grounds[Math.Clamp(k, 0, grounds.Count - 1)].Id), _margin, _gap,
+                                            skipped.Length > 0 ? $"읽은 객체 {data.Read}개 · {skipped}" : $"읽은 객체 {data.Read}개");
+                if (AcadApp.ShowModalWindow(w) != true) { ed.WriteMessage("\n[측량도 보정] 취소"); return; }
+                use = w.Chosen; gi = Math.Clamp(w.GroundIndex, 0, grounds.Count - 1);
+                margin = w.Band; gap = w.Gap;
+                _margin = margin; _gap = gap;
+            }
+            var r = SurveyFix.Merge(doc, use, grounds[gi].Id, margin, gap);
+            if (!r.Ok) { Refuse(ed, r.Message); return; }
+            ed.WriteMessage($"\n[측량도 보정] {name} → 새 '{r.NewName}' — " + r.Message);
+            if (!SelfCheckLog.Headless)
+                AcadApp.ShowAlertDialog($"측량도 보정 끝 — 새 원지반 '{r.NewName}'\n\n" + r.Message.Replace(" · ", "\n· ").Replace("\n  ", "\n"));
+        }
+        catch (System.Exception ex)
+        {
+            ed.WriteMessage("\n[측량도 보정 오류] " + ex.Message);
+            try { DiagLog.Append($"\n■ DHSURVEYFIX 오류 — {ex}\n"); } catch { }
+            if (!SelfCheckLog.Headless) AcadApp.ShowAlertDialog("측량도 보정 중 오류:\n" + ex.Message);
+        }
+    }
+
+    static bool FileForTestUsed;
+
+    static string? AskFile()
+    {
+        if (FileForTest != null) { var t = FileForTest; FileForTest = null; FileForTestUsed = true; return t; }
+        if (SelfCheckLog.Headless) return null;
+        var dlg = new Microsoft.Win32.OpenFileDialog
+        {
+            Title = "측량도 선택 (DWG · DXF)",
+            Filter = "측량도 (*.dwg;*.dxf)|*.dwg;*.dxf|모든 파일 (*.*)|*.*",
+            CheckFileExists = true,
+        };
+        try { if (_lastDir.Length > 0 && System.IO.Directory.Exists(_lastDir)) dlg.InitialDirectory = _lastDir; } catch { }
+        bool? ok;
+        try { ok = dlg.ShowDialog(); } catch { ok = false; }
+        if (ok != true) return null;
+        try { _lastDir = System.IO.Path.GetDirectoryName(dlg.FileName) ?? ""; } catch { }
+        return dlg.FileName;
+    }
+
+    static void Refuse(Editor ed, string msg)
+    {
+        ed.WriteMessage("\n[측량도 보정] " + msg.Replace("\n\n", " — ").Replace("\n", " "));
+        try { DiagLog.Append("\n■ DHSURVEYFIX — 거절: " + msg.Replace("\n", " ") + "\n"); } catch { }
+        if (!SelfCheckLog.Headless) AcadApp.ShowAlertDialog("측량도 보정 — 하지 못했습니다\n\n" + msg);
+    }
+}

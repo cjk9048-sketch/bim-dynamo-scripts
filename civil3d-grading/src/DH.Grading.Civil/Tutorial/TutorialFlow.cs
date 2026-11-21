@@ -129,13 +129,13 @@ internal static class TutorialFlow
     /// <summary>단계 글 — «무엇 → 왜» 한 줄(초보용 단답 · 어요/습니다체 · ※ 없음). <paramref name="guide"/> = 따라 그릴 점선(그려 둔 선)이 있나.</summary>
     internal static string Text(Step s, bool dxf, bool guide = true) => s switch
     {
-        Step.Ground => dxf ? "[원지반 가져오기] ▼ → [수치지도 DXF] → DXF 파일로 땅 만들기"
-                           : "[원지반 가져오기] ▼ → [서버 지표면] → 지도에서 땅 고르기",
+        Step.Ground => dxf ? "[원지반 가져오기] → 창의 [수치지도 DXF 가져오기] → DXF 파일로 땅 만들기"
+                           : "[원지반 가져오기] → 창의 [서버에서 가져오기] → 지도에서 땅 고르기",
         Step.Search => "검색 칸에 «대모산» → [검색] → 그 자리로 이동",
         Step.Pick => $"지도에서 모서리 두 곳 클릭 → 가로 · 세로 {MinRangeM} m 이상(사면 여유)",
         Step.Send => "[이 범위 가져오기] → 원지반 만들기",
         Step.Importing => "원지반 만드는 중 → 잠시 기다리기",
-        Step.Dxf => "[원지반 가져오기] ▼ → [수치지도 DXF] → tut_ch1.dxf [열기] → 원지반 만들기",
+        Step.Dxf => "[원지반 가져오기] → 창의 [수치지도 DXF 가져오기] → tut_ch1.dxf [열기] → 원지반 만들기",
         Step.Crop => "[기타] → [원지형 자르기] → 노란 점선 모서리 두 곳 클릭 → 쓸 땅만 남기기",
         Step.Draw => (guide ? "노란 점선 따라" : "노란 점선 안에") + " 닫힌 폴리선(PLINE → 마지막 C) → 계획 경계",
         Step.Elev => "선 클릭 → Ctrl+1 → «고도» 칸 입력 → 계획 높이",
