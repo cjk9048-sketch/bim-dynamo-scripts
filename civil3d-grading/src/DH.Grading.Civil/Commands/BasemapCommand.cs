@@ -44,7 +44,7 @@ public sealed class BasemapCommand
             var (epsg, lon0, fn, csNote, csOk) = ResolveCs(db);
             if (!csOk)
             {
-                Refuse(ed, "좌표계를 알 수 없습니다.\n[공통설정] «기타» 칸에서 좌표계(원점)를 먼저 지정하세요.");
+                Refuse(ed, "좌표계를 알 수 없습니다.\n[공통설정]에서 좌표계(원점)를 먼저 지정하세요.");
                 return;
             }
 

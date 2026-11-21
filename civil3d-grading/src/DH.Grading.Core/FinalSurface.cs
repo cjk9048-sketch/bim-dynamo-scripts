@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Globalization;
 using NetTopologySuite.Algorithm;
 using NetTopologySuite.Algorithm.Locate;
@@ -99,6 +99,8 @@ public static class FinalSurface
         /// <summary>도로마다 B 합(3D «진입도로 자리»).</summary>
         public Geometry? RoadArea;
         public long MsZone, MsOutside, MsCheck, MsTotal;
+        /// <summary>★[v117.19.1] 뒤집기 흉내 한도를 넓혀 만들었을 때 그 값(m) · 자리 — 0이면 보통 한도로 만듦.</summary>
+        public double FlipLoose; public string FlipLooseAt = "";
 
         public string Text
         {
@@ -112,6 +114,7 @@ public static class FinalSurface
                     NonManifold, Flipped, TJunctions, Overlap, ZeroArea, Pairs01, TwoZ, Pairs1mm, Thin, ThinRoad > 0 ? $"(도로 세모 {ThinRoad})" : "");
                 s += string.Format(ci, " · 넓이 {0:F3}/{1:F3} ㎡", AreaFinal, AreaExpect);
                 if (Zone != null) s += " · 다듬기 판정 " + Zone.Tier + "(" + Zone.TierText + ")";
+                if (FlipLoose > 0) s += string.Format(ci, " · ⚠Civil이 대각선을 뒤집으면 높이 최대 {0:F1}mm 바뀔 수 있음 @{1}", FlipLoose * 1000, FlipLooseAt);
                 if (Outside != null && Outside.Text.Length > 0) s += " · " + Outside.Text;
                 s += string.Format(ci, " · {0} ms(다듬기 {1} · 바깥 {2} · 검사 {3})", MsTotal, MsZone, MsOutside, MsCheck);
                 foreach (var l in Layers)
@@ -201,7 +204,12 @@ public static class FinalSurface
                     if (zk.Contains((p.X, p.Y))) fixedP[(p.X, p.Y)] = p;
             // ★[실제 자료 1103 계측] 띠 · 조각 바늘(높이 107~122µm — ∂B 1.2 mm 짧은 변에 먼 꼭짓점 · ∂B 세 점 거의 한 줄)은 Civil이 뒤집는 문턱(122µm) 안 →
             //   옹벽 터파기면과 같이 125µm 아래 면도 접는다(ThinFlat). 움직일 수 있는 점은 ∂B 쪽(고정 점 아님)뿐이다
-            var made = CivilSafeMesh.MakeZone(zone, fixedP.Values.OrderBy(p => p.X).ThenBy(p => p.Y).ToList(), out var zr, flatH: CivilSafeMesh.ThinFlat);
+            var fixedL = fixedP.Values.OrderBy(p => p.X).ThenBy(p => p.Y).ToList();
+            // ★[v117.19.1 · JACK 1121 밤] 옹벽 추가 뒤 «뒤집기 흉내 1.9mm»(판정 2 한도 1 mm)로 최종면을 못 만들어 옛 최종면까지 치웠다(다듬기 55초 뒤) →
+            //   최종면은 뒤집기 흉내를 1 cm(높이 예산 ZTol2)까지 받는다 — 한 번만 돈다(판정만 다르고 손질은 같다). 1 mm 넘으면 ⚠로 알린다.
+            //   다른 까닭(겹침 · 못 푼 쌍 · 테두리 높이)은 그대로 실패.
+            var made = CivilSafeMesh.MakeZoneLooseFlip(1e-2, zone, fixedL, out var zr, flatH: CivilSafeMesh.ThinFlat);
+            if (made != null && zr.FlipRiskDz > 1e-3) { R.FlipLoose = zr.FlipRiskDz; R.FlipLooseAt = zr.FlipRiskAt; }
             R.Zone = zr;
             if (made == null) { R.Fail = "손댄 구역 다듬기 못 함 — " + (zr.Fail.Length > 0 ? zr.Fail : zr.Summary); R.MsZone = sw.ElapsedMilliseconds; return null; }
             safe = made;

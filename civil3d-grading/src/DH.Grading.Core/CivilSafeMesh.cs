@@ -220,6 +220,20 @@ public static class CivilSafeMesh
         finally { zoneDeadline.Value = was; }
     }
     static readonly System.Threading.AsyncLocal<long> zoneDeadline = new();
+    /// <summary>★[v117.19.1 · JACK 1121 밤] 판정 2의 «뒤집기 흉내» 한도 — 보통 1 mm. 최종지표면만 1 cm(ZTol2 · 높이 예산과 같은 값)까지 받는 다시 해 보기에 쓴다.
+    /// 옹벽 추가 뒤 최종면이 «뒤집기 흉내 1.9mm»로 못 만들어져 옛 최종면을 치웠다 — Civil이 대각선을 뒤집어도 높이 2 mm 안팎은 토량 · 도면에 영향이 없다.</summary>
+    static readonly System.Threading.AsyncLocal<double> flipLim2Ovr = new();
+    static double FlipLim2 => flipLim2Ovr.Value > 0 ? flipLim2Ovr.Value : FlipTol2;
+
+    /// <summary>«뒤집기 흉내» 판정 2 한도를 <paramref name="flipLim2"/>(≤ 1 cm)로 넓혀 다듬기 — 최종지표면이 보통 한도로 못 지었을 때만 부른다.</summary>
+    public static List<WallDaylight.Tri>? MakeZoneLooseFlip(double flipLim2, IReadOnlyList<WallDaylight.Tri> tris, IEnumerable<Point3> fixedPts, out Report rep, double flatH = 0)
+    {
+        double was = flipLim2Ovr.Value;
+        flipLim2Ovr.Value = Math.Min(ZTol2, Math.Max(FlipTol2, flipLim2));
+        try { return MakeZone(tris, fixedPts, out rep, flatH: flatH); }
+        finally { flipLim2Ovr.Value = was; }
+    }
+
     static void CheckDeadline() { long d = zoneDeadline.Value; if (d != 0 && Environment.TickCount64 > d) throw new TimeoutException("다듬기 시간 한도 넘음"); }
 
     /// <summary>옹벽 터파기면이 쓰는 «납작한 면» 높이 — Civil이 긴 변을 뒤집는 문턱(122µm) 곁(<see cref="ThinH"/>와 같은 값).</summary>
@@ -384,7 +398,7 @@ public static class CivilSafeMesh
                      && rep.WallDzNear <= Math.Max(rep.SpotDz, rep.WallTol2) + 1e-4
                      && rep.CivilRisk == 0 && rep.FlipRiskDz <= FlipTol1;
         double wallLim2 = allow ? rep.WallCap : rep.WallTol2;
-        bool t2 = ok0 && rep.PlanMax <= PlanTol2 && rep.BorderDz <= ZTol2 && rep.WallDz <= wallLim2 && rep.FlipRiskDz <= FlipTol2;
+        bool t2 = ok0 && rep.PlanMax <= PlanTol2 && rep.BorderDz <= ZTol2 && rep.WallDz <= wallLim2 && rep.FlipRiskDz <= FlipLim2;
         rep.Tier = t1 ? 1 : t2 ? 2 : 3;
         rep.OverForced = rep.Tier == 2 && allow && rep.WallDz > rep.WallTol2;          // ★[계획 검토 M5] 부를 때마다 새로(같은 rep을 두 번 잰다)
         if (rep.Tier == 2)
@@ -440,7 +454,7 @@ public static class CivilSafeMesh
                     if (no.Count > 0) why.Add("허용 안 됨: " + string.Join(" · ", no));
                 }
             }
-            if (rep.FlipRiskDz > FlipTol2) why.Add($"뒤집기 흉내 {rep.FlipRiskDz * 1000:F1}mm @{rep.FlipRiskAt}");
+            if (rep.FlipRiskDz > FlipLim2) why.Add($"뒤집기 흉내 {rep.FlipRiskDz * 1000:F1}mm @{rep.FlipRiskAt}");
             rep.Fail = string.Join(" · ", why);
         }
     }

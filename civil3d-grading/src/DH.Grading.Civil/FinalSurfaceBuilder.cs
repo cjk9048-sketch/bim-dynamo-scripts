@@ -1,4 +1,4 @@
-using Autodesk.AutoCAD.ApplicationServices;
+﻿using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.DatabaseServices;
 using DH.Grading.Core;
 using NetTopologySuite.Geometries;
@@ -449,6 +449,8 @@ internal static class FinalSurfaceBuilder
                 // 가파른 띠 — 까닭 붙여 경고 · 꺾임 가로지름은 알림(로그 · 명령창)
                 CachedGroundSurface? bc = null;
                 var (warn, info) = SteepNotes(db, tr, rep.Steep, I.Roads, I.BaseId, () => bc ??= new CachedGroundSurface(baseT));
+                // ★[v117.19.1] 뒤집기 흉내 한도를 넓혀 만든 최종면(1 mm ~ 1 cm) — 실패 대신 알림
+                if (rep.FlipLoose > 0) warn.Add(string.Format(System.Globalization.CultureInfo.InvariantCulture, "⚠옹벽 곁 한 자리에서 Civil이 대각선을 뒤집으면 높이 최대 {0:F1}mm 바뀔 수 있음(토량 영향 없음)", rep.FlipLoose * 1000));
                 var ci = System.Globalization.CultureInfo.InvariantCulture;
                 WriteStamp(tr, cTin, I.Stamp0,
                            string.Format(ci, "{0:yyyy-MM-dd HH:mm:ss} · {1} · 세모 {2} · Δv 최대 {3:F1} mm · 가파른 띠 {4}", DateTime.Now, GradingSettings.Version, fin.Count, rep.DvMax * 1000, rep.Steep.Count),

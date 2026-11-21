@@ -74,18 +74,63 @@ public sealed class SheetDialog : Window
           + " 배경지도 화질 = [위성지도] 사진 해상도(넓으면 자동으로 낮춤)."
           + " 등고선 · 계곡선 간격 = 원지반 · 정지면 · 최종지표면 · 진입도로 지표면(도면에 저장).",
             first: true);
+        // ★★[v117.19.1 · JACK 1121 밤 «공통설정에 기타라고 하지 말고 노리선 그리기와 같은 레벨로 다 풀어»] 접이식 «기타» 칸 없앰 —
+        //   켜고 끄는 칸(노리선 · 결과지표면만 · 지적 속성 · 임상도 수목)을 한 줄씩 → 고르는 칸(배경지도 화질 · 좌표계) → 간격 → VWorld 키.
+        //   저장 자리 · 기본값 · 검사는 그대로(GradingSettings · VWorldKey · ForestSettings). openMisc는 옛 명령(DHMISCSET) 호환으로만 받는다.
+        _ = openMisc;
         // ★[JACK 1112 «노리선 단추 없애고 도면설정에 켜고 끄는 칸 · 기본 켜기»] 노리선 그리기 — 도면에 저장(Commands.NoriSetting)
         _noriDraw = new CheckBox
         {
             Content = "노리선 그리기",
             IsChecked = noriDraw,
-            Margin = new Thickness(0, 0, 0, 8),
+            Margin = new Thickness(0, 0, 0, 6),
             ToolTip = "계획부지 · 진입도로 지표면을 만들거나 업데이트할 때 노리선을 같이 그림",
         };
         root.Children.Add(_noriDraw);
+        _show0 = GradingSettings.ShowOnlyResultSurface;
+        _showOnlyResult = new CheckBox
+        {
+            Content = "결과지표면만 표시",
+            IsChecked = _show0,
+            Margin = new Thickness(0, 0, 0, 6),
+            ToolTip = "체크: 정지면을 만든 뒤 정지면_DH만 보이고 원지반·가상면은 숨깁니다.\n"
+                    + "해제하고 저장: 숨겼던 지표면을 모두 다시 표시합니다.",
+        };
+        root.Children.Add(_showOnlyResult);
+        // ★[v109.1 · 검토 M9] 지적 속성 → 특성 창(Map 개체 데이터) — 끄면 XData만
+        _parcel0 = GradingSettings.ParcelObjectData;
+        _parcelOd = new CheckBox
+        {
+            Content = "지적 속성을 특성 창에 표시",
+            IsChecked = _parcel0,
+            Margin = new Thickness(0, 0, 0, 6),
+            ToolTip = "체크: [지적도]로 가져온 필지 선 · 해치 · 지번을 고르면 특성 창에 지번 · 지목 · 소유 구분 · 공시지가가 보입니다(Map 개체 데이터 DH_PARCEL_V1).\n"
+                    + "해제: 속성은 XData(DH_PARCEL)에만 넣습니다 — 다음 [지적도]부터.",
+        };
+        root.Children.Add(_parcelOd);
+        // ★[v117.18.6 · JACK 1116 «회사 API로 해결»] 임상도 — 수목 넣기만(회사 API · 못 쓰면 도면 폴더 사본)
+        _fs = ForestSettings.Load();
+        _forestOn = new CheckBox
+        {
+            Content = "3D 보기에 수목 넣기 (임상도)",
+            IsChecked = _fs.On,
+            Margin = new Thickness(0, 0, 0, 2),
+            ToolTip = "[3D 보기] 수목 · 벌개제근 — 회사 API(회사망) · 못 쓰면 도면 폴더 사본",
+        };
+        root.Children.Add(_forestOn);
+        _forestState = new TextBlock { FontSize = 11, Foreground = DhBrand.Sub, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(20, 0, 0, 8) };
+        root.Children.Add(_forestState);
+
         int bmIdx = System.Array.IndexOf(GradingSettings.BasemapResValues, GradingSettings.BasemapRes);
         _basemapRes = AddCombo(root, "배경지도 화질", GradingSettings.BasemapResLabels,
                                bmIdx >= 0 ? bmIdx : 1, "");
+        // ★목록은 <see cref="GradingDialog.CoordLabels"/>가 정본(§50) — 위성사진 · 지형 · 지적도가 이 원점으로 맞춰진다
+        _coordSys = AddCombo(root, "좌표계", GradingDialog.CoordLabels, 0, "");
+        _coordSys.Width = 300;
+        _coordSys.ToolTip = "내보내기 원점 — 위성사진 · 지형 · 지적도가 이 원점으로 맞춰집니다(대부분 신 2010 · N=600000)";
+        _epsg0 = GradingSettings.ExportEpsg;
+        int idx = System.Array.IndexOf(GradingDialog.EpsgCodes, _epsg0);
+        _coordSys.SelectedIndex = idx >= 0 ? idx : 0;               // 기본 중부(5186)
         // ★★[v111.11 · JACK 1103 «원지형 및 모든 지형의 등고선 간격을 … 3. 공통에»] 지표면 스타일의 간격 — 도면에 저장
         const string contourTip = "원지반 · 정지면 · 최종지표면 · 진입도로 지표면의 등고선 간격\n"
                                 + "가져온 수치지도 등고선(선)은 원본 자료라 그대로";
@@ -97,73 +142,23 @@ public sealed class SheetDialog : Window
         _contourMinor.TextChanged += (_, __) => _contourMsg.Text = "";
         _contourMajor.TextChanged += (_, __) => _contourMsg.Text = "";
 
-        // ★★[JACK 1119 «도면설정 → 공통설정 · 도곽은 도면생성 창 도곽과 같으니 없애»] «2. 도곽» 줄 없앰 —
-        //   도면생성 창 ■ 도곽이 같은 FrameLibrary(이 PC current.json)를 고름 · 추가(DHSHEETFRAMEADD = 옛 [바꾸기…]와 같은 Pick) · K-water(기본) 고름 = 옛 [기본으로](Reset)
-
-        // ══ 기타(옛 [기타 설정]) ══════════════════════════════════════════
-        //   접이식 칸 — DHMISCSET(옛 명령 · 튜토리얼 글)으로 열면 펼친 채로 · 아니면 지난번 접은 상태(처음은 접힘)
-        if (openMisc) GradingDialog.ForgetOpen(MiscKey);
-        var misc = GradingDialog.AddCollapsible(root, "기타", out var miscBadge,
-            "좌표계(내보내기 원점) · 결과지표면만 표시 · 지적 속성 · VWorld 키 · 임상도 — 옛 [기타 설정]",
-            open: openMisc, key: MiscKey);
-        miscBadge.Text = "좌표계 · 표시 · VWorld 키 · 임상도";
-
-        misc.Children.Add(SubHead("좌표계 (내보내기 원점)", first: true));
-        misc.Children.Add(Note("위성사진 · 지형 · 지적도가 이 원점으로 맞춰집니다 — 대부분 신(2010 · N=600000)"));
-        // ★목록은 <see cref="GradingDialog.CoordLabels"/>가 정본(§50)
-        _coordSys = new ComboBox
-        {
-            Width = 300, Height = 28,
-            Margin = new Thickness(0, 0, 0, 4),
-            VerticalContentAlignment = VerticalAlignment.Center,
-            HorizontalAlignment = HorizontalAlignment.Left,
-        };
-        foreach (var cs in GradingDialog.CoordLabels) _coordSys.Items.Add(cs);
-        _epsg0 = GradingSettings.ExportEpsg;
-        int idx = System.Array.IndexOf(GradingDialog.EpsgCodes, _epsg0);
-        _coordSys.SelectedIndex = idx >= 0 ? idx : 0;               // 기본 중부(5186)
-        misc.Children.Add(_coordSys);
-
-        misc.Children.Add(SubHead("표시"));
-        _show0 = GradingSettings.ShowOnlyResultSurface;
-        _showOnlyResult = new CheckBox
-        {
-            Content = "결과지표면만 표시",
-            IsChecked = _show0,
-            Margin = new Thickness(0, 0, 0, 6),
-            ToolTip = "체크: 정지면을 만든 뒤 정지면_DH만 보이고 원지반·가상면은 숨깁니다.\n"
-                    + "해제하고 저장: 숨겼던 지표면을 모두 다시 표시합니다.",
-        };
-        misc.Children.Add(_showOnlyResult);
-        // ★[v109.1 · 검토 M9] 지적 속성 → 특성 창(Map 개체 데이터) — 끄면 XData만
-        _parcel0 = GradingSettings.ParcelObjectData;
-        _parcelOd = new CheckBox
-        {
-            Content = "지적 속성을 특성 창에 표시",
-            IsChecked = _parcel0,
-            Margin = new Thickness(0, 0, 0, 4),
-            ToolTip = "체크: [지적도]로 가져온 필지 선 · 해치 · 지번을 고르면 특성 창에 지번 · 지목 · 소유 구분 · 공시지가가 보입니다(Map 개체 데이터 DH_PARCEL_V1).\n"
-                    + "해제: 속성은 XData(DH_PARCEL)에만 넣습니다 — 다음 [지적도]부터.",
-        };
-        misc.Children.Add(_parcelOd);
-
         // ★★[v109 · JACK 1028 «각자 키를 발급받아서 넣을 수 있게» · «기본은 내장 키»]
-        misc.Children.Add(SubHead("VWorld 인증키"));
-        misc.Children.Add(Note("위성사진 · 지도 · 지적에 씀 — 비우면 내장 키 · 자주 쓰면 내 키(vworld.kr · 무료)"));
         _vwKey = new TextBox
         {
             Text = VWorldKey.User,
-            Width = 300, Height = 26,
+            Width = 200, Height = 26,
             VerticalContentAlignment = VerticalAlignment.Center,
             HorizontalAlignment = HorizontalAlignment.Left,
-            ToolTip = "8-4-4-4-12 꼴(예: 1A2B3C4D-…). 비우면 내장 키",
+            ToolTip = "위성사진 · 지도 · 지적에 씀 — 비우면 내장 키 · 자주 쓰면 내 키(vworld.kr · 무료)\n8-4-4-4-12 꼴(예: 1A2B3C4D-…)",
         };
-        var vwRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 4) };
+        var vwRow = new DockPanel { Margin = new Thickness(0, 0, 0, 2), LastChildFill = false };
+        var vwLbl = new TextBlock { Text = "VWorld 인증키", Width = 110, VerticalAlignment = VerticalAlignment.Center };
+        vwRow.Children.Add(vwLbl);
         vwRow.Children.Add(_vwKey);
-        var test = new Button { Content = "키 시험", MinWidth = 72, Margin = new Thickness(6, 0, 0, 0) };
+        var test = new Button { Content = "키 시험", MinWidth = 64, Margin = new Thickness(6, 0, 0, 0) };
         var how = new Button
         {
-            Content = "발급 방법", MinWidth = 72, Margin = new Thickness(6, 0, 0, 0),
+            Content = "발급 방법", MinWidth = 64, Margin = new Thickness(6, 0, 0, 0),
             ToolTip = "vworld.kr 회원가입 → 마이포털 → 인증키 발급\n"
                     + "· 서비스유형: 기타(QGIS, ArcGIS 등) · 서비스URL: 비워도 됨\n"
                     + "· 활용 API: WMTS/TMS · WMS/WFS · 2D데이터 · 국가중점\n"
@@ -171,10 +166,10 @@ public sealed class SheetDialog : Window
         };
         vwRow.Children.Add(test);
         vwRow.Children.Add(how);
-        misc.Children.Add(vwRow);
-        var vwState = _vwState = new TextBlock { FontSize = 11, Foreground = DhBrand.Sub, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 4) };
+        root.Children.Add(vwRow);
+        var vwState = _vwState = new TextBlock { FontSize = 11, Foreground = DhBrand.Sub, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(110, 0, 0, 4) };
         vwState.Text = "지금: " + VWorldKey.Source;
-        misc.Children.Add(vwState);
+        root.Children.Add(vwState);
         how.Click += (_, __) =>
         {
             try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("https://www.vworld.kr/mypo/mypo_apiKey_i001.do") { UseShellExecute = true }); }
@@ -202,49 +197,15 @@ public sealed class SheetDialog : Window
             finally { test.IsEnabled = true; }
         };
 
-        // ★[v117.18.6 · JACK 1116 «회사 API로 해결»] 임상도 — 수목 넣기만(회사 API · 못 쓰면 도면 폴더 사본)
-        _fs = ForestSettings.Load();
-        misc.Children.Add(SubHead("임상도"));
-        _forestOn = new CheckBox
-        {
-            Content = "수목 넣기",
-            IsChecked = _fs.On,
-            Margin = new Thickness(0, 0, 0, 4),
-            ToolTip = "[3D 보기] 수목 · 벌개제근 — 회사 API(회사망) · 못 쓰면 도면 폴더 사본",
-        };
-        misc.Children.Add(_forestOn);
-        _forestState = new TextBlock { FontSize = 11, Foreground = DhBrand.Sub, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 2) };
-        misc.Children.Add(_forestState);
-
         // ★★★[JACK 0908 "너무 옛스럽고 딱딱한데" · "회사로고 활용" · "도킹창도 일관성있는 색으로"]
         //   창의 껍데기(청록 띠·로고 머리띠·바닥 단추)와 컨트롤 모양은 <see cref="DhBrand"/>가 맡는다.
         //   [JACK 0728과 같은 규칙] Enter로 저장되지 않게 — 저장은 클릭으로만(IsDefault를 안 준다).
         var (ok, cancel) = DhBrand.FooterButtons(okText);
         ok.Click += OnOk;
         root.Margin = new Thickness(18, 14, 18, 14);
-        DhBrand.Dress(this, "공통설정", "노리선 · 배경지도 화질 · 등고선 간격 · 좌표계 · VWorld 키 · 임상도", root, ok, cancel);
+        DhBrand.Dress(this, "공통설정", "노리선 · 표시 · 임상도 · 배경지도 화질 · 좌표계 · 등고선 간격 · VWorld 키", root, ok, cancel);
     }
 
-
-    /// <summary>«기타» 칸 안의 중간 제목 — 도킹창 중간 제목(GradingPanel.SubHead)과 같은 글씨.</summary>
-    private static TextBlock SubHead(string text, bool first = false) => new()
-    {
-        Text = text,
-        FontSize = 12,
-        FontWeight = FontWeights.Bold,
-        Foreground = DhBrand.Ink,
-        Margin = new Thickness(0, first ? 0 : 12, 0, 4),
-    };
-
-    /// <summary>중간 제목 밑 짧은 설명(회색 11).</summary>
-    private static TextBlock Note(string text) => new()
-    {
-        Text = text,
-        FontSize = 11,
-        Foreground = DhBrand.Sub,
-        TextWrapping = TextWrapping.Wrap,
-        Margin = new Thickness(0, 0, 0, 6),
-    };
 
     /// <summary>라벨 + 콤보 한 줄 — <see cref="GradingDialog.AddRow"/>와 같은 자리맞춤(라벨 110).</summary>
     private static ComboBox AddCombo(Panel parent, string label, string[] items, int index, string hint)

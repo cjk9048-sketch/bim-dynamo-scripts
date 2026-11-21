@@ -26,7 +26,7 @@ public sealed class GradingSettingsCommand
             doc.Editor.WriteMessage(
                 // ★[JACK 0910] [값 저장]은 없어졌다 — 친 값은 바로 반영되고, 만들기는 그 칸 안에 있다.
                 "\n[정지 설정] 오른쪽 <계획부지 정지> 창에서 값을 고치면 바로 반영됩니다 — [계획부지생성하기]로 만드세요."
-              + "\n  · 좌표계·표시 옵션은 리본 [공통설정](DHSHEETSET) «기타» 칸에 있습니다. 옹벽 형태는 이 창의 «옹벽» 묶음에 있습니다.");
+              + "\n  · 좌표계·표시 옵션은 리본 [공통설정](DHSHEETSET)에 있습니다. 옹벽 형태는 이 창의 «옹벽» 묶음에 있습니다.");
         }
         catch { }
     }
@@ -115,7 +115,7 @@ public sealed class MiscSettingsCommand
                 if (!ok)
                     AcadApp.ShowAlertDialog(
                         "도면 좌표계를 자동으로 바꾸지 못했습니다.\n" + note +
-                        "\n\n배경지도는 [공통설정] «기타»에서 고른 좌표계로 만들어집니다.\n" +
+                        "\n\n배경지도는 [공통설정]에서 고른 좌표계로 만들어집니다.\n" +
                         "도면 좌표계까지 맞추려면 MAPCSASSIGN 명령으로 직접 지정하세요.");
                 try { DiagLog.Append($"\n■ DHMISCSET 좌표계 변경 — EPSG {prevEpsg} → {GradingSettings.ExportEpsg} · {note}\n"); } catch { }
 

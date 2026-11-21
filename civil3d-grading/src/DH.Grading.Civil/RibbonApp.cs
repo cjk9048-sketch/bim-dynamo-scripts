@@ -488,8 +488,8 @@ public sealed class RibbonApp : IExtensionApplication
             var btnSheetSet = MakeButton(
                 "공통\n설정", "DHSHEETSET ", "노리선 · 배경지도 화질 · 등고선 간격 · 좌표계 · VWorld 키 · 임상도", "도면설정");   // ★[JACK 1119] 이름 = 공통설정 · 도곽은 [도면생성] 창(명령 · 아이콘 키 그대로)
             btnSheetSet.ToolTip = MakeTip("공통설정 (DHSHEETSET)",
-                "**노리선 · 배경지도 화질 · 등고선 간격** — 흙 모양(정지옵션)과 별개\n" +
-                "**기타** — 좌표계(내보내기 원점) · 결과지표면만 표시 · 지적 속성 · VWorld 키 · 임상도\n\n" +
+                "**노리선 · 결과지표면만 표시 · 지적 속성 · 임상도 수목**\n" +
+                "**배경지도 화질 · 좌표계 · 등고선 간격 · VWorld 키** — 흙 모양(정지옵션)과 별개\n\n" +
                 "축척 · 배치 · 측점 간격 · 층따기 → 종횡단도 창(부지 · 진입도로)\n" +
                 "도곽 → [도면생성] 창\n" +
                 "정지면 다시 만들 필요 없음", null);
@@ -1038,11 +1038,11 @@ public sealed class RibbonApp : IExtensionApplication
             pMisc.Items.Add(btnReset);           // ★[v111.6] 위성지도는 [공통]으로 옮김
             pMisc.Items.Add(Spacer());
             // ★[v117.19 · 사내 배포 1123] [정보] — 지금 판 · 지문 · 이번 판 바뀐 점 · 업데이트 확인(새 판이 있으면 주황 점 · «새 판»)
-            _btnInfo = MakeButton("정보", "DHABOUT ", "지금 설치된 판 · 바뀐 점 · 새 판 확인", "default");
+            _btnInfo = MakeButton("정보", "DHABOUT ", "Version · What's New · Check for Updates", "default");
             _btnInfo.ToolTip = MakeTip("정보 (DHABOUT)",
-                "지금 설치된 **판 · 날짜 · 빌드 지문** · 이번 판 바뀐 점\n" +
-                "**업데이트 확인** — 새 판이 있으면 여기서 설치 파일을 엽니다(Civil 3D를 닫고 설치).\n" +
-                "Civil 3D를 켜면 하루 한 번 저절로 확인합니다.", null);
+                "**Version** · **What's New**(이번 버전 수정 내용)\n" +
+                "**Check for Updates** — 새 버전이 있으면 여기서 설치 파일을 엽니다(Civil 3D를 닫고 설치).\n" +
+                "배포 위치가 정해지면 Civil 3D를 켤 때 하루 한 번 저절로 확인합니다.", null);
             MarkUpdate(UpdateUi.RibbonNewer);
             pMisc.Items.Add(_btnInfo);
             pMisc.Items.Add(Spacer());

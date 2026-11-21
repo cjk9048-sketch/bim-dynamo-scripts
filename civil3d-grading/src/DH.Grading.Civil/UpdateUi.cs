@@ -375,7 +375,8 @@ internal sealed class UpdateToast : Window
     }
 }
 
-/// <summary>[정보] 창 — 지금 판 · 날짜 · 지문 · 설치 위치 · 이번 판 바뀐 점 · 업데이트(마지막 확인 · 새 판 강조 · 설치 · 이 판 안 알림).</summary>
+/// <summary>[정보] 창 — ★[v117.19.1 · JACK 1121 밤] 프로그램 «About» 꼴로 줄임: Version · What's New(이번 판 바뀐 점) · Update(확인 · 새 판 설치).
+/// 빌드 지문 · 설치 위치 · «위치 바꾸기(고급)»는 뺐다(사용자 위치 파일 %APPDATA%\DH.Grading\update.json 은 UpdateCheck가 그대로 읽는다).</summary>
 internal sealed class UpdateInfoWindow : Window
 {
     readonly StackPanel _upd = new();
@@ -384,33 +385,34 @@ internal sealed class UpdateInfoWindow : Window
 
     internal UpdateInfoWindow(string version, string stamp, string installDir, List<string> notes)
     {
-        Title = "DH 정지 — 정보";
-        Width = 520; SizeToContent = SizeToContent.Height; ResizeMode = ResizeMode.NoResize;
+        Title = "DH Grading — About";
+        Width = 480; SizeToContent = SizeToContent.Height; ResizeMode = ResizeMode.NoResize;
         WindowStartupLocation = WindowStartupLocation.CenterOwner; ShowInTaskbar = false;
 
         var body = new StackPanel();
-        body.Children.Add(H("지금 설치된 판"));
         var v = UpdateCheck.ParseVersion(version);
         string date = UpdateCheck.DateOf(version);
-        body.Children.Add(Row("판", v != null ? "v" + UpdateCheck.Show(v) : version, bold: true));
-        if (date.Length > 0) body.Children.Add(Row("날짜", date));
-        body.Children.Add(Row("빌드 지문", stamp));
-        if (installDir.Length > 0) body.Children.Add(Row("설치 위치", installDir));
+        body.Children.Add(new TextBlock { Text = "DH Grading for Civil 3D", FontSize = 16, FontWeight = FontWeights.Bold, Foreground = DhBrand.Ink, Margin = new Thickness(0, 4, 0, 2) });
+        body.Children.Add(new TextBlock
+        {
+            Text = "Version " + (v != null ? UpdateCheck.Show(v) : version) + (date.Length > 0 ? "   ·   " + date : ""),
+            FontSize = 13, Foreground = DhBrand.Brand, FontWeight = FontWeights.SemiBold,
+            FontFamily = new FontFamily("Consolas, Segoe UI"),
+        });
 
-        body.Children.Add(H("이번 판 바뀐 점"));
-        if (notes.Count == 0) body.Children.Add(P("(이 판의 릴리스 노트가 없습니다)", DhBrand.Sub));
+        body.Children.Add(H("What's New"));
+        if (notes.Count == 0) body.Children.Add(P("(no release notes for this version)", DhBrand.Sub));
         foreach (var n in notes) body.Children.Add(P("· " + n, DhBrand.Ink));
 
-        body.Children.Add(H("업데이트"));
+        body.Children.Add(H("Update"));
         body.Children.Add(_upd);
         body.Children.Add(_status);
-        body.Children.Add(Advanced());
 
-        _check = new Button { Content = "업데이트 확인", MinWidth = 110, Height = 32, Margin = new Thickness(0, 0, 8, 0) };
+        _check = new Button { Content = "Check for Updates", MinWidth = 130, Height = 32, Margin = new Thickness(0, 0, 8, 0) };
         _check.Click += (_, _) => { _status.Text = ""; UpdateUi.RunCheck(auto: false); };
-        var close = new Button { Content = "닫기", MinWidth = 84, Height = 32, IsCancel = true };
+        var close = new Button { Content = "Close", MinWidth = 84, Height = 32, IsCancel = true };
         close.Click += (_, _) => Close();
-        DhBrand.Dress(this, "DH 정지 — 정보", version, body, _check, close);
+        DhBrand.Dress(this, "DH Grading — About", version, body, _check, close);
 
         System.Action h = Refresh;
         UpdateUi.Changed += h;
@@ -422,17 +424,16 @@ internal sealed class UpdateInfoWindow : Window
     {
         var st = UpdateCheck.LoadState();
         _upd.Children.Clear();
-        _check.IsEnabled = !UpdateUi.Busy;
-        _check.Content = UpdateUi.Busy ? "확인 중…" : "업데이트 확인";
-
-        if (AdvancedBox != null && !AdvancedBox.IsKeyboardFocusWithin) AdvancedBox.Text = string.Join("\r\n", st.Sources);
         var src = UpdateUi.Sources(st);
-        int nUser = st.Sources.Count;
-        string where = src.Count == 0 ? "업데이트 위치 미설정 — 새 판 알림 꺼짐"
-            : $"{src.Count}곳(차례로 · 모두 3초 안)" + (nUser > 0 ? $" · {(st.SourcesOrigin == "moved" ? "옮긴 위치" : "직접 지정")} {nUser}곳 먼저" : "");
-        _upd.Children.Add(Row("확인 위치", where, warn: src.Count == 0));
         _check.IsEnabled = !UpdateUi.Busy && src.Count > 0;
-        _upd.Children.Add(Row("마지막 확인", st.LastCheck == System.DateTime.MinValue ? "아직 안 함" : $"{st.LastCheck:yyyy-MM-dd HH:mm} · {Say(st.LastStatus, st.LastMessage)}"));
+        _check.Content = UpdateUi.Busy ? "Checking…" : "Check for Updates";
+        if (src.Count == 0)
+        {
+            // 배포 위치가 아직 없음(회사와 정하는 중) — 확인 단추는 꺼 둔다
+            _upd.Children.Add(P("Update server not configured — 배포 위치가 정해지면 새 버전 확인이 켜집니다.", DhBrand.Sub));
+            return;
+        }
+        _upd.Children.Add(Row("Last check", st.LastCheck == System.DateTime.MinValue ? "—" : $"{st.LastCheck:yyyy-MM-dd HH:mm}  ·  {Say(st.LastStatus, st.LastMessage)}"));
 
         var lt = st.Latest;
         bool newer = UpdateCheck.CachedNewer(st, UpdateUi.Current);
@@ -441,25 +442,23 @@ internal sealed class UpdateInfoWindow : Window
             var card = new StackPanel();
             card.Children.Add(new TextBlock
             {
-                Text = $"새 판 v{lt.Version}{(lt.Date.Length > 0 ? " · " + lt.Date : "")}{(lt.Mandatory ? "  ·  꼭 설치할 판" : "")}",
+                Text = $"New version {lt.Version}{(lt.Date.Length > 0 ? "  ·  " + lt.Date : "")}{(lt.Mandatory ? "  ·  Required" : "")}",
                 FontSize = 14, FontWeight = FontWeights.Bold, Foreground = lt.Mandatory ? DhBrand.Warn : DhBrand.Brand,
             });
             foreach (var n in lt.Notes) card.Children.Add(P("· " + n, DhBrand.Ink));
-            if (!lt.Mandatory && UpdateCheck.SameVersion(st.SkipVersion, lt.Version))
-                card.Children.Add(P("(이 판은 알리지 않기로 했습니다 — 여기서는 그대로 설치할 수 있습니다)", DhBrand.Sub));
             var bar = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 8, 0, 0) };
-            var inst = new Button { Content = UpdateCheck.IsUrl(lt.Installer) ? "설치 파일 받기" : "설치 파일 열기", MinWidth = 120, Height = 30, Margin = new Thickness(0, 0, 8, 0) };
+            var inst = new Button { Content = UpdateCheck.IsUrl(lt.Installer) ? "Download" : "Open Installer", MinWidth = 120, Height = 30, Margin = new Thickness(0, 0, 8, 0) };
             try { if (DhBrand.Skin != null) inst.Style = (Style)DhBrand.Skin["DhPrimary"]; } catch { }
             inst.Click += (_, _) => UpdateUi.Install(lt, this, (msg, bad) => { _status.Text = msg; _status.Foreground = bad ? DhBrand.Warn : DhBrand.Ok; });
             bar.Children.Add(inst);
             if (!lt.Mandatory && !UpdateCheck.SameVersion(st.SkipVersion, lt.Version))
             {
-                var skip = new Button { Content = "이 판 알리지 않기", MinWidth = 110, Height = 30 };
+                var skip = new Button { Content = "Skip This Version", MinWidth = 120, Height = 30 };
                 skip.Click += (_, _) => UpdateUi.Skip(lt.Version);
                 bar.Children.Add(skip);
             }
             card.Children.Add(bar);
-            card.Children.Add(P("설치는 Civil 3D를 모두 닫은 뒤에 합니다(켜져 있으면 파일이 잠겨 설치가 멈춥니다).", DhBrand.Sub));
+            card.Children.Add(P("설치는 Civil 3D를 모두 닫은 뒤에 합니다.", DhBrand.Sub));
             _upd.Children.Add(new Border
             {
                 Background = new SolidColorBrush(Color.FromRgb(0xFF, 0xF6, 0xE8)), BorderBrush = new SolidColorBrush(Color.FromRgb(0xE8, 0xB4, 0x8E)),
@@ -468,59 +467,14 @@ internal sealed class UpdateInfoWindow : Window
         }
     }
 
-    /// <summary>«위치 바꾸기(고급)» — 작게 접어 둔다. 한 줄에 하나(\\서버\공유\latest.json · https://…). 비우고 저장 = 설치 기본값만.</summary>
-    UIElement Advanced()
-    {
-        var box = new TextBox { AcceptsReturn = true, TextWrapping = TextWrapping.NoWrap, MinHeight = 54, FontSize = 11, VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-            Text = string.Join("\r\n", UpdateCheck.LoadState().Sources) };
-        var msg = new TextBlock { FontSize = 11, Foreground = DhBrand.Sub, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 3, 0, 0) };
-        var inst = UpdateUi.InstalledSources();
-        var panel = new StackPanel { Visibility = Visibility.Collapsed, Margin = new Thickness(0, 4, 0, 0) };
-        panel.Children.Add(new TextBlock { FontSize = 11, Foreground = DhBrand.Sub, TextWrapping = TextWrapping.Wrap,
-            Text = "먼저 볼 위치(한 줄에 하나 · \\\\서버\\공유\\latest.json 또는 https://…). 비우고 저장하면 설치 기본값만 봅니다." });
-        panel.Children.Add(box);
-        panel.Children.Add(new TextBlock { FontSize = 11, Foreground = DhBrand.Sub, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 3, 0, 0),
-            Text = inst.Count == 0 ? "설치 기본값: 없음" : "설치 기본값: " + string.Join(" · ", inst) });
-        var bar = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 4, 0, 0) };
-        var save = new Button { Content = "저장", MinWidth = 64, Height = 26, Margin = new Thickness(0, 0, 6, 0) };
-        save.Click += (_, _) =>
-        {
-            string? bad = UpdateUi.SaveUserSources(box.Text.Split('\n'));
-            msg.Text = bad == null ? "저장했습니다 — [업데이트 확인]으로 바로 볼 수 있습니다." : $"이 줄은 위치가 아닙니다(절대 경로 · UNC · http(s)만): {bad}";
-            msg.Foreground = bad == null ? DhBrand.Ok : DhBrand.Warn;
-        };
-        var clear = new Button { Content = "설치 기본값으로", MinWidth = 64, Height = 26 };
-        clear.Click += (_, _) => { box.Text = ""; UpdateUi.SaveUserSources(System.Array.Empty<string>()); msg.Text = "직접 지정한 위치를 지웠습니다."; msg.Foreground = DhBrand.Ok; };
-        bar.Children.Add(save); bar.Children.Add(clear);
-        panel.Children.Add(bar);
-        panel.Children.Add(msg);
-        var toggle = new Button { Content = "▸ 위치 바꾸기(고급)", FontSize = 11, Height = 22, MinHeight = 0, Padding = new Thickness(4, 0, 4, 0), Margin = new Thickness(0, 8, 0, 0),
-            HorizontalAlignment = HorizontalAlignment.Left, Background = Brushes.Transparent, BorderThickness = new Thickness(0), Foreground = DhBrand.Sub };
-        toggle.Click += (_, _) =>
-        {
-            bool open = panel.Visibility != Visibility.Visible;
-            panel.Visibility = open ? Visibility.Visible : Visibility.Collapsed;
-            toggle.Content = (open ? "▾" : "▸") + " 위치 바꾸기(고급)";
-        };
-        AdvancedPanel = panel;
-        AdvancedBox = box;
-        var sp = new StackPanel();
-        sp.Children.Add(toggle); sp.Children.Add(panel);
-        return sp;
-    }
-
-    /// <summary>시험 손잡이(그림에서 펼쳐 보이려고).</summary>
-    internal StackPanel? AdvancedPanel;
-    internal TextBox? AdvancedBox;
-
     static string Say(string status, string msg) => status switch
     {
         nameof(UpdateCheck.Status.Newer) => msg,
-        nameof(UpdateCheck.Status.Same) => "최신 판입니다",
-        nameof(UpdateCheck.Status.Older) => "최신 판입니다(올라온 판이 더 낮음)",
-        nameof(UpdateCheck.Status.NoSource) => "업데이트 위치 미설정",
-        nameof(UpdateCheck.Status.Unreachable) => "확인 못 함 — " + msg,
-        nameof(UpdateCheck.Status.BadManifest) => "latest.json 을 못 읽음 — " + msg,
+        nameof(UpdateCheck.Status.Same) => "Up to date",
+        nameof(UpdateCheck.Status.Older) => "Up to date",
+        nameof(UpdateCheck.Status.NoSource) => "Update server not configured",
+        nameof(UpdateCheck.Status.Unreachable) => "Server unreachable — " + msg,
+        nameof(UpdateCheck.Status.BadManifest) => "Cannot read latest.json — " + msg,
         _ => msg,
     };
 

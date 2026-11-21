@@ -132,8 +132,8 @@ internal static class VWorldKey
         || body.Contains("locator=\"key\"", System.StringComparison.OrdinalIgnoreCase)
         || body.Contains("인증키", System.StringComparison.Ordinal);
 
-    internal const string KeyHelp = "VWorld 키가 맞지 않습니다(등록 안 됐거나 만료) — [공통설정] «기타»에서 키를 확인하세요";
-    internal const string NoKeyHelp = "VWorld 키가 없습니다 — [공통설정] «기타»에서 내 키를 넣으세요";
+    internal const string KeyHelp = "VWorld 키가 맞지 않습니다(등록 안 됐거나 만료) — [공통설정]에서 키를 확인하세요";
+    internal const string NoKeyHelp = "VWorld 키가 없습니다 — [공통설정]에서 내 키를 넣으세요";
 
     // ── [키 시험] — 공개 장소(서울시청 둘레) 고정 좌표로 네 가지를 한 번씩(조사 1028에서 성공한 꼴 그대로) ──
     // 15초 — VWorld 지적 그림(WMS)은 때때로 10초를 넘긴다(1028 화면 없는 시험: 같은 키로 한 번은 ✓ · 한 번은 10초 넘김)
