@@ -348,7 +348,7 @@ internal static class SurveyFix
 
     /// <summary>★★[JACK 1122 «원지반 도로 다듬기»] 다듬은 도로 테두리(3D)로 그 범위만 바꿔 원지반을 새로 짓는다 — 측량도 보정과 같은 한 벌
     /// (범위 안 옛 등고선 · 표고점 뺌 · 옛 원지반 숨김 · 옛 테두리로 자름 · 이벤트 뷰어 창 없음). <paramref name="note"/> = 결과 앞머리(다듬기 셈 요약).</summary>
-    internal static Result MergeRoad(Document doc, ObjectId groundId, NetTopologySuite.Geometries.Geometry region, IReadOnlyList<List<Point3>> lines, string note)
+    internal static Result MergeRoad(Document doc, ObjectId groundId, NetTopologySuite.Geometries.Geometry region, IReadOnlyList<List<Point3>> lines, string note, IReadOnlyList<Point3>? spots = null)
     {
         var r = new Result { BaseId = groundId };
         LastForTest = r;
@@ -362,11 +362,47 @@ internal static class SurveyFix
             if (l.Count < 2) continue;
             use.Add(new SurveyItem { Id = id++, Layer = "도로", Kind = SurveyKind.Break, Pts = l.ToList(), Z0 = l.Min(q => q.Z), Z1 = l.Max(q => q.Z), Src = "도로 테두리" });
         }
+        if (spots != null)
+            foreach (var q in spots) use.Add(new SurveyItem { Id = id++, Layer = "도로", Kind = SurveyKind.Spot, Pts = new List<Point3> { q }, Z0 = q.Z, Z1 = q.Z, Src = "도로 평탄화" });
         if (use.Count == 0) { r.Message = "다듬은 도로 선이 없습니다."; return r; }
-        return Build(doc, use, r, bm, region, 0, 0, "", surveyOnly: false, roadNote: note);
+        var keepAll = lines.ToList();
+        if (spots != null && spots.Count > 0) keepAll.Add(spots.ToList());
+        return Build(doc, use, r, bm, region, 0, 0, "", surveyOnly: false, roadNote: note, roadLines: keepAll);
     }
 
-    static Result Build(Document doc, IReadOnlyList<SurveyItem> use, Result r, BaseMat bm, NetTopologySuite.Geometries.Geometry? region, double margin, double gap, string partWarn, bool surveyOnly, string? roadNote = null)
+    /// <summary>★[JACK 1122 «다듬기 돌려도 울퉁불퉁»] Civil «평탄부 최소화»는 등고선 단계에서(도로 선 넣기 전) 빈 도로 자리의 평평한 삼각형에 등고선 사이 높이 점을 끼워 넣는다
+    /// (1122 실측: 도로 한가운데 81.25 = 80 · 82.5 가운데) — 도로 범위 안에서 다듬은 선 위(0.6 m 안)가 아닌 점은 지운다(지표면 편집 «점 삭제»).</summary>
+    static int DropStrayInRoad(Database db, ObjectId sid, NetTopologySuite.Geometries.Geometry region, IReadOnlyList<List<Point3>> lines)
+    {
+        const double C = 0.5;
+        var keep = new HashSet<(long, long)>();
+        foreach (var l in lines) foreach (var q in l) keep.Add(((long)Math.Floor(q.X / C), (long)Math.Floor(q.Y / C)));
+        bool Near(double x, double y)
+        {
+            long cx = (long)Math.Floor(x / C), cy = (long)Math.Floor(y / C);
+            for (long dx = -1; dx <= 1; dx++) for (long dy = -1; dy <= 1; dy++) if (keep.Contains((cx + dx, cy + dy))) return true;
+            return false;
+        }
+        var inner = region.Buffer(-0.5);
+        if (inner.IsEmpty) return 0;
+        var prep = NetTopologySuite.Geometries.Prepared.PreparedGeometryFactory.Prepare(inner);
+        var env = inner.EnvelopeInternal;
+        var gf = inner.Factory;
+        using var tr = db.TransactionManager.StartTransaction();
+        if (tr.GetObject(sid, OpenMode.ForWrite) is not CivilDb.TinSurface tin) { tr.Commit(); return 0; }
+        var del = new List<CivilDb.TinSurfaceVertex>();
+        foreach (CivilDb.TinSurfaceVertex v in tin.Vertices)
+        {
+            var p = v.Location;
+            if (!env.Contains(p.X, p.Y) || Near(p.X, p.Y)) continue;
+            if (prep.Contains(gf.CreatePoint(new NetTopologySuite.Geometries.Coordinate(p.X, p.Y)))) del.Add(v);
+        }
+        if (del.Count > 0) tin.DeleteVertices(del);
+        tr.Commit();
+        return del.Count;
+    }
+
+    static Result Build(Document doc, IReadOnlyList<SurveyItem> use, Result r, BaseMat bm, NetTopologySuite.Geometries.Geometry? region, double margin, double gap, string partWarn, bool surveyOnly, string? roadNote = null, IReadOnlyList<List<Point3>>? roadLines = null)
     {
         var db = doc.Database;
         var ed = doc.Editor;
@@ -466,6 +502,13 @@ internal static class SurveyFix
                 try { clip = ClipToOld(db, groundId, r.NewId); } finally { EventViewerMute.End(evPrev); }
             }
             if (clip.Length > 0) done += "\n  " + clip;
+            if (roadLines != null && region != null)
+            {
+                var evPrev2 = EventViewerMute.Begin();
+                try { int nd = DropStrayInRoad(db, r.NewId, region, roadLines); if (nd > 0) done += $"\n  도로 안 끼어든 점 {nd}개 지움(평탄부 최소화 점)"; }
+                catch (System.Exception dex) { done += "\n  ⚠도로 안 점 정리 못 함 — " + dex.Message; }
+                finally { EventViewerMute.End(evPrev2); }
+            }
             // ── 옛 원지반은 숨김(지우지 않음 — 그것을 쓰는 결과가 있을 수 있음 · [원지반 삭제]로 지울 수 있음) ──
             if (r.DupSpots > 0) done += $"\n  같은 자리 표고점 {r.DupSpots}개는 하나만 씀";
             if (roadNote == null && r.Cross is { ZDiff: > 0 } cx)

@@ -1059,7 +1059,14 @@ public sealed class InfraworksCommand
                     trG.Commit();
                 }
                 catch (System.Exception gex) { log.AppendLine("  원지반 샘플러 못 만듦 — " + gex.Message); }
-            int nG = GroundSet.List(db).Count;
+            int nG = 0;   // ★[JACK 1122] 숨긴 원지반(측량도 보정 · 도로 다듬기 전 것)은 안 셈
+            try
+            {
+                using var trV = db.TransactionManager.StartTransaction();
+                foreach (var g in GroundSet.List(db)) if (trV.GetObject(g.Id, OpenMode.ForRead) is Autodesk.Civil.DatabaseServices.Surface sv && sv.Visible) nG++;
+                trV.Commit();
+            }
+            catch { }
             if (nG >= 2) web.Warn.Add($"원지반이 {nG}장 — 3D에는 «{gname}» 하나만 넣었습니다");
             string? path = Web3DBuilder.Build(db, web, log, SelfCheckLog.Headless && SkipSatelliteForTest);
             int nw = web.Warn.Distinct().Count();

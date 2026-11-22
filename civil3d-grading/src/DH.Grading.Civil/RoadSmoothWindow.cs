@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
@@ -24,30 +24,35 @@ internal sealed class RoadSmoothWindow : Window
     readonly TextBlock _info;
     readonly Button _ok;
     readonly RoadCanvas _cv;
+    RoadSmooth.Result? _initial;
+    readonly GroundDemoView _demo = new("레이어 · 값에 마우스 → 설명");
+    static readonly string[] RoleScene = { "rNone", "rEdge", "rCenter", "rBarrier" };
 
     internal RoadSmooth.Result? Result { get; private set; }
     internal RoadSmooth.Options Options { get; private set; }
     internal Dictionary<string, Role> Roles => _roleBox.ToDictionary(kv => kv.Key, kv => (Role)Math.Max(0, kv.Value.SelectedIndex), StringComparer.OrdinalIgnoreCase);
 
     internal RoadSmoothWindow(string fileName, string groundName, Dictionary<string, List<List<(double X, double Y)>>> lines, Dictionary<string, Role> roles,
-                              RoadSmooth.Options opt, Func<Dictionary<string, Role>, RoadSmooth.Options, RoadSmooth.Result> compute)
+                              RoadSmooth.Options opt, Func<Dictionary<string, Role>, RoadSmooth.Options, RoadSmooth.Result> compute, RoadSmooth.Result? initial = null)
     {
+        _initial = initial;
         _lines = lines; _compute = compute;
         Options = opt;
         Title = "DH 도로 다듬기";
-        Width = 1180; Height = 780; MinWidth = 820; MinHeight = 560;
+        Width = 1200; Height = 900; MinWidth = 860; MinHeight = 640;
         WindowStartupLocation = WindowStartupLocation.CenterScreen; ShowInTaskbar = false; ResizeMode = ResizeMode.CanResizeWithGrip;
 
         var body = new Grid { Margin = new Thickness(14, 12, 14, 10) };
-        body.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(340) });
+        body.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(370) });
         body.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(12) });
         body.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
 
-        var left = new DockPanel { LastChildFill = true };
-        var head = new TextBlock { Text = "레이어 역할", FontWeight = FontWeights.Bold, FontSize = 13, Foreground = DhBrand.Brand, Margin = new Thickness(0, 0, 0, 6) };
-        DockPanel.SetDock(head, Dock.Top); left.Children.Add(head);
+        // ★[JACK 1122 «레이어 역할은 아래로 · 세로 줄이고 · 위에 설명 애니메이션 · 레이어 · 값에 마우스/입력 때 도움말»]
+        var left = new StackPanel();
+        left.Children.Add(_demo);
+        var head = new TextBlock { Text = "레이어 역할", FontWeight = FontWeights.Bold, FontSize = 13, Foreground = DhBrand.Brand, Margin = new Thickness(0, 10, 0, 6) };
+        left.Children.Add(head);
         var opts = new StackPanel { Margin = new Thickness(0, 10, 0, 0) };
-        DockPanel.SetDock(opts, Dock.Bottom); left.Children.Add(opts);
 
         Grid RowGrid() { var g = new Grid(); g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) }); g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(52) }); g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(112) }); return g; }
         void Cell(Grid g, int c, UIElement e) { Grid.SetColumn(e, c); g.Children.Add(e); }
@@ -63,7 +68,8 @@ internal sealed class RoadSmoothWindow : Window
             var cb = new ComboBox { Height = 24, Margin = new Thickness(8, 0, 0, 0), ItemsSource = Commands.RoadSmoothCommand.RoleNames, SelectedIndex = (int)(roles.TryGetValue(kv.Key, out var r) ? r : Role.None) };
             string ly = kv.Key;
             cb.SelectionChanged += (_, __) => { _cv!.Roles = Roles; _cv.InvalidateVisual(); Stale(); };
-            row.MouseEnter += (_, __) => { _cv!.Hover = ly; _cv.InvalidateVisual(); };
+            row.MouseEnter += (_, __) => { _cv!.Hover = ly; _cv.InvalidateVisual(); _demo.Play(RoleScene[Math.Clamp(cb.SelectedIndex, 0, 3)]); };
+            cb.DropDownClosed += (_, __) => _demo.Play(RoleScene[Math.Clamp(cb.SelectedIndex, 0, 3)]);
             row.MouseLeave += (_, __) => { if (_cv!.Hover == ly) { _cv.Hover = null; _cv.InvalidateVisual(); } };
             row.Background = Brushes.Transparent;
             Cell(row, 2, cb);
@@ -72,21 +78,29 @@ internal sealed class RoadSmoothWindow : Window
         }
         var table = new DockPanel();
         DockPanel.SetDock(hdr, Dock.Top); table.Children.Add(hdr);
-        table.Children.Add(new ScrollViewer { Content = list, VerticalScrollBarVisibility = ScrollBarVisibility.Visible });
-        left.Children.Add(new Border { BorderBrush = DhBrand.Line, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(4), Background = DhBrand.Card, Padding = new Thickness(6, 6, 2, 4), Child = table });
+        table.Children.Add(new ScrollViewer { Content = list, VerticalScrollBarVisibility = ScrollBarVisibility.Auto });
+        left.Children.Add(new Border { BorderBrush = DhBrand.Line, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(4), Background = DhBrand.Card, Padding = new Thickness(6, 6, 2, 4), Child = table, Height = 128 });
+        left.Children.Add(opts);
 
         opts.Children.Add(Row("원지반", new TextBlock { Text = groundName, FontWeight = FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center }, "다듬을 원지반(가장 나중 것) — 새 원지반을 짓고 이것은 숨김"));
         _len = Num(opt.SmoothLen); _jump = Num(opt.JumpMax); _width = Num(opt.MaxWidth);
-        opts.Children.Add(Row("다듬기 길이 (m)", _len, "도로 테두리 높이를 이 길이만큼 앞뒤로 평균 — 클수록 매끈(경사는 그대로)"));
-        opts.Children.Add(Row("둑 판정 (m)", _jump, "다듬은 높이와 이보다 크게 다르면 둑 · 굴다리 · 입체 구간으로 보고 그 둘레는 보정 안 함"));
-        opts.Children.Add(Row("작은 도로 폭 (m)", _width, "중심선 없는 길 — 이 폭보다 좁고 긴 면만 도로로 봄"));
+        foreach (var (lb, tb, sc) in new[] { ("다듬기 길이 (m)", _len, "rLen"), ("둑 판정 (m)", _jump, "rJump"), ("작은 도로 폭 (m)", _width, "rWidth") })
+        {
+            var rw = Row(lb, tb, "");
+            rw.ToolTip = null;
+            rw.MouseEnter += (_, __) => _demo.Play(sc);
+            tb.GotKeyboardFocus += (_, __) => _demo.Play(sc);
+            tb.PreviewMouseDown += (_, __) => _demo.Play(sc);
+            opts.Children.Add(rw);
+        }
         foreach (var t in new[] { _len, _jump, _width }) t.TextChanged += (_, __) => Stale();
         var prev = new Button { Content = "미리 보기", Height = 30, Padding = new Thickness(14, 0, 14, 0), Margin = new Thickness(0, 6, 0, 0), HorizontalAlignment = HorizontalAlignment.Left };
         prev.Click += (_, __) => Recalc();
         opts.Children.Add(prev);
         _info = new TextBlock { TextWrapping = TextWrapping.Wrap, FontSize = 11.5, Margin = new Thickness(0, 6, 0, 0) };
         opts.Children.Add(_info);
-        Grid.SetColumn(left, 0); body.Children.Add(left);
+        var leftScroll = new ScrollViewer { Content = left, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, Padding = new Thickness(0, 0, 4, 0) };
+        Grid.SetColumn(leftScroll, 0); body.Children.Add(leftScroll);
 
         _cv = new RoadCanvas(lines) { Roles = Roles };
         var cvb = new Border { BorderBrush = DhBrand.Line, BorderThickness = new Thickness(1), Background = SurveyCanvas.Bg, ClipToBounds = true, Child = _cv };
@@ -97,7 +111,7 @@ internal sealed class RoadSmoothWindow : Window
         ok.Click += (_, __) => { if (Result == null) Recalc(); if (Result?.Region != null) DialogResult = true; };
         DhBrand.Dress(this, "도로 다듬기", fileName, body, ok, cancel);
         SizeChanged += (_, __) => FitBody(body);
-        Loaded += (_, __) => { FitBody(body); _cv.FitAll(); Recalc(); };
+        Loaded += (_, __) => { FitBody(body); _cv.FitAll(); Recalc(); _demo.Play("gRoad"); };   // 첫 셈은 명령이 로딩 창 아래에서 해 둠(_initial)
     }
 
     void FitBody(Grid body) { try { body.Height = Math.Max(420, ActualHeight - 190); } catch { } }
@@ -111,7 +125,11 @@ internal sealed class RoadSmoothWindow : Window
     {
         Options = new RoadSmooth.Options { SmoothLen = ParseOr(_len.Text, 20), JumpMax = ParseOr(_jump.Text, 2), MaxWidth = ParseOr(_width.Text, 12) };
         Cursor = Cursors.Wait;
-        try { Result = _compute(Roles, Options); }
+        try
+        {
+            if (_initial != null) { Result = _initial; _initial = null; }
+            else using (BusyPopup.Scope("도로 다시 셈하는 중…")) Result = _compute(Roles, Options);
+        }
         catch (Exception ex) { Result = null; _info.Text = "셈 실패 — " + ex.Message; _info.Foreground = DhBrand.Warn; return; }
         finally { Cursor = null; }
         _cv.Res = Result; _cv.InvalidateVisual();
@@ -127,7 +145,8 @@ internal sealed class RoadSmoothWindow : Window
 
     static FrameworkElement Row(string label, FrameworkElement ctl, string tip)
     {
-        var dp = new DockPanel { Margin = new Thickness(0, 0, 0, 5), LastChildFill = false, ToolTip = tip };
+        var dp = new DockPanel { Margin = new Thickness(0, 0, 0, 5), LastChildFill = false, Background = Brushes.Transparent };
+        if (tip.Length > 0) dp.ToolTip = tip;
         var lb = new TextBlock { Text = label, Width = 110, VerticalAlignment = VerticalAlignment.Center, Foreground = DhBrand.Ink };
         DockPanel.SetDock(lb, Dock.Left); dp.Children.Add(lb);
         DockPanel.SetDock(ctl, Dock.Left); dp.Children.Add(ctl);

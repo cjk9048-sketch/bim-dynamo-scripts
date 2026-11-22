@@ -30,6 +30,13 @@ internal sealed class GroundDemoView : Border
         ["gServer"] = (5.4, "서버에서 — 지도에서 모서리 두 점으로 범위 → 그 자리 등고선을 사내 서버에서 받아 원지반(VPN)"),
         ["gContour"] = (4.8, "등고선으로 — 도면에 있는 표고 든 등고선을 걸쳐 고르면(ALL 가능) 그 사본으로 원지반"),
         ["gSurvey"] = (7.0, "측량도 보정 — 백판 위에 측량도를 얹어 측량 범위만 측량 등고선 · 표고점으로 바꿔 원지반을 새로 지음"),
+        ["rEdge"] = (4.4, "도로경계 — 도로 양쪽 테두리 선 · 두 선 사이 면을 다듬음"),
+        ["rCenter"] = (4.6, "중심선 — 도로 가운데 선 · 어느 면이 도로인지 알려 줌(VWorld는 도로폭으로 면을 만듦)"),
+        ["rBarrier"] = (4.2, "교량 · 터널 — 도로와 엇갈려 지나가는 것 · 만나는 곳 둘레는 원래 원지반 그대로"),
+        ["rNone"] = (3.4, "안 씀 — 도로와 상관없는 레이어는 빼기"),
+        ["rLen"] = (6.0, "다듬기 길이 — 도로 테두리 높이를 앞뒤로 이만큼 평균(클수록 매끈)"),
+        ["rJump"] = (5.6, "둑 판정 — 원래 높이가 다듬은 선에서 이보다 튀면 둑 · 입체로 보고 그 구간은 그대로"),
+        ["rWidth"] = (4.4, "작은 도로 폭 — 중심선 없는 면 가운데 이 폭보다 좁고 긴 것만 도로"),
         ["gRoad"] = (8.0, "도로 다듬기 — 도로선(수치지도 · 측량도 · VWorld)으로 도로 면을 찾아 테두리 높이를 길이 방향으로 다듬고 도로 안을 반듯하게 다시 지음"),
     };
 
@@ -99,6 +106,13 @@ internal sealed class GroundDemoView : Border
             case "gContour": SceneContour(t); break;
             case "gSurvey": SceneSurvey(t); break;
             case "gRoad": SceneRoad(t); break;
+            case "rEdge": SceneREdge(t); break;
+            case "rCenter": SceneRCenter(t); break;
+            case "rBarrier": SceneRBarrier(t); break;
+            case "rNone": SceneRNone(t); break;
+            case "rLen": SceneRLen(t); break;
+            case "rJump": SceneRJump(t); break;
+            case "rWidth": SceneRWidth(t); break;
         }
     }
 
@@ -443,5 +457,184 @@ internal sealed class GroundDemoView : Border
         string foot = t < 1.4 ? "수치지도 원지반 — 도로 위 등고선이 들쭉날쭉" : t < 2.8 ? "도로경계로 도로 면을 찾음(중심선 · 도로폭)"
                     : t < 5.2 ? "테두리 높이를 길이 방향으로 다듬음" : t < 6.2 ? "높이가 튀는 곳(둑 · 입체 교차)은 빼고" : "도로 안만 반듯하게 다시 지음 → 상수도 종단이 깔끔";
         Tx(16, H - 22, foot, 11, Ink);
+    }
+    // ── [도로 다듬기] 창 도움말 장면 — 레이어 역할 넷 · 값 셋 (JACK 1122 «레이어 · 값에 마우스 올리거나 입력할 때 도움말 애니메이션») ──
+    static readonly Brush EdgeC = Fz(0xD8, 0x9A, 0x00), CenC = Fz(0x00, 0x9C, 0xB8), BarC = Fz(0xC0, 0x30, 0xC0), ExC = Fz(0xD0, 0x3A, 0x2A), RawC = Fz(0xC0, 0x4A, 0x3A),
+                          FaceB = Fz(0x2E, 0xA0, 0x5A, 0x40), ExFill = Fz(0xD0, 0x3A, 0x2A, 0x30);
+
+    Polyline RoadEdgeLine(double side, double upto, Brush b, double w)
+    {
+        var pl = new Polyline { Stroke = b, StrokeThickness = w, StrokeLineJoin = PenLineJoin.Round };
+        for (double x = -10; x <= -10 + (W + 20) * upto; x += 6) pl.Points.Add(new Point(x, RoadCy(x) + side));
+        return pl;
+    }
+
+    void RoadBackdrop(double op)
+    {
+        var road = PolyG(RoadPoly(RoadHalf));
+        var outside = new CombinedGeometry(GeometryCombineMode.Exclude, RectG(0, 0, W, H), road); outside.Freeze();
+        Contours(BaseIso, BaseC, IdxC, outside, op * 0.55);
+    }
+
+    // 도로경계 — 테두리 두 줄이 그려지고 그 사이가 도로 면
+    void SceneREdge(double t)
+    {
+        RoadBackdrop(1);
+        double e = Seg(t, 0.3, 1.8), face = Seg(t, 2.1, 2.9);
+        if (face > 0) _cv.Children.Add(new Path { Data = PolyG(RoadPoly(RoadHalf)), Fill = FaceB, Opacity = face });
+        if (e > 0) { _cv.Children.Add(RoadEdgeLine(-RoadHalf, e, EdgeC, 2.6)); _cv.Children.Add(RoadEdgeLine(RoadHalf, e, EdgeC, 2.6)); }
+        Chip(14, 12, "도로경계 = 도로 양쪽 테두리 선", Seg(t, 0.2, 0.6));
+        Chip(150, RoadCy(150) + RoadHalf + 14, "두 선 사이 = 도로 면(다듬는 곳)", face);
+        Tx(16, H - 26, t < 2.1 ? "수치지도 A001x · 측량도 도로선 · VWorld 도로 면" : "닫힌 면만 도로 — 끊긴 선은 이어지지 않으면 빠질 수 있음", 11, DhBrand.Sub);
+    }
+
+    // 중심선 — 가운데 선 → 도로폭만큼 양쪽으로 부풀어 도로 면
+    void SceneRCenter(double t)
+    {
+        RoadBackdrop(1);
+        double c = Seg(t, 0.3, 1.6), grow = Seg(t, 1.9, 3.1);
+        if (grow > 0)
+        {
+            double h = RoadHalf * grow;
+            _cv.Children.Add(new Path { Data = PolyG(RoadPoly(h)), Fill = FaceB, Stroke = EdgeC, StrokeThickness = 1.4, Opacity = 0.4 + 0.6 * grow });
+            double ax = 250, ay = RoadCy(250);
+            Ln(ax, ay, ax, ay - h, Ink, 1.2); Ln(ax, ay, ax, ay + h, Ink, 1.2);
+            Tx(ax + 6, ay - h - 4, "도로폭 ÷ 2", 10, Ink, true, grow);
+        }
+        if (c > 0) { var pl = RoadEdgeLine(0, c, CenC, 2.4); pl.StrokeDashArray = new DoubleCollection { 6, 3 }; _cv.Children.Add(pl); }
+        Chip(14, 12, "중심선 = 도로 가운데 선", Seg(t, 0.2, 0.6));
+        Chip(14, 40, "VWorld는 중심선 + 도로폭으로 도로 면을 만듦", Seg(t, 2.0, 2.4));
+        Tx(16, H - 26, t < 1.9 ? "어느 면이 도로인지 알려 주는 선(경계와 같이 쓰면 더 정확)" : "중심선에서 20 m 안만 도로로 — 산이 딸려 오지 않게", 11, DhBrand.Sub);
+    }
+
+    // 교량 · 터널 — 가로지르는 곳 둘레는 원래 땅 그대로
+    void SceneRBarrier(double t)
+    {
+        RoadBackdrop(1);
+        _cv.Children.Add(new Path { Data = PolyG(RoadPoly(RoadHalf)), Fill = FaceB });
+        _cv.Children.Add(RoadEdgeLine(-RoadHalf, 1, EdgeC, 2)); _cv.Children.Add(RoadEdgeLine(RoadHalf, 1, EdgeC, 2));
+        double b = Seg(t, 0.4, 1.4), ring = Seg(t, 1.8, 2.8);
+        double cx = 230, cy = RoadCy(230);
+        if (b > 0) Ln(cx - 70 * b, cy - 130 * b, cx + 70 * b, cy + 130 * b, BarC, 7, false, 0.85);
+        if (ring > 0)
+        {
+            double r = 46 * ring;
+            var e = new Ellipse { Width = 2 * r, Height = 2 * r, Fill = ExFill, Stroke = ExC, StrokeThickness = 2 };
+            Canvas.SetLeft(e, cx - r); Canvas.SetTop(e, cy - r); _cv.Children.Add(e);
+            Tx(cx + r + 4, cy - 8, "25 m", 11, ExC, true, ring);
+        }
+        Chip(14, 12, "교량 · 터널 = 도로 위 · 아래로 지나가는 것", Seg(t, 0.2, 0.6));
+        Chip(14, 40, "만나는 곳 둘레는 다듬지 않음(원래 원지반)", ring);
+        Tx(16, H - 26, "수치지도 A0013122(교량) · A0013117(터널) · VWorld 교통링크", 11, DhBrand.Sub);
+    }
+
+    // 안 씀 — 도로와 상관없는 선은 빼기
+    void SceneRNone(double t)
+    {
+        RoadBackdrop(1);
+        _cv.Children.Add(RoadEdgeLine(-RoadHalf, 1, EdgeC, 2)); _cv.Children.Add(RoadEdgeLine(RoadHalf, 1, EdgeC, 2));
+        double fade = Seg(t, 1.4, 2.4);
+        var gray = Fz(0x70, 0x78, 0x80);
+        foreach (var (x, y, w, h) in new[] { (60.0, 40.0, 50.0, 34.0), (300.0, 30.0, 40.0, 50.0), (90.0, 220.0, 60.0, 30.0), (320.0, 210.0, 46.0, 40.0) })
+        {
+            Pg(new[] { new Point(x, y), new Point(x + w, y), new Point(x + w, y + h), new Point(x, y + h) }, null, gray, 1.6, 1 - fade);
+            if (fade > 0.3) { Ln(x, y, x + w, y + h, ExC, 1.6, false, fade); Ln(x + w, y, x, y + h, ExC, 1.6, false, fade); }
+        }
+        Chip(14, 12, "안 씀 = 도로와 상관없는 레이어", Seg(t, 0.2, 0.6));
+        Tx(16, H - 26, "건물 · 담장 · 등고선 · 글자 등은 «안 씀» — 도로선만 남기기", 11, DhBrand.Sub);
+    }
+
+    // ── 종단 그래프 도구(값 장면) ──
+    const double Gx = 22, Gy = 44, Gw = 376, Gh = 190;
+    static double ProfRaw(double u) => 10 * Math.Sin(u * Math.PI * 1.15) + 1.7 * Math.Sin(u * 57) + 1.1 * Math.Sin(u * 23 + 1);
+    static double MovAvg(Func<double, double> f, double u, double win)
+    {
+        double s = 0; int n = 0;
+        for (double d = -win / 2; d <= win / 2 + 1e-9; d += win / 20) { s += f(Math.Clamp(u + d, 0, 1)); n++; }
+        return s / n;
+    }
+    Point GP(double u, double z, double z0, double z1) => new(Gx + 8 + (Gw - 16) * u, Gy + Gh - 12 - (Gh - 28) * (z - z0) / (z1 - z0));
+    void GraphBox(string title)
+    {
+        _cv.Children.Add(new Rectangle { Width = Gw, Height = Gh, Fill = Paper, Stroke = DhBrand.Line, StrokeThickness = 1, RenderTransform = new TranslateTransform(Gx, Gy) });
+        Tx(Gx + 8, Gy + 4, title, 10.5, Ink, true);
+    }
+    Polyline Curve(Func<double, double> f, double upto, Brush b, double w, double z0, double z1)
+    {
+        var pl = new Polyline { Stroke = b, StrokeThickness = w, StrokeLineJoin = PenLineJoin.Round };
+        for (double u = 0; u <= upto + 1e-9; u += 0.004) pl.Points.Add(GP(u, f(u), z0, z1));
+        return pl;
+    }
+
+    // 다듬기 길이 — 앞뒤 L만큼 평균 내는 창이 미끄러지며 매끈한 선을 그림
+    void SceneRLen(double t)
+    {
+        const double z0 = -4, z1 = 14, win = 0.11;
+        GraphBox("도로 테두리 종단(길이 방향)");
+        _cv.Children.Add(Curve(ProfRaw, 1, RawC, 1.3, z0, z1));
+        double run = Seg(t, 0.6, 4.2);
+        if (run > 0)
+        {
+            _cv.Children.Add(Curve(u => MovAvg(ProfRaw, u, win), run, SurvC, 2.6, z0, z1));
+            double ux = run;
+            var a = GP(Math.Max(0, ux - win / 2), z0, z0, z1); var b = GP(Math.Min(1, ux + win / 2), z1, z0, z1);
+            if (run < 1) _cv.Children.Add(new Rectangle { Width = Math.Max(1, b.X - a.X), Height = Gh - 28, Fill = Fz(0x1F, 0x5F, 0xBF, 0x22), Stroke = SurvC, StrokeThickness = 1, StrokeDashArray = new DoubleCollection { 3, 2 }, RenderTransform = new TranslateTransform(a.X, Gy + 16) });
+            if (run < 1) Tx(a.X + 2, Gy + Gh - 12, "← 20 m →", 10, SurvC, true);
+        }
+        Chip(Gx, Gy + Gh + 8, "빨강 = 원래(들쭉날쭉) · 파랑 = 다듬은 높이", Seg(t, 0.2, 0.6));
+        Tx(16, H - 26, t < 4.2 ? "앞뒤 20 m 높이를 평균 → 잔 굴곡만 사라지고 오르내림(경사)은 그대로" : "크게 = 더 매끈 · 너무 크면 고개 · 골짜기까지 펴짐(10 ~ 40 m 권장)", 11, DhBrand.Sub);
+    }
+
+    // 둑 판정 — 다듬은 선과 원래 높이 차이가 한도보다 크면 둑 · 입체로 보고 그 구간은 그대로
+    static double ProfEmb(double u) => 6 * u + 1.2 * Math.Sin(u * 40) + 5.5 * Math.Exp(-Math.Pow((u - 0.62) / 0.045, 2));
+    void SceneRJump(double t)
+    {
+        const double z0 = -2, z1 = 14, win = 0.14;
+        GraphBox("도로 테두리 종단 — 굴다리 둑이 있는 곳");
+        double sm = Seg(t, 0.5, 1.6), band = Seg(t, 1.9, 2.8), mark = Seg(t, 3.1, 3.9);
+        Func<double, double> s = u => MovAvg(ProfEmb, u, win);
+        if (band > 0)
+        {
+            var up = new Polyline(); var dn = new List<Point>();
+            for (double u = 0; u <= 1; u += 0.01) { up.Points.Add(GP(u, s(u) + 2, z0, z1)); dn.Add(GP(u, s(u) - 2, z0, z1)); }
+            dn.Reverse(); foreach (var p in dn) up.Points.Add(p);
+            Pg(up.Points, Fz(0x1F, 0x5F, 0xBF, 0x18), SurvC, 0.8, band, dash: true);
+            Tx(Gx + Gw - 120, Gy + 20, "± 2 m 안 = 정상", 10, SurvC, true, band);
+        }
+        _cv.Children.Add(Curve(ProfEmb, 1, RawC, 1.4, z0, z1));
+        if (sm > 0) _cv.Children.Add(Curve(s, sm, SurvC, 2.4, z0, z1));
+        if (mark > 0)
+        {
+            double ua = 1, ub = 0;
+            for (double u = 0; u <= 1; u += 0.002) if (Math.Abs(ProfEmb(u) - s(u)) > 2) { ua = Math.Min(ua, u); ub = Math.Max(ub, u); }
+            if (ub > ua)
+            {
+                var a = GP(ua - 0.03, z1, z0, z1); var b = GP(ub + 0.03, z0, z0, z1);
+                _cv.Children.Add(new Rectangle { Width = b.X - a.X, Height = Gh - 28, Fill = ExFill, Stroke = ExC, StrokeThickness = 1.6, Opacity = mark, RenderTransform = new TranslateTransform(a.X, Gy + 16) });
+                Tx(a.X - 30, Gy + Gh + 4, "제외 — 원래 원지반 그대로", 11, ExC, true, mark);
+            }
+        }
+        Tx(16, H - 26, t < 3.1 ? "원래 높이가 다듬은 선에서 2 m 넘게 튀면" : "둑 · 굴다리 · 입체 구간으로 보고 그 둘레는 손대지 않음(작게 = 더 많이 뺌)", 11, DhBrand.Sub);
+    }
+
+    // 작은 도로 폭 — 중심선 없는 면 가운데 좁고 긴 것만 도로
+    void SceneRWidth(double t)
+    {
+        for (int i = 0; i <= 10; i++) Ln(i * 42, 0, i * 42, H, Grid, 0.8);
+        for (int j = 0; j <= 7; j++) Ln(0, j * 43, W, j * 43, Grid, 0.8);
+        double a = Seg(t, 0.3, 1.2), judge = Seg(t, 1.8, 2.8);
+        // 좁고 긴 골목(폭 8 m)
+        var lane = new[] { new Point(30, 92), new Point(250, 72), new Point(390, 90), new Point(390, 110), new Point(250, 92), new Point(30, 112) };
+        Pg(lane, judge > 0 ? FaceB : null, EdgeC, 2, a);
+        // 넓은 마당(폭 30 m)
+        var yard = new[] { new Point(120, 170), new Point(300, 170), new Point(300, 250), new Point(120, 250) };
+        Pg(yard, judge > 0 ? Fz(0x90, 0x98, 0xA0, 0x30) : null, EdgeC, 2, a);
+        if (judge > 0)
+        {
+            Ln(60, 88, 60, 116, Ink, 1.4, false, judge); Tx(66, 118, "8 m ≤ 12 m → 도로", 11, Pick, true, judge);
+            Ln(320, 170, 320, 250, Ink, 1.4, false, judge); Tx(326, 200, "30 m > 12 m", 11, ExC, true, judge); Tx(326, 216, "→ 도로 아님", 11, ExC, true, judge);
+        }
+        Chip(14, 12, "중심선 없는 면 — 좁고 긴 것만 도로", Seg(t, 0.2, 0.6));
+        Tx(16, H - 26, "단지 소로 · 농로는 살리고 주차장 · 마당 · 공터는 빼는 기준", 11, DhBrand.Sub);
     }
 }

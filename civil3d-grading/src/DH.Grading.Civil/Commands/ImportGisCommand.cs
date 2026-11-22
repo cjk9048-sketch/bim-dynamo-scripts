@@ -708,6 +708,18 @@ public sealed class ImportGisCommand
             {
                 var site = GroundSet.SiteGround(db);
                 var pick = l.Find(g => g.Id == site);
+                // ★[JACK 1122 «다듬기 돌렸는데 3D가 똑같아»] 측량도 보정 · 도로 다듬기는 새 원지반을 짓고 옛것을 <b>숨김</b> — 숨긴 면은 건너뛰고 보이는 것 중 가장 오래된 것
+                if (pick.Id.IsNull)
+                {
+                    try
+                    {
+                        using var tr = db.TransactionManager.StartTransaction();
+                        foreach (var g in l)
+                            if (tr.GetObject(g.Id, OpenMode.ForRead) is Autodesk.Civil.DatabaseServices.Surface s && s.Visible) { pick = g; break; }
+                        tr.Commit();
+                    }
+                    catch { }
+                }
                 if (pick.Id.IsNull) pick = l[0];
                 name = pick.Name; tris = pick.Tris;
                 return pick.Id;

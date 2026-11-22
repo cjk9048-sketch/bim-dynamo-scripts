@@ -200,6 +200,8 @@ public static class MapPalette
             //   빈 도면은 화면이 원점(0,0) 근처인데 현장은 20만 미터 밖이다 —
             //   안 옮기면 "가져왔다는데 아무것도 없다"가 된다.
             ZoomTo(doc, p.X0, p.Y0, p.X1, p.Y1);
+            // ★[JACK 1122 «서버에서 가져오기 끝나고 지도 창 닫히면 원지반 가져오기 창은 다시 열리게 — 도로 다듬기 이어서»]
+            if (!SelfCheckLog.Headless) try { DH.Grading.Civil.GroundPalette.Show(); } catch { }
         }
     }
 }
@@ -675,6 +677,7 @@ internal sealed class MapPanel : UserControl
         {
             try { _doc?.Editor.WriteMessage("\n[서버 지표면] 지도를 그만두었습니다."); } catch { }
             MapPalette.Close();
+            try { DH.Grading.Civil.GroundPalette.Show(); } catch { }   // ★[JACK 1122] 그만둬도 원지반 가져오기 창으로 돌아감
             return;
         }
 

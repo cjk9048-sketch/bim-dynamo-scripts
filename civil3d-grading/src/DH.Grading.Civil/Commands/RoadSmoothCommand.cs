@@ -116,7 +116,12 @@ public sealed class RoadSmoothCommand
             lines.Where(kv => roles.TryGetValue(kv.Key, out var rr) && rr == want).SelectMany(kv => kv.Value).Cast<IReadOnlyList<(double X, double Y)>>();
         using var tr = db.TransactionManager.StartTransaction();
         var g = Sampler(tr, groundId, out _);
-        var r = RoadSmooth.Build(Of(Role.Edge).ToList(), Of(Role.Center).ToList(), Of(Role.Barrier).ToList(), g, o);
+        RoadSmooth.Result r;
+        // ★[JACK 1122 «QGIS 같은 로직»] VWorld(중심선 + 도로폭)는 도로 한 줄 = 중심선 + 좌우 선(BuildCorridor) · 파일(경계선)은 면 방식
+        if (VwWidths != null && lines.TryGetValue(VwCenter, out var cl) && cl.Count == VwWidths.Count && roles.TryGetValue(VwCenter, out var rc) && rc == Role.Center)
+            r = RoadSmooth.BuildCorridor(cl.Select((p, i) => ((IReadOnlyList<(double X, double Y)>)p, VwWidths[i])).ToList(), Of(Role.Barrier).ToList(), g, o);
+        else
+            r = RoadSmooth.Build(Of(Role.Edge).ToList(), Of(Role.Center).ToList(), Of(Role.Barrier).ToList(), g, o);
         tr.Commit();
         return r;
     }
@@ -155,44 +160,61 @@ public sealed class RoadSmoothCommand
             }
             else
             {
+                VwWidths = null;
                 string? path = AskFile();
                 if (string.IsNullOrEmpty(path)) { ed.WriteMessage("\n[도로 다듬기] 취소"); return; }
                 name = System.IO.Path.GetFileName(path);
                 ed.WriteMessage($"\n[도로 다듬기] {name} 읽는 중…");
-                try { lines = ReadLines(path, (box.X0 - pad, box.Y0 - pad, box.X1 + pad, box.Y1 + pad)); }
+                var swR = System.Diagnostics.Stopwatch.StartNew();
+                try { using (BusyPopup.Scope("도로선 파일 읽는 중…")) lines = ReadLines(path, (box.X0 - pad, box.Y0 - pad, box.X1 + pad, box.Y1 + pad)); }
                 catch (System.Exception rex) { Refuse(ed, $"도로선 파일을 읽지 못했습니다 — {name}\n\n{rex.Message}"); return; }
                 if (lines.Count == 0) { Refuse(ed, $"원지반 범위 안에 선이 없습니다 — {name}\n\n원지반과 같은 자리(좌표계) 파일인지 확인하세요."); return; }
+                try { DiagLog.Append($"\n[도로 다듬기] 파일 읽기 {swR.Elapsed.TotalSeconds:0.0}초 · 레이어 {lines.Count} · 선 {lines.Values.Sum(v => v.Count):N0}"); } catch { }
                 var mem = LoadRoles();
                 foreach (var k in lines.Keys) { var a = AutoRole(k); roles[k] = a != Role.None ? a : mem.TryGetValue(k, out var m) ? m : Role.None; }
             }
 
             RoadSmooth.Result res;
             RoadSmooth.Options o;
+            // ★[JACK 1122 «도로 다듬기 누르면 창 뜰 때까지 오래 걸림 — 멈춘 줄 앎 · 로딩 창»] 첫 셈은 창을 띄우기 전에 로딩 창 아래에서(창 Loaded에서 셈하면 빈 화면으로 멈춘 듯 보임)
+            var swC = System.Diagnostics.Stopwatch.StartNew();
+            RoadSmooth.Result first;
+            using (BusyPopup.Scope("도로 면 찾는 중… (범위가 넓으면 시간이 걸립니다)")) first = Compute(db, gid, lines, roles, Opt);
+            try { DiagLog.Append($"\n[도로 다듬기] 첫 셈 {swC.Elapsed.TotalSeconds:0.0}초 · {string.Join(" | ", first.Log)}"); } catch { }
             if (FileForTestUsed || SelfCheckLog.Headless)
             {
                 FileForTestUsed = false;
                 o = Opt;
-                res = Compute(db, gid, lines, roles, o);
+                res = first;
             }
             else
             {
                 string gname = grounds[^1].Name;
-                var w = new RoadSmoothWindow(name, gname, lines, roles, Opt, (rl, op) => Compute(db, gid, lines, rl, op));
+                var w = new RoadSmoothWindow(name, gname, lines, roles, Opt, (rl, op) => Compute(db, gid, lines, rl, op), first);
                 if (AcadApp.ShowModalWindow(w) != true || w.Result == null) { ed.WriteMessage("\n[도로 다듬기] 취소"); return; }
                 res = w.Result; o = w.Options; Opt = o;
                 if (src == Source.File) SaveRoles(w.Roles);
             }
+            LastResForTest = res;
+            LastCentersForTest = lines.Where(kv => roles.TryGetValue(kv.Key, out var rr) && rr == Role.Center).SelectMany(kv => kv.Value).ToList();
             if (res.Region == null || res.Lines.Count == 0) { Refuse(ed, "다듬을 도로를 찾지 못했습니다.\n\n" + string.Join("\n", res.Log) + "\n\n레이어 역할(도로경계)을 확인하세요."); return; }
 
             var sw = System.Diagnostics.Stopwatch.StartNew();
             string note = string.Format(System.Globalization.CultureInfo.InvariantCulture,
                 "도로 면 {0} · 범위 {1:N0} ㎡ · 최대 보정 {2:0.00} m · 다듬기 {3:0} m{4}{5}", res.RoadFaces, res.Region.Area, res.MaxShift, o.SmoothLen,
                 res.Crossings > 0 ? $" · 입체 교차 {res.Crossings}곳 제외" : "", res.JumpSpans > 0 ? $" · 둑/입체 구간 {res.JumpSpans}곳 제외" : "");
-            var r = SurveyFix.MergeRoad(doc, gid, res.Region, res.Lines, note);
+            SurveyFix.Result r;
+            using (BusyPopup.Scope("새 원지반 짓는 중…")) r = SurveyFix.MergeRoad(doc, gid, res.Region, res.Lines, note, res.Spots);
             try { DiagLog.Append($"\n[도로 다듬기] {name} — {(r.Ok ? "끝" : "못 함")} · {sw.Elapsed.TotalSeconds:0.0}초 · {string.Join(" | ", res.Log)}"); } catch { }
-            if (!r.Ok) { Refuse(ed, r.Message); return; }
+            // ★[JACK 1122 «끝 알림에 글이 많으면 안 읽음 — 완료 / 문제 있음만»] 자세한 글은 명령줄 · 진단 로그에만
+            if (!r.Ok)
+            {
+                ed.WriteMessage("\n[도로 다듬기] " + r.Message.Replace("\n", " "));
+                if (!SelfCheckLog.Headless) AcadApp.ShowAlertDialog("도로 다듬기를 하지 못했습니다.\n\n" + FirstLine(r.Message));
+                return;
+            }
             ed.WriteMessage("\n[도로 다듬기] " + r.Message.Replace("\n", " "));
-            if (!SelfCheckLog.Headless) AcadApp.ShowAlertDialog("도로 다듬기 끝 — 새 원지반 '" + r.NewName + "'\n\n" + r.Message);
+            if (!SelfCheckLog.Headless) AcadApp.ShowAlertDialog("도로 다듬기 완료 — 새 원지반 '" + r.NewName + "'");
             GroundPalette.Refresh();
         }
         catch (System.Exception ex)
@@ -209,6 +231,10 @@ public sealed class RoadSmoothCommand
     internal enum Source { Cancel, File, VWorld }
     /// <summary>시험용 — FileForTest에 이 글을 넣으면 VWorld로.</summary>
     internal const string VWorldForTest = "<VWORLD>";
+    /// <summary>VWorld 중심선마다 도로폭(<see cref="VwCenter"/> 선과 같은 차례) — 파일 길이면 null.</summary>
+    internal static List<double>? VwWidths;
+    internal static RoadSmooth.Result? LastResForTest;
+    internal static List<List<(double X, double Y)>>? LastCentersForTest;
     internal const string VwEdge = "VWorld 도로 면(중심선 + 도로폭)", VwCenter = "VWorld 도로중심선", VwSep = "VWorld 터널 · 교량(교통링크)";
 
     static Source AskSource()
@@ -258,6 +284,7 @@ public sealed class RoadSmoothCommand
         var centers = got.Centers.Where(VWorldRoads.IsCenter).ToList();
         o[VwEdge] = VWorldRoads.EdgesFromCenters(centers);
         o[VwCenter] = centers.Select(l => l.Pts).ToList();
+        VwWidths = centers.Select(VWorldRoads.WidthOf).ToList();
         o[VwSep] = got.Links.Where(VWorldRoads.IsGradeSep).Select(l => l.Pts).ToList();
         try { DiagLog.Append($"\n[도로 다듬기] VWorld 중심선 {got.Centers.Count} (씀 {centers.Count}) · 교통링크 {got.Links.Count} (입체 {o[VwSep].Count}) · 테두리 {o[VwEdge].Count} · 호출 {got.Calls} · {got.Ms} ms · {csNote}"); } catch { }
         return o;
@@ -279,6 +306,12 @@ public sealed class RoadSmoothCommand
         if (ok != true) return null;
         try { _lastDir = System.IO.Path.GetDirectoryName(dlg.FileName) ?? ""; } catch { }
         return dlg.FileName;
+    }
+
+    static string FirstLine(string s)
+    {
+        var l = (s ?? "").Split('\n').Select(x => x.Trim()).FirstOrDefault(x => x.Length > 0) ?? "";
+        return l.Length > 120 ? l[..120] + "…" : l;
     }
 
     static void Refuse(Editor ed, string msg)
