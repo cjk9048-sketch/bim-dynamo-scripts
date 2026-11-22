@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using Autodesk.AutoCAD.ApplicationServices;
@@ -48,7 +48,8 @@ internal static class SurveyFix
         public string Message = "", NewName = "", BaseName = "";
         public ObjectId NewId = ObjectId.Null, BaseId = ObjectId.Null;
         public NetTopologySuite.Geometries.Geometry? Region;
-        public int BaseLines, BaseCut, BaseGone, BaseSpots, BaseSpotsGone, SurvContours, SurvBreaks, SurvSpots;
+        public int BaseLines, BaseCut, BaseGone, BaseSpots, BaseSpotsGone, SurvContours, SurvBreaks, SurvSpots, DupSpots;
+        public SurveyMerge.CrossReport? Cross;
     }
 
     /// <summary>시험 고리 — 마지막 결과(범위 · 새 원지반).</summary>
@@ -181,7 +182,17 @@ internal static class SurveyFix
 
     // ── 합성 ────────────────────────────────────────────────────────────────
     /// <summary>측량 범위만 측량 자료로 바꿔 원지반을 새로 짓는다 — 창 없음(화면 없는 시험도 이것). 못 하면 Ok 거짓 + 이유(도면 그대로).</summary>
-    internal static Result Merge(Document doc, IReadOnlyList<SurveyItem> use, ObjectId groundId, double margin, double gap)
+    /// <summary>측량 자료의 평면 상자(여유 <paramref name="pad"/> m 포함) — 범위(무거운 셈) 전에 자리만 볼 때.</summary>
+    internal static (double X0, double Y0, double X1, double Y1) BoxOf(IEnumerable<SurveyItem> use, double pad = 0)
+    {
+        double x0 = double.MaxValue, y0 = double.MaxValue, x1 = double.MinValue, y1 = double.MinValue;
+        foreach (var it in use) foreach (var p in it.Pts) { x0 = Math.Min(x0, p.X); y0 = Math.Min(y0, p.Y); x1 = Math.Max(x1, p.X); y1 = Math.Max(y1, p.Y); }
+        return (x0 - pad, y0 - pad, x1 + pad, y1 + pad);
+    }
+
+    /// <summary>측량 범위만 측량 자료로 바꿔 원지반을 새로 짓는다 — 창 없음(화면 없는 시험도 이것). 못 하면 Ok 거짓 + 이유(도면 그대로).
+    /// <para>★[JACK 1122] <paramref name="surveyOnly"/> = 원지반과 다른 곳의 측량도 — 백판 없이 측량 자료만으로 새 원지반(옛 원지반은 숨기지 않음 · 다른 자리라 둘 다 씀).</para></summary>
+    internal static Result Merge(Document doc, IReadOnlyList<SurveyItem> use, ObjectId groundId, double margin, double gap, bool surveyOnly = false)
     {
         var r = new Result { BaseId = groundId };
         LastForTest = r;
@@ -189,20 +200,40 @@ internal static class SurveyFix
         var ed = doc.Editor;
         r.BaseName = GroundSet.NameOf(db, groundId);
         if (use.Count == 0) { r.Message = "쓸 측량 자료가 없습니다."; return r; }
-        var region = SurveyGeo.RegionOf(use, margin, gap);
-        if (region == null || region.IsEmpty) { r.Message = "측량 범위를 만들지 못했습니다."; return r; }
-        r.Region = region;
-
         var bm = ReadBase(db, groundId);
+        if (surveyOnly)
+        {
+            // ★[검토 1122 MEDIUM] 측량도만으로는 «다른 곳(같은 좌표계)»일 때만 — 겹치면 보정을 · 좌표계가 다르면 거절(엉뚱한 자리에 원지반을 짓지 않게)
+            if (bm.Lines.Count > 0 || bm.Spots.Count > 0)
+            {
+                double ax0 = double.MaxValue, ay0 = double.MaxValue, ax1 = double.MinValue, ay1 = double.MinValue;
+                foreach (var (pts, _, _) in bm.Lines) foreach (var p in pts) { ax0 = Math.Min(ax0, p.X); ay0 = Math.Min(ay0, p.Y); ax1 = Math.Max(ax1, p.X); ay1 = Math.Max(ay1, p.Y); }
+                foreach (var p in bm.Spots) { ax0 = Math.Min(ax0, p.X); ay0 = Math.Min(ay0, p.Y); ax1 = Math.Max(ax1, p.X); ay1 = Math.Max(ay1, p.Y); }
+                var s0 = BoxOf(use, Math.Max(0.01, margin));
+                var c0 = SurveyMerge.Classify(s0.X0, s0.Y0, s0.X1, s0.Y1, ax0, ay0, ax1, ay1);
+                if (c0.Kind == SurveyMerge.Placement.Overlap) { r.Message = "측량도가 원지반과 겹칩니다 — [측량도만으로 원지반] 대신 [보정 실행]을 쓰세요."; return r; }
+                if (c0.Kind == SurveyMerge.Placement.CrsMismatch) { r.Message = "측량도가 원지반과 겹치지 않습니다 — " + c0.Text; return r; }
+            }
+            return Build(doc, use, r, new BaseMat(), null, margin, gap, "", surveyOnly: true);
+        }
         if (bm.Lines.Count == 0)
         {
             r.Message = $"'{r.BaseName}'의 재료(등고선)를 찾지 못했습니다" + (bm.Untagged > 0 && bm.Tagged == 0 ? " — 원지반이 둘 이상인 옛 도면이라 어느 것의 재료인지 모릅니다" : "")
                       + ".\n[원지반 가져오기]로 원지반을 다시 만든 뒤 해 보세요.";
             return r;
         }
-        // 좌표계 — 측량 범위가 백판과 안 겹치면 거절(원점이 다른 도면)
+        // ★[JACK 1122 «다른 곳 측량도 · 너무 오래 걸림»] 자리부터 본다(상자만 — 범위 셈 전) — 안 겹치면 범위를 셀 까닭이 없다
         double bx0 = double.MaxValue, by0 = double.MaxValue, bx1 = double.MinValue, by1 = double.MinValue;
         foreach (var (pts, _, _) in bm.Lines) foreach (var p in pts) { bx0 = Math.Min(bx0, p.X); by0 = Math.Min(by0, p.Y); bx1 = Math.Max(bx1, p.X); by1 = Math.Max(by1, p.Y); }
+        var sb = BoxOf(use, Math.Max(0.01, margin));
+        var cls = SurveyMerge.Classify(sb.X0, sb.Y0, sb.X1, sb.Y1, bx0, by0, bx1, by1);
+        if (cls.Kind != SurveyMerge.Placement.Overlap)
+        {
+            r.Message = "측량도가 원지반과 겹치지 않습니다 — " + cls.Text;
+            return r;
+        }
+        var region = SurveyGeo.RegionOf(use, margin, gap);
+        if (region == null || region.IsEmpty) { r.Message = "측량 범위를 만들지 못했습니다."; return r; }
         var env = region.EnvelopeInternal;
         double ix = Math.Min(env.MaxX, bx1) - Math.Max(env.MinX, bx0), iy = Math.Min(env.MaxY, by1) - Math.Max(env.MinY, by0);
         if (ix <= 0 || iy <= 0)
@@ -212,14 +243,24 @@ internal static class SurveyFix
             return r;
         }
         string partWarn = ix * iy < 0.5 * env.Width * env.Height ? "\n  ⚠측량 범위의 절반 넘게가 원지반 밖 — 밖은 측량 자료만으로 지음" : "";
+        return Build(doc, use, r, bm, region, margin, gap, partWarn, surveyOnly: false);
+    }
+
+    static Result Build(Document doc, IReadOnlyList<SurveyItem> use, Result r, BaseMat bm, NetTopologySuite.Geometries.Geometry? region, double margin, double gap, string partWarn, bool surveyOnly)
+    {
+        var db = doc.Database;
+        var ed = doc.Editor;
+        ObjectId groundId = r.BaseId;
+        r.Region = region;
+        // 측량만: 백판 없음 → 자르기 · 숨기기 없음
+        var prep = region != null ? SurveyMerge.Prepare(region) : null;
 
         // ── 백판 자르기 ──
-        var prep = SurveyMerge.Prepare(region);
         var keepLines = new List<(List<Point3> Pts, bool Closed, bool Flat)>();
         foreach (var (pts, closed, flat) in bm.Lines)
         {
             r.BaseLines++;
-            var parts = SurveyMerge.ClipOutside(pts, closed, prep);
+            var parts = SurveyMerge.ClipOutside(pts, closed, prep!);
             if (parts.Count == 0) { r.BaseGone++; continue; }
             if (parts.Count != 1 || parts[0].Pts.Count != pts.Count || parts[0].Closed != closed) r.BaseCut++;
             foreach (var (pp, cl) in parts)
@@ -229,7 +270,7 @@ internal static class SurveyFix
         foreach (var p in bm.Spots)
         {
             r.BaseSpots++;
-            if (SurveyMerge.Inside(prep, p.X, p.Y)) r.BaseSpotsGone++; else keepSpots.Add(p);
+            if (SurveyMerge.Inside(prep!, p.X, p.Y)) r.BaseSpotsGone++; else keepSpots.Add(p);
         }
 
         // ── 재료 사본 그리기(원지반 재료 레이어 · 꺼 둠) ──
@@ -261,10 +302,16 @@ internal static class SurveyFix
                     catch { }
                 }
                 foreach (var (pts, closed, flat) in keepLines) Line(pts, closed, flat);
-                foreach (var p in keepSpots) try { spotIds.Add(Add(new DBPoint(P3d(p)) { LayerId = laySpot })); } catch { }
+                // ★[JACK 1122 «이벤트 오류»] 같은 자리 표고점은 하나만(측량 먼저 · 백판은 남은 자리만) — Civil «중복 항목 무시»가 줄줄이 뜨지 않게
+                var survSpots = use.Where(i => i.Kind == SurveyKind.Spot).Select(i => i.Pts[0]).ToList();
+                var spotsOnce = SurveyMerge.DedupSpots(survSpots.Concat(keepSpots));
+                var survSet = new HashSet<Point3>(survSpots);
+                r.DupSpots = survSpots.Count + keepSpots.Count - spotsOnce.Count;
+                foreach (var p in spotsOnce)
+                    try { spotIds.Add(Add(new DBPoint(P3d(p)) { LayerId = laySpot })); if (survSet.Contains(p)) r.SurvSpots++; } catch { }
                 foreach (var it in use)
                 {
-                    if (it.Kind == SurveyKind.Spot) { try { spotIds.Add(Add(new DBPoint(P3d(it.Pts[0])) { LayerId = laySpot })); r.SurvSpots++; } catch { } continue; }
+                    if (it.Kind == SurveyKind.Spot) continue;
                     int n0 = contourIds.Count + breakIds.Count;
                     Line(it.Pts, it.Closed, it.Kind == SurveyKind.Contour);
                     if (contourIds.Count + breakIds.Count > n0) { if (it.Kind == SurveyKind.Contour) r.SurvContours++; else r.SurvBreaks++; }
@@ -273,12 +320,15 @@ internal static class SurveyFix
             }
 
             // ── 원지반 — 세 길과 같은 한 벌(새 이름 원지반_N · 주인 표시 · 스타일 · 레이어) ──
+            try { r.Cross = SurveyMerge.Crossings(use.Where(i => i.Kind != SurveyKind.Spot).Select(i => (i.Layer, (IReadOnlyList<Point3>)i.Pts, i.Closed)).ToList()); } catch { }
             string surfNote = ImportGisCommand.BuildGroundSurfaceFrom(db, ed, contourIds, spotIds, breakIds);
             DrawOrderFix.Apply(db);
             bool built = !surfNote.StartsWith("지표면 생성 실패", StringComparison.Ordinal) && !surfNote.StartsWith("지표면 생략", StringComparison.Ordinal);
             foreach (var g in GroundSet.List(db, legacy: false)) if (!before.Contains(g.Id)) { r.NewId = g.Id; r.NewName = g.Name; }
-            string done = $"'{r.BaseName}' 백판 등고선 {r.BaseLines}가닥 중 범위에 걸려 자름 {r.BaseCut} · 통째 뺌 {r.BaseGone} · 표고점 {r.BaseSpots}개 중 뺌 {r.BaseSpotsGone}"
-                        + $" → 측량 등고선 {r.SurvContours} · 3D 선 {r.SurvBreaks} · 표고점 {r.SurvSpots} 넣음 · 범위 {region.Area:N0} ㎡(여유 {margin:0.##} m · 틈 메움 {gap:0.##} m) · {surfNote}";
+            string done = surveyOnly
+                ? $"측량도만으로 — 측량 등고선 {r.SurvContours} · 3D 선 {r.SurvBreaks} · 표고점 {r.SurvSpots} · {surfNote}"
+                : $"'{r.BaseName}' 백판 등고선 {r.BaseLines}가닥 중 범위에 걸려 자름 {r.BaseCut} · 통째 뺌 {r.BaseGone} · 표고점 {r.BaseSpots}개 중 뺌 {r.BaseSpotsGone}"
+                  + $" → 측량 등고선 {r.SurvContours} · 3D 선 {r.SurvBreaks} · 표고점 {r.SurvSpots} 넣음 · 범위 {region!.Area:N0} ㎡(여유 {margin:0.##} m · 틈 메움 {gap:0.##} m) · {surfNote}";
             if (!built || r.NewId.IsNull)
             {
                 r.Message = "원지반을 새로 짓지 못했습니다.\n\n" + done;
@@ -286,8 +336,12 @@ internal static class SurveyFix
                 return r;
             }
             // ── 옛 원지반은 숨김(지우지 않음 — 그것을 쓰는 결과가 있을 수 있음 · [원지반 삭제]로 지울 수 있음) ──
-            string hid = "";
-            try
+            if (r.DupSpots > 0) done += $"\n  같은 자리 표고점 {r.DupSpots}개는 하나만 씀";
+            if (r.Cross is { ZDiff: > 0 } cx)
+                done += $"\n  ⚠측량 선끼리 높이가 다르게 엇갈린 곳 {cx.ZDiff}곳 — 지표면이 한쪽만 씀(" + string.Join(" · ", cx.Pairs.Take(3).Select(p => p.A == p.B ? $"{p.A} {p.N}" : $"{p.A}×{p.B} {p.N}")) + ")"
+                      + "\n    담장 · 건물 · 수목처럼 땅이 아닌 레이어면 창에서 빼고 다시 하세요";
+            string hid = surveyOnly ? $"\n  옛 '{r.BaseName}'은 그대로(다른 자리 — 둘 다 원지반으로 씀)" : "";
+            if (!surveyOnly) try
             {
                 using var tr = db.TransactionManager.StartTransaction();
                 if (!groundId.IsNull && !groundId.IsErased && tr.GetObject(groundId, OpenMode.ForWrite) is CivilDb.Surface old && old.Visible)

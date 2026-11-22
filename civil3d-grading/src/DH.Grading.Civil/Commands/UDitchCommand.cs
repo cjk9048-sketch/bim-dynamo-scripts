@@ -1,4 +1,4 @@
-using System.Globalization;
+﻿using System.Globalization;
 using System.IO;
 using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.DatabaseServices;
@@ -15,18 +15,23 @@ namespace DH.Grading.Civil.Commands;
 /// 기록 = 도면 NOD «DH_GRADING/UDITCH»(다시 열면 그대로 · 고침). 셈 = Core <see cref="UDitch"/>.</para></summary>
 public sealed class UDitchCommand
 {
-    /// <summary>도면마다(세션) — 고른 측구 · 불러온 CSV · 창 자리.</summary>
-    sealed class Memo
+    /// <summary>도면마다(세션) — 고른 측구 · 불러온 CSV · 지난 일 알림(도킹창이 한 번 보이고 비움).</summary>
+    internal sealed class Memo
     {
         public int Sel;
         public List<UDitch.IdfRow> Csv = new();
         public string CsvSource = "", CsvFile = "";
+        public string Note = "", Error = "";
     }
     static readonly Dictionary<string, Memo> Memos = new(System.StringComparer.OrdinalIgnoreCase);
-    static double? WinLeft, WinTop;
+    internal static Memo MemoOf(Document doc)
+    {
+        if (!Memos.TryGetValue(doc.Name ?? "", out var m)) Memos[doc.Name ?? ""] = m = new Memo();
+        return m;
+    }
     static readonly CultureInfo Ic = CultureInfo.InvariantCulture;
 
-    sealed class Ctx
+    internal sealed class Ctx
     {
         public Document Doc = null!; public Database Db = null!; public Editor Ed = null!;
         public UDitch.Record Rec = new(); public UDitch.Settings S = new();
@@ -58,9 +63,8 @@ public sealed class UDitchCommand
             c.Rec.Site = UDitchStore.SiteOf(c.Db, GradingSettings.ExportEpsg, c.Rec.Ditches);
             int fd = 1;
             try { fd = System.Convert.ToInt16(AcadApp.GetSystemVariable("FILEDIA")); } catch { }
-            if (!Memos.TryGetValue(doc.Name ?? "", out var memo)) Memos[doc.Name ?? ""] = memo = new Memo();
             if (lineMode || SelfCheckLog.Headless || fd == 0) RunCmdLine(c);
-            else RunPopup(c, memo);
+            else { Done(c, "도킹창 열기"); UDitchPalette.Show(doc); }   // ★[JACK 1122 «측구 기능도 도킹팝업으로»] 창 = 우측 도킹창(명령줄 · 키트는 그대로)
         }
         catch (System.Exception ex) { Done(c, "⚠원인: " + ex.Message + "\n" + ex); }
     }
@@ -78,80 +82,167 @@ public sealed class UDitchCommand
         tr.Commit();
     }
 
-    // ══════════════════════════════ 창 ══════════════════════════════
+    // ══════════════════════════════ 도킹창 단추 → 명령 ══════════════════════════════
+    // ★[JACK 1122 «측구 기능도 도킹팝업으로 바꾸고 기능을 업데이트»] 창 단추는 아래 명령을 보낸다(도면 일 = 명령 안 · 되돌리기 한 번).
+    //   값 고침(강우 · 규격 · 바닥고 · 집수 · 덮개 · 방향)은 창이 기록에 바로 적는다(UDitchPalette). 일이 끝나면 알림은 Memo에 · 창은 다시 읽음.
 
-    static void RunPopup(Ctx c, Memo memo)
+    /// <summary>창 단추 일 하나 — 기록 읽기 → 일 → 알림(Memo) → 창 다시 읽기.</summary>
+    static void PalRun(string what, System.Func<Ctx, Memo, (string Note, string Error)> act, bool echo = true)
     {
-        string note = "", error = "";
-        for (int guard = 0; guard < 200; guard++)
+        var doc = AcadApp.DocumentManager.MdiActiveDocument; if (doc == null) return;
+        var c = new Ctx { Doc = doc, Db = doc.Database, Ed = doc.Editor, Log = new System.Text.StringBuilder($"\n■ DHUDITCH {what}\n") };
+        var memo = MemoOf(doc);
+        memo.Note = ""; memo.Error = "";   // ★[검토 1122 MEDIUM] 알림은 다음 일이 시작될 때만 비움(창 다시 읽기는 지우지 않음)
+        if (what != "도면에서 보기") ClearMark();
+        try
         {
-            var st = c.Rec.Site;
-            var v = new UDitchDialog.View
-            {
-                Rec = c.Rec, S = c.S, Sel = System.Math.Min(memo.Sel, c.Rec.Ditches.Count - 1), Csv = memo.Csv, CsvSource = memo.CsvSource, CsvFile = memo.CsvFile,
-                Note = note, Error = error,
-                SiteText = (double.IsFinite(st.X) ? string.Format(Ic, "X {0:0.000} · Y {1:0.000}", st.X, st.Y) : "대표점 없음") + $" · EPSG {(st.Epsg > 0 ? st.Epsg.ToString(Ic) : "?")}"
-                           + (double.IsFinite(st.Lat) ? string.Format(Ic, " · {0:0.00000}°N {1:0.00000}°E", st.Lat, st.Lon) : ""),
-                SiteWarn = SiteWarn(c),
-                Foot = string.Format(Ic, "설정 {0} · n {1} · 허용 수심 {2:0}% · 최소 경사 {3:0.###} % · 유속 {4:0.0#}~{5:0.0#} m/s", Path.GetFileName(c.SetFrom), c.S.ManningN, c.S.DepthRatio * 100,
-                                     c.S.MinSlopePct, c.S.MinVelocity, c.S.MaxVelocity) + (c.SetWhy.Length > 0 ? " · ⚠" + c.SetWhy : ""),
-            };
-            if (v.Sel < 0 && c.Rec.Ditches.Count > 0) v.Sel = 0;
-            var dlg = new UDitchDialog(v);
-            if (WinLeft is double wl && WinTop is double wt) { dlg.WindowStartupLocation = System.Windows.WindowStartupLocation.Manual; dlg.Left = wl; dlg.Top = wt; }
-            AcadApp.ShowModalWindow(dlg);
-            try { WinLeft = dlg.Left; WinTop = dlg.Top; } catch { }
-            memo.Sel = dlg.Sel; memo.Csv = v.Csv; memo.CsvSource = v.CsvSource; memo.CsvFile = v.CsvFile;
-            if (dlg.Dirty) SaveRec(c);
-            note = ""; error = "";
-            if (dlg.DialogResult != true || dlg.Action == UDitchDialog.Act.None) { c.Ed.WriteMessage("\n[U형 측구] 닫음"); return; }
-            switch (dlg.Action)
-            {
-                case UDitchDialog.Act.Pick:
-                    if (PickEntity(c, keywords: false, out var pid, out _) && AddDitch(c, pid, out int pi, out string pmsg)) { memo.Sel = pi; note = pmsg; }
-                    continue;
-                case UDitchDialog.Act.Draw:
-                    if (DrawLine(c, out var did) && AddDitch(c, did, out int di, out string dmsg)) { memo.Sel = di; note = dmsg; }
-                    continue;
-                case UDitchDialog.Act.Delete:
-                    if (memo.Sel >= 0 && memo.Sel < c.Rec.Ditches.Count)
-                    {
-                        string id = c.Rec.Ditches[memo.Sel].Id;
-                        int n;
-                        using (var tr = c.Db.TransactionManager.StartTransaction())
-                        {
-                            n = UDitchStore.Erase(c.Db, tr, id);
-                            c.Rec.Ditches.RemoveAt(memo.Sel);
-                            UDitchStore.Save(c.Db, tr, c.Rec);
-                            tr.Commit();
-                        }
-                        note = $"{id} 지움(모델 {n}개)";
-                        memo.Sel = System.Math.Min(memo.Sel, c.Rec.Ditches.Count - 1);
-                    }
-                    continue;
-                case UDitchDialog.Act.Build:
-                    if (Build(c, out string bmsg)) note = bmsg; else error = bmsg;
-                    continue;
-                case UDitchDialog.Act.Fit:   // ★[v117.16 검토 LOW] [지표면 맞춤] — 원 선 · 지표를 다시 읽음(창 미리보기 = 모델)
-                    if (memo.Sel >= 0 && memo.Sel < c.Rec.Ditches.Count)
-                    {
-                        var fd0 = c.Rec.Ditches[memo.Sel];
-                        using (var tr = c.Db.TransactionManager.StartTransaction())
-                        {
-                            UDitchStore.Refresh(c.Db, tr, fd0, c.S);
-                            UDitchStore.Save(c.Db, tr, c.Rec);
-                            tr.Commit();
-                        }
-                        var ly = UDitch.LayoutOf(fd0, c.S);
-                        note = string.Format(Ic, "{0} — 지표 다시 읽음 · 구간 {1}{2}{3}", fd0.Id, ly.Segs.Count, ly.Drops.Count > 0 ? $" · 낙차 {ly.Drops.Count}" : "",
-                                             ly.Basins.Count > 0 ? string.Format(Ic, " · 집수정 {0} · 관 {1:0.0} m", ly.Basins.Count, ly.Pipes.Sum(p => p.Length)) : "");
-                        c.Log.AppendLine("  [지표면 맞춤] " + note);
-                        foreach (var ln in ly.Log) c.Log.AppendLine("    " + ln);
-                    }
-                    continue;
-            }
+            if (!Load(c, out string why)) { memo.Note = ""; memo.Error = why; Done(c, "⚠" + why); return; }
+            var (n, e) = act(c, memo);
+            memo.Note = n; memo.Error = e;
+            if (echo && (n.Length > 0 || e.Length > 0)) Done(c, e.Length > 0 ? "⚠" + e : n);
         }
+        catch (System.Exception ex) { memo.Note = ""; memo.Error = ex.Message; Done(c, "⚠원인: " + ex.Message + "\n" + ex); }
+        finally { UDitchPalette.Refresh(); }
     }
+
+    /// <summary>설정 · 기록 · 부지 읽기(창 · 단추 명령 공통). 거짓 = 기록이 깨짐(덮지 않으려고 멈춤).</summary>
+    internal static bool Load(Ctx c, out string why, bool sync = true)
+    {
+        // ★[검토 1122 MEDIUM] 창 다시 읽기(도면 탭 바꿈 등)는 sync = 거짓 — SyncToDocument가 정지 세션 기억(마지막 계획 · 원지반 · 옹벽 고른 것)을 지우므로 명령일 때만
+        if (sync) GradingSettings.SyncToDocument(c.Doc);
+        c.S = UDitchStore.LoadSettings(out c.SetFrom, out c.SetWhy);
+        using (var tr = c.Db.TransactionManager.StartTransaction())
+        {
+            bool ok = UDitchStore.TryLoad(c.Db, tr, out c.Rec, out why);
+            tr.Commit();
+            if (!ok) { why = why + " — 기록을 덮지 않으려고 멈춤"; return false; }
+        }
+        // ★[재검토 1122 LOW] 창 다시 읽기(sync 거짓)는 좌표계 동기화가 없어 EPSG가 앞 도면 것일 수 있음 — 적힌 부지 그대로(없을 때만 셈)
+        if (sync || c.Rec.Site.Source.Contains("없음") || !double.IsFinite(c.Rec.Site.X))
+            c.Rec.Site = UDitchStore.SiteOf(c.Db, GradingSettings.ExportEpsg, c.Rec.Ditches);
+        return true;
+    }
+
+    static bool SelOk(Ctx c, Memo m) => m.Sel >= 0 && m.Sel < c.Rec.Ditches.Count;
+
+    static (string, string) Picked(Memo m, int i, string msg) { m.Sel = i; return (msg, ""); }
+
+    [CommandMethod("DHUDITCHPICK")]
+    public void PalPick() => PalRun("선 고르기", (c, m) =>
+        PickEntity(c, keywords: false, out var id, out _) && AddDitch(c, id, out int i, out string msg) ? Picked(m, i, msg) : ("", ""));
+
+    [CommandMethod("DHUDITCHDRAW")]
+    public void PalDraw() => PalRun("선 그리기", (c, m) =>
+        DrawLine(c, out var id) && AddDitch(c, id, out int i, out string msg) ? Picked(m, i, msg) : ("", ""));
+
+    [CommandMethod("DHUDITCHDEL")]
+    public void PalDelete() => PalRun("지우기", (c, m) =>
+    {
+        if (!SelOk(c, m)) return ("", "지울 측구를 고르세요");
+        string id = c.Rec.Ditches[m.Sel].Id;
+        int n;
+        using (var tr = c.Db.TransactionManager.StartTransaction())
+        {
+            n = UDitchStore.Erase(c.Db, tr, id);
+            c.Rec.Ditches.RemoveAt(m.Sel);
+            UDitchStore.Save(c.Db, tr, c.Rec);
+            tr.Commit();
+        }
+        m.Sel = System.Math.Min(m.Sel, c.Rec.Ditches.Count - 1);
+        return ($"{id} 지움(모델 {n}개 · 원 선은 그대로)", "");
+    });
+
+    [CommandMethod("DHUDITCHBUILD")]
+    public void PalBuild() => PalRun("모델 생성", (c, m) => Build(c, out string msg) ? (msg, "") : ("", msg), echo: false);   // Build가 알림 줄을 이미 씀
+
+    /// <summary>[지표면 맞춤] — 원 선 · 지표를 다시 읽고 바닥이 지표를 따라감(단차 → 집수정 + 관로 · 급하면 낙차).</summary>
+    [CommandMethod("DHUDITCHFIT")]
+    public void PalFit() => PalRun("지표면 맞춤", (c, m) =>
+    {
+        if (!SelOk(c, m)) return ("", "측구를 고르세요");
+        var d = c.Rec.Ditches[m.Sel];
+        d.InvertAuto = true; d.Follow = true;
+        using (var tr = c.Db.TransactionManager.StartTransaction())
+        {
+            UDitchStore.Refresh(c.Db, tr, d, c.S);
+            UDitch.ApplyAuto(d, c.S);
+            UDitchStore.Save(c.Db, tr, c.Rec);
+            tr.Commit();
+        }
+        var ly = UDitch.LayoutOf(d, c.S);
+        foreach (var ln in ly.Log) c.Log.AppendLine("    " + ln);
+        return (string.Format(Ic, "{0} — 지표 다시 읽음 · 구간 {1}{2}{3}", d.Id, ly.Segs.Count, ly.Drops.Count > 0 ? $" · 낙차 {ly.Drops.Count}" : "",
+                              ly.Basins.Count > 0 ? string.Format(Ic, " · 집수정 {0} · 관 {1:0.0} m", ly.Basins.Count, ly.Pipes.Sum(p => p.Length)) : ""), "");
+    });
+
+    /// <summary>★[JACK 1122 기능 업데이트] [면적 고르기] — 닫힌 폴리선 · 원 · 영역 · 해치를 골라 넓이 합 → 고른 측구의 집수면적(ha).</summary>
+    [CommandMethod("DHUDITCHAREA")]
+    public void PalArea() => PalRun("면적 고르기", (c, m) =>
+    {
+        if (!SelOk(c, m)) return ("", "측구를 먼저 고르세요");
+        var d = c.Rec.Ditches[m.Sel];
+        var o = new PromptSelectionOptions { MessageForAdding = $"\n[U형 측구] {d.Id} 집수 구역 — 닫힌 폴리선 · 원 · 영역 · 해치 고르기(여럿이면 합)" };
+        var f = new SelectionFilter(new[] { new TypedValue((int)DxfCode.Start, "LWPOLYLINE,POLYLINE,CIRCLE,ELLIPSE,SPLINE,REGION,HATCH") });
+        var r = c.Ed.GetSelection(o, f);
+        if (r.Status != PromptStatus.OK) return ("", "");
+        var (sum, used, open) = AreaOf(c.Db, r.Value.GetObjectIds());
+        if (used == 0) return ("", open > 0 ? $"닫힌 것이 없음(열린 선 {open}개) — 닫힌 폴리선 · 원 · 영역 · 해치를 고르세요" : "넓이를 셀 것이 없음");
+        d.AreaHa = sum / 10000.0;
+        using (var tr = c.Db.TransactionManager.StartTransaction()) { UDitchStore.Save(c.Db, tr, c.Rec); tr.Commit(); }
+        string unit = "";
+        try { if (c.Db.Insunits != UnitsValue.Meters && c.Db.Insunits != UnitsValue.Undefined) unit = $" · ⚠도면 단위 {c.Db.Insunits} — m로 가정"; } catch { }
+        return (string.Format(Ic, "{0} 집수면적 {1:0.####} ha ({2:N0} ㎡ · {3}개{4}){5}", d.Id, d.AreaHa, sum, used, open > 0 ? $" · 열린 선 {open}개 뺌" : "", unit), "");
+    });
+
+    /// <summary>닫힌 것들의 넓이 합(㎡) · 쓴 수 · 열린 선 수 — 화면 없는 시험도 이것.</summary>
+    internal static (double Sum, int Used, int Open) AreaOf(Database db, IEnumerable<ObjectId> ids)
+    {
+        double sum = 0; int used = 0, open = 0;
+        using var tr = db.TransactionManager.StartTransaction();
+        // ★[검토 1122 MEDIUM] 해치와 그 경계선을 같이 고르면 두 번 셈 → 고른 해치의 연관 경계선은 뺌
+        var idList = ids.ToList();
+        var skip = new HashSet<ObjectId>();
+        foreach (var id in idList)
+            try { if (tr.GetObject(id, OpenMode.ForRead) is Hatch hh && hh.Associative) foreach (ObjectId b in hh.GetAssociatedObjectIds()) skip.Add(b); } catch { }
+        foreach (var id in idList)
+            try
+            {
+                if (skip.Contains(id)) continue;
+                var e = tr.GetObject(id, OpenMode.ForRead);
+                double a = double.NaN;
+                if (e is Region rg) a = rg.Area;
+                else if (e is Hatch h) a = h.Area;
+                else if (e is Curve cv)
+                {
+                    bool closed = cv.Closed;
+                    try { if (!closed && cv.StartPoint.DistanceTo(cv.EndPoint) < 1e-6) closed = true; } catch { }
+                    if (closed) a = cv.Area; else open++;
+                }
+                if (double.IsFinite(a) && a > 0) { sum += a; used++; }
+            }
+            catch { }
+        tr.Commit();
+        return (sum, used, open);
+    }
+
+    /// <summary>★[JACK 1122 기능 업데이트] [도면에서 보기] — 고른 측구 선으로 화면 이동 + 빨간 선으로 표시(다른 단추 · 다른 측구를 고르면 지움).</summary>
+    [CommandMethod("DHUDITCHZOOM")]
+    public void PalZoom() => PalRun("도면에서 보기", (c, m) =>
+    {
+        if (!SelOk(c, m)) return ("", "측구를 고르세요");
+        var d = c.Rec.Ditches[m.Sel];
+        var pts = UDitch.CleanPts(d.Pts);
+        if (pts.Count < 2) return ("", $"{d.Id} 선 점이 없음 — [선 고르기]로 다시 읽으세요");
+        double x0 = pts.Min(p => p[0]), y0 = pts.Min(p => p[1]), x1 = pts.Max(p => p[0]), y1 = pts.Max(p => p[1]);
+        GroundOffCommand.ZoomToExt(c.Ed, new Extents3d(new Point3d(x0, y0, 0), new Point3d(x1, y1, 0)));
+        ClearMark();
+        try { _mark = PickMark.PaintPath(c.Doc, pts.Select(p => new Point3(p[0], p[1], p.Length > 2 && double.IsFinite(p[2]) ? p[2] : 0)).ToList(), false); } catch { }
+        return ($"{d.Id} — 도면에 빨간 선으로 표시(다른 측구를 고르면 지움)", "");
+    });
+
+    static PickMark? _mark;
+    /// <summary>[도면에서 보기] 빨간 선 지우기 — 창에서 다른 측구를 고를 때 · 다른 단추 일 전에.</summary>
+    internal static void ClearMark() { try { _mark?.Dispose(); } catch { } _mark = null; }
 
     static string SiteWarn(Ctx c)
     {

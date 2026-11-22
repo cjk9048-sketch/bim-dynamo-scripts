@@ -238,6 +238,7 @@ public sealed class RibbonApp : IExtensionApplication
                     RoadPalette.RefreshReset();
                     SheetBookPalette.Refresh();   // ★[v112.0] 도면화 창 — 장 수 · 축척 · 옛것(창이 보일 때만)
                     GroundPalette.Refresh();      // ★[JACK 1121] 원지반 가져오기 창 — [측량도 보정하기] 켜짐 · 지금 원지반(창이 보일 때만)
+                    UDitchPalette.Refresh();      // ★[JACK 1122] U형 측구 창 — 도면 기록 다시 읽기(창이 보일 때만)
                 }
                 // ★[v111.10 · 계획 3.5] 초기화를 U로 되돌려도 단추가 꺼진 채 남지 않게 — 실행 취소 · 다시 실행도(RefreshEnabled는 빼고)
                 else if (c3 == "U" || c3 == "UNDO" || c3 == "REDO" || c3 == "MREDO")
@@ -246,6 +247,7 @@ public sealed class RibbonApp : IExtensionApplication
                     RoadPalette.RefreshReset();
                     SheetBookPalette.Refresh();   // ★[v112.0] 도면화 창 — 장 수 · 축척 · 옛것(창이 보일 때만)
                     GroundPalette.Refresh();      // ★[JACK 1121] 되돌려 원지반이 생기거나 없어져도 [측량도 보정하기]가 따라감
+                    UDitchPalette.Refresh();      // ★[JACK 1122] 되돌린 측구 기록을 창에
                 }
             };
         }
@@ -891,8 +893,9 @@ public sealed class RibbonApp : IExtensionApplication
             // ★★[배수지 U형 측구 1단계] 부지 배수 — 강우 · 측구 선 · 규격 · 수리검토 · 3D 모델
             var btnUDitch = MakeButton("U형\n측구", "DHUDITCH ", "측구 선을 따라 U형 측구 — 강우 · 규격 · 바닥고 · 수리검토 · 3D 모델", "U형측구");
             btnUDitch.ToolTip = MakeTip("U형 측구 (DHUDITCH)",
-                "**U형 측구 창**이 열립니다.\n" +
-                "· 강우(수동 · CSV) · 측구 선(고르기 · 그리기) · 규격 · 바닥고 · 집수면적\n" +
+                "오른쪽에 **U형 측구 도킹창**이 열립니다(단추에 마우스 → 그림 설명).\n" +
+                "· 측구 선(고르기 · 그리기 · 도면에서 보기) · 규격 · 덮개 · 바닥고 · 지표면 맞춤\n" +
+                "· 집수면적(칸 · [면적 고르기]) · 강우(수동 · CSV) · [추천 규격 적용]\n" +
                 "· [모델 생성] = 솔리드(레이어 DH-U형측구) · 보고서(도면 옆 _U형측구.txt)\n" +
                 "· 수리검토는 모델과 따로 — 부족 = 빨강 · 주의 = 노랑", null);
             pGrade.Items.Add(btnUDitch);
