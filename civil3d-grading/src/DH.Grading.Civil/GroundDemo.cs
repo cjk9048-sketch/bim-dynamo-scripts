@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Windows;
@@ -30,6 +30,7 @@ internal sealed class GroundDemoView : Border
         ["gServer"] = (5.4, "서버에서 — 지도에서 모서리 두 점으로 범위 → 그 자리 등고선을 사내 서버에서 받아 원지반(VPN)"),
         ["gContour"] = (4.8, "등고선으로 — 도면에 있는 표고 든 등고선을 걸쳐 고르면(ALL 가능) 그 사본으로 원지반"),
         ["gSurvey"] = (7.0, "측량도 보정 — 백판 위에 측량도를 얹어 측량 범위만 측량 등고선 · 표고점으로 바꿔 원지반을 새로 지음"),
+        ["gRoad"] = (8.0, "도로 다듬기 — 도로선(수치지도 · 측량도 · VWorld)으로 도로 면을 찾아 테두리 높이를 길이 방향으로 다듬고 도로 안을 반듯하게 다시 지음"),
     };
 
     static Brush Fz(byte r, byte g, byte b, byte a = 255) { var x = new SolidColorBrush(Color.FromArgb(a, r, g, b)); x.Freeze(); return x; }
@@ -97,6 +98,7 @@ internal sealed class GroundDemoView : Border
             case "gServer": SceneServer(t); break;
             case "gContour": SceneContour(t); break;
             case "gSurvey": SceneSurvey(t); break;
+            case "gRoad": SceneRoad(t); break;
         }
     }
 
@@ -361,5 +363,85 @@ internal sealed class GroundDemoView : Border
         string foot = t < 1.0 ? "백판 — 수치지도 · 서버 · 전산 등고선" : t < 2.6 ? "측량도를 얹음(도면은 안 엶 · 미리보기 창에서 고름)"
                     : t < 4.8 ? "범위 안 백판 등고선 · 표고점은 지움" : "측량 자료로 치환 → 합성";
         Tx(16, H - 26, foot, 11, DhBrand.Sub);
+    }
+    // ── 장면 5: 도로 다듬기 — 들쭉날쭉한 도로 → 테두리 높이를 길이 방향으로 다듬어 반듯하게 ──
+    const double RoadHalf = 15, BridgeX = 300;
+    static double RoadCy(double x) => 150 - 0.08 * x + 16 * Math.Sin(x / 75.0);
+    static double Bumpy(double x, double y) => Base(x, y) + 2.6 * Math.Sin(x / 6.5 + y / 9.0) + 1.8 * Math.Cos(x / 4.3 - y / 7.0);
+    /// <summary>다듬은 도로 높이 — 도로 길이 방향 이동 평균(가로 방향은 평평).</summary>
+    static double RoadZ(double x, double y)
+    {
+        double s = 0; int n = 0;
+        for (double d = -40; d <= 40; d += 4) { double xx = x + d; s += Base(xx, RoadCy(xx)); n++; }
+        return s / n;
+    }
+    static List<(Point A, Point B, bool Idx)>? _bumpIso, _roadIso;
+    static List<(Point A, Point B, bool Idx)> BumpIso => _bumpIso ??= Iso(Bumpy, 2);
+    static List<(Point A, Point B, bool Idx)> RoadIso => _roadIso ??= Iso(RoadZ, 2);
+    static Point[] RoadPoly(double half)
+    {
+        var top = new List<Point>(); var bot = new List<Point>();
+        for (double x = -10; x <= W + 10; x += 10) { top.Add(new Point(x, RoadCy(x) - half)); bot.Add(new Point(x, RoadCy(x) + half)); }
+        bot.Reverse(); top.AddRange(bot);
+        return top.ToArray();
+    }
+
+    void SceneRoad(double t)
+    {
+        double edges = Seg(t, 1.4, 2.4), prof = Seg(t, 2.8, 3.6), smooth = Seg(t, 3.8, 5.0), bridge = Seg(t, 5.2, 5.9), done = Seg(t, 6.2, 7.2);
+        var road = RoadPoly(RoadHalf);
+        var roadG = PolyG(road);
+        var bridgeG = new EllipseGeometry(new Point(BridgeX, RoadCy(BridgeX)), 30, 30); bridgeG.Freeze();
+        var outside = new CombinedGeometry(GeometryCombineMode.Exclude, RectG(0, 0, W, 190), roadG); outside.Freeze();
+        var roadNoBridge = new CombinedGeometry(GeometryCombineMode.Exclude, roadG, bridge > 0 ? bridgeG : Geometry.Empty); roadNoBridge.Freeze();
+        var roadBridge = new CombinedGeometry(GeometryCombineMode.Intersect, roadG, bridgeG); roadBridge.Freeze();
+        // 바깥 땅은 그대로
+        Contours(BaseIso, BaseC, IdxC, outside, Seg(t, 0, 0.5));
+        // 도로 바탕
+        Pg(road, Fz(0xEE, 0xEE, 0xEA), null, 0, Seg(t, 0, 0.5));
+        // 도로 안 — 처음엔 들쭉날쭉(수치지도 등고선이 도로를 못 담음) → 다듬으면 가로로 반듯한 선(교량 둘레는 원래 그대로)
+        double bumpOp = Seg(t, 0, 0.5) * (1 - done);
+        Contours(BumpIso, Fz(0xC0, 0x4A, 0x3A), Fz(0xC0, 0x4A, 0x3A), done > 0 ? roadNoBridge : roadG, bumpOp);
+        if (done > 0) { var fill = new Path { Data = roadNoBridge, Fill = Fz(0x1F, 0x5F, 0xBF, 0x22), Opacity = done }; _cv.Children.Add(fill); }
+        Contours(RoadIso, SurvC, SurvC, roadNoBridge, done);
+        if (done > 0) Contours(BumpIso, Fz(0xC0, 0x4A, 0x3A), Fz(0xC0, 0x4A, 0x3A), roadBridge, done);
+        // 도로경계 — 초록으로 짚음
+        if (edges > 0)
+        {
+            var e1 = new Polyline { Stroke = Pick, StrokeThickness = 2.2, Opacity = edges }; var e2 = new Polyline { Stroke = Pick, StrokeThickness = 2.2, Opacity = edges };
+            for (double x = -10; x <= -10 + (W + 20) * edges; x += 6) { e1.Points.Add(new Point(x, RoadCy(x) - RoadHalf)); e2.Points.Add(new Point(x, RoadCy(x) + RoadHalf)); }
+            _cv.Children.Add(e1); _cv.Children.Add(e2);
+            Chip(14, 12, "도로선 — 수치지도 DXF · 측량도 · VWorld", edges * (1 - Seg(t, 5.0, 5.4)));
+        }
+        // 교량 · 터널 · 둑 — 빨간 원 · 그 둘레는 손대지 않음
+        if (bridge > 0)
+        {
+            Ln(BridgeX - 40, 20, BridgeX + 25, 185, Fz(0x7A, 0x8A, 0x9A), 9, false, bridge * 0.8);
+            Ring(BridgeX, RoadCy(BridgeX), 30, Fz(0xD0, 0x3A, 0x2A), bridge);
+            Chip(BridgeX - 130, 12, "교량 · 터널 · 둑 둘레는 그대로", bridge * (1 - done));
+        }
+        // 아래 — 도로 테두리 종단(울퉁불퉁 → 다듬기)
+        if (prof > 0)
+        {
+            double px = 18, py = 196, pw = W - 36, ph = 66;
+            _cv.Children.Add(new Rectangle { Width = pw, Height = ph, Fill = Paper, Stroke = DhBrand.Line, StrokeThickness = 1, Opacity = prof, RenderTransform = new TranslateTransform(px, py) });
+            double zl = double.MaxValue, zh = double.MinValue;
+            for (double x = 0; x <= W; x += 4) { double a = Bumpy(x, RoadCy(x) - RoadHalf), b = RoadZ(x, 0); zl = Math.Min(zl, Math.Min(a, b)); zh = Math.Max(zh, Math.Max(a, b)); }
+            Point P(double x, double z) => new(px + 6 + (pw - 12) * x / W, py + ph - 8 - (ph - 18) * (z - zl) / Math.Max(1e-6, zh - zl));
+            var raw = new Polyline { Stroke = Fz(0xC0, 0x4A, 0x3A), StrokeThickness = 1.3, Opacity = prof * (1 - 0.6 * smooth) };
+            var sm = new Polyline { Stroke = SurvC, StrokeThickness = 2.2 };
+            for (double x = 0; x <= W; x += 3)
+            {
+                bool keep = bridge > 0 && Math.Abs(x - BridgeX) < 30;
+                raw.Points.Add(P(x, Bumpy(x, RoadCy(x) - RoadHalf)));
+                if (x <= W * smooth) sm.Points.Add(P(x, keep ? Bumpy(x, RoadCy(x) - RoadHalf) : RoadZ(x, 0)));
+            }
+            _cv.Children.Add(raw); if (sm.Points.Count > 1) _cv.Children.Add(sm);
+            Tx(px + 6, py + 2, smooth > 0 ? "도로 테두리 종단 — 앞뒤 20 m씩 평균(경사는 그대로)" : "도로 테두리 종단 — 들쭉날쭉", 10, Ink, true, prof);
+        }
+        Chip(14, 12, "새 원지반 — 도로 안만 다시 지음 · 옛 원지반은 숨김", done);
+        string foot = t < 1.4 ? "수치지도 원지반 — 도로 위 등고선이 들쭉날쭉" : t < 2.8 ? "도로경계로 도로 면을 찾음(중심선 · 도로폭)"
+                    : t < 5.2 ? "테두리 높이를 길이 방향으로 다듬음" : t < 6.2 ? "높이가 튀는 곳(둑 · 입체 교차)은 빼고" : "도로 안만 반듯하게 다시 지음 → 상수도 종단이 깔끔";
+        Tx(16, H - 22, foot, 11, Ink);
     }
 }

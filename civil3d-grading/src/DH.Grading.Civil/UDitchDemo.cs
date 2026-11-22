@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Windows;
 using System.Windows.Controls;
@@ -31,6 +31,16 @@ internal sealed class UDitchDemoView : Border
         ["udArea"] = (4.6, "면적 고르기 — 도면의 닫힌 폴리선 · 원 · 해치를 고르면 넓이 합이 집수면적(ha)"),
         ["udRain"] = (4.2, "강우 — 공식 자료의 재현기간 · 지속기간 · 강우강도(CSV 표에서 한 줄) · Q = C · I · A / 360"),
         ["udBuild"] = (5.0, "모델 생성 — 모든 측구를 U형 콘크리트 솔리드로(덮개 · 집수정 · 관로 포함) + 보고서"),
+        // ★[JACK 1122 «측구 입력값마다 애니메이션 — 측구 설계를 해 본 적이 없어 설계적인 뜻이 필요»]
+        ["udSize"] = (6.0, "규격 — 안폭 B × 안높이 H(mm). 물이 허용 수심(보통 안높이의 80 %)까지 찰 때 흘릴 수 있는 양 = 통수능. 클수록 많이 흘림"),
+        ["udCover"] = (4.6, "덮개 — 사람 · 차가 지나는 자리는 스틸 그레이팅(빗물은 틈으로 들어감) · 아니면 열린 U(청소 쉬움)"),
+        ["udRev"] = (4.8, "방향 — 물은 높은 곳 → 낮은 곳. 오르막으로 그리면 측구가 땅에 묻힘 → 새 측구는 자동으로 맞추고, 바꾸려면 [방향 바꾸기]"),
+        ["udInvert"] = (6.0, "바닥고 — 측구 바닥 높이. 지표 − 덮개(흙) − 안높이. 시점이 종점보다 높아야 흐름 · 경사 = 높이 차 ÷ 길이(최소 경사 이상)"),
+        ["udC"] = (5.4, "유출계수 C — 내린 비 중 측구로 흘러드는 몫(0~1). 포장 0.9 · 잔디 0.3 · 숲 0.2 — 땅에 스며드는 만큼 작음"),
+        ["udYears"] = (5.0, "재현기간 — 그만한 비가 평균 몇 년에 한 번 오는지. 길게 잡을수록 큰 비 → 안전하지만 측구가 커짐(기준서 값을 따름)"),
+        ["udMins"] = (5.6, "지속기간 — 집수면 가장 먼 곳의 빗물이 측구까지 오는 시간(도달시간). 짧을수록 그 시간 동안 내리는 비가 강함"),
+        ["udIdf"] = (5.4, "강우강도 — 공식 IDF 자료(재현기간 × 지속기간 표)에서 읽은 시간당 비(mm/h). 값을 짓지 말고 자료에서"),
+        ["udResult"] = (6.4, "결과 — 필요 유량 Q = C · I · A / 360 과 통수능을 견줌 · 유속도 범위 안이어야 OK. 부족하면 [추천 규격 적용]"),
     };
 
     static Brush Fz(byte r, byte g, byte b, byte a = 255) { var x = new SolidColorBrush(Color.FromArgb(a, r, g, b)); x.Freeze(); return x; }
@@ -99,6 +109,15 @@ internal sealed class UDitchDemoView : Border
             case "udArea": SceneArea(t); break;
             case "udRain": SceneRain(t); break;
             case "udBuild": SceneBuild(t); break;
+            case "udSize": SceneSize(t); break;
+            case "udCover": SceneCover(t); break;
+            case "udRev": SceneRev(t); break;
+            case "udInvert": SceneInvert(t); break;
+            case "udC": SceneC(t); break;
+            case "udYears": SceneYears(t); break;
+            case "udMins": SceneMins(t); break;
+            case "udIdf": SceneIdf(t); break;
+            case "udResult": SceneResult(t); break;
         }
     }
 
@@ -323,6 +342,236 @@ internal sealed class UDitchDemoView : Border
         {
             double x = 300 + (k * 37) % 110, y = ((t * 160 + k * 53) % 120) + 150;
             Ln(x, y, x - 4, y + 10, Water, 1.5);
+        }
+    }
+
+    // ── 입력값 장면(JACK 1122) ──
+    void Rect(double x, double y, double w, double h, Brush? fill, Brush? stroke = null, double sw = 1)
+    {
+        var r = new Rectangle { Width = Math.Max(0, w), Height = Math.Max(0, h), Fill = fill, Stroke = stroke, StrokeThickness = sw };
+        Canvas.SetLeft(r, x); Canvas.SetTop(r, y); _cv.Children.Add(r);
+    }
+    void Box(double x, double y, string text, double a = 1, Brush? fg = null)
+    {
+        var b = new Border { Opacity = a, Background = DhBrand.Card, BorderBrush = DhBrand.Line, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(4), Padding = new Thickness(8, 4, 8, 4),
+            Child = new TextBlock { Text = text, FontSize = 12, FontWeight = FontWeights.SemiBold, Foreground = fg ?? DhBrand.Brand } };
+        Canvas.SetLeft(b, x); Canvas.SetTop(b, y); _cv.Children.Add(b);
+    }
+    /// <summary>치수선(양끝 화살) + 글.</summary>
+    void Dim(double x1, double y1, double x2, double y2, string label, double lx, double ly)
+    {
+        Arrow((x1 + x2) / 2, (y1 + y2) / 2, x1, y1, Ink); Arrow((x1 + x2) / 2, (y1 + y2) / 2, x2, y2, Ink);
+        Tx(lx, ly, label, 11, Ink, true);
+    }
+    /// <summary>U 단면(콘크리트) — 안 왼쪽 위 (x, y) · 안폭 b · 안높이 h · 벽 w.</summary>
+    void USection(double x, double y, double b, double h, double w)
+    {
+        Poly(new[] { new Point(x - w, y), new Point(x, y), new Point(x, y + h), new Point(x + b, y + h), new Point(x + b, y), new Point(x + b + w, y),
+                     new Point(x + b + w, y + h + w), new Point(x - w, y + h + w) }, ConcDark, 1.2, Conc, true);
+    }
+
+    void SceneSize(double t)
+    {
+        double x = 150, y = 70, b = 120, h = 120, w = 16;
+        Rect(0, y, W, H - y, Ground); Ln(0, y, W, y, GroundLine, 2);
+        Rect(x - w, y - 1, b + 2 * w, 3, DhBrand.Card);
+        USection(x, y, b, h, w);
+        Rect(x, y - 2, b, h + 2, DhBrand.Card);
+        if (t > 0.6) Dim(x, y - 14, x + b, y - 14, "안폭 B", x + b / 2 - 22, y - 34);
+        if (t > 1.2) Dim(x + b + w + 16, y, x + b + w + 16, y + h, "안높이 H", x + b + w + 24, y + h / 2 - 8);
+        double a = Seg(t, 1.8, 3.4), wd = h * 0.8 * a;
+        if (a > 0) Rect(x, y + h - wd, b, wd, Water);
+        if (t > 3.4)
+        {
+            Ln(x - 30, y + h * 0.2, x + b + 4, y + h * 0.2, DhBrand.Brand, 1.4, 4);
+            Tx(16, y + h * 0.2 - 22, "허용 수심 80 %", 11, DhBrand.Brand, true);
+            Tx(16, y + h * 0.2 - 8, "(위 20 % = 여유)", 10, DhBrand.Sub);
+        }
+        if (t > 4.2) Box(60, 236, "통수능 = 물 단면 × 유속(매닝 공식) — 이만큼까지 흘림", Seg(t, 4.2, 4.9));
+    }
+
+    void SceneCover(double t)
+    {
+        // 왼쪽 열린 U · 오른쪽 그레이팅
+        foreach (var (x0, grating) in new[] { (60.0, false), (250.0, true) })
+        {
+            double y = 120, b = 90, h = 80, w = 12;
+            Rect(x0 - 40, y, 170, 120, Ground); Ln(x0 - 40, y, x0 + 130, y, GroundLine, 2);
+            USection(x0, y, b, h, w); Rect(x0, y - 2, b, h + 2, DhBrand.Card);
+            Rect(x0, y + h * 0.55, b, h * 0.45, Water);
+            if (grating)
+            {
+                double a = Seg(t, 0.8, 1.8), sx = x0 - 120 * (1 - a);
+                Rect(sx, y - 6, b, 6, Pipe);
+                for (double k = 6; k < b; k += 10) Ln(sx + k, y - 6, sx + k, y, DhBrand.Card, 2);
+                // 빗물이 틈으로
+                if (t > 2.0) for (int k = 0; k < 6; k++) { double dy = ((t * 90 + k * 17) % 60); Ln(x0 + 10 + k * 14, y - 60 + dy, x0 + 8 + k * 14, y - 52 + dy, Water, 1.6); }
+                Tx(x0 - 12, y + h + 22, "스틸 그레이팅", 12, Ink, true);
+                Tx(x0 - 22, y + h + 38, "사람 · 차 지나는 자리", 10, DhBrand.Sub);
+            }
+            else
+            {
+                Tx(x0 + 2, y + h + 22, "덮개 없음", 12, Ink, true);
+                Tx(x0 - 6, y + h + 38, "열린 U · 청소 쉬움", 10, DhBrand.Sub);
+            }
+        }
+        if (t > 2.6) Tx(110, 30, "그레이팅 무게는 물량에만 — 통수능은 같음", 11, Ink, true);
+    }
+
+    static double SlopeZ(double x) => 80 + x * 0.32;   // 왼쪽 높음(위) → 오른쪽 낮음
+    void SceneRev(double t)
+    {
+        var g = new List<Point>(); for (double x = 20; x <= 400; x += 10) g.Add(new Point(x, SlopeZ(x)));
+        Poly(new List<Point>(g) { new(400, H), new(20, H) }, null, 0, Ground, true);
+        Poly(g, GroundLine, 2);
+        Tx(24, SlopeZ(24) - 28, "높음", 11, Ink, true); Tx(360, SlopeZ(370) - 28, "낮음", 11, Ink, true);
+        bool wrong = t < 2.4;
+        double a = wrong ? Seg(t, 0.3, 1.6) : Seg(t, 2.6, 3.9);
+        double xa = wrong ? 360 : 60, xb = wrong ? 60 : 360;
+        double xe = xa + (xb - xa) * a;
+        if (a > 0.05) Arrow(xa, SlopeZ(xa) - 10, xe, SlopeZ(xe) - 10, wrong ? Pick : AreaLine);
+        if (wrong && t > 1.6)
+        {
+            Tx(150, 40, "✕ 오르막으로 그림", 13, Pick, true);
+            // 묻힌 측구(평평하게 땅 속)
+            Ln(60, SlopeZ(360) + 16, 360, SlopeZ(360) + 16, Ditch, 4, 6);
+            Tx(70, SlopeZ(360) + 22, "측구가 땅 속에 묻힘", 10.5, Pick, true);
+        }
+        if (!wrong)
+        {
+            Ln(60, SlopeZ(60) + 14, 360, SlopeZ(360) + 14, Ditch, 4);
+            if (t > 3.9) Tx(150, 40, "✓ 높은 쪽 → 낮은 쪽", 13, AreaLine, true);
+            if (t > 4.1) for (int k = 0; k < 3; k++) { double x = 60 + ((t * 120 + k * 100) % 300); Dot(x, SlopeZ(x) + 11, 3, Water); }
+        }
+    }
+
+    void SceneInvert(double t)
+    {
+        Tx(12, 10, "종단", 11, Ink, true);
+        double Zg(double x) => 118 + x * 0.12;
+        var g = new List<Point>(); for (double x = 30; x <= 400; x += 10) g.Add(new Point(x, Zg(x)));
+        Poly(new List<Point>(g) { new(400, H), new(30, H) }, null, 0, Ground, true);
+        Poly(g, GroundLine, 2);
+        double cov = 14, hh = 34;
+        double a = Seg(t, 0.4, 2.0);
+        var inv = new List<Point>(); for (double x = 30; x <= 30 + 370 * a; x += 10) inv.Add(new Point(x, Zg(x) + cov + hh));
+        if (inv.Count > 1) Poly(inv, Ditch, 4);
+        if (t > 2.0)
+        {
+            double x = 70, yg = Zg(x);
+            Ln(x, yg, x, yg + cov, Ink, 1.5); Tx(x + 6, yg - 2, "덮개(흙)", 10, DhBrand.Sub);
+            Rect(x - 10, yg + cov, 20, hh, Fz(0x1F, 0x5F, 0xBF, 0x30), Ditch);
+            Tx(x + 14, yg + cov + 8, "안높이", 10, DhBrand.Sub);
+            Dot(x, yg + cov + hh, 4, Pick); Tx(x - 30, yg + cov + hh + 8, "시점 바닥고 41.20", 11, Pick, true);
+        }
+        if (t > 3.0) { double x = 370; Dot(x, Zg(x) + cov + hh, 4, Pick); Tx(x - 80, Zg(x) + cov + hh + 8, "종점 바닥고 40.80", 11, Pick, true); }
+        if (t > 3.8) Box(40, 40, "경사 = (41.20 − 40.80) ÷ 40 m = 1.0 %", Seg(t, 3.8, 4.4));
+        if (t > 4.6) Tx(40, 76, "최소 경사보다 작으면 흙이 쌓임 · 칸에 치면 한 경사(손 입력)", 10.5, DhBrand.Sub);
+    }
+
+    void SceneC(double t)
+    {
+        (string Name, double C, Brush Fill)[] k = { ("포장(아스팔트)", 0.9, Fz(0x6A, 0x70, 0x74)), ("잔디", 0.3, Fz(0x8B, 0xC3, 0x4A)), ("숲", 0.2, Fz(0x2E, 0x7D, 0x32)) };
+        for (int i = 0; i < 3; i++)
+        {
+            double x = 20 + i * 135, y = 150;
+            Rect(x, y, 120, 26, k[i].Fill);
+            Tx(x + 4, y + 32, $"{k[i].Name}  C ≈ {k[i].C:0.0}", 11, Ink, true);
+            // 빗방울 — C 몫은 옆으로 흘러감(파랑 화살) · 나머지는 스며듦(갈색 점)
+            for (int j = 0; j < 10; j++)
+            {
+                double ph = (t * 0.9 + j * 0.1) % 1.0, dx = x + 8 + j * 11;
+                if (ph < 0.6) Ln(dx, 60 + ph * 140, dx - 2, 68 + ph * 140, Water, 1.6);
+                else if (j < k[i].C * 10) Dot(dx + (ph - 0.6) * 60, y - 4, 2.6, Ditch);
+                else Dot(dx, y + 8 + (ph - 0.6) * 30, 2.2, GroundLine);
+            }
+        }
+        // 측구(오른쪽 끝)
+        Rect(W - 14, 140, 10, 40, Ditch);
+        if (t > 2.4) Box(40, 230, "C = 측구로 흘러드는 몫 · 여러 땅이면 넓이로 가중 평균", Seg(t, 2.4, 3.0));
+    }
+
+    void SceneYears(double t)
+    {
+        (string Y, double I)[] r = { ("10년", 0.55), ("30년", 0.72), ("50년", 0.82), ("100년", 1.0) };
+        Tx(16, 10, "재현기간이 길수록 큰 비", 12, Ink, true);
+        for (int i = 0; i < r.Length; i++)
+        {
+            double a = Seg(t, 0.3 + i * 0.5, 1.0 + i * 0.5), x = 40 + i * 92, hgt = 170 * r[i].I * a;
+            Rect(x, 250 - hgt, 56, hgt, Water, Ditch);
+            Tx(x + 12, 256, r[i].Y, 12, Ink, true);
+            // 구름 + 빗줄기 밀도
+            var cl = new Ellipse { Width = 64, Height = 22, Fill = Fz(0xB0, 0xBC, 0xC4) }; Canvas.SetLeft(cl, x - 4); Canvas.SetTop(cl, 52); _cv.Children.Add(cl);
+            int n = (int)(4 + 10 * r[i].I);
+            for (int j = 0; j < n; j++) { double yy = 76 + ((t * 140 + j * 29) % 14); Ln(x + 4 + j * 52.0 / n, yy, x + 2 + j * 52.0 / n, yy + 7, Water, 1.4); }
+        }
+        if (t > 2.8) Tx(16, 28, "보통 기준서(도로 · 단지 배수)가 정한 연수를 씀", 10.5, DhBrand.Sub);
+    }
+
+    void SceneMins(double t)
+    {
+        PlanBase();
+        var zone = new[] { new Point(80, 70), new Point(330, 70), new Point(330, 150), new Point(200, 170), new Point(80, 150) };
+        Poly(zone, AreaLine, 1.5, Area, true);
+        Poly(Route, Ditch, 4);
+        // 가장 먼 점 → 측구 끝(종점)까지 물방울
+        var path = new[] { new Point(100, 90), new Point(180, 120), new Point(250, 160), new Point(300, 210), Route[^1] };
+        double a = Seg(t, 0.6, 3.8);
+        Dot(path[0].X, path[0].Y, 5, Pick); Tx(path[0].X + 10, path[0].Y + 2, "가장 먼 곳", 10.5, Pick, true);
+        Poly(Upto(path, a), Water, 2, null);
+        var p = At(path, a); Dot(p.X, p.Y, 5, Ditch);
+        Box(250, 18, $"{a * 10:0}분", 1);
+        if (t > 4.0) Tx(40, 256, "도달시간 = 지속기간 · 짧으면 더 센 비로 셈", 12, Ink, true);
+    }
+
+    void SceneIdf(double t)
+    {
+        double x0 = 60, y0 = 250, w = 320, h = 200;
+        Ln(x0, y0, x0 + w, y0, Ink, 1.4); Ln(x0, y0, x0, y0 - h, Ink, 1.4);
+        Tx(x0 + w - 70, y0 + 6, "지속기간(분)", 10, DhBrand.Sub); Tx(8, y0 - h - 18, "강우강도(mm/h)", 10, DhBrand.Sub);
+        double X(double m) => x0 + w * (m - 5) / 115;
+        double Y(double i) => y0 - h * i / 200;
+        (string N, double A, Brush B)[] cs = { ("10년", 1300, Fz(0x8F, 0xB8, 0xDE)), ("30년", 1580, Ditch), ("50년", 1700, Fz(0x0D, 0x3B, 0x80)) };
+        double a = Seg(t, 0.2, 1.6);
+        foreach (var (n, A, b) in cs)
+        {
+            var pts = new List<Point>(); for (double m = 5; m <= 5 + 115 * a; m += 2.5) pts.Add(new Point(X(m), Y(A / (m + 4))));
+            if (pts.Count > 1) Poly(pts, b, 2);
+        }
+        // 범례(곡선 끝 글자가 겹치지 않게)
+        for (int c = 0; c < cs.Length; c++) { Ln(x0 + w - 70, y0 - h + 6 + c * 16, x0 + w - 50, y0 - h + 6 + c * 16, cs[c].B, 2.5); Tx(x0 + w - 44, y0 - h - 2 + c * 16, cs[c].N, 10.5, cs[c].B, true); }
+        if (t > 1.8)
+        {
+            double k = Seg(t, 1.8, 2.8), m = 10, i = 1580 / (m + 4);
+            Ln(X(m), y0, X(m), y0 - (y0 - Y(i)) * k, Pick, 1.4, 4);
+            if (k > 0.99) { Ln(X(m), Y(i), x0 + (X(m) - x0) * (1 - Seg(t, 2.8, 3.6)), Y(i), Pick, 1.4, 4); Dot(X(m), Y(i), 5, Pick); }
+            Tx(X(m) - 8, y0 + 6, "10", 10, Pick, true);
+        }
+        if (t > 3.6) Box(100, 30, "30년 · 10분 → 112.9 mm/h", Seg(t, 3.6, 4.2));
+    }
+
+    void SceneResult(double t)
+    {
+        // 필요 Q vs 통수능 막대
+        Tx(30, 14, "필요 유량", 11, Ink, true); Tx(160, 14, "통수능(규격)", 11, Ink, true);
+        double need = 0.62, cap1 = 0.48, cap2 = 0.95;
+        bool up = t > 3.4;
+        double cap = up ? cap1 + (cap2 - cap1) * Seg(t, 3.4, 4.4) : cap1;
+        double a = Seg(t, 0.3, 1.4), b = Seg(t, 0.8, 1.9);
+        Rect(40, 230 - 170 * need * a, 60, 170 * need * a, Water, Ditch);
+        Rect(170, 230 - 170 * cap * b, 60, 170 * cap * b, cap >= need ? Area : Fz(0xD0, 0x30, 0x28, 0x50), cap >= need ? AreaLine : Pick);
+        Tx(36, 236, "C·I·A/360", 10, DhBrand.Sub);
+        Tx(166, 236, up ? "U형 400×400" : "U형 300×300", 10, DhBrand.Sub);
+        if (t > 2.0 && !up) Tx(250, 120, "⚠ 부족", 15, Pick, true);
+        if (t > 2.4 && t < 3.4) Box(250, 150, "[추천 규격 적용]", Seg(t, 2.4, 2.8));
+        if (up && t > 4.4) Tx(250, 120, "✓ OK", 15, AreaLine, true);
+        // 유속 범위
+        if (t > 4.6)
+        {
+            Ln(40, 274, 380, 274, Ink, 1.2);
+            Rect(40 + 340 * 0.6 / 4, 268, 340 * 2.4 / 4, 12, Area, AreaLine);
+            Tx(40, 280, "0", 9, DhBrand.Sub); Tx(40 + 340 * 0.6 / 4 - 6, 280, "0.6", 9, DhBrand.Sub); Tx(40 + 340 * 3.0 / 4 - 6, 280, "3.0 m/s", 9, DhBrand.Sub);
+            Dot(40 + 340 * 1.4 / 4, 274, 5, Ditch); Tx(250, 246, "유속도 범위 안", 11, Ink, true);
         }
     }
 

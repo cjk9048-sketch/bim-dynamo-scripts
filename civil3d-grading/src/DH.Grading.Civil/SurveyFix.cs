@@ -29,6 +29,12 @@ internal static class SurveyFix
         public string Path = "";
         public readonly List<SurveyItem> Items = new();
         public readonly HashSet<string> LayersOff = new(StringComparer.OrdinalIgnoreCase);
+        /// <summary>★[JACK 1122 «캐드처럼»] 레이어 색(ARGB) — 창 목록 · 그림.</summary>
+        public readonly Dictionary<string, int> LayerArgb = new(StringComparer.OrdinalIgnoreCase);
+        /// <summary>★[JACK 1122 «측량도의 블록들이 점으로만 나와 구분이 안 됨»] 블록 모양(그림용 — 자료 아님 · 표고 0 블록 포함).</summary>
+        public readonly List<SurveyDecor> Decor = new();
+        int _decorPts;
+        internal void AddDecor(SurveyDecor dc) { if (_decorPts > 400_000) return; _decorPts += dc.Pts.Count; Decor.Add(dc); }
         public int Read, Zero, Other, Fail, Short, BlockZero;
         public string Skipped()
         {
@@ -73,11 +79,45 @@ internal static class SurveyFix
         sdb.CloseInput(true);
         int id = 0;
         using var tr = sdb.TransactionManager.StartTransaction();
+        // 블록 정의 모양(정의 좌표 · 한 번만 읽음 · 중첩 블록은 뺌)
+        var defs = new Dictionary<ObjectId, List<(List<Point3d> P, bool Closed)>>();
+        List<(List<Point3d> P, bool Closed)> DefOf(ObjectId btrId)
+        {
+            if (defs.TryGetValue(btrId, out var l)) return l;
+            l = new();
+            try
+            {
+                var btr = (BlockTableRecord)tr.GetObject(btrId, OpenMode.ForRead);
+                int n = 0;
+                foreach (ObjectId eid in btr)
+                {
+                    if (++n > 300) break;
+                    try
+                    {
+                        if (tr.GetObject(eid, OpenMode.ForRead) is Curve cv)
+                        {
+                            var pp = GroundContourCommand.Sample(cv, out bool cl);
+                            if (pp != null && pp.Count >= 2) l.Add((pp.Select(q => new Point3d(q.X, q.Y, q.Z)).ToList(), cl));
+                        }
+                    }
+                    catch { }
+                }
+            }
+            catch { }
+            defs[btrId] = l;
+            return l;
+        }
         try
         {
             var lt = (LayerTable)tr.GetObject(sdb.LayerTableId, OpenMode.ForRead);
             foreach (ObjectId lid in lt)
-                try { var r = (LayerTableRecord)tr.GetObject(lid, OpenMode.ForRead); if (r.IsOff || r.IsFrozen) d.LayersOff.Add(r.Name); } catch { }
+                try
+                {
+                    var r = (LayerTableRecord)tr.GetObject(lid, OpenMode.ForRead);
+                    if (r.IsOff || r.IsFrozen) d.LayersOff.Add(r.Name);
+                    try { d.LayerArgb[r.Name] = r.Color.ColorValue.ToArgb(); } catch { }
+                }
+                catch { }
         }
         catch { }
         var ms = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(sdb), OpenMode.ForRead);
@@ -88,18 +128,32 @@ internal static class SurveyFix
                 if (tr.GetObject(oid, OpenMode.ForRead) is not Entity e) continue;
                 d.Read++;
                 string ly = e.Layer ?? "";
+                int argb = 0;
+                try { var ec = e.Color; argb = ec.IsByLayer || ec.IsByBlock ? (d.LayerArgb.TryGetValue(ly, out int la) ? la : 0) : ec.ColorValue.ToArgb(); } catch { }
+                int before = d.Items.Count;
                 if (e is DBPoint dp)
                 {
                     if (Math.Abs(dp.Position.Z) < GroundContourCommand.ZeroTol) { d.Zero++; continue; }
-                    d.Items.Add(new SurveyItem { Id = id++, Layer = ly, Kind = SurveyKind.Spot, Pts = { P3(dp.Position) }, Z0 = dp.Position.Z, Z1 = dp.Position.Z, Src = "점" });
+                    d.Items.Add(new SurveyItem { Id = id++, Layer = ly, Kind = SurveyKind.Spot, Pts = { P3(dp.Position) }, Z0 = dp.Position.Z, Z1 = dp.Position.Z, Src = "점", Argb = argb });
                     continue;
                 }
                 if (e is BlockReference br)
                 {
+                    try
+                    {
+                        var xf = br.BlockTransform;
+                        foreach (var (pp, cl) in DefOf(br.BlockTableRecord))
+                        {
+                            var dc = new SurveyDecor { Layer = ly, Argb = argb, Closed = cl };
+                            foreach (var q in pp) { var w = q.TransformBy(xf); dc.Pts.Add((w.X, w.Y)); }
+                            d.AddDecor(dc);
+                        }
+                    }
+                    catch { }
                     // 측점 기호 블록 — 삽입점 표고가 곧 그 점의 표고(측량 성과도의 흔한 꼴). 표고 0이면 도곽 · 범례 같은 기호.
                     if (Math.Abs(br.Position.Z) < GroundContourCommand.ZeroTol) { d.BlockZero++; continue; }
                     string bn = ""; try { bn = br.Name; } catch { }
-                    d.Items.Add(new SurveyItem { Id = id++, Layer = ly, Kind = SurveyKind.Spot, Pts = { P3(br.Position) }, Z0 = br.Position.Z, Z1 = br.Position.Z, Src = "블록 " + bn });
+                    d.Items.Add(new SurveyItem { Id = id++, Layer = ly, Kind = SurveyKind.Spot, Pts = { P3(br.Position) }, Z0 = br.Position.Z, Z1 = br.Position.Z, Src = "블록 " + bn, Argb = argb });
                     continue;
                 }
                 if (e is not (Line or Polyline or Polyline2d or Polyline3d or Arc or Circle or Ellipse or Spline)) { d.Other++; continue; }
@@ -112,6 +166,7 @@ internal static class SurveyFix
                 var it = new SurveyItem { Id = id++, Layer = ly, Kind = flat ? SurveyKind.Contour : SurveyKind.Break, Closed = closed, Z0 = z0, Z1 = z1, Src = e.GetType().Name };
                 foreach (var p in pts) it.Pts.Add(flat ? new Point3(p.X, p.Y, z0) : P3(p));
                 d.Items.Add(it);
+                for (int k = before; k < d.Items.Count; k++) d.Items[k].Argb = argb;
             }
             catch { d.Fail++; }
         }
@@ -211,7 +266,7 @@ internal static class SurveyFix
                 foreach (var p in bm.Spots) { ax0 = Math.Min(ax0, p.X); ay0 = Math.Min(ay0, p.Y); ax1 = Math.Max(ax1, p.X); ay1 = Math.Max(ay1, p.Y); }
                 var s0 = BoxOf(use, Math.Max(0.01, margin));
                 var c0 = SurveyMerge.Classify(s0.X0, s0.Y0, s0.X1, s0.Y1, ax0, ay0, ax1, ay1);
-                if (c0.Kind == SurveyMerge.Placement.Overlap) { r.Message = "측량도가 원지반과 겹칩니다 — [측량도만으로 원지반] 대신 [보정 실행]을 쓰세요."; return r; }
+                if (c0.Kind == SurveyMerge.Placement.Overlap) { r.Message = "측량도가 원지반과 겹칩니다 — [측량도만으로 원지반] 대신 [선택 레이어 사용]을 쓰세요."; return r; }
                 if (c0.Kind == SurveyMerge.Placement.CrsMismatch) { r.Message = "측량도가 원지반과 겹치지 않습니다 — " + c0.Text; return r; }
             }
             return Build(doc, use, r, new BaseMat(), null, margin, gap, "", surveyOnly: true);
@@ -242,11 +297,76 @@ internal static class SurveyFix
                       + $"측량 {env.MinX:F0},{env.MinY:F0} ~ {env.MaxX:F0},{env.MaxY:F0}\n원지반 {bx0:F0},{by0:F0} ~ {bx1:F0},{by1:F0}";
             return r;
         }
-        string partWarn = ix * iy < 0.5 * env.Width * env.Height ? "\n  ⚠측량 범위의 절반 넘게가 원지반 밖 — 밖은 측량 자료만으로 지음" : "";
+        string partWarn = "";
         return Build(doc, use, r, bm, region, margin, gap, partWarn, surveyOnly: false);
     }
 
-    static Result Build(Document doc, IReadOnlyList<SurveyItem> use, Result r, BaseMat bm, NetTopologySuite.Geometries.Geometry? region, double margin, double gap, string partWarn, bool surveyOnly)
+    /// <summary>옛 원지반 테두리를 새 원지반 바깥 경계로. 못 하면 알림 글(경계 없이 둠).</summary>
+    static string ClipToOld(Database db, ObjectId oldId, ObjectId newId)
+    {
+        try
+        {
+            List<Point3>? ring = null;
+            double best = 0;
+            var areas = new List<double>();
+            using (var tr = db.TransactionManager.StartTransaction())
+            {
+                if (oldId.IsNull || oldId.IsErased || tr.GetObject(oldId, OpenMode.ForRead) is not CivilDb.TinSurface old) { tr.Commit(); return ""; }
+                foreach (ObjectId bid in old.ExtractBorder(Autodesk.Civil.SurfaceExtractionSettingsType.Model))
+                {
+                    var ent = tr.GetObject(bid, OpenMode.ForWrite);
+                    var lp = new List<Point3>();
+                    if (ent is Polyline3d p3)
+                    {
+                        foreach (ObjectId vId in p3)
+                            if (tr.GetObject(vId, OpenMode.ForRead) is PolylineVertex3d pv) lp.Add(P3(pv.Position));
+                    }
+                    else if (ent is Polyline p2)
+                        for (int k = 0; k < p2.NumberOfVertices; k++) lp.Add(P3(p2.GetPoint3dAt(k)));
+                    ent.Erase();   // 재기용 임시 추출물
+                    if (lp.Count < 3) continue;
+                    double a = 0;
+                    for (int k = 0; k < lp.Count; k++) { var u = lp[k]; var v = lp[(k + 1) % lp.Count]; a += u.X * v.Y - v.X * u.Y; }
+                    areas.Add(Math.Abs(a) / 2);
+                    if (Math.Abs(a) / 2 > best) { best = Math.Abs(a) / 2; ring = lp; }
+                }
+                tr.Commit();
+            }
+            if (ring == null) return "⚠옛 원지반 테두리를 못 읽음 — 경계 자르기 생략";
+            using (var tr = db.TransactionManager.StartTransaction())
+            {
+                var tin = (CivilDb.TinSurface)tr.GetObject(newId, OpenMode.ForWrite);
+                GradingBuilder.AddOuterBoundary(tin, ring, midOrd: 0.01);
+                tr.Commit();
+            }
+            // ★[검토 1122 MEDIUM] 옛 원지반이 여러 조각이면 가장 큰 조각 테두리만 씀 — 알림
+            int islands = areas.Count(x => x > best * 0.01) - 1;
+            return "옛 원지반 테두리 밖은 자름" + (islands > 0 ? $" · ⚠옛 원지반이 여러 조각 — 가장 큰 조각만(작은 조각 {islands}개 자리는 새 원지반에 없음)" : "");
+        }
+        catch (System.Exception ex) { return "⚠옛 원지반 테두리로 자르지 못함 — " + ex.Message; }
+    }
+
+    /// <summary>★★[JACK 1122 «원지반 도로 다듬기»] 다듬은 도로 테두리(3D)로 그 범위만 바꿔 원지반을 새로 짓는다 — 측량도 보정과 같은 한 벌
+    /// (범위 안 옛 등고선 · 표고점 뺌 · 옛 원지반 숨김 · 옛 테두리로 자름 · 이벤트 뷰어 창 없음). <paramref name="note"/> = 결과 앞머리(다듬기 셈 요약).</summary>
+    internal static Result MergeRoad(Document doc, ObjectId groundId, NetTopologySuite.Geometries.Geometry region, IReadOnlyList<List<Point3>> lines, string note)
+    {
+        var r = new Result { BaseId = groundId };
+        LastForTest = r;
+        r.BaseName = GroundSet.NameOf(doc.Database, groundId);
+        var bm = ReadBase(doc.Database, groundId);
+        if (bm.Lines.Count == 0 && bm.Spots.Count == 0) { r.Message = $"'{r.BaseName}'의 재료(등고선 · 표고점)를 찾지 못했습니다.\n[원지반 가져오기]로 원지반을 다시 만든 뒤 해 보세요."; return r; }
+        int id = 0;
+        var use = new List<SurveyItem>();
+        foreach (var l in lines)
+        {
+            if (l.Count < 2) continue;
+            use.Add(new SurveyItem { Id = id++, Layer = "도로", Kind = SurveyKind.Break, Pts = l.ToList(), Z0 = l.Min(q => q.Z), Z1 = l.Max(q => q.Z), Src = "도로 테두리" });
+        }
+        if (use.Count == 0) { r.Message = "다듬은 도로 선이 없습니다."; return r; }
+        return Build(doc, use, r, bm, region, 0, 0, "", surveyOnly: false, roadNote: note);
+    }
+
+    static Result Build(Document doc, IReadOnlyList<SurveyItem> use, Result r, BaseMat bm, NetTopologySuite.Geometries.Geometry? region, double margin, double gap, string partWarn, bool surveyOnly, string? roadNote = null)
     {
         var db = doc.Database;
         var ed = doc.Editor;
@@ -328,16 +448,27 @@ internal static class SurveyFix
             string done = surveyOnly
                 ? $"측량도만으로 — 측량 등고선 {r.SurvContours} · 3D 선 {r.SurvBreaks} · 표고점 {r.SurvSpots} · {surfNote}"
                 : $"'{r.BaseName}' 백판 등고선 {r.BaseLines}가닥 중 범위에 걸려 자름 {r.BaseCut} · 통째 뺌 {r.BaseGone} · 표고점 {r.BaseSpots}개 중 뺌 {r.BaseSpotsGone}"
-                  + $" → 측량 등고선 {r.SurvContours} · 3D 선 {r.SurvBreaks} · 표고점 {r.SurvSpots} 넣음 · 범위 {region!.Area:N0} ㎡(여유 {margin:0.##} m · 틈 메움 {gap:0.##} m) · {surfNote}";
+                  + (roadNote != null
+                      ? $" → 다듬은 도로 테두리 {r.SurvBreaks}가닥 넣음 · {roadNote} · {surfNote}"
+                      : $" → 측량 등고선 {r.SurvContours} · 3D 선 {r.SurvBreaks} · 표고점 {r.SurvSpots} 넣음 · 범위 {region!.Area:N0} ㎡(여유 {margin:0.##} m · 틈 메움 {gap:0.##} m) · {surfNote}");
             if (!built || r.NewId.IsNull)
             {
                 r.Message = "원지반을 새로 짓지 못했습니다.\n\n" + done;
                 try { DiagLog.Append($"\n■ DHSURVEYFIX — 실패: {done}\n"); } catch { }
                 return r;
             }
+            // ★[JACK 1122 스샷 «처음 부른 원지반보다 측량도가 넘어가도 처음 원지반을 넘어 작성되지 않게»]
+            //   새 원지반 바깥 경계 = 옛 원지반 테두리(가장 큰 고리) — 측량이 밖으로 뻗어도 긴 삼각형으로 늘어나지 않음
+            string clip = "";
+            if (!surveyOnly)
+            {
+                var evPrev = EventViewerMute.Begin();   // ★[검토 1122 MEDIUM] 자르며 다시 짓기도 이벤트 뷰어 창 없이
+                try { clip = ClipToOld(db, groundId, r.NewId); } finally { EventViewerMute.End(evPrev); }
+            }
+            if (clip.Length > 0) done += "\n  " + clip;
             // ── 옛 원지반은 숨김(지우지 않음 — 그것을 쓰는 결과가 있을 수 있음 · [원지반 삭제]로 지울 수 있음) ──
             if (r.DupSpots > 0) done += $"\n  같은 자리 표고점 {r.DupSpots}개는 하나만 씀";
-            if (r.Cross is { ZDiff: > 0 } cx)
+            if (roadNote == null && r.Cross is { ZDiff: > 0 } cx)
                 done += $"\n  ⚠측량 선끼리 높이가 다르게 엇갈린 곳 {cx.ZDiff}곳 — 지표면이 한쪽만 씀(" + string.Join(" · ", cx.Pairs.Take(3).Select(p => p.A == p.B ? $"{p.A} {p.N}" : $"{p.A}×{p.B} {p.N}")) + ")"
                       + "\n    담장 · 건물 · 수목처럼 땅이 아닌 레이어면 창에서 빼고 다시 하세요";
             string hid = surveyOnly ? $"\n  옛 '{r.BaseName}'은 그대로(다른 자리 — 둘 다 원지반으로 씀)" : "";

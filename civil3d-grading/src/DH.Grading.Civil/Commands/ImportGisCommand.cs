@@ -163,7 +163,21 @@ public sealed class ImportGisCommand
             ed.WriteMessage($"\n[등고선] {ids.Count}가닥 작도 완료");
 
             // ── "원지반" 지표면 자동 생성 ──
-            string surfNote = BuildGroundSurface(db, ed, ids);
+            var before = new HashSet<ObjectId>(GroundSet.List(db, legacy: false).Select(g => g.Id));
+            var evPrev = EventViewerMute.Begin();   // ★[검토 1122 MEDIUM] 짓기 · 네모 맞춤 다시 짓기 모두 이벤트 뷰어 창 없이
+            string surfNote;
+            try
+            {
+            surfNote = BuildGroundSurface(db, ed, ids);
+            // ★[JACK 1122 «서버 지표면이 고른 네모대로 안 되고 경계가 찌그러짐»] 등고선이 닿지 않은 모서리 · 변까지 네모로 — 상자 테두리로 자름
+            foreach (var g in GroundSet.List(db, legacy: false))
+                if (!before.Contains(g.Id))
+                {
+                    string fit = FitToBox(db, g.Id, x0, y0, x1, y1, lines.SelectMany(l => l.Pts.Cast<Point3d>()));
+                    if (fit.Length > 0) surfNote += " · " + fit;
+                }
+            }
+            finally { EventViewerMute.End(evPrev); }
             DrawOrderFix.Apply(db);
             ed.Regen();
 
@@ -180,6 +194,103 @@ public sealed class ImportGisCommand
             AcadApp.ShowAlertDialog("등고선 가져오기 중 오류:\n" + ex.Message);
             return false;
         }
+    }
+
+    /// <summary>★[JACK 1122] 지표면을 고른 상자에 꼭 맞춤 — 상자 테두리에서 지표면이 없는 자리(등고선이 안 닿은 모서리 · 변)만
+    /// 가까운 등고선 꼭짓점 높이(거리 가중 8점)로 점을 채우고, 상자를 바깥 경계로 넣는다. 못 하면 알림 글(지표면은 그대로).</summary>
+    internal static string FitToBox(Database db, ObjectId sid, double x0, double y0, double x1, double y1, IEnumerable<Point3d> verts)
+    {
+        try
+        {
+            var vs = verts.ToList();
+            if (vs.Count < 3 || x1 <= x0 || y1 <= y0) return "";
+            // 꼭짓점 격자(가까운 점 찾기)
+            double cell = Math.Max(5, Math.Sqrt((x1 - x0) * (y1 - y0) / Math.Max(1, vs.Count)) * 3);
+            var grid = new Dictionary<(int, int), List<int>>();
+            for (int i = 0; i < vs.Count; i++)
+            {
+                var k = ((int)Math.Floor((vs[i].X - x0) / cell), (int)Math.Floor((vs[i].Y - y0) / cell));
+                if (!grid.TryGetValue(k, out var l)) grid[k] = l = new List<int>();
+                l.Add(i);
+            }
+            double Idw(double x, double y)
+            {
+                int cx = (int)Math.Floor((x - x0) / cell), cy = (int)Math.Floor((y - y0) / cell);
+                var near = new List<(double D, double Z)>();
+                // ★[검토 1122 LOW] 고리 한 겹씩만 더 봄(전체 정사각형 되풀이 없음) · 8점 찾은 뒤 한 겹 더(대각 쪽 더 가까운 점) · 상자 크기에서 멈춤
+                int maxR = (int)Math.Ceiling(Math.Max(x1 - x0, y1 - y0) / cell) + 2, extra = -1;
+                for (int r = 0; r <= maxR; r++)
+                {
+                    for (int gx = cx - r; gx <= cx + r; gx++)
+                        for (int gy = cy - r; gy <= cy + r; gy++)
+                        {
+                            if (Math.Abs(gx - cx) != r && Math.Abs(gy - cy) != r) continue;
+                            if (grid.TryGetValue((gx, gy), out var l))
+                                foreach (int i in l) near.Add((Math.Sqrt((vs[i].X - x) * (vs[i].X - x) + (vs[i].Y - y) * (vs[i].Y - y)), vs[i].Z));
+                        }
+                    if (near.Count >= 8 && extra < 0) extra = r + 1;
+                    if (extra >= 0 && r >= extra) break;
+                }
+                if (near.Count == 0) return double.NaN;
+                double sw = 0, sz = 0;
+                foreach (var (d, z) in near.OrderBy(n => n.D).Take(8)) { double w = 1 / Math.Max(0.01, d * d); sw += w; sz += w * z; }
+                return sz / sw;
+            }
+            double per = 2 * ((x1 - x0) + (y1 - y0));
+            double step = Math.Clamp(per / 800, 1, 10);
+            var ring = new List<Point3> { new(x0, y0, 0), new(x1, y0, 0), new(x1, y1, 0), new(x0, y1, 0) };
+            var add = new List<Point3d>();
+            int miss = 0;
+            double cxm = (x0 + x1) / 2, cym = (y0 + y1) / 2;
+            using (var tr = db.TransactionManager.StartTransaction())
+            {
+                var tin = (TinSurface)tr.GetObject(sid, OpenMode.ForRead);
+                for (int e = 0; e < 4; e++)
+                {
+                    var a = ring[e]; var b = ring[(e + 1) % 4];
+                    double len = Math.Sqrt((b.X - a.X) * (b.X - a.X) + (b.Y - a.Y) * (b.Y - a.Y));
+                    int n = Math.Max(1, (int)Math.Ceiling(len / step));
+                    for (int k = 0; k < n; k++)
+                    {
+                        double t = (double)k / n, x = a.X + (b.X - a.X) * t, y = a.Y + (b.Y - a.Y) * t;
+                        // ★[검토 1122 LOW] 테두리 바로 안쪽(1 cm)을 봄 — 선 위 반올림으로 «없음»이 나와 칼날 점이 생기지 않게
+                        double tx = x + Math.Sign(cxm - x) * 0.01, ty = y + Math.Sign(cym - y) * 0.01;
+                        bool has;
+                        try { tin.FindElevationAtXY(tx, ty); has = true; } catch { has = false; }
+                        if (has) continue;
+                        double z = Idw(x, y);
+                        if (double.IsFinite(z)) add.Add(new Point3d(x, y, z)); else miss++;
+                    }
+                }
+                tr.Commit();
+            }
+            // ★[검토 1122 MEDIUM] 채운 점 = 원지반 재료(표고점 레이어 · 주인 표시) — [측량도 보정]이 백판을 다시 읽어도 모서리가 남게
+            var ids = new ObjectIdCollection();
+            if (add.Count > 0)
+            {
+                using var tr = db.TransactionManager.StartTransaction();
+                ObjectId laySpot = EnsureLayer(db, tr, LayerSpot, 2);
+                var ms = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForWrite);
+                foreach (var p in add)
+                {
+                    var dp = new DBPoint(p) { LayerId = laySpot };
+                    ms.AppendEntity(dp); tr.AddNewlyCreatedDBObject(dp, true);
+                    ids.Add(dp.ObjectId);
+                }
+                tr.Commit();
+                GroundSet.Tag(db, ids.Cast<ObjectId>(), sid.Handle.ToString());
+            }
+            using (var tr = db.TransactionManager.StartTransaction())
+            {
+                var tin = (TinSurface)tr.GetObject(sid, OpenMode.ForWrite);
+                if (ids.Count > 0) tin.DrawingObjectsDefinition.AddFromPoints(ids, "테두리 채움");
+                GradingBuilder.AddOuterBoundary(tin, ring, midOrd: 0.01);   // 다시 짓기는 이 안에서 한 번
+                tr.Commit();
+            }
+            return (add.Count > 0 ? $"고른 네모로 자름(빈 테두리 {add.Count}점은 가까운 등고선 높이로 채움)" : "고른 네모로 자름")
+                 + (miss > 0 ? $" · ⚠테두리 {miss}곳은 가까운 등고선이 없어 못 채움" : "");
+        }
+        catch (System.Exception ex) { return "⚠네모로 자르지 못함 — " + ex.Message; }
     }
 
     // ── 지적도 ────────────────────────────────────────────────────────────────

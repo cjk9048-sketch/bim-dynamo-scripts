@@ -21,7 +21,7 @@ public sealed class SurveyFixCommand
     /// <summary>창 기본값 — 한 세션 동안 마지막에 쓴 값.</summary>
     static double _margin = 2.0, _gap = 40.0;
 
-    /// <summary>★[JACK 1122 «업체마다 레이어명이 다름 — 사용자가 보고 고름»] 지난번 [보정 실행] 때 쓴 레이어 이름 — 같은 업체 측량도면 그대로 체크해 연다.
+    /// <summary>★[JACK 1122 «업체마다 레이어명이 다름 — 사용자가 보고 고름»] 지난번 [선택 레이어 사용] 때 쓴 레이어 이름 — 같은 업체 측량도면 그대로 체크해 연다.
     /// %APPDATA%\DH.Grading\survey_layers.txt(한 줄에 하나). 못 읽으면 빈 것(아무것도 체크 안 함).</summary>
     static string LayerFile => System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "DH.Grading", "survey_layers.txt");
     static List<string> LoadLayers()
@@ -107,7 +107,7 @@ public sealed class SurveyFixCommand
             {
                 var w = new SurveyFixWindow(name, data.Items, data.LayersOff, grounds.Select(g => g.Name).ToList(), gi,
                                             k => SurveyFix.BaseForView(db, grounds[Math.Clamp(k, 0, grounds.Count - 1)].Id), _margin, _gap,
-                                            skipped.Length > 0 ? $"읽은 객체 {data.Read}개 · {skipped}" : $"읽은 객체 {data.Read}개", LoadLayers());
+                                            skipped.Length > 0 ? $"읽은 객체 {data.Read}개 · {skipped}" : $"읽은 객체 {data.Read}개", LoadLayers(), data.LayerArgb, data.Decor);
                 if (AcadApp.ShowModalWindow(w) != true) { ed.WriteMessage("\n[측량도 보정] 취소"); return; }
                 use = w.Chosen; gi = Math.Clamp(w.GroundIndex, 0, grounds.Count - 1);
                 // ★[검토 1122 LOW] 업체마다 따로 기억 — 이 도면에서 쓴 것은 더하고 안 쓴 것만 뺌(다른 업체 레이어명은 남김)

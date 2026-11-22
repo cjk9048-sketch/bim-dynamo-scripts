@@ -447,6 +447,8 @@ public sealed class UDitchCommand
         var d = k >= 0 ? c.Rec.Ditches[k] : new UDitch.Ditch { Id = UDitch.NextId(c.Rec.Ditches), LineHandle = h, Size = c.S.Sizes[0].Copy(), C = c.S.DefaultC, Follow = true };
         UDitchStore.FillGround(c.Db, tr, d, pts, z3, c.S);
         UDitch.ApplyAuto(d, c.S);
+        // ★[JACK 1122] 새 측구는 흐름 방향을 지표로 정함(높은 쪽 → 낮은 쪽) — 그린 차례가 오르막이면 측구가 통째로 묻힘. 다시 고른 옛 측구는 [방향 바꾸기] 그대로.
+        string dirNote = k < 0 ? UDitch.AutoDirection(d, c.S) : "";
         if (k < 0) { c.Rec.Ditches.Add(d); k = c.Rec.Ditches.Count - 1; }
         if (c.Rec.Site.Source.Contains("없음")) c.Rec.Site = UDitchStore.SiteOf(c.Db, GradingSettings.ExportEpsg, c.Rec.Ditches);
         UDitchStore.Save(c.Db, tr, c.Rec);
@@ -454,7 +456,8 @@ public sealed class UDitchCommand
         index = k;
         var lay = UDitch.LayoutOf(d, c.S);
         msg = string.Format(Ic, "{0} — 길이 {1} · 지표면 {2}{3}{4}", d.Id, UDitch.LengthText(d, c.S, "0.00"), d.Surface,
-                            lay.Basins.Count > 0 ? $" · 단차 {lay.Basins.Count} → 집수정 + 관로" : "", why.Length > 0 ? " · ⚠" + why : "");
+                            lay.Basins.Count > 0 ? $" · 단차 {lay.Basins.Count} → 집수정 + 관로" : "", why.Length > 0 ? " · ⚠" + why : "")
+              + (dirNote.Length > 0 ? " · " + dirNote : "");
         c.Log.AppendLine("  " + msg);
         foreach (var ln in lay.Log) c.Log.AppendLine("    " + ln);
         return true;

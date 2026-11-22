@@ -155,6 +155,14 @@ internal sealed class UDitchPanel : UserControl
 
         Content = new ScrollViewer { Content = root, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled };
 
+        // ★[JACK 1122 «측구 입력값마다 애니메이션»] 칸 · 단추에 마우스(또는 입력 커서) → 위 설명 칸에 그 값의 설계 뜻
+        void Explain(FrameworkElement el, string key) { el.MouseEnter += (_, __) => _demo.Play(key); el.GotKeyboardFocus += (_, __) => _demo.Play(key); }
+        Explain(_size, "udSize"); Explain(_cover, "udCover"); Explain(_rev, "udRev");
+        Explain(_start, "udInvert"); Explain(_end, "udInvert"); Explain(_area, "udArea"); Explain(_c, "udC");
+        Explain(_years, "udYears"); Explain(_mins, "udMins"); Explain(_int, "udIdf");
+        Explain(_src, "udRain"); Explain(_ver, "udRain"); Explain(_csv, "udRain");
+        Explain(_result, "udResult"); Explain(_recBtn, "udResult"); Explain(_segBox, "udFit");
+
         // ── 처리기 ──
         foreach (var tb in new[] { _years, _mins, _int }) tb.TextChanged += (_, __) => RainChanged(manual: true);
         foreach (var tb in new[] { _src, _ver }) tb.TextChanged += (_, __) =>

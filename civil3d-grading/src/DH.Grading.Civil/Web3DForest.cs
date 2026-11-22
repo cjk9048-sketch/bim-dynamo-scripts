@@ -1,4 +1,4 @@
-using DH.Grading.Core;
+﻿using DH.Grading.Core;
 using DH.Grading.Core.Forest;
 using NetTopologySuite.Geometries;
 
@@ -128,7 +128,7 @@ internal static class Web3DForest
                 return Missing("수목 범위가 너무 넓습니다", false);
             }
             // ★[v117.19 · JACK 1116] 회사 임상도 API(2025 · 회사망) → 창고 → 도면 폴더 사본 → 없음 — 못 쓰면 조용히 다음으로(로그 한 줄)
-            var pick = ForestSource.OpenWithApi(DhKeys.Installed.GisApi, keys, st.Tiles, st.IsDefault, st.Seen, dwgDir, s => BusyPopup.Text("3D 보기 — " + s), out string apiNote, out int apiPolys);
+            var pick = ForestSource.OpenWithApi(DhKeys.Installed.GisApi, keys, st.Tiles, st.IsDefault, st.Seen, dwgDir, s => BusyPopup.Text("3D 보기 — " + s), out string apiNote, out int apiPolys, db: DhKeys.Installed.GisDb.Ready ? GisDb.LoadForest : null);
             if (apiNote.Length > 0) log.AppendLine("  수목: " + apiNote + " → " + (pick.Source != null ? pick.Log : "창고 없음"));
             if (pick.Source == null)
             {

@@ -1,4 +1,4 @@
-namespace DH.Grading.Core.Forest;
+﻿namespace DH.Grading.Core.Forest;
 
 /// <summary>★[v115 · JACK 1105 임상도] 타일 창고 읽기 — «폴더 또는 http» 꼴로 짜되 이번 판은 폴더만(계획 2판 0-4 · 5절). NAS(<c>HttpForestSource</c>)는 다음 판.</summary>
 public interface IForestTileSource
@@ -63,7 +63,8 @@ public static class ForestSource
     /// <summary>★[v117.19 · JACK 1116] 회사 API(2025판 · 회사망에서만) → 창고 → 도면 폴더 사본 → missing. <paramref name="apiBase"/>가 비었거나 못 쓰면 조용히 다음으로 — 까닭 한 줄은 <paramref name="apiNote"/>(주소는 안 적음).
     /// API에서 받은 칸은 메모리 창고(<see cref="ForestApiSource"/>) — 사본은 부르는 쪽이 <see cref="CopyUsed"/>로 저장.</summary>
     public static Pick OpenWithApi(string? apiBase, IReadOnlyList<(int Tx, int Ty)> keys, string tiles, bool isDefault, bool seen, string? dwgDir,
-                                   Action<string>? progress, out string apiNote, out int apiPolys, System.Net.Http.HttpMessageHandler? handler = null)
+                                   Action<string>? progress, out string apiNote, out int apiPolys, System.Net.Http.HttpMessageHandler? handler = null,
+                                   Func<double[], Action<byte[], Func<string, string>>, int>? db = null)
     {
         apiNote = ""; apiPolys = 0;
         if (!string.IsNullOrWhiteSpace(apiBase) && keys.Count > 0)
@@ -71,6 +72,24 @@ public static class ForestSource
             var r = ForestApiClient.TryFetch(apiBase!.Trim(), keys, progress, handler);
             if (r.Source != null) { apiPolys = r.Polys; return new Pick(r.Source, "", false, false, ForestApi.Label, false, true); }
             apiNote = r.Note;
+        }
+        // ★[JACK 1122 «서버 지표면은 집에서도 되는데 왜 3D 수목만 안 나와?»] 회사 API는 회사망 밖을 403(RBAC)으로 막음 — 같은 표(portal_etc.tb_fgdi_im5000)를 사내 DB로 직접(집에서도 됨 · 등고선과 같은 접속)
+        if (db != null && keys.Count > 0)
+        {
+            try
+            {
+                progress?.Invoke("임상도 받는 중(사내 DB)");
+                var b = new ForestApiBuilder(keys);
+                var got = new HashSet<string>();
+                db(ForestApi.Bbox5186(keys), (wkb, get) =>
+                {
+                    if (!got.Add(get("gid"))) return;
+                    b.Add(ForestApi.ParseWkbRings(wkb), get);
+                });
+                apiPolys = got.Count;
+                return new Pick(b.Finish(), "", false, false, ForestApi.Label + " · 사내 DB", false, true);
+            }
+            catch (Exception ex) { apiNote = (apiNote.Length > 0 ? apiNote + " · " : "") + "사내 DB도 못 씀 — " + ex.GetType().Name; }
         }
         // ★[v117.18.6 · JACK 1116 «기타 설정 임상도 타일은 필요 없지 않아? 회사 API로 해결» → «타일 폴더 없앰»] API 못 쓰면 도면 폴더 사본만(타일 폴더 안 봄)
         if (OpenCopy(dwgDir, out var copy, out string cwhy)) return new Pick(copy, "", false, false, "회사 API 못 씀 → 도면 폴더 사본", true);

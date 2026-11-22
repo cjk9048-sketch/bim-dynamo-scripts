@@ -1,4 +1,4 @@
-using Autodesk.AutoCAD.Geometry;
+﻿using Autodesk.AutoCAD.Geometry;
 using Npgsql;
 
 namespace DH.Grading.Civil;
@@ -54,6 +54,36 @@ internal static class GisDb
         foreach (var s in new[] { d.Host, d.Password })
             if (s.Length >= 3) msg = msg.Replace(s, "(사내 DB)");
         return msg;
+    }
+
+    /// <summary>★[JACK 1122] 임상도(회사 API와 같은 표 <c>portal_etc.tb_fgdi_im5000</c> · 5186) — 상자 안 폴리곤을 WKB + 속성으로. 너무 많으면 예외(받기 전에 셈).</summary>
+    public static int LoadForest(double[] bbox5186, System.Action<byte[], System.Func<string, string>> onFeature)
+    {
+        using var conn = new NpgsqlConnection(new NpgsqlConnectionStringBuilder(ConnString) { Timeout = 5, CommandTimeout = 120 }.ConnectionString);
+        conn.Open();
+        using (var cc = new NpgsqlCommand("SELECT count(*) FROM portal_etc.tb_fgdi_im5000 WHERE geom && ST_MakeEnvelope(@a,@b,@c,@d,5186)", conn))
+        {
+            cc.Parameters.AddWithValue("a", bbox5186[0]); cc.Parameters.AddWithValue("b", bbox5186[1]); cc.Parameters.AddWithValue("c", bbox5186[2]); cc.Parameters.AddWithValue("d", bbox5186[3]);
+            long n = System.Convert.ToInt64(cc.ExecuteScalar());
+            if (n > DH.Grading.Core.Forest.ForestApiClient.MaxFeatures) throw new System.IO.InvalidDataException($"임상도 폴리곤 {n:N0}개 — 너무 많음");
+        }
+        string[] cols = { "gid", "storunst", "fror_cd", "frtp_cd", "koftr_grou", "dmcls_cd", "agcls_cd", "dnst_cd", "height", "ldmark_stn", "map_label", "갱신년도", "etc_pcmtt", "frtp_nm", "koftr_nm", "dmcls_nm", "agcls_nm", "dnst_nm", "height_nm" };
+        string sel = string.Join(", ", cols.Select(c => "\"" + c + "\"::text"));
+        using var cmd = new NpgsqlCommand($"SELECT {sel}, ST_AsBinary(geom) FROM portal_etc.tb_fgdi_im5000 WHERE geom && ST_MakeEnvelope(@a,@b,@c,@d,5186)", conn);
+        cmd.Parameters.AddWithValue("a", bbox5186[0]); cmd.Parameters.AddWithValue("b", bbox5186[1]); cmd.Parameters.AddWithValue("c", bbox5186[2]); cmd.Parameters.AddWithValue("d", bbox5186[3]);
+        int k = 0;
+        using var r = cmd.ExecuteReader();
+        var row = new Dictionary<string, string>(System.StringComparer.Ordinal);
+        while (r.Read())
+        {
+            if (r.IsDBNull(cols.Length)) continue;
+            row.Clear();
+            for (int i = 0; i < cols.Length; i++) row[cols[i]] = r.IsDBNull(i) ? "" : r.GetString(i).Trim();
+            var snap = new Dictionary<string, string>(row, System.StringComparer.Ordinal);
+            onFeature((byte[])r.GetValue(cols.Length), name => snap.TryGetValue(name, out var v) ? v : "");
+            k++;
+        }
+        return k;
     }
 
     public static bool CanConnect(out string reason)

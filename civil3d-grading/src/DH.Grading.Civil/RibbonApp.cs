@@ -47,6 +47,7 @@ using AcadApp = Autodesk.AutoCAD.ApplicationServices.Application;
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.NgiiCommand))]               // DHNGII(수치지도 DXF → 원지반)
 [assembly: CommandClass(typeof(DH.Grading.Civil.GroundPalette))]                       // ★[JACK 1121] DHGROUNDPANEL(원지반 가져오기 도킹창 — 리본 스플릿 대신)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.SurveyFixCommand))]          // ★[JACK 1121] DHSURVEYFIX(측량도 보정 — 백판 위 측량 범위만 바꿔 원지반 새로)
+[assembly: CommandClass(typeof(DH.Grading.Civil.Commands.RoadSmoothCommand))]         // ★[JACK 1122] DHROADSMOOTH(원지반 도로 다듬기 — 수치지도 · 측량도 도로선으로 도로 울퉁불퉁 보정)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.GroundContourCommand))]      // ★[v113.0] DHGNDCONTOUR(도면의 등고선 → 원지반)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.CropGroundCommand))]         // DHCROP(원지형 자르기)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.SelfCheckCommand))]          // DHSELFCHECK(자가점검 — 읽기만 · v103.1.7)

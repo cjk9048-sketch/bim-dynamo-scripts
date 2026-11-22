@@ -1,4 +1,4 @@
-namespace DH.Grading.Core;
+﻿namespace DH.Grading.Core;
 
 /// <summary>★★[v117.16 · JACK 1112 «3D 뷰로 보니깐 이런 상태인데 … 애초에 폴리선이 단차 있게 만든 부지거든?» → «이 부분도 해주고»]
 /// U형 측구 — 바닥이 지표를 따라감(지표 − 덮개 − 안높이 · 최소 경사는 지킴) · 최대 경사보다 급하면 낙차(계단) · 단차(급한 내리막이 최대 낙차보다 높음)는 집수정 + 관로(원형).
@@ -245,6 +245,29 @@ public static partial class UDitch
 
     /// <summary>측구 짜임. 지표 따라감(<see cref="Ditch.Follow"/> · 자동 바닥고 · 지표 2점 이상)이면 단차 → 집수정 + 관로 · 급한 곳 → 낙차 ·
     /// 아니면 시점 → 종점 한 경사 한 구간(옛 방식 그대로).</summary>
+    /// <summary>★[JACK 1122 스샷 «단 있는 3D 폴리선으로 했더니 저렇게 나옴»] 흐름 방향 자동 — 물은 내려가기만 하므로
+    /// 그린 차례대로 가면 묻히는 높이(지표가 앞서 지난 가장 낮은 곳보다 솟은 높이의 최대)와 거꾸로 갈 때를 견줘, 거꾸로가 0.1 m 넘게 덜 묻히면 뒤집는다.
+    /// 지표 따라감 · 자동 바닥고일 때만. 돌려줌 = 알림 글(안 바꿨으면 빈 글).</summary>
+    public static string AutoDirection(Ditch d, Settings s)
+    {
+        if (!d.Follow || !d.InvertAuto) return "";
+        var p = CleanPts(d.Pts);
+        if (p.Count < 2) return "";
+        var sm = SamplesOf(d, new Path2(p)).Where(q => double.IsFinite(q.Z)).Select(q => q.Z).ToList();
+        if (sm.Count < 2) return "";
+        static double Buried(IEnumerable<double> zs)
+        {
+            double low = double.PositiveInfinity, worst = 0;
+            foreach (double z in zs) { low = Math.Min(low, z); worst = Math.Max(worst, z - low); }
+            return worst;
+        }
+        double fwd = Buried(sm), rev = Buried(Enumerable.Reverse(sm));
+        if (fwd - rev <= 0.1) return "";
+        Reverse(d);
+        ApplyAuto(d, s);
+        return string.Format(Ic, "흐름 방향을 높은 쪽 → 낮은 쪽으로 바꿈(그린 차례대로면 최대 {0:0.00} m 묻힘 · 바꾸면 {1:0.00} m)", fwd, rev);
+    }
+
     public static Layout LayoutOf(Ditch d, Settings s)
     {
         var lay = new Layout();

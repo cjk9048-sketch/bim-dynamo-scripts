@@ -23,10 +23,21 @@ internal sealed class SurveyItem
     public List<Point3> Pts = new();
     public bool Closed;
     public double Z0, Z1;
-    /// <summary>미리보기에서 하나씩 뺀 것은 거짓(레이어 체크와 따로).</summary>
+    /// <summary>미리보기에서 하나씩 뺀 것은 거짓(레이어 체크와 따로) — 지금 창은 레이어 단위로만 고름(늘 참).</summary>
     public bool On = true;
-    /// <summary>원본 종류(«3D 폴리선» · «점» · «블록 PT» …) — 창 안내 · 로그.</summary>
+    /// <summary>원본 종류(«3D 폴리선» · «점» · «블록 PT» …) — 로그.</summary>
     public string Src = "";
+    /// <summary>★[JACK 1122 «팝업 측량도를 캐드처럼»] 도면에 보이는 색(ARGB — 객체 색 · ByLayer면 레이어 색). 0 = 모름.</summary>
+    public int Argb;
+}
+
+/// <summary>★[JACK 1122] 측량도 블록 모양(그림용 — 자료 아님).</summary>
+internal sealed class SurveyDecor
+{
+    public string Layer = "";
+    public int Argb;
+    public bool Closed;
+    public List<(double X, double Y)> Pts = new();
 }
 
 /// <summary>측량 범위 — 고른 것의 선 · 점에서(<see cref="SurveyMerge.Region"/>). 창과 명령이 같은 한 벌을 쓴다(AutoCAD 타입 없음).</summary>
@@ -50,255 +61,187 @@ internal sealed class SurveyBase
     public void Grow(double x, double y) { X0 = Math.Min(X0, x); Y0 = Math.Min(Y0, y); X1 = Math.Max(X1, x); Y1 = Math.Max(Y1, y); }
 }
 
-/// <summary>★★[JACK 1121 «측량도를 고르면 팝업 창에 측량도가 열리고 거기서 가져올 등고선 · 표고점을 고름»] 측량도 미리보기 창.
-/// <para>도면을 열지 않고(옆 DB로 읽은 것) 그린다 — 왼쪽 = 레이어(체크 · 수) · 원지반 · 여유 · 틈 메움, 오른쪽 = 그림(백판 회색 · 측량 등고선 파랑 · 3D 선 보라 · 표고점 빨강 · 범위 청록).
-/// 그림: 클릭 = 하나 빼기/넣기 · 끌기 = 상자 안 빼기(Shift = 넣기) · 휠 = 확대 · 오른쪽(가운데) 끌기 = 이동.</para>
-/// <para>범위가 원지반과 안 겹치면(좌표계가 다름) [보정 실행]을 끈다 — 어긋난 자리에 측량을 붙이면 엉뚱한 땅이 된다.</para></summary>
+/// <summary>★★[JACK 1121 · 1122] 측량도 보정 창 — 왼쪽 레이어 목록(체크 = 씀) · 오른쪽 CAD 같은 검은 바탕 그림(도면 색).
+/// <para>★[JACK 1122 «고르고 나서 선택 레이어 사용 · 취소만 · 설명 문장 다 지우고 깔끔하게»]
+/// 그림에서 객체를 누르면 그 레이어를 쓰기/안 쓰기(레이어 전체 · 마우스를 올리면 그 레이어 객체가 전부 강조) · 휠 = 확대 · 가운데/오른쪽 끌기 = 이동 · 두 번 클릭 = 전체.</para>
+/// <para>처음엔 아무 레이어도 쓰지 않음(수목 · 건물에도 표고가 있음) — 지난번에 쓴 레이어 이름이 있으면 그것만 체크.</para></summary>
 internal sealed class SurveyFixWindow : Window
 {
     static readonly CultureInfo IC = CultureInfo.InvariantCulture;
 
     readonly List<SurveyItem> _items;
     readonly Dictionary<string, CheckBox> _layerChecks = new(StringComparer.OrdinalIgnoreCase);
-    /// <summary>★[JACK 1122 «레이어별로 잘 구분 · 객체를 누르면 그 레이어가 선택»] 레이어 줄(강조) · 레이어 색 · 고른 레이어 칸.</summary>
     readonly Dictionary<string, Border> _layerRows = new(StringComparer.OrdinalIgnoreCase);
     readonly Dictionary<string, Brush> _layerColor = new(StringComparer.OrdinalIgnoreCase);
-    readonly Border _selCard;
-    readonly TextBlock _selTitle, _selText;
-    readonly Button _selUse, _selOnly, _selClear, _selZoom;
-    string? _selLayer;
-    /// <summary>체크를 한꺼번에 바꾸는 중 — 끝에 한 번만 다시 셈(검토 1122 MEDIUM).</summary>
-    bool _bulk;
     readonly Dictionary<string, string> _countText = new(StringComparer.OrdinalIgnoreCase);
-    void Bulk(Action a) { _bulk = true; try { a(); } finally { _bulk = false; } Changed(); }
-    /// <summary>쓸 것의 엇갈림 셈 캐시.</summary>
-    string _crossKey = "";
-    SurveyMerge.CrossReport? _crossCache;
     readonly Func<int, SurveyBase> _loadBase;
     readonly ComboBox? _ground;
     readonly TextBox _margin, _gap;
-    readonly TextBlock _info, _warn;
+    readonly TextBlock _info, _cross, _warn;
     readonly Button _ok;
-    /// <summary>★[JACK 1122] 원지반과 다른 곳(같은 좌표계)일 때만 보임 — 측량 자료만으로 새 원지반.</summary>
+    /// <summary>원지반과 다른 곳(같은 좌표계)일 때만 보임 — 측량 자료만으로 새 원지반.</summary>
     readonly Button _onlyBtn;
-    /// <summary>[측량도만으로 원지반]으로 닫혔나.</summary>
     internal bool SurveyOnly { get; private set; }
-    /// <summary>범위 셈 캐시 — 쓸 것 · 여유 · 틈 메움이 같으면 다시 안 셈.</summary>
     string _regionKey = "";
     NetTopologySuite.Geometries.Geometry? _regionCache;
+    string _crossKey = "";
+    SurveyMerge.CrossReport? _crossCache;
     readonly SurveyCanvas _cv;
     readonly DispatcherTimer _debounce = new() { Interval = TimeSpan.FromMilliseconds(250) };
     SurveyBase _base;
 
-    /// <summary>[보정 실행]으로 닫혔을 때 — 쓸 것 · 원지반 차례 · 여유 · 틈 메움.</summary>
     internal List<SurveyItem> Chosen { get; private set; } = new();
     internal int GroundIndex { get; private set; }
     internal double Band { get; private set; }
     internal double Gap { get; private set; }
 
-    /// <summary>레이어 색 — 흰 바탕에서 서로 잘 갈리는 16색(차례로 돌림).</summary>
-    static readonly Color[] Palette =
-    {
-        Color.FromRgb(0xD0, 0x3B, 0x2F), Color.FromRgb(0x1F, 0x5F, 0xBF), Color.FromRgb(0x2E, 0x8B, 0x3E), Color.FromRgb(0x8E, 0x44, 0xAD),
-        Color.FromRgb(0xE6, 0x7E, 0x22), Color.FromRgb(0x00, 0x8A, 0x8F), Color.FromRgb(0xB8, 0x2E, 0x8A), Color.FromRgb(0x7A, 0x5C, 0x2E),
-        Color.FromRgb(0x2C, 0x3E, 0x50), Color.FromRgb(0xC0, 0x9A, 0x00), Color.FromRgb(0x5D, 0x8A, 0xD6), Color.FromRgb(0x6A, 0xA8, 0x4F),
-        Color.FromRgb(0xE0, 0x56, 0x8A), Color.FromRgb(0x4B, 0x3F, 0x9E), Color.FromRgb(0x96, 0x6B, 0x4A), Color.FromRgb(0x3A, 0x9E, 0x9A),
-    };
-
-    const string SelHelp = "그림에서 표고점 · 선을 누르면 그 레이어의 객체가 전부 강조됩니다. 땅(타점 · 등고선 · 지반선)인지 보고 [이 레이어 쓰기]를 누르세요. 수목 · 건물 · 담장처럼 땅이 아닌 레이어는 빼세요.";
-
     internal SurveyFixWindow(string fileName, List<SurveyItem> items, ICollection<string> layersOff, IReadOnlyList<string> grounds, int groundIdx,
-                             Func<int, SurveyBase> loadBase, double margin, double gap, string readNote, ICollection<string>? remembered = null)
+                             Func<int, SurveyBase> loadBase, double margin, double gap, string readNote, ICollection<string>? remembered = null,
+                             IReadOnlyDictionary<string, int>? layerArgb = null, IReadOnlyList<SurveyDecor>? decor = null)
     {
         _items = items;
         _loadBase = loadBase;
         GroundIndex = groundIdx;
         Title = "DH 측량도 보정";
-        Width = 1080; Height = 720;
+        Width = 1180; Height = 780;
         MinWidth = 820; MinHeight = 560;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
         ShowInTaskbar = false;
         ResizeMode = ResizeMode.CanResizeWithGrip;
 
         var body = new Grid { Margin = new Thickness(14, 12, 14, 10) };
-        body.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(300) });
+        body.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(330) });
         body.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(12) });
         body.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
 
-        // ── 왼쪽: 레이어 · 설정 · 알림 ──
+        // ── 왼쪽: 레이어 목록 · 아래 설정 ──
         var left = new DockPanel { LastChildFill = true };
-        var top = new StackPanel();
-        top.Children.Add(Head("가져올 레이어", "체크한 레이어의 등고선 · 3D 선 · 표고점만 씀(표고 0은 이미 뺌)"));
-        DockPanel.SetDock(top, Dock.Top);
-        left.Children.Add(top);
+        var head = new TextBlock { Text = "레이어", FontWeight = FontWeights.Bold, FontSize = 13, Foreground = DhBrand.Brand, Margin = new Thickness(0, 0, 0, 6) };
+        DockPanel.SetDock(head, Dock.Top);
+        left.Children.Add(head);
 
-        var opts = new StackPanel { Margin = new Thickness(0, 8, 0, 0) };
+        var opts = new StackPanel { Margin = new Thickness(0, 10, 0, 0) };
         DockPanel.SetDock(opts, Dock.Bottom);
         left.Children.Add(opts);
 
-        // ★[JACK 1122 «측량도라고 전부 쓰는 게 아님 — 수목까지 표고점이 있음 · 업체마다 레이어명이 다름 → 사용자가 보고 고름»]
-        //   처음엔 아무것도 체크하지 않음(지난번에 쓴 레이어 이름이 이 도면에 있으면 그것만) — 그림에서 객체를 눌러 레이어를 확인하고 고른다.
         var remember = new HashSet<string>(remembered ?? Array.Empty<string>(), StringComparer.OrdinalIgnoreCase);
-        bool anyRemembered = items.Any(i => remember.Contains(i.Layer) && !layersOff.Contains(i.Layer));
-        RememberedUsed = anyRemembered;
+        // ★[JACK 1122 «레이어 부분 정렬 · 위에 행 제목 — 레이어명 · 형태 · 객체»] 표 꼴(같은 칸 너비)
+        const double CChip = 24, CKind = 92, CNum = 48;
+        Grid RowGrid() { var gr = new Grid(); gr.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(CChip) }); gr.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                         gr.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(CKind) }); gr.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(CNum) }); return gr; }
+        void Cell(Grid gr, int c, UIElement el) { Grid.SetColumn(el, c); gr.Children.Add(el); }
+        var hdr = RowGrid();
+        hdr.Margin = new Thickness(29, 0, 18, 3);   // 체크 칸 · 스크롤 막대 너비만큼 비킴
+        TextBlock H(string t, TextAlignment al = TextAlignment.Left) => new() { Text = t, FontSize = 11, FontWeight = FontWeights.SemiBold, Foreground = DhBrand.Sub, TextAlignment = al };
+        Cell(hdr, 1, H("레이어명")); Cell(hdr, 2, H("형태")); Cell(hdr, 3, H("객체", TextAlignment.Right));
         var layerList = new StackPanel();
-        int ci = 0;
         foreach (var g in items.GroupBy(i => i.Layer, StringComparer.OrdinalIgnoreCase).OrderBy(g => g.Key, StringComparer.OrdinalIgnoreCase))
         {
             string ly = g.Key;
             _countText[ly] = Counts(g);
-            var col = new SolidColorBrush(Palette[ci++ % Palette.Length]); col.Freeze();
+            int argb = layerArgb != null && layerArgb.TryGetValue(ly, out int a) ? a : g.Select(i => i.Argb).FirstOrDefault(x => x != 0);
+            var col = SurveyCanvas.Visible(argb);
             _layerColor[ly] = col;
             bool off = layersOff.Contains(ly);
-            var cb = new CheckBox { IsChecked = remember.Contains(ly) && !off, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0), ToolTip = "이 레이어를 씀" };
-            cb.Checked += (_, __) => Changed(); cb.Unchecked += (_, __) => Changed();
-            _layerChecks[ly] = cb;
-            var row = new DockPanel { LastChildFill = true };
-            DockPanel.SetDock(cb, Dock.Left);
-            row.Children.Add(cb);
-            var sw = new Border { Width = 12, Height = 12, CornerRadius = new CornerRadius(2), Background = col, Margin = new Thickness(0, 0, 6, 0), VerticalAlignment = VerticalAlignment.Center };
-            DockPanel.SetDock(sw, Dock.Left);
-            row.Children.Add(sw);
-            row.Children.Add(new TextBlock { Text = (ly.Length > 0 ? ly : "(이름 없음)") + "  ·  " + Counts(g) + (off ? "  (꺼진 레이어)" : ""), TextWrapping = TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Center });
-            var rb = new Border
+            var row = RowGrid();
+            // 레이어 색 = 검은 칩 위 짧은 선(흰 레이어도 빈 체크 칸처럼 안 보이게)
+            Cell(row, 0, new Border { Width = 18, Height = 12, Background = SurveyCanvas.Bg, CornerRadius = new CornerRadius(2), HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Center,
+                                      Child = new Border { Width = 12, Height = 3, Background = col, VerticalAlignment = VerticalAlignment.Center } });
+            var fg = off ? DhBrand.Sub : DhBrand.Ink;
+            Cell(row, 1, new TextBlock { Text = (ly.Length > 0 ? ly : "(이름 없음)") + (off ? " (꺼짐)" : ""), TextTrimming = TextTrimming.CharacterEllipsis, Foreground = fg, VerticalAlignment = VerticalAlignment.Center });
+            Cell(row, 2, new TextBlock { Text = KindText(g), TextTrimming = TextTrimming.CharacterEllipsis, Foreground = DhBrand.Sub, FontSize = 11.5, VerticalAlignment = VerticalAlignment.Center });
+            Cell(row, 3, new TextBlock { Text = g.Count().ToString("N0", IC), Foreground = fg, TextAlignment = TextAlignment.Right, VerticalAlignment = VerticalAlignment.Center });
+            var cb = new CheckBox
             {
-                Child = row, Padding = new Thickness(4, 2, 4, 2), CornerRadius = new CornerRadius(3), Background = Brushes.Transparent, Cursor = Cursors.Hand,
-                BorderBrush = DhBrand.Brand, BorderThickness = new Thickness(0),
-                ToolTip = $"표고 {g.Min(i => i.Z0):F2} ~ {g.Max(i => i.Z1):F2} m · 눌러서 그림에서 이 레이어 보기",
+                IsChecked = remember.Contains(ly) && !off, Content = row, VerticalContentAlignment = VerticalAlignment.Center, HorizontalContentAlignment = HorizontalAlignment.Stretch,
+                Margin = new Thickness(0, 1, 0, 1), ToolTip = $"{ly} · {_countText[ly]} · 표고 {g.Min(i => i.Z0):F2} ~ {g.Max(i => i.Z1):F2} m",
             };
-            rb.MouseLeftButtonUp += (_, e) => { if (e.OriginalSource is DependencyObject d && IsInCheck(d)) return; SelectLayer(ly, fromCanvas: false); };
+            cb.Checked += (_, __) => Changed(); cb.Unchecked += (_, __) => Changed();
+            cb.MouseEnter += (_, __) => { _cv!.Hover = ly; _cv.InvalidateVisual(); };
+            cb.MouseLeave += (_, __) => { if (_cv!.Hover == ly) { _cv.Hover = null; _cv.InvalidateVisual(); } };
+            _layerChecks[ly] = cb;
+            var rb = new Border { Child = cb, Padding = new Thickness(4, 1, 4, 1), CornerRadius = new CornerRadius(3), Background = Brushes.Transparent };
             _layerRows[ly] = rb;
             layerList.Children.Add(rb);
         }
-        var allRow = new WrapPanel { Margin = new Thickness(0, 6, 0, 0) };
-        var bAll = Small("전체 넣기", "모든 레이어 체크 · 하나씩 뺀 것도 다시 넣음");
-        bAll.Click += (_, __) => Bulk(() => { foreach (var c in _layerChecks.Values) c.IsChecked = true; foreach (var i in _items) i.On = true; });
-        var bNone = Small("레이어 모두 끔", "체크 모두 해제 — 쓸 레이어만 다시 켜기");
-        bNone.Click += (_, __) => Bulk(() => { foreach (var c in _layerChecks.Values) c.IsChecked = false; });
-        allRow.Children.Add(bAll); allRow.Children.Add(bNone);
-
-        // 고른 레이어 칸 — 그림 · 목록에서 누른 레이어(그 레이어 객체 전부 강조)
-        _selTitle = new TextBlock { FontWeight = FontWeights.Bold, FontSize = 13, Foreground = DhBrand.Ink, TextWrapping = TextWrapping.Wrap };
-        _selText = new TextBlock { FontSize = 11, Foreground = DhBrand.Sub, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 2, 0, 6) };
-        _selUse = Small("이 레이어 쓰기", "체크 켜기/끄기");
-        _selUse.Click += (_, __) => { if (_selLayer != null && _layerChecks.TryGetValue(_selLayer, out var c)) c.IsChecked = c.IsChecked != true; };
-        _selOnly = Small("이 레이어만 쓰기", "다른 레이어 체크는 모두 끔");
-        _selOnly.Click += (_, __) => { if (_selLayer == null) return; Bulk(() => { foreach (var kv in _layerChecks) kv.Value.IsChecked = kv.Key.Equals(_selLayer, StringComparison.OrdinalIgnoreCase); }); };
-        _selZoom = Small("이 레이어로 확대", "그림을 이 레이어 객체에 맞춰 확대(두 번 클릭 = 전체 보기)");
-        _selZoom.Click += (_, __) => { if (_selLayer != null) _cv.FitTo(_items.Where(i => i.Layer.Equals(_selLayer, StringComparison.OrdinalIgnoreCase)), 0.08); };
-        _selClear = Small("선택 풀기", "강조 끔(Esc)");
-        _selClear.Click += (_, __) => SelectLayer(null, fromCanvas: false);
-        var selBtns = new WrapPanel();
-        foreach (var b in new[] { _selUse, _selOnly, _selZoom, _selClear }) { b.Margin = new Thickness(0, 0, 6, 4); selBtns.Children.Add(b); }
-        var selStack = new StackPanel();
-        selStack.Children.Add(_selTitle); selStack.Children.Add(_selText); selStack.Children.Add(selBtns);
-        _selCard = new Border
+        var tableBox = new DockPanel();
+        DockPanel.SetDock(hdr, Dock.Top);
+        tableBox.Children.Add(hdr);
+        tableBox.Children.Add(new ScrollViewer { Content = layerList, VerticalScrollBarVisibility = ScrollBarVisibility.Visible });
+        left.Children.Add(new Border
         {
-            BorderBrush = DhBrand.Brand, BorderThickness = new Thickness(1.5), CornerRadius = new CornerRadius(4), Background = DhBrand.BrandDim,
-            Padding = new Thickness(10, 8, 10, 8), Margin = new Thickness(0, 8, 0, 0), Child = selStack,
-        };
-        var listWrap = new StackPanel();
-        listWrap.Children.Add(new Border
-        {
-            BorderBrush = DhBrand.Line, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(4), Background = DhBrand.Card, Padding = new Thickness(8, 4, 8, 4),
-            Child = new ScrollViewer { Content = layerList, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, MaxHeight = 250 },
+            BorderBrush = DhBrand.Line, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(4), Background = DhBrand.Card, Padding = new Thickness(6, 6, 2, 4),
+            Child = tableBox,
         });
-        listWrap.Children.Add(allRow);
-        listWrap.Children.Add(_selCard);
-        left.Children.Add(listWrap);
 
-        opts.Children.Add(Head("백판 · 범위", "고른 원지반의 등고선 · 표고점 중 범위 안 것을 측량 자료로 바꿈"));
         if (grounds.Count > 1)
         {
-            _ground = new ComboBox { MinWidth = 150, ItemsSource = grounds, SelectedIndex = Math.Clamp(groundIdx, 0, grounds.Count - 1) };
+            _ground = new ComboBox { MinWidth = 130, ItemsSource = grounds, SelectedIndex = Math.Clamp(groundIdx, 0, grounds.Count - 1) };
             _ground.SelectionChanged += (_, __) => { GroundIndex = _ground!.SelectedIndex; _base = _loadBase(GroundIndex); _cv!.Base = _base; Changed(); };
-            opts.Children.Add(Row("원지반", _ground, "바꿀 백판(원지반이 둘 이상)"));
+            opts.Children.Add(Row("원지반", _ground, "바꿀 원지반"));
         }
-        else opts.Children.Add(Row("원지반", new TextBlock { Text = grounds.Count > 0 ? grounds[0] : "-", VerticalAlignment = VerticalAlignment.Center, FontWeight = FontWeights.SemiBold }, "바꿀 백판"));
-        _margin = Num(margin, "측량 자료 바깥으로 이만큼 더(m) — 이 띠에서 측량과 백판이 이어짐");
-        _gap = Num(gap, "측량 선 사이 빈 칸이 이보다 좁으면 범위 안으로(m) · 0 = 선 둘레만");
-        opts.Children.Add(Row("여유 (m)", _margin, "측량 자료 바깥으로 이만큼 더(m) — 이 띠에서 측량과 백판이 이어짐"));
-        opts.Children.Add(Row("틈 메움 (m)", _gap, "측량 선 사이 빈 칸이 이보다 좁으면 범위 안으로(m) · 0 = 선 둘레만"));
+        else opts.Children.Add(Row("원지반", new TextBlock { Text = grounds.Count > 0 ? grounds[0] : "-", VerticalAlignment = VerticalAlignment.Center, FontWeight = FontWeights.SemiBold }, "바꿀 원지반"));
+        _margin = Num(margin);
+        _gap = Num(gap);
+        // ★[JACK 1122 «여유 · 틈 메움이 무슨 기능인지 모르겠어»] 말풍선에 그림 설명
+        opts.Children.Add(Row("여유 (m)", _margin, null, Explain(margin: true)));
+        opts.Children.Add(Row("틈 메움 (m)", _gap, null, Explain(margin: false)));
         _margin.TextChanged += (_, __) => Changed();
         _gap.TextChanged += (_, __) => Changed();
-        _info = new TextBlock { TextWrapping = TextWrapping.Wrap, FontSize = 11.5, Foreground = DhBrand.Ink, Margin = new Thickness(0, 8, 0, 0) };
-        _warn = new TextBlock { TextWrapping = TextWrapping.Wrap, FontSize = 11.5, Foreground = DhBrand.Warn, Margin = new Thickness(0, 4, 0, 0), Visibility = Visibility.Collapsed };
+        _info = new TextBlock { TextWrapping = TextWrapping.Wrap, FontSize = 11.5, Foreground = DhBrand.Ink, Margin = new Thickness(0, 6, 0, 0) };
+        _cross = new TextBlock { TextWrapping = TextWrapping.Wrap, FontSize = 11.5, Foreground = SurveyCanvas.CrossDark, Margin = new Thickness(0, 3, 0, 0), Visibility = Visibility.Collapsed };
+        _warn = new TextBlock { TextWrapping = TextWrapping.Wrap, FontSize = 11.5, Foreground = DhBrand.Warn, Margin = new Thickness(0, 3, 0, 0), Visibility = Visibility.Collapsed };
         opts.Children.Add(_info);
+        opts.Children.Add(_cross);
         opts.Children.Add(_warn);
         _onlyBtn = new Button
         {
-            Content = "측량도만으로 원지반", Height = 30, Padding = new Thickness(12, 0, 12, 0), Margin = new Thickness(0, 6, 0, 0), HorizontalAlignment = HorizontalAlignment.Left,
-            Visibility = Visibility.Collapsed,
-            ToolTip = "원지반과 다른 곳의 측량도 — 백판 없이 측량 등고선 · 3D 선 · 표고점만으로 새 원지반(원지반_N)을 만듭니다.\n지금 원지반은 그대로 둡니다(숨기지 않음 · 다른 자리라 둘 다 씀).\n측량 범위 밖은 땅이 없으니, 넓은 땅이 필요하면 [원지반 가져오기]로 그 자리 원지반을 먼저 만든 뒤 [측량도 보정하기]를 다시 하세요.",
+            Content = "측량도만으로 원지반", Height = 28, Padding = new Thickness(12, 0, 12, 0), Margin = new Thickness(0, 6, 0, 0), HorizontalAlignment = HorizontalAlignment.Left,
+            Visibility = Visibility.Collapsed, ToolTip = "백판 없이 측량 자료만으로 새 원지반(지금 원지반은 그대로)",
         };
         _onlyBtn.Click += (_, __) =>
         {
-            // ★[검토 1122 MEDIUM] 고른 것이 방금 바뀌었으면(셈 기다리는 중) 지금 것으로 다시 보고, 여전히 «다른 곳»일 때만
             _debounce.Stop();
             Recalc();
             if (_onlyBtn.Visibility != Visibility.Visible) return;
-            Chosen = Use();
-            Band = ParseOr(_margin.Text, 2);
-            Gap = ParseOr(_gap.Text, 0);
-            SurveyOnly = true;
-            DialogResult = true;
+            Finish(surveyOnly: true);
         };
         opts.Children.Add(_onlyBtn);
-        if (readNote.Length > 0) opts.Children.Add(new TextBlock { Text = readNote, TextWrapping = TextWrapping.Wrap, FontSize = 10.5, Foreground = DhBrand.Sub, Margin = new Thickness(0, 4, 0, 0) });
 
         Grid.SetColumn(left, 0);
         body.Children.Add(left);
 
-        // ── 오른쪽: 그림 ──
+        // ── 오른쪽: CAD 같은 그림 ──
         _base = loadBase(groundIdx);
         _cv = new SurveyCanvas(items)
         {
+            Decor = decor,
             Base = _base, IsLayerOn = LayerOn,
-            ColorOf = l => _layerColor.TryGetValue(l, out var b) ? b : SurveyCanvas.BreakB,
-            Describe = Describe,
+            ColorOf = l => _layerColor.TryGetValue(l, out var b) ? b : Brushes.White,
+            Describe = l => $"{(l.Length > 0 ? l : "(이름 없음)")}   {(_countText.TryGetValue(l, out var t) ? t : "")}   {(LayerOn(l) ? "● 사용" : "○ 안 씀")}",
         };
-        _cv.Toggled += Changed;
-        _cv.LayerPicked += l => SelectLayer(l, fromCanvas: true);
-        PreviewKeyDown += (_, e) => { if (e.Key == System.Windows.Input.Key.Escape && _selLayer != null) { SelectLayer(null, false); e.Handled = true; } };
-        ShowSel();
-        var legend = new WrapPanel { Margin = new Thickness(2, 6, 0, 0) };
-        void Key(Brush b, string s, bool dot = false)
-        {
-            legend.Children.Add(dot ? new System.Windows.Shapes.Ellipse { Width = 7, Height = 7, Fill = b, Margin = new Thickness(0, 0, 4, 0), VerticalAlignment = VerticalAlignment.Center }
-                                    : new Border { Width = 16, Height = 3, Background = b, Margin = new Thickness(0, 0, 4, 0), VerticalAlignment = VerticalAlignment.Center });
-            legend.Children.Add(new TextBlock { Text = s, FontSize = 10.5, Foreground = DhBrand.Sub, Margin = new Thickness(0, 0, 12, 0) });
-        }
-        legend.Children.Add(new TextBlock { Text = "색 = 레이어(왼쪽 목록 색) · 진하게 = 쓸 것 · 옅게 = 안 씀   ", FontSize = 10.5, Foreground = DhBrand.Sub });
-        Key(SurveyCanvas.BaseB, "백판(원지반 재료)");
-        Key(SurveyCanvas.OffB, "하나씩 뺀 것");
-        Key(SurveyCanvas.CrossB, "높이 다른 엇갈림", dot: true);
-        Key(SurveyCanvas.RegionLineB, "바꿀 범위");
-        var hint = new TextBlock { Text = "클릭 = 그 객체의 레이어 고르기(레이어 전체 강조) · Ctrl + 클릭 = 하나만 빼기/넣기 · 끌기 = 상자 안 빼기(Shift + 끌기 = 넣기) · 휠 = 확대 · 오른쪽 끌기 = 이동 · 두 번 클릭 = 전체 보기 · Esc = 선택 풀기", FontSize = 10.5, Foreground = DhBrand.Sub, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(2, 2, 0, 0) };
-        var right = new DockPanel { LastChildFill = true };
-        var below = new StackPanel();
-        below.Children.Add(legend); below.Children.Add(hint);
-        DockPanel.SetDock(below, Dock.Bottom);
-        right.Children.Add(below);
-        right.Children.Add(new Border { BorderBrush = DhBrand.Line, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(4), Background = DhBrand.Card, ClipToBounds = true, Child = _cv });
-        Grid.SetColumn(right, 2);
-        body.Children.Add(right);
+        _cv.LayerPicked += PickLayer;
+        var cvBorder = new Border { BorderBrush = DhBrand.Line, BorderThickness = new Thickness(1), Background = SurveyCanvas.Bg, ClipToBounds = true, Child = _cv };
+        Grid.SetColumn(cvBorder, 2);
+        body.Children.Add(cvBorder);
 
-        var (ok, cancel) = DhBrand.FooterButtons("보정 실행");
+        var (ok, cancel) = DhBrand.FooterButtons("선택 레이어 사용");
         _ok = ok;
-        ok.ToolTip = "범위 안 백판 등고선 · 표고점을 지우고 측량 자료로 바꿔 원지반을 새로 짓습니다(옛 원지반은 숨김 · 지우지 않음)";
-        ok.Click += (_, __) =>
-        {
-            Chosen = Use();
-            Band = ParseOr(_margin.Text, 2);
-            Gap = ParseOr(_gap.Text, 0);
-            DialogResult = true;
-        };
+        ok.Click += (_, __) => Finish(surveyOnly: false);
         DhBrand.Dress(this, "측량도 보정", fileName, body, ok, cancel);
-        // Dress가 본문을 스크롤 칸에 넣는다 — 그림이 창 높이를 따라가게 본문 높이를 창에 맞춤
         SizeChanged += (_, __) => FitBody(body);
         Loaded += (_, __) => { FitBody(body); _cv.FitAll(); };
         _debounce.Tick += (_, __) => { _debounce.Stop(); Recalc(); };
         Recalc();
+    }
+
+    void Finish(bool surveyOnly)
+    {
+        Chosen = Use();
+        Band = ParseOr(_margin.Text, 2);
+        Gap = ParseOr(_gap.Text, 0);
+        SurveyOnly = surveyOnly;
+        DialogResult = true;
     }
 
     void FitBody(Grid body)
@@ -306,10 +249,7 @@ internal sealed class SurveyFixWindow : Window
         try { body.Height = Math.Max(420, ActualHeight - 190); } catch { }
     }
 
-    /// <summary>지난번에 쓴 레이어 이름으로 체크해 열었나(창 알림).</summary>
-    internal bool RememberedUsed { get; }
-
-    /// <summary>[보정 실행] 때 체크된 레이어 — 다음 측량도 창의 처음 체크(같은 업체 레이어명).</summary>
+    /// <summary>[선택 레이어 사용] 때 체크된 레이어 — 다음 측량도 창의 처음 체크(같은 업체 레이어명).</summary>
     internal List<string> CheckedLayers => _layerChecks.Where(kv => kv.Value.IsChecked == true).Select(kv => kv.Key).ToList();
     /// <summary>이 도면에 있는데 안 쓴 레이어 — 기억에서 뺌(다른 업체 이름은 그대로 둠).</summary>
     internal List<string> UncheckedLayers => _layerChecks.Where(kv => kv.Value.IsChecked != true).Select(kv => kv.Key).ToList();
@@ -325,68 +265,25 @@ internal sealed class SurveyFixWindow : Window
         return string.Join(" · ", parts);
     }
 
-    static bool IsInCheck(DependencyObject d)
+    bool LayerOn(string l) => _layerChecks.TryGetValue(l, out var c) && c.IsChecked == true;
+
+    /// <summary>★[JACK 1122] 그림에서 누른 객체의 레이어를 쓰기/안 쓰기(레이어 전체) · 목록에서 그 줄을 보여 줌.</summary>
+    internal void PickLayer(string? ly)
     {
-        for (var x = d; x != null; x = x is Visual ? VisualTreeHelper.GetParent(x) : LogicalTreeHelper.GetParent(x))
-            if (x is CheckBox) return true;
-        return false;
+        foreach (var kv in _layerRows) kv.Value.Background = Brushes.Transparent;
+        if (ly == null || !_layerChecks.TryGetValue(ly, out var cb)) return;
+        cb.IsChecked = cb.IsChecked != true;
+        var row = _layerRows[ly];
+        row.Background = DhBrand.BrandDim;
+        try { row.BringIntoView(); } catch { }
     }
 
-    bool LayerOn(string l) => !_layerChecks.TryGetValue(l, out var c) || c.IsChecked == true;
-
-    /// <summary>그림 위 알림 — 레이어 이름 · 수 · 쓰는지.</summary>
-    string Describe(string ly) => $"{(ly.Length > 0 ? ly : "(이름 없음)")} · {(_countText.TryGetValue(ly, out var ct) ? ct : "")} · {(LayerOn(ly) ? "쓰는 중" : "안 씀")}";
-
-    /// <summary>★[JACK 1122] 레이어 고르기 — 그림에서 누른 객체의 레이어(또는 목록 줄) · 그 레이어 객체 전부 강조 · 목록 줄 강조 · 고른 레이어 칸.</summary>
-    internal void SelectLayer(string? ly, bool fromCanvas)
-    {
-        if (ly != null && !_layerChecks.ContainsKey(ly)) ly = null;
-        _selLayer = ly;
-        foreach (var kv in _layerRows)
-        {
-            bool on = ly != null && kv.Key.Equals(ly, StringComparison.OrdinalIgnoreCase);
-            kv.Value.Background = on ? DhBrand.BrandDim : Brushes.Transparent;
-            kv.Value.BorderThickness = new Thickness(on ? 1 : 0);
-            if (on && fromCanvas) try { kv.Value.BringIntoView(); } catch { }
-        }
-        _cv.Selected = ly;
-        _cv.InvalidateVisual();
-        ShowSel();
-    }
-
-    void ShowSel()
-    {
-        if (_selLayer == null)
-        {
-            _selTitle.Text = "레이어 확인";
-            _selTitle.Foreground = DhBrand.Brand;
-            _selText.Text = SelHelp;
-            _selUse.Visibility = _selOnly.Visibility = _selClear.Visibility = _selZoom.Visibility = Visibility.Collapsed;
-            return;
-        }
-        var g = _items.Where(i => i.Layer.Equals(_selLayer, StringComparison.OrdinalIgnoreCase)).ToList();
-        bool on = LayerOn(_selLayer);
-        _selTitle.Text = "고른 레이어: " + (_selLayer.Length > 0 ? _selLayer : "(이름 없음)") + (on ? "  — 쓰는 중" : "  — 안 씀");
-        _selTitle.Foreground = on ? DhBrand.Ok : DhBrand.Ink;
-        string src = string.Join(", ", g.GroupBy(i => i.Src).OrderByDescending(x => x.Count()).Take(3).Select(x => $"{SrcName(x.Key)} {x.Count()}"));
-        _selText.Text = $"{Counts(g)} — 그림에 전부 강조(다른 레이어는 흐리게)\n표고 {g.Min(i => i.Z0):F2} ~ {g.Max(i => i.Z1):F2} m · 원본 {src}";
-        _selUse.Content = on ? "이 레이어 빼기" : "이 레이어 쓰기";
-        _selUse.Visibility = _selOnly.Visibility = _selClear.Visibility = _selZoom.Visibility = Visibility.Visible;
-    }
-
-    static string SrcName(string s) => s switch
-    {
-        "Line" => "선", "Polyline" => "폴리선", "Polyline2d" => "2D 폴리선", "Polyline3d" => "3D 폴리선", "Arc" => "호", "Circle" => "원",
-        "Ellipse" => "타원", "Spline" => "스플라인", _ => s,
-    };
-
-    List<SurveyItem> Use() => _items.Where(i => i.On && (!_layerChecks.TryGetValue(i.Layer, out var c) || c.IsChecked == true)).ToList();
+    List<SurveyItem> Use() => _items.Where(i => i.On && LayerOn(i.Layer)).ToList();
 
     void Changed()
     {
-        if (_bulk) return;
-        ShowSel();
-        _onlyBtn.IsEnabled = false;   // 다시 셀 때까지(Recalc가 켬)
+        _onlyBtn.IsEnabled = false;
+        _ok.IsEnabled = false;   // 다시 셀 때까지
         _cv.InvalidateVisual();
         _debounce.Stop(); _debounce.Start();
     }
@@ -399,7 +296,7 @@ internal sealed class SurveyFixWindow : Window
         bool badNum = double.IsNaN(m) || double.IsNaN(g) || m < 0 || g < 0;
         int nc = use.Count(i => i.Kind == SurveyKind.Contour), nb = use.Count(i => i.Kind == SurveyKind.Break), ns = use.Count(i => i.Kind == SurveyKind.Spot);
         bool enough = !badNum && use.Count > 0 && !(nc + nb == 0 && ns < 3);
-        // ★[JACK 1122 «원지반 만든 곳과 다른 곳의 측량도»] 자리부터(상자만 — 즉시) · 안 겹치면 범위를 세지 않는다
+        // 자리부터(상자만 — 즉시) · 안 겹치면 범위를 세지 않는다
         var place = (Kind: SurveyMerge.Placement.Overlap, DistKm: 0.0, Text: "");
         if (enough && _base.Any)
         {
@@ -421,10 +318,8 @@ internal sealed class SurveyFixWindow : Window
         }
         _cv.Region = region;
         _cv.InvalidateVisual();
-        string area = region != null ? $" · 범위 {region.Area:N0} ㎡" : "";
-        _info.Text = $"쓸 것: 등고선 {nc} · 3D 선 {nb} · 표고점 {ns}{area}";
-        if (RememberedUsed) _info.Text += "\n(지난번에 쓴 레이어 이름으로 체크해 열었음 — 확인하세요)";
-        // ★[JACK 1122 «이벤트 오류»] 쓸 선끼리 높이가 다르게 엇갈린 곳 — 지표면이 한쪽을 버림 · 어느 레이어끼리인지 보여 줌
+        _info.Text = use.Count == 0 ? "" : $"등고선 {nc} · 3D 선 {nb} · 표고점 {ns}" + (region != null ? $" · 범위 {region.Area:N0} ㎡" : "");
+        // 쓸 선끼리 높이가 다르게 엇갈린 곳(지표면이 한쪽을 버림) — 그림 주황 점
         var lines = use.Where(i => i.Kind != SurveyKind.Spot).ToList();
         var ch = new HashCode();
         foreach (var i in lines) ch.Add(i.Id);
@@ -435,57 +330,87 @@ internal sealed class SurveyFixWindow : Window
             _crossKey = ck;
         }
         _cv.Cross = _crossCache;
-        if (_crossCache is { Capped: true }) _info.Text += "\n(선이 너무 많아 엇갈림은 일부만 셈)";
-        if (_crossCache is { ZDiff: > 0 } cr)
-            _info.Text += $"\n⚠ 높이가 다르게 엇갈린 선 {cr.ZDiff}곳(그림 주황 점) — 지표면이 한쪽만 씀: "
-                          + string.Join(" · ", cr.Pairs.Take(4).Select(p => p.A == p.B ? $"{p.A} {p.N}" : $"{p.A}×{p.B} {p.N}"))
-                          + "\n  땅이 아닌 레이어(담장 · 건물 · 수목 등)면 빼세요.";
+        string cross = _crossCache is { ZDiff: > 0 } cr
+            ? $"엇갈린 선 {cr.ZDiff}곳 — " + string.Join(" · ", cr.Pairs.Take(3).Select(p => p.A == p.B ? $"{p.A} {p.N}" : $"{p.A}×{p.B} {p.N}"))
+            : "";
+        _cross.Text = cross;
+        _cross.Visibility = cross.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
         string warn = "";
         _onlyBtn.Visibility = Visibility.Collapsed;
         _onlyBtn.IsEnabled = true;
         if (badNum) warn = "여유 · 틈 메움에 0 이상의 숫자를 넣으세요.";
-        else if (use.Count == 0) warn = "쓸 레이어를 고르세요 — 그림에서 표고점 · 선을 눌러 레이어를 확인하고 [이 레이어 쓰기](또는 목록 체크).";
+        else if (use.Count == 0) warn = "쓸 레이어를 고르세요.";
         else if (nc + nb == 0 && ns < 3) warn = "등고선 · 3D 선이 없고 표고점이 셋보다 적습니다.";
-        else if (!_base.Any) warn = "고른 원지반의 재료(등고선 · 표고점)를 못 찾았습니다 — 원지반을 다시 만든 뒤 해 보세요.";
+        else if (!_base.Any) warn = "원지반 재료를 못 찾았습니다 — 원지반을 다시 만든 뒤 해 보세요.";
         else if (place.Kind != SurveyMerge.Placement.Overlap)
         {
-            warn = "측량도가 원지반과 겹치지 않습니다 — " + place.Text;
+            warn = "원지반과 겹치지 않습니다 — " + place.Text;
             if (place.Kind == SurveyMerge.Placement.Elsewhere) _onlyBtn.Visibility = Visibility.Visible;
         }
         else if (region == null) warn = "범위를 못 만들었습니다.";
-        else
-        {
-            var e = region.EnvelopeInternal;
-            double ix = Math.Min(e.MaxX, _base.X1) - Math.Max(e.MinX, _base.X0), iy = Math.Min(e.MaxY, _base.Y1) - Math.Max(e.MinY, _base.Y0);
-            if (ix <= 0 || iy <= 0)
-                warn = $"측량도가 원지반과 겹치지 않습니다 — 좌표계(원점)가 다를 수 있습니다.\n측량 {e.MinX:F0},{e.MinY:F0} ~ {e.MaxX:F0},{e.MaxY:F0} · 원지반 {_base.X0:F0},{_base.Y0:F0} ~ {_base.X1:F0},{_base.Y1:F0}";
-            else if (ix * iy < 0.5 * e.Width * e.Height)
-                _info.Text += "\n⚠ 측량 범위의 절반 넘게가 원지반 밖입니다 — 밖은 측량 자료만으로 지어집니다.";
-        }
         _warn.Text = warn;
         _warn.Visibility = warn.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
-        bool blocking = warn.Length > 0;
-        _ok.IsEnabled = !blocking;
+        _ok.IsEnabled = warn.Length == 0;
     }
 
     static double ParseOr(string s, double d) => double.TryParse((s ?? "").Trim(), NumberStyles.Float, IC, out double v) ? v : d;
 
-    static TextBox Num(double v, string tip) => new() { Text = v.ToString("0.##", IC), Width = 80, ToolTip = tip, HorizontalContentAlignment = HorizontalAlignment.Right };
+    static TextBox Num(double v) => new() { Text = v.ToString("0.##", IC), Width = 70, HorizontalContentAlignment = HorizontalAlignment.Right };
 
-    static Button Small(string text, string tip) => new() { Content = text, Height = 26, Padding = new Thickness(10, 0, 10, 0), Margin = new Thickness(0, 0, 6, 0), ToolTip = tip };
-
-    static FrameworkElement Head(string title, string sub)
+    static string KindText(IEnumerable<SurveyItem> g)
     {
-        var st = new StackPanel { Margin = new Thickness(0, 0, 0, 6) };
-        st.Children.Add(new TextBlock { Text = title, FontWeight = FontWeights.Bold, FontSize = 13, Foreground = DhBrand.Brand });
-        st.Children.Add(new TextBlock { Text = sub, FontSize = 10.5, Foreground = DhBrand.Sub, TextWrapping = TextWrapping.Wrap });
+        var k = new List<string>();
+        if (g.Any(i => i.Kind == SurveyKind.Contour)) k.Add("등고선");
+        if (g.Any(i => i.Kind == SurveyKind.Break)) k.Add("3D 선");
+        if (g.Any(i => i.Kind == SurveyKind.Spot && !SurveyCanvas.IsBlock(i))) k.Add("점");
+        if (g.Any(i => SurveyCanvas.IsBlock(i))) k.Add("블록");
+        return string.Join(" · ", k);
+    }
+
+    /// <summary>여유 · 틈 메움 말풍선 — 작은 그림 + 두 줄.</summary>
+    static object Explain(bool margin)
+    {
+        var cv = new Canvas { Width = 260, Height = 120, Background = SurveyCanvas.Bg };
+        void L(double x1, double y1, double x2, double y2, Brush b, double w, bool dash = false)
+        {
+            var ln = new System.Windows.Shapes.Line { X1 = x1, Y1 = y1, X2 = x2, Y2 = y2, Stroke = b, StrokeThickness = w };
+            if (dash) ln.StrokeDashArray = new DoubleCollection { 4, 3 };
+            cv.Children.Add(ln);
+        }
+        void T(double x, double y, string t, Brush b) { var tb = new TextBlock { Text = t, Foreground = b, FontSize = 11 }; Canvas.SetLeft(tb, x); Canvas.SetTop(tb, y); cv.Children.Add(tb); }
+        var survey = Brushes.White; var region = SurveyCanvas.RegionLineB; var basel = SurveyCanvas.BaseB;
+        for (int k = 0; k < 6; k++) L(0, 12 + k * 20, 260, 18 + k * 20, basel, 1);   // 백판 등고선
+        if (margin)
+        {
+            for (int k = 0; k < 3; k++) L(90, 40 + k * 16, 170, 44 + k * 16, survey, 1.6);   // 측량 선
+            var r = new System.Windows.Shapes.Rectangle { Width = 110, Height = 72, Stroke = region, StrokeThickness = 1.4, StrokeDashArray = new DoubleCollection { 5, 3 } };
+            Canvas.SetLeft(r, 75); Canvas.SetTop(r, 26); cv.Children.Add(r);
+            L(170, 44, 185, 44, Brushes.Orange, 2); T(188, 36, "여유", Brushes.Orange);
+        }
+        else
+        {
+            for (int k = 0; k < 3; k++) { L(30, 40 + k * 16, 100, 44 + k * 16, survey, 1.6); L(160, 40 + k * 16, 230, 44 + k * 16, survey, 1.6); }
+            var r = new System.Windows.Shapes.Rectangle { Width = 220, Height = 72, Stroke = region, StrokeThickness = 1.4, StrokeDashArray = new DoubleCollection { 5, 3 } };
+            Canvas.SetLeft(r, 20); Canvas.SetTop(r, 26); cv.Children.Add(r);
+            L(100, 96, 160, 96, Brushes.Orange, 2); T(112, 100, "틈", Brushes.Orange);
+        }
+        var st = new StackPanel { MaxWidth = 280 };
+        st.Children.Add(cv);
+        st.Children.Add(new TextBlock
+        {
+            TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 6, 0, 0),
+            Text = margin
+                ? "여유 — 측량 자료(흰 선) 바깥으로 이만큼 더 넓혀 «바꿀 범위»(점선)를 잡습니다. 이 띠에서 측량과 원래 원지반이 자연스럽게 이어집니다. 보통 1~3 m."
+                : "틈 메움 — 측량 자료가 떨어져 있어도 그 사이가 이 값보다 좁으면 한 범위로 묶습니다. 사이에 옛 원지반 등고선이 끼어 땅이 들쭉날쭉해지는 것을 막습니다. 0 = 측량 선 둘레만.",
+        });
         return st;
     }
 
-    static FrameworkElement Row(string label, FrameworkElement ctl, string tip)
+    static FrameworkElement Row(string label, FrameworkElement ctl, string? tip, object? tipContent = null)
     {
-        var dp = new DockPanel { Margin = new Thickness(0, 0, 0, 6), LastChildFill = false, ToolTip = tip };
-        var lb = new TextBlock { Text = label, Width = 96, VerticalAlignment = VerticalAlignment.Center, Foreground = DhBrand.Ink };
+        var dp = new DockPanel { Margin = new Thickness(0, 0, 0, 5), LastChildFill = false, ToolTip = tipContent ?? tip };
+        if (tipContent != null) ToolTipService.SetInitialShowDelay(dp, 200);
+        var lb = new TextBlock { Text = label, Width = 86, VerticalAlignment = VerticalAlignment.Center, Foreground = DhBrand.Ink };
         DockPanel.SetDock(lb, Dock.Left);
         dp.Children.Add(lb);
         DockPanel.SetDock(ctl, Dock.Left);
@@ -494,50 +419,66 @@ internal sealed class SurveyFixWindow : Window
     }
 }
 
-/// <summary>측량도 그림 — OnRender 한 번에 그림(선 수천 가닥도 가볍게) · 확대 · 이동 · 고르기.</summary>
+/// <summary>측량도 그림 — CAD 모형 공간처럼 검은 바탕 · 도면 색 · OnRender 한 번에 그림 · 확대 · 이동 · 레이어 고르기.</summary>
 internal sealed class SurveyCanvas : FrameworkElement
 {
     static Brush Fz(byte r, byte g, byte b, byte a = 255) { var x = new SolidColorBrush(Color.FromArgb(a, r, g, b)); x.Freeze(); return x; }
-    internal static readonly Brush BaseB = Fz(0xB4, 0xBC, 0xBE), ContourB = Fz(0x1F, 0x5F, 0xBF), BreakB = Fz(0x7A, 0x3F, 0xB5), SpotB = Fz(0xD0, 0x3B, 0x2F),
-                                   OffB = Fz(0xE2, 0xA7, 0xA2), CrossB = Fz(0xF3, 0x9C, 0x12), RegionB = Fz(0x00, 0x8A, 0x8F, 0x30), RegionLineB = Fz(0x00, 0x7A, 0x80), SelB = Fz(0x00, 0x48, 0x4E, 0x22);
-    static readonly Pen BaseP = Frz(new Pen(BaseB, 0.8)), ConP = Frz(new Pen(ContourB, 1.3)), BrkP = Frz(new Pen(BreakB, 1.3)),
-                        OffP = Frz(new Pen(OffB, 1.0) { DashStyle = new DashStyle(new double[] { 3, 2 }, 0) }), RegP = Frz(new Pen(RegionLineB, 1.6) { DashStyle = new DashStyle(new double[] { 6, 3 }, 0) }),
-                        SelP = Frz(new Pen(Fz(0x00, 0x48, 0x4E), 1) { DashStyle = new DashStyle(new double[] { 4, 2 }, 0) }), ExtP = Frz(new Pen(Fz(0x9A, 0xA6, 0xA8), 1) { DashStyle = new DashStyle(new double[] { 2, 3 }, 0) });
+    /// <summary>Civil 3D 2026 모형 공간 바탕과 같은 어두운 회청색.</summary>
+    internal static readonly Brush Bg = Fz(0x21, 0x28, 0x30);
+    internal static readonly Brush BaseB = Fz(0x4A, 0x55, 0x60), CrossB = Fz(0xFF, 0x9F, 0x1A), CrossDark = Fz(0xC0, 0x6A, 0x00),
+                                   RegionB = Fz(0x2F, 0xB8, 0xC0, 0x22), RegionLineB = Fz(0x3F, 0xD0, 0xD8), TagBg = Fz(0x10, 0x14, 0x18, 0xE0), TagInk = Fz(0xE8, 0xEC, 0xEE);
+    static readonly Pen BaseP = Frz(new Pen(BaseB, 0.8)), RegP = Frz(new Pen(RegionLineB, 1.3) { DashStyle = new DashStyle(new double[] { 6, 4 }, 0) }),
+                        ExtP = Frz(new Pen(Fz(0x60, 0x6C, 0x78), 1) { DashStyle = new DashStyle(new double[] { 2, 3 }, 0) }),
+                        CrossP = Frz(new Pen(CrossB, 1.8)), TagP = Frz(new Pen(Fz(0x60, 0x6C, 0x78), 1));
     static Pen Frz(Pen p) { p.Freeze(); return p; }
+
+    internal static bool IsBlock(SurveyItem i) => i.Kind == SurveyKind.Spot && i.Src.StartsWith("블록", StringComparison.Ordinal);
+
+    /// <summary>도면 색(ARGB) → 검은 바탕에서 보이는 붓(너무 어두우면 밝힘 · 0 = 흰색).</summary>
+    internal static Brush Visible(int argb)
+    {
+        var c = argb == 0 ? Colors.White : Color.FromRgb((byte)(argb >> 16), (byte)(argb >> 8), (byte)argb);
+        double lum = 0.299 * c.R + 0.587 * c.G + 0.114 * c.B;
+        if (lum < 90) { double t = (90 - lum) / 255 + 0.2; c = Color.FromRgb((byte)(c.R + (255 - c.R) * t), (byte)(c.G + (255 - c.G) * t), (byte)(c.B + (255 - c.B) * t)); }
+        var b = new SolidColorBrush(c); b.Freeze();
+        return b;
+    }
 
     readonly List<SurveyItem> _items;
     internal SurveyBase? Base;
     internal NetTopologySuite.Geometries.Geometry? Region;
     internal Func<string, bool> IsLayerOn = _ => true;
-    internal Func<string, Brush> ColorOf = _ => BreakB;
+    internal Func<string, Brush> ColorOf = _ => Brushes.White;
     internal Func<string, string> Describe = l => l;
     internal SurveyMerge.CrossReport? Cross;
-    /// <summary>고른 레이어(전부 강조 · 다른 레이어 흐리게) · 마우스 아래 레이어.</summary>
-    internal string? Selected;
-    string? _hover;
-    Point _hoverAt;
-    internal event Action? Toggled;
+    internal IReadOnlyList<SurveyDecor>? Decor;
+    /// <summary>마우스 아래(또는 목록에서 가리킨) 레이어 — 그 레이어 객체 전부 강조.</summary>
+    internal string? Hover;
     internal event Action<string?>? LayerPicked;
+
     readonly Dictionary<(Brush, int), Pen> _pens = new();
+    readonly Dictionary<(Brush, byte), Brush> _fades = new();
+    readonly Dictionary<int, Brush> _itemBrush = new();
+    Brush ItemBrush(SurveyItem i)
+    {
+        if (i.Argb == 0) return ColorOf(i.Layer);
+        if (!_itemBrush.TryGetValue(i.Argb, out var b)) _itemBrush[i.Argb] = b = Visible(i.Argb);
+        return b;
+    }
     Pen PenOf(Brush b, int mode)
     {
         if (_pens.TryGetValue((b, mode), out var p)) return p;
         p = mode switch
         {
-            0 => new Pen(b, 1.4),                       // 쓸 것
-            1 => new Pen(Fade(b, 70), 0.9),             // 안 씀
-            2 => new Pen(Fade(b, 40), 0.8),             // 고른 레이어 있을 때 다른 것
-            3 => new Pen(b, 2.6),                       // 고른 레이어
-            4 => new Pen(Fade(b, 70), 7),               // 고른 레이어 후광
-            6 => new Pen(b, 2.0) { DashStyle = new DashStyle(new double[] { 3, 2 }, 0) },   // 고른 레이어인데 안 씀(점선)
-            _ => new Pen(b, 2.2),                       // 마우스 아래
+            0 => new Pen(b, 1.1),                    // 쓰는 레이어
+            1 => new Pen(Fade(b, 55), 0.8),          // 안 쓰는 레이어
+            2 => new Pen(Fade(b, 90), 7),            // 강조 후광
+            _ => new Pen(b, 2.2),                    // 강조 본선
         };
         p.LineJoin = PenLineJoin.Round; p.StartLineCap = p.EndLineCap = PenLineCap.Round;
         p.Freeze();
-        _pens[(b, mode)] = p;
-        return p;
+        return _pens[(b, mode)] = p;
     }
-    readonly Dictionary<(Brush, byte), Brush> _fades = new();
     Brush Fade(Brush b, byte a)
     {
         if (_fades.TryGetValue((b, a), out var f)) return f;
@@ -546,11 +487,18 @@ internal sealed class SurveyCanvas : FrameworkElement
         return _fades[(b, a)] = n;
     }
 
-    // 보기: 화면 = (월드 − 원점) × 배율 · y 뒤집음
     double _s = 1, _ox, _oy;
-    Point? _down, _panFrom;
-    Point _cur;
-    bool _dragging;
+    Point? _panFrom, _down;
+    Point _hoverAt;
+    string? _lastPick;
+    SurveyItem? _hoverItem;
+
+    protected override void OnLostMouseCapture(MouseEventArgs e)
+    {
+        // ★[검토 1122 LOW] 끌던 중 다른 창으로 넘어가도 이동이 멈추게
+        _panFrom = null; _down = null; Cursor = Cursors.Cross;
+        base.OnLostMouseCapture(e);
+    }
 
     internal SurveyCanvas(List<SurveyItem> items)
     {
@@ -562,10 +510,8 @@ internal sealed class SurveyCanvas : FrameworkElement
         SizeChanged += (_, e) => { if (e.PreviousSize.Width < 1) FitAll(); };
     }
 
-    /// <summary>측량 자료 전체가 보이게(원지반이 가까우면 같이).</summary>
-    internal void FitAll() => FitTo(_items, 0.3);   // 측량 둘레 30 % 여유(백판이 조금 보이게)
+    internal void FitAll() => FitTo(_items, 0.06);
 
-    /// <summary>고른 것이 꽉 차게(둘레 <paramref name="pad"/> 비율 여유) — [이 레이어로 확대].</summary>
     internal void FitTo(IEnumerable<SurveyItem> items, double pad)
     {
         double x0 = double.MaxValue, y0 = double.MaxValue, x1 = double.MinValue, y1 = double.MinValue;
@@ -586,12 +532,11 @@ internal sealed class SurveyCanvas : FrameworkElement
 
     protected override void OnRender(DrawingContext dc)
     {
-        dc.DrawRectangle(DhBrand.Card, null, new Rect(0, 0, ActualWidth, ActualHeight));
+        dc.DrawRectangle(Bg, null, new Rect(0, 0, ActualWidth, ActualHeight));
         var b = Base;
         if (b != null && b.Any)
         {
-            var e0 = S(b.X0, b.Y1); var e1 = S(b.X1, b.Y0);
-            dc.DrawRectangle(null, ExtP, new Rect(e0, e1));
+            dc.DrawRectangle(null, ExtP, new Rect(S(b.X0, b.Y1), S(b.X1, b.Y0)));
             var g = new StreamGeometry();
             using (var c = g.Open())
                 foreach (var l in b.Lines)
@@ -602,8 +547,24 @@ internal sealed class SurveyCanvas : FrameworkElement
                 }
             g.Freeze();
             dc.DrawGeometry(null, BaseP, g);
-            foreach (var p in b.Spots) dc.DrawEllipse(BaseB, null, S(p.X, p.Y), 1.2, 1.2);
         }
+        // 블록 모양(도면 색 · 그 레이어를 쓰면 진하게)
+        if (Decor != null)
+            foreach (var grp in Decor.GroupBy(x => (x.Argb, IsLayerOn(x.Layer), Hover != null && x.Layer.Equals(Hover, StringComparison.OrdinalIgnoreCase))))
+            {
+                var g = new StreamGeometry();
+                using (var c = g.Open())
+                    foreach (var dd in grp)
+                    {
+                        if (dd.Pts.Count < 2) continue;
+                        c.BeginFigure(S(dd.Pts[0].X, dd.Pts[0].Y), false, dd.Closed);
+                        for (int k = 1; k < dd.Pts.Count; k++) c.LineTo(S(dd.Pts[k].X, dd.Pts[k].Y), true, false);
+                    }
+                g.Freeze();
+                var col = grp.Key.Argb == 0 ? Brushes.White : (_itemBrush.TryGetValue(grp.Key.Argb, out var ib) ? ib : (_itemBrush[grp.Key.Argb] = Visible(grp.Key.Argb)));
+                dc0(g, grp.Key.Item3 ? PenOf(col, 5) : grp.Key.Item2 ? PenOf(col, 0) : PenOf(col, 1));
+            }
+        void dc0(Geometry g, Pen p) => dc.DrawGeometry(null, p, g);
         if (Region != null)
         {
             var g = new StreamGeometry { FillRule = FillRule.Nonzero };
@@ -616,34 +577,31 @@ internal sealed class SurveyCanvas : FrameworkElement
             g.Freeze();
             dc.DrawGeometry(RegionB, RegP, g);
         }
-        // ★[JACK 1122 «레이어별로 잘 구분»] 색 = 레이어 · 진하게 = 쓸 것 · 옅게 = 안 씀 · 고른 레이어 = 굵게 + 후광(다른 레이어는 흐리게)
-        //   차례: 안 씀 → 쓸 것 → 마우스 아래 레이어 → 고른 레이어(맨 위)
-        string? sel = Selected, hov = _hover;
-        bool Eq(string a, string? b) => b != null && a.Equals(b, StringComparison.OrdinalIgnoreCase);
-        for (int pass = 0; pass < 5; pass++)
+        // 차례: 안 쓰는 레이어(흐리게) → 쓰는 레이어(도면 색) → 마우스 아래 레이어(후광 + 굵게)
+        string? hov = Hover;
+        for (int pass = 0; pass < 4; pass++)
             foreach (var i in _items)
             {
-                bool layerOn = IsLayerOn(i.Layer);
-                bool on = i.On && layerOn;
-                bool isSel = Eq(i.Layer, sel), isHov = !isSel && Eq(i.Layer, hov);
-                int passOf = isHov ? 2 : on ? 1 : 0;   // 고른 레이어는 3(후광) · 4(본선)
-                if (isSel ? pass < 3 : passOf != pass) continue;
-                var col = ColorOf(i.Layer);
+                bool isHov = hov != null && i.Layer.Equals(hov, StringComparison.OrdinalIgnoreCase);
+                bool on = i.On && IsLayerOn(i.Layer);
+                int want = isHov ? 2 : on ? 1 : 0;
+                if (isHov ? pass < 2 : want != pass) continue;
+                var col = ItemBrush(i);
+                if (IsBlock(i))
+                {
+                    // ★[JACK 1122 «원래 측량도의 블록들이 전부 점으로 나와 구분이 안 됨»] 블록 = 속 빈 네모(점은 둥근 점)
+                    var c0 = S(i.Pts[0].X, i.Pts[0].Y);
+                    double r = isHov ? (pass == 2 ? 6 : 4) : on ? 3 : 2.4;
+                    var pen = isHov && pass == 2 ? PenOf(Fade(col, 90), 2) : PenOf(on || isHov ? col : Fade(col, 55), 0);
+                    dc.DrawRectangle(null, pen, new Rect(c0.X - r, c0.Y - r, 2 * r, 2 * r));
+                    continue;
+                }
                 if (i.Kind == SurveyKind.Spot)
                 {
                     var c0 = S(i.Pts[0].X, i.Pts[0].Y);
-                    if (isSel)
-                    {
-                        // ★[검토 1122 MEDIUM] 고른 레이어도 «안 씀 · 하나 뺀 것»이 보이게 — 안 쓰면 속 빈 점 · 뺀 것은 분홍
-                        if (!on) { if (pass == 4) dc.DrawEllipse(Brushes.White, PenOf(i.On ? col : OffB, 0), c0, 3.2, 3.2); }
-                        else if (pass == 3) dc.DrawEllipse(Fade(col, 70), null, c0, 6, 6);
-                        else dc.DrawEllipse(col, PenOf(Brushes.White, 0), c0, 3.4, 3.4);
-                    }
-                    else if (isHov) dc.DrawEllipse(col, null, c0, 3.2, 3.2);
-                    else if (!layerOn) dc.DrawEllipse(Fade(col, (byte)(sel != null ? 40 : 70)), null, c0, 1.6, 1.6);
-                    else if (!i.On) dc.DrawEllipse(OffB, null, c0, 1.8, 1.8);
-                    else if (sel != null) dc.DrawEllipse(Fade(col, 70), null, c0, 1.8, 1.8);
-                    else dc.DrawEllipse(col, null, c0, 2.4, 2.4);
+                    if (isHov) { if (pass == 2) dc.DrawEllipse(Fade(col, 90), null, c0, 5.5, 5.5); else dc.DrawEllipse(col, null, c0, 2.8, 2.8); }
+                    else if (on) dc.DrawEllipse(col, null, c0, 1.3, 1.3);
+                    else dc.DrawEllipse(Fade(col, 55), null, c0, 1.0, 1.0);
                     continue;
                 }
                 var g = new StreamGeometry();
@@ -653,44 +611,32 @@ internal sealed class SurveyCanvas : FrameworkElement
                     for (int k = 1; k < i.Pts.Count; k++) c.LineTo(S(i.Pts[k].X, i.Pts[k].Y), true, false);
                 }
                 g.Freeze();
-                if (isSel && !on && pass == 3) continue;   // 안 쓰는 고른 레이어 = 후광 없음
-                Pen pen = isSel ? (!i.On ? OffP : !layerOn ? PenOf(col, 6) : PenOf(col, pass == 3 ? 4 : 3))
-                        : isHov ? PenOf(col, 5)
-                        : !layerOn ? PenOf(col, sel != null ? 2 : 1)
-                        : !i.On ? OffP
-                        : sel != null ? PenOf(Fade(col, 90), 0) : PenOf(col, 0);
-                dc.DrawGeometry(null, pen, g);
+                dc.DrawGeometry(null, PenOf(col, isHov ? pass : on ? 0 : 1), g);
             }
-        // 높이가 다르게 엇갈린 곳(주황 점)
         if (Cross != null)
             foreach (var (cxx, cyy) in Cross.At) dc.DrawEllipse(null, CrossP, S(cxx, cyy), 4, 4);
-        if (_dragging && _down is Point d0)
-            dc.DrawRectangle(SelB, SelP, new Rect(d0, _cur));
         // 축척 막대
         double bar = Nice(120 / _s);
         double px = bar * _s;
         var y = ActualHeight - 14;
-        dc.DrawLine(new Pen(DhBrand.Ink, 2), new Point(12, y), new Point(12 + px, y));
-        var ft = new FormattedText(bar >= 1 ? $"{bar:0.##} m" : $"{bar * 100:0} cm", IC, FlowDirection.LeftToRight, new Typeface(DhBrand.Ui, FontStyles.Normal, FontWeights.Normal, FontStretches.Normal), 10.5, DhBrand.Ink, 1.0);
-        dc.DrawText(ft, new Point(16 + px, y - 8));
-        // 레이어 알림(왼쪽 위) — 마우스 아래 레이어 · 고른 레이어
-        double ty = 8;
-        void Tag(string text, Brush sw, bool strong)
+        dc.DrawLine(new Pen(TagInk, 2), new Point(12, y), new Point(12 + px, y));
+        dc.DrawText(Text(bar >= 1 ? $"{bar:0.##} m" : $"{bar * 100:0} cm", false), new Point(16 + px, y - 8));
+        // 레이어 이름(왼쪽 위)
+        if (hov != null)
         {
-            var t = new FormattedText(text, IC, FlowDirection.LeftToRight, new Typeface(DhBrand.Ui, FontStyles.Normal, strong ? FontWeights.Bold : FontWeights.Normal, FontStretches.Normal), 12, DhBrand.Ink, 1.0);
-            var r = new Rect(8, ty, t.Width + 30, t.Height + 8);
-            dc.DrawRoundedRectangle(TagBg, strong ? TagP : null, r, 4, 4);
-            dc.DrawRoundedRectangle(sw, null, new Rect(14, ty + (r.Height - 11) / 2, 11, 11), 2, 2);
-            dc.DrawText(t, new Point(30, ty + 4));
-            ty += r.Height + 4;
+            string what = _hoverItem != null && string.Equals(_hoverItem.Layer, hov, StringComparison.OrdinalIgnoreCase)
+                ? "   ·   이 객체: " + (_hoverItem.Kind == SurveyKind.Contour ? "등고선" : _hoverItem.Kind == SurveyKind.Break ? "3D 선" : _hoverItem.Src) + string.Format(IC, " {0:0.00} m", _hoverItem.Z0)
+                : "";
+            var t = Text(Describe(hov) + what, true);
+            var r = new Rect(8, 8, t.Width + 28, t.Height + 8);
+            dc.DrawRoundedRectangle(TagBg, TagP, r, 3, 3);
+            dc.DrawRectangle(ColorOf(hov), null, new Rect(14, 8 + (r.Height - 10) / 2, 10, 10));
+            dc.DrawText(t, new Point(30, 12));
         }
-        if (Selected != null) Tag("고른 레이어: " + Describe(Selected), ColorOf(Selected), true);
-        if (_hover != null && !string.Equals(_hover, Selected, StringComparison.OrdinalIgnoreCase)) Tag(Describe(_hover) + " — 누르면 이 레이어 고르기", ColorOf(_hover), false);
     }
 
-    static readonly Brush TagBg = Fz(0xFF, 0xFF, 0xFF, 0xE8);
-    static readonly Pen TagP = Frz(new Pen(Fz(0x00, 0x48, 0x4E), 1.2));
-    static readonly Pen CrossP = Frz(new Pen(CrossB, 2));
+    static FormattedText Text(string s, bool bold) =>
+        new(s, IC, FlowDirection.LeftToRight, new Typeface(DhBrand.Ui, FontStyles.Normal, bold ? FontWeights.SemiBold : FontWeights.Normal, FontStretches.Normal), 11.5, TagInk, 1.0);
 
     static readonly CultureInfo IC = CultureInfo.InvariantCulture;
     static double Nice(double v)
@@ -715,8 +661,9 @@ internal sealed class SurveyCanvas : FrameworkElement
     {
         Focus();
         var p = e.GetPosition(this);
-        if (e.ChangedButton == MouseButton.Left && e.ClickCount == 2) { FitAll(); e.Handled = true; return; }
-        if (e.ChangedButton == MouseButton.Left) { _down = p; _cur = p; _dragging = false; CaptureMouse(); }
+        // ★[JACK 1122 «꼭 두 번 눌러야 체크가 됨»] 두 번 클릭 = 빈 곳에서만 전체 보기 — 객체 위 두 번째 클릭은 보통 클릭(빨리 이어 누른 두 객체가 «두 번 클릭»으로 먹히지 않게)
+        if (e.ChangedButton == MouseButton.Left && e.ClickCount == 2 && Nearest(p) == null) { FitAll(); e.Handled = true; return; }
+        if (e.ChangedButton == MouseButton.Left) { _down = p; CaptureMouse(); }
         else if (e.ChangedButton is MouseButton.Right or MouseButton.Middle) { _panFrom = p; CaptureMouse(); Cursor = Cursors.SizeAll; }
         e.Handled = true;
     }
@@ -729,75 +676,59 @@ internal sealed class SurveyCanvas : FrameworkElement
             _ox -= (p.X - f.X) / _s; _oy += (p.Y - f.Y) / _s;
             _panFrom = p;
             InvalidateVisual();
+            return;
         }
-        else if (_down is Point d && e.LeftButton == MouseButtonState.Pressed)
+        if (_down is Point d && e.LeftButton == MouseButtonState.Pressed && (Math.Abs(p.X - d.X) > 8 || Math.Abs(p.Y - d.Y) > 8))
         {
-            _cur = p;
-            if (!_dragging && (Math.Abs(p.X - d.X) > 4 || Math.Abs(p.Y - d.Y) > 4)) _dragging = true;
-            if (_dragging) InvalidateVisual();
+            // 왼쪽 끌기도 이동(CAD처럼 손으로 밀기)
+            _panFrom = p; _down = null; Cursor = Cursors.SizeAll;
+            _ox -= (p.X - d.X) / _s; _oy += (p.Y - d.Y) / _s;
+            InvalidateVisual();
+            return;
         }
-        else if ((p - _hoverAt).Length > 2)
+        if ((p - _hoverAt).Length > 2)
         {
             _hoverAt = p;
-            var h = Nearest(p, anyLayer: true)?.Layer;
-            if (!string.Equals(h, _hover, StringComparison.Ordinal)) { _hover = h; Cursor = h != null ? Cursors.Hand : Cursors.Cross; InvalidateVisual(); }
+            var hi = Nearest(p);
+            _hoverItem = hi;
+            var h = hi?.Layer;
+            if (!string.Equals(h, Hover, StringComparison.Ordinal)) { Hover = h; Cursor = h != null ? Cursors.Hand : Cursors.Cross; InvalidateVisual(); }
         }
     }
 
     protected override void OnMouseLeave(MouseEventArgs e)
     {
-        if (_hover != null) { _hover = null; Cursor = Cursors.Cross; InvalidateVisual(); }
-    }
-
-    /// <summary>마우스 가까운 객체(8 px 안) — 레이어 고르기는 안 쓰는 레이어도 잡는다(빼 둔 수목 레이어도 눌러 볼 수 있게).</summary>
-    SurveyItem? Nearest(Point p, bool anyLayer)
-    {
-        const double tol = 8;
-        SurveyItem? best = null; double bd = tol;
-        foreach (var i in _items)
-        {
-            if (!anyLayer && !IsLayerOn(i.Layer)) continue;
-            double d = Dist(i, p);
-            // 같은 거리면 쓰는 레이어 먼저
-            if (d < bd || (d == bd && best != null && !IsLayerOn(best.Layer) && IsLayerOn(i.Layer))) { bd = d; best = i; }
-        }
-        return best;
+        if (Hover != null && _panFrom == null) { Hover = null; Cursor = Cursors.Cross; InvalidateVisual(); }
     }
 
     protected override void OnMouseUp(MouseButtonEventArgs e)
     {
         var p = e.GetPosition(this);
-        if (_panFrom != null && e.ChangedButton is MouseButton.Right or MouseButton.Middle) { _panFrom = null; ReleaseMouseCapture(); Cursor = Cursors.Cross; e.Handled = true; return; }
-        if (_down is Point d && e.ChangedButton == MouseButton.Left)
+        if (_panFrom != null) { _panFrom = null; _down = null; ReleaseMouseCapture(); Cursor = Cursors.Cross; e.Handled = true; return; }
+        if (_down != null && e.ChangedButton == MouseButton.Left)
         {
+            _down = null;
             ReleaseMouseCapture();
-            if (_dragging) BoxToggle(d, p, on: (Keyboard.Modifiers & ModifierKeys.Shift) != 0);
-            else if ((Keyboard.Modifiers & ModifierKeys.Control) != 0) ClickToggle(p);
-            else LayerPicked?.Invoke(Nearest(p, anyLayer: true)?.Layer);   // ★[JACK 1122] 클릭 = 그 객체의 레이어 고르기(빈 곳 = 선택 풀기)
-            _down = null; _dragging = false;
+            var l = Nearest(p)?.Layer;
+            _lastPick = l;
+            if (l != null) LayerPicked?.Invoke(l);   // 누른 객체의 레이어 쓰기/안 쓰기
             InvalidateVisual();
             e.Handled = true;
         }
     }
 
-    void ClickToggle(Point p)
+    /// <summary>마우스 가까운 객체(8 px 안 · 같은 거리면 쓰는 레이어 먼저).</summary>
+    SurveyItem? Nearest(Point p)
     {
-        var best = Nearest(p, anyLayer: false);
-        if (best == null) return;
-        best.On = !best.On;
-        Toggled?.Invoke();
-    }
-
-    void BoxToggle(Point a, Point b, bool on)
-    {
-        var r = new Rect(a, b);
-        int n = 0;
+        const double tol = 8;
+        SurveyItem? best = null; double bd = tol;
         foreach (var i in _items)
         {
-            if (!IsLayerOn(i.Layer) || i.On == on) continue;
-            if (i.Pts.Any(q => r.Contains(S(q.X, q.Y)))) { i.On = on; n++; }
+            // ★[JACK 1122 «선 위에 있는 점은 선 때문에 선택이 안 됨»] 점 · 블록을 먼저(선보다 5 px 가깝게 침)
+            double d = Dist(i, p) - (i.Kind == SurveyKind.Spot ? 5 : 0);
+            if (d < bd || (d == bd && best != null && !IsLayerOn(best.Layer) && IsLayerOn(i.Layer))) { bd = d; best = i; }
         }
-        if (n > 0) Toggled?.Invoke();
+        return best;
     }
 
     double Dist(SurveyItem i, Point p)

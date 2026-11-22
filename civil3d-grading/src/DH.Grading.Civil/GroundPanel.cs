@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
@@ -16,7 +16,7 @@ internal sealed class GroundPanel : UserControl
 
     readonly Action<string> _send;
     readonly GroundDemoView _demo = new();
-    readonly Button _survey;
+    readonly Button _survey, _road;
     readonly TextBlock _surveyNote, _now;
     internal readonly Button DeleteButton;
 
@@ -41,8 +41,12 @@ internal sealed class GroundPanel : UserControl
         _survey = Big("측량도 보정하기", "측량도 DWG · DXF → 미리보기에서 고르기 → 그 범위만 측량 자료로", "DHSURVEYFIX", "gSurvey",
             "측량도를 고르면 미리보기 창에 열립니다(도면은 안 엶). 가져올 레이어 · 선을 고르면\n측량 범위(+ 여유 2 m) 안의 백판 등고선 · 표고점을 지우고 측량 자료로 바꿔 원지반을 새로 짓습니다(옛 원지반은 숨김 · 지우지 않음).");
         root.Children.Add(_survey);
+        // ★[JACK 1122 «원지반 생성에 도로 보정»] 도로 다듬기 — 수치지도 · 측량도 도로선으로 도로가 울퉁불퉁한 원지반을 보정
+        _road = Big("도로 다듬기", "수치지도 · 측량도의 도로선 → 도로 테두리 높이를 다듬어 도로를 깔끔하게(상수도 종단용)", "DHROADSMOOTH", "gRoad",
+            "도로선을 VWorld에서 받거나 파일(수치지도 DXF · 측량도)을 고르면 도로경계 · 중심선 · 교량/터널을 자동으로 나누고(측량도는 레이어 역할 고르기)\n도로 테두리 높이를 길이 방향으로 다듬어 도로 안을 평평하게 다시 짓습니다. 교량 · 입체 교차 · 굴다리 둑 둘레는 원래 원지반 그대로(옛 원지반은 숨김).");
+        root.Children.Add(_road);
         _surveyNote = new TextBlock { FontSize = 10.5, Foreground = DhBrand.Warn, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(4, -2, 0, 6), Text = "원지반을 먼저 만드세요 — 위 셋 중 하나" };
-        root.Children.Add(_surveyNote);
+        // [JACK 1122] 설명 글 없앰 — 꺼진 까닭은 툴팁 · 그림으로
 
         _now = new TextBlock { FontSize = 11, Foreground = DhBrand.Sub, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(2, 6, 0, 0) };
         root.Children.Add(_now);
@@ -59,6 +63,7 @@ internal sealed class GroundPanel : UserControl
     internal void SetState(bool hasGround, string now)
     {
         _survey.IsEnabled = hasGround;
+        _road.IsEnabled = hasGround;
         _surveyNote.Visibility = hasGround ? Visibility.Collapsed : Visibility.Visible;
         _now.Text = now.Length > 0 ? "지금 원지반: " + now : "지금 원지반: 없음";
         DeleteButton.IsEnabled = hasGround;
@@ -71,7 +76,6 @@ internal sealed class GroundPanel : UserControl
     {
         var st = new StackPanel { Margin = new Thickness(0, 6, 0, 6) };
         st.Children.Add(new TextBlock { Text = title, FontWeight = FontWeights.Bold, FontSize = 13, Foreground = DhBrand.Brand });
-        st.Children.Add(new TextBlock { Text = sub, FontSize = 10.5, Foreground = DhBrand.Sub, TextWrapping = TextWrapping.Wrap });
         root.Children.Add(st);
     }
 
@@ -79,7 +83,7 @@ internal sealed class GroundPanel : UserControl
     {
         var st = new StackPanel();
         st.Children.Add(new TextBlock { Text = title, FontSize = 13, FontWeight = FontWeights.SemiBold });
-        st.Children.Add(new TextBlock { Text = sub, FontSize = 10.5, Opacity = 0.75, TextWrapping = TextWrapping.Wrap });
+        // ★[JACK 1122 «단추 밑 작은 설명은 다 없애 — 애니메이션이 있으니»] 단추엔 이름만(설명은 위 그림 · 툴팁)
         // 글은 왼쪽 · 오른쪽 끝에 › — 단추 모양표(DhBrand)가 알맹이를 가운데 두므로 알맹이 폭을 단추 폭에 맞춘다
         var arrow = new TextBlock { Text = "›", FontSize = 20, Opacity = 0.45, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, -2, 0, 0) };
         var body = new DockPanel { LastChildFill = true };
@@ -87,7 +91,7 @@ internal sealed class GroundPanel : UserControl
         body.Children.Add(arrow); body.Children.Add(st);
         var b = new Button
         {
-            Content = body, MinHeight = 50, Margin = new Thickness(0, 0, 0, 8), Padding = new Thickness(10, 6, 10, 6),
+            Content = body, MinHeight = 38, Margin = new Thickness(0, 0, 0, 8), Padding = new Thickness(10, 6, 10, 6),
             HorizontalContentAlignment = HorizontalAlignment.Left, VerticalContentAlignment = VerticalAlignment.Center,
             ToolTip = tip + $"\n({cmd})",
         };
@@ -106,9 +110,12 @@ internal sealed class GroundPanel : UserControl
         // 꺼진 단추는 MouseEnter가 안 옴 — 자리로 가려 설명을 튼다
         try
         {
-            if (_survey.IsEnabled || !_survey.IsVisible) return;
-            var p = e.GetPosition(_survey);
-            if (p.X >= 0 && p.Y >= 0 && p.X < _survey.ActualWidth && p.Y < _survey.ActualHeight) _demo.Play("gSurvey");
+            foreach (var (b, key) in new[] { (_survey, "gSurvey"), (_road, "gRoad") })
+            {
+                if (b.IsEnabled || !b.IsVisible) continue;
+                var p = e.GetPosition(b);
+                if (p.X >= 0 && p.Y >= 0 && p.X < b.ActualWidth && p.Y < b.ActualHeight) _demo.Play(key);
+            }
         }
         catch { }
     }

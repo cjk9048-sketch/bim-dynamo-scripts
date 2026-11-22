@@ -1,4 +1,4 @@
-using Autodesk.AutoCAD.DatabaseServices;
+﻿using Autodesk.AutoCAD.DatabaseServices;
 using DH.Grading.Core;
 using DH.Grading.Core.Forest;
 
@@ -27,7 +27,7 @@ internal static class XsecForestLoad
             string? dwgDir = null;
             try { string f = db.Filename; if (System.IO.Path.IsPathRooted(f) && System.IO.File.Exists(f)) dwgDir = System.IO.Path.GetDirectoryName(f); } catch { }
             var st = ForestSettings.Load();
-            var pick = ForestSource.OpenWithApi(DhKeys.Installed.GisApi, keys, st.Tiles, st.IsDefault, st.Seen, dwgDir, s => BusyPopup.Text("벌개재근 — " + s), out string apiNote, out _);
+            var pick = ForestSource.OpenWithApi(DhKeys.Installed.GisApi, keys, st.Tiles, st.IsDefault, st.Seen, dwgDir, s => BusyPopup.Text("벌개재근 — " + s), out string apiNote, out _, db: DhKeys.Installed.GisDb.Ready ? GisDb.LoadForest : null);
             if (apiNote.Length > 0) log?.AppendLine("  벌개재근(횡단): " + apiNote + " → " + (pick.Source != null ? pick.Log : "창고 없음"));
             if (pick.Source == null) { why = "임상도 없음"; return null; }
             var tiles = ForestSource.Load(pick.Source, keys, () => !pick.FromCopy && !pick.FromApi && ForestSource.OpenCopy(dwgDir, out var cp, out _) ? cp : null, out var used, out int failed, out _);
