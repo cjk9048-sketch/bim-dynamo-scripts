@@ -14,6 +14,7 @@ import { Sun, sunPosition } from './sun.js';
 import { photo, video, download, fileName } from './capture.js';
 import { inHost, post, onHost } from './host.js';
 import { Walk } from './walk.js';
+import { KeyMove } from './keymove.js';
 
 // ★[JACK 1103] 'align' = 부지 측점 · 'ralign' = 진입도로 측점(도로가 있을 때만)
 // ★[v115 · JACK 1105 임상도] 'tree' = 수목(임상도) — 건물 다음
@@ -144,6 +145,8 @@ async function main() {
   // 시야 검토 — 눈높이(지표면 + 1.70 m)로 걷기 · 켜 있는 동안 정보 누르기 · 해 · 시공 등 다른 칸은 그대로 두되 키보드는 여기서만 받는다
   const walk = new Walk(view, L, picker, document.getElementById('walkBtn'));
   walk.onChange = (m) => { if (m !== 'off') { fitState = ''; ui.hideInfo(); picker.clearMarks(); } };
+  // ★[JACK 1123] 방향키 = 보는 방향 기준 앞뒤 · 옆 이동(Shift 빠르게) — 걷기 중에는 walk가 먼저 받아 막음
+  new KeyMove(view, () => { fitState = ''; });
   const sunBtn = document.getElementById('sunBtn'), buildBtn = document.getElementById('buildBtn');
   const videoBtn = document.getElementById('videoBtn'), photoBtn = document.getElementById('photoBtn');
   if (!sun.available) { sunBtn.disabled = true; sunBtn.title = '해 그림자 — 도면 좌표계(위경도)를 모릅니다'; }

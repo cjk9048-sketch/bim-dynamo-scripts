@@ -46,6 +46,7 @@ using AcadApp = Autodesk.AutoCAD.ApplicationServices.Application;
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.MapPalette))]                // DHCONTOURBOX(지도 도킹바가 넘긴 범위로 지표면 가져오기)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.NgiiCommand))]               // DHNGII(수치지도 DXF → 원지반)
 [assembly: CommandClass(typeof(DH.Grading.Civil.GroundPalette))]                       // ★[JACK 1121] DHGROUNDPANEL(원지반 가져오기 도킹창 — 리본 스플릿 대신)
+[assembly: CommandClass(typeof(DH.Grading.Civil.StructPalette))]                       // ★[JACK 1123] DHSTRUCTPANEL(구조물 도킹창 — 리본 스플릿 대신)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.SurveyFixCommand))]          // ★[JACK 1121] DHSURVEYFIX(측량도 보정 — 백판 위 측량 범위만 바꿔 원지반 새로)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.RoadSmoothCommand))]         // ★[JACK 1122] DHROADSMOOTH(원지반 도로 다듬기 — 수치지도 · 측량도 도로선으로 도로 울퉁불퉁 보정)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.GroundContourCommand))]      // ★[v113.0] DHGNDCONTOUR(도면의 등고선 → 원지반)
@@ -240,6 +241,7 @@ public sealed class RibbonApp : IExtensionApplication
                     SheetBookPalette.Refresh();   // ★[v112.0] 도면화 창 — 장 수 · 축척 · 옛것(창이 보일 때만)
                     GroundPalette.Refresh();      // ★[JACK 1121] 원지반 가져오기 창 — [측량도 보정하기] 켜짐 · 지금 원지반(창이 보일 때만)
                     UDitchPalette.Refresh();      // ★[JACK 1122] U형 측구 창 — 도면 기록 다시 읽기(창이 보일 때만)
+                    StructPalette.Refresh();      // ★[JACK 1123] 구조물 창 — [구조물 지우기] 켜짐 · 지금 구조물(창이 보일 때만)
                 }
                 // ★[v111.10 · 계획 3.5] 초기화를 U로 되돌려도 단추가 꺼진 채 남지 않게 — 실행 취소 · 다시 실행도(RefreshEnabled는 빼고)
                 else if (c3 == "U" || c3 == "UNDO" || c3 == "REDO" || c3 == "MREDO")
@@ -249,6 +251,7 @@ public sealed class RibbonApp : IExtensionApplication
                     SheetBookPalette.Refresh();   // ★[v112.0] 도면화 창 — 장 수 · 축척 · 옛것(창이 보일 때만)
                     GroundPalette.Refresh();      // ★[JACK 1121] 되돌려 원지반이 생기거나 없어져도 [측량도 보정하기]가 따라감
                     UDitchPalette.Refresh();      // ★[JACK 1122] 되돌린 측구 기록을 창에
+                    StructPalette.Refresh();      // ★[JACK 1123] 되돌린 구조물 기록을 창에
                 }
             };
         }
@@ -432,8 +435,9 @@ public sealed class RibbonApp : IExtensionApplication
             var vAll = MakeButton("전부\n보기", "DHVIEWALL ", "최종지표면(부지 + 진입도로) · 터파기 · 선을 모두 표시", "보기전부");
             var vGnd = MakeButton("원지반\n만", "DHVIEWG ", "원지반만 표시(계획 · 진입도로 · 터파기 숨김)", "보기원지반");
             var vPln = MakeButton("계획\n지표면", "DHVIEWP ", "부지 계획지표면만 표시(진입도로 뺌)", "보기계획");
-            var vRoad = MakeButton("진입\n도로", "DHVIEWR ", "진입도로 지표면 + 아래 바탕면 표시", "노리선");
-            var vFin = MakeButton("최종\n지표면", "DHVIEWF ", "부지 + 진입도로를 합친 최종지표면만 표시(선 없이)", "보기계획");
+            // ★[JACK 1123 «겹침 풀기»] 진입도로 · 최종지표면은 제 그림(전엔 [진입도로 생성] · «계획지표면»과 같은 그림)
+            var vRoad = MakeButton("진입\n도로", "DHVIEWR ", "진입도로 지표면 + 아래 바탕면 표시", "보기도로");
+            var vFin = MakeButton("최종\n지표면", "DHVIEWF ", "부지 + 진입도로를 합친 최종지표면만 표시(선 없이)", "보기최종");
             var vExc = MakeButton("터파기\n만", "DHVIEWE ", "터파기 지표면만 표시", "보기터파기");
             var vStn = MakeButton("측점\n보기/숨기기", "DHVIEWSTN ", "부지 · 진입도로 검토선과 측점 글자를 켜고 끕니다(다른 보기와 따로)", "측점추가");
 
@@ -651,7 +655,7 @@ public sealed class RibbonApp : IExtensionApplication
             //   안에 지적도 삽입버튼하고 지적도삭제 버튼 만들어줘"</i>]
             //   위성지도와 <b>같은 모양</b>으로 묶는다 — 넣는 자리와 빼는 자리를 한 단추에.
             var btnParcelOff = MakeButton(
-                "지적도\n삭제", "DHPARCELOFF ", "가져온 지적도(필지 경계·지번)를 레이어 통째로 지웁니다", "지적");
+                "지적도\n삭제", "DHPARCELOFF ", "가져온 지적도(필지 경계·지번)를 레이어 통째로 지웁니다", "지적삭제");   // ★[JACK 1123] 필지 + 빨강 ×(삽입과 겹치지 않게)
             btnParcelOff.ToolTip = MakeTip("지적도 삭제 (DHPARCELOFF)",
                 "[지적도 삽입]으로 가져온 것을 <b>레이어 통째로</b> 지웁니다 — 필지 경계와 지번 글씨.\n" +
                 "· 레이어 자체는 남겨 다음에 다시 씁니다.\n" +
@@ -879,7 +883,7 @@ public sealed class RibbonApp : IExtensionApplication
             splitRoad.Current = btnRoadDraw;
             // ★★[v113.3 · JACK 1105 «스플릿으로 하지 말고 그냥 진입도로 생성 — 누르면 진입도로 창이 뜨고 창에 도로 그리기랑 폴리선 선택 · 별도 팝업 말고 · 기존 진입도로 창 버튼은 없애»]
             //   리본에는 단추 하나(스플릿 · [진입도로 창]은 만들어만 두고 안 얹음 — 명령 DHROADDRAW · DHROAD · DHROADPANEL은 그대로 산다)
-            var btnRoadNew = MakeButton("진입도로\n생성", "DHROADNEW ", "진입도로 창을 엽니다 — 도로 설정을 정하고 [진입도로 생성](경로 그리기 / 폴리선 선택)으로 만듭니다", "노리선");
+            var btnRoadNew = MakeButton("진입도로\n생성", "DHROADNEW ", "진입도로 창을 엽니다 — 도로 설정을 정하고 [진입도로 생성](경로 그리기 / 폴리선 선택)으로 만듭니다", "진입도로");   // ★[JACK 1123] 원근 도로 + ★
             btnRoadNew.ToolTip = MakeTip("진입도로 생성 (DHROADNEW)",
                 "**진입도로 창**이 열립니다.\n" +
                 "창 «진입도로 생성» 탭에서 도로 설정(곡선 반경 · 횡단 · 포장 · 사면)을 정한 뒤\n" +
@@ -910,14 +914,23 @@ public sealed class RibbonApp : IExtensionApplication
             pRoad.Items.Add(btnSecRoad);
             pRoad.Items.Add(Spacer());
 
-            // ★★[v111.6 · JACK 1102] [공통] = 둘이 함께 쓰는 것 — 도면설정 · 노리선 · 지층 · 위성지도(기타에서 옮김) · ★[v111.7] 원지반 가져오기는 [원지반 작성]으로
+            // ★★[v111.6 · JACK 1102] [공통] = 둘이 함께 쓰는 것 — 도면설정 · 노리선 · 지층 · ★[v111.7] 원지반 가져오기는 [원지반 작성]으로
+            // ★★[JACK 1123 «위성지도 삽입은 기타로 · 구조물은 공통으로»] 공통설정 · 지층 구성 · 구조물 · 대안 (위성지도 삽입 → [기타] 지적도 옆)
+            //   [구조물] = 스플릿 대신 단추 하나 → [구조물] 도킹창(<see cref="StructPalette"/> · DHSTRUCTPANEL). 창 안 단추는 옛 명령(DHSTRUCT · DHSTRUCTBOX · DHSTRUCTPTS · DHSTRUCTOFF)을 그대로 보낸다.
+            var btnStruct = MakeButton("구조물", "DHSTRUCTPANEL ", "구조물 창 — 불러오기 · 박스 구조물 배치 · 좌표계 내보내기 · 지우기", "구조물");
+            btnStruct.ToolTip = MakeTip("구조물 (DHSTRUCTPANEL)",
+                "누르면 오른쪽에 <b>구조물 창</b>이 열립니다 — 단추에 마우스를 올리면 그림으로 설명합니다.\n" +
+                "**구조물 불러오기** — Revit 3D DWG · IFC(공유 좌표)를 붙여 평면 · 종단 · 횡단에 자른 면을 넣습니다.\n" +
+                "**박스 구조물 배치** — Revit 모델 없이 평면 외곽 × 높이로 직접(같은 수량 · 그림).\n" +
+                "**좌표계 내보내기** — 두 점 + 네모를 Revit 애드인이 읽는 파일로 저장합니다.\n" +
+                "**구조물 지우기** — 그린 것 · xref · 기록을 지웁니다(원본 파일은 그대로).", null);
             tab.Panels.Add(new RibbonPanel { Source = pCommon });
             pCommon.Items.Add(Spacer());
             pCommon.Items.Add(btnSheetSet);
             pCommon.Items.Add(Spacer());
             pCommon.Items.Add(btnStrata);
             pCommon.Items.Add(Spacer());
-            pCommon.Items.Add(splitMap);
+            pCommon.Items.Add(btnStruct);
             pCommon.Items.Add(Spacer());
             // ★★[v112.1 · JACK 1104 «대안 저장»] 지금 설계를 도면 사본으로 · 대안끼리 수량표
             var btnAlt = MakeButton("대안", "DHALT ", "지금 설계(계획지표면 + 진입도로)를 도면 사본으로 저장하고 대안끼리 수량을 견줍니다", "대안");
@@ -941,7 +954,7 @@ public sealed class RibbonApp : IExtensionApplication
             pExport.Items.Add(btnBook);
             pExport.Items.Add(Spacer());
             // ★[수량산출서 · JACK 1116] 토공 수량산출서(엑셀) — 도면화 옆
-            var btnQty = MakeButton("수량\n산출서", "DHQTYXLSX ", "토공 수량산출서(엑셀) — 토공집계표 · 시설 토적표 · 수로관 · 임목폐기물", "도면화");
+            var btnQty = MakeButton("수량\n산출서", "DHQTYXLSX ", "토공 수량산출서(엑셀) — 토공집계표 · 시설 토적표 · 수로관 · 임목폐기물", "수량산출");   // ★[JACK 1123] 표 종이 + Σ([도면생성]과 겹치지 않게)
             btnQty.ToolTip = MakeTip("수량산출서 (DHQTYXLSX)",
                 "마지막 [횡단도] 수량 · U형 측구 · 벌개제근으로 **토공 수량산출서(엑셀)**를 만듭니다.\n\n" +
                 "· 시트 = 토공집계표 · 1)시설 토적표 · 수로관산근 · 임목폐기물 둘\n" +
@@ -955,7 +968,7 @@ public sealed class RibbonApp : IExtensionApplication
             tab.Panels.Add(new RibbonPanel { Source = pMisc });
             pMisc.Items.Add(Spacer());
             // ★[튜토리얼 · JACK 1117 «게임처럼 따라 하기 · 리본 단추로만 시작»] 새 빈 도면 → 원지반 가져오기 → 계획부지 생성
-            var btnTut = MakeButton("튜토리얼", "DHTUTORIAL ", "단원 고르기 → 원지반 가져오기 · 계획부지 생성 · 터파기 생성 따라 하기", "계획부지");
+            var btnTut = MakeButton("튜토리얼", "DHTUTORIAL ", "단원 고르기 → 원지반 가져오기 · 계획부지 생성 · 터파기 생성 따라 하기", "튜토리얼");   // ★[JACK 1123] 펼친 책 + ▶([계획부지 생성]과 겹치지 않게)
             btnTut.ToolTip = MakeTip("튜토리얼 (DHTUTORIAL)",
                 "**단원 고르기** → 1 원지반 가져오기 · 2 계획부지 생성 · 3 터파기 생성\n" +
                 "늘 새 도면 · 자료 사본에서 — 지금 도면은 그대로\n" +
@@ -966,28 +979,11 @@ public sealed class RibbonApp : IExtensionApplication
             pMisc.Items.Add(Spacer());
             pMisc.Items.Add(splitParcel);
             pMisc.Items.Add(Spacer());
-            // ★★[v115 · JACK 1105 «Revit 구조물을 투영하는 기능을 [기타]에»] [구조물] 스플릿 — 불러오기 · 좌표계 내보내기(v116.9) · 지우기
-            var splitStruct = new RibbonSplitButton
-            {
-                Text = "구조물", ShowText = true, ShowImage = true, LargeImage = MakeGlyph("구조물"), Image = MakeGlyphSmall("구조물"),
-                Size = RibbonItemSize.Large, Orientation = System.Windows.Controls.Orientation.Vertical,
-                IsSplit = true, IsSynchronizedWithCurrentItem = false, ListStyle = RibbonSplitButtonListStyle.List,
-                ToolTip = MakeTip("구조물", "Revit 3D DWG(공유 좌표)를 xref로 붙이고\n평면 외곽 · 종단 · 횡단에 자른 면을 넣습니다.\n[박스 구조물 배치] — Revit 모델 없이 평면 외곽 × 높이로 직접(같은 수량 · 그림).", null),
-            };
-            var btnStructIn = MakeButton("구조물\n불러오기", "DHSTRUCT ", "Revit 3D DWG 불러오기", "구조물");
-            // ★[v116.9 · JACK 1110 «구조물 좌표계 내보내기 단추 만들고 다시 반영은 없애»] 원본이 바뀌면 [구조물 불러오기]로 같은 파일을 다시 고름(같은 경로 = 바꿔치기)
-            var btnStructPts = MakeButton("구조물\n좌표계 내보내기", "DHSTRUCTPTS ", "두 점을 찍어 Revit 애드인이 읽는 기준점 파일(JSON · m · WCS)로 저장합니다", "구조물");
-            var btnStructOff = MakeButton("구조물\n지우기", "DHSTRUCTOFF ", "그린 것 · xref · 기록을 지웁니다(원본 파일은 그대로)", "구조물");
-            // ★[v117.19 · JACK 1121] 박스 구조물 직접 배치(Revit 모델 없는 초기 설계 — 같은 기록 · 수량 · 그림 길)
-            var btnStructBox = MakeButton("박스 구조물\n배치", "DHSTRUCTBOX ", "이름 · 높이 · 바닥고로 평면에 박스를 그려 구조물로 넣습니다(개략 되메우기 · 토공)", "구조물");
-            splitStruct.Items.Add(btnStructIn);
-            splitStruct.Items.Add(btnStructBox);
-            splitStruct.Items.Add(btnStructPts);
-            splitStruct.Items.Add(btnStructOff);
-            splitStruct.Current = btnStructIn;
-            pMisc.Items.Add(splitStruct);
+            // ★★[JACK 1123 «위성지도 삽입 단추를 기타로 · 구조물은 공통으로»] [위성지도 삽입] 스플릿 = 지적도 옆(둘 다 VWorld에서 받아 깔기) · 옛 [구조물] 스플릿 자리
+            //   ★[v115 · JACK 1105]부터 여기 있던 [구조물] 스플릿(불러오기 · 박스 배치 · 좌표계 내보내기 · 지우기)은 [공통]의 단추 하나 + 도킹창으로
+            pMisc.Items.Add(splitMap);
             pMisc.Items.Add(Spacer());
-            pMisc.Items.Add(btnReset);           // ★[v111.6] 위성지도는 [공통]으로 옮김
+            pMisc.Items.Add(btnReset);
             pMisc.Items.Add(Spacer());
             // ★[v117.19 · 사내 배포 1123] [정보] — 지금 판 · 지문 · 이번 판 바뀐 점 · 업데이트 확인(새 판이 있으면 주황 점 · «새 판»)
             _btnInfo = MakeButton("정보", "DHABOUT ", "Version · What's New · Check for Updates", "default");
@@ -1021,28 +1017,10 @@ public sealed class RibbonApp : IExtensionApplication
         catch { }
     }
 
-    /// <summary>[정보] 그림 — 파란 원 + i · 새 판이 있으면 오른쪽 위 주황 점.</summary>
+    /// <summary>[정보] 그림 — 파란 원 + i · 새 판이 있으면 오른쪽 위 주황 점(<see cref="RibbonIcons"/>의 «정보» · «정보+» — 칸 색 안 입힘).</summary>
     private static ImageSource? InfoGlyph(bool dot)
     {
-        try
-        {
-            var g = new DrawingGroup();
-            g.Children.Add(new GeometryDrawing(Brushes.Transparent, null, new RectangleGeometry(new Rect(0, 0, 32, 32))));
-            var fill = new LinearGradientBrush(Color.FromRgb(0x62, 0xA8, 0xF0), Color.FromRgb(0x2F, 0x68, 0xB8), 90);
-            g.Children.Add(new GeometryDrawing(new SolidColorBrush(Color.FromRgb(0x17, 0x38, 0x6F)), null, new EllipseGeometry(new Point(16, 17.2), 12, 12)));
-            g.Children.Add(new GeometryDrawing(fill, null, new EllipseGeometry(new Point(16, 16), 12, 12)));
-            g.Children.Add(new GeometryDrawing(Brushes.White, null, new EllipseGeometry(new Point(16, 9.6), 2.1, 2.1)));
-            g.Children.Add(new GeometryDrawing(Brushes.White, null, new RectangleGeometry(new Rect(14.2, 13, 3.6, 10.5), 1, 1)));
-            if (dot)
-            {
-                g.Children.Add(new GeometryDrawing(Brushes.White, null, new EllipseGeometry(new Point(26, 6), 6, 6)));
-                g.Children.Add(new GeometryDrawing(new SolidColorBrush(Color.FromRgb(0xE8, 0x6A, 0x1C)), null, new EllipseGeometry(new Point(26, 6), 4.6, 4.6)));
-            }
-            g.Freeze();
-            var img = new DrawingImage(g);
-            img.Freeze();
-            return img;
-        }
+        try { return Bake(RibbonIcons.Get(dot ? "정보+" : "정보"), 32); }
         catch { return null; }
     }
 
@@ -1132,8 +1110,9 @@ public sealed class RibbonApp : IExtensionApplication
                 ImageSource? Re(ImageSource? img)
                 {
                     if (img == null || !_kindOf.TryGetValue(img, out var k)) return img;
-                    var src = RibbonIcons.Get(k.Kind, k.Small) ?? RibbonIcons.Get("default", k.Small);
-                    return Bake(RibbonTone.Apply(src, hue), k.Small ? 16 : 32) ?? img;
+                    // ★[JACK 1123 Civil 느낌 그림] 칸 색은 그림의 강조색만(흙 · 풀 · 종이 · 배지 색은 그대로) — RibbonIcons가 hue로 직접 그린다
+                    var src = RibbonIcons.Get(k.Kind, k.Small, hue) ?? RibbonIcons.Get("default", k.Small, hue);
+                    return Bake(src, k.Small ? 16 : 32) ?? img;
                 }
                 rb.LargeImage = Re(rb.LargeImage);
                 rb.Image = Re(rb.Image);
