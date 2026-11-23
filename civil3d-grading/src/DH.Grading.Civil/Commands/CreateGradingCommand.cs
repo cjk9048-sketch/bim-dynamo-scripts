@@ -413,6 +413,75 @@ public sealed class CreateGradingCommand
         return (cut, fill, addC, addF);
     }
 
+    /// <summary>★[v117.34 · 속도 D-7 · JACK 1123 «안정성 그대로 · 속도만»] 한 번의 정지면 생성(DoGradeInner) 안 원지반 캐시 — 같은 면을 여러 번 뜨지 않는다.
+    /// 다시 쓰는 것은 셋이 모두 맞을 때만: ① 같은 면(ObjectId) ② 지은 뒤 그 면에 바뀜 · 지움 알림이 없음(Database.ObjectModified/ObjectErased — UndoGuard가 면 바뀜을 잡는 그 알림)
+    /// ③ Civil 통계 지문(<see cref="SelfCheck.PrintOf"/> — 세모 수 · 점 수 · 최저 · 최고 · 평균 표고) 같음. 알림은 트랜잭션을 커밋할 때 나오므로
+    /// 지을 때와 다시 쓸 때 모두 바깥 트랜잭션이 없어야 한다(열린 트랜잭션 1개 = 지금 연 것). 하나라도 어긋나면(새로 만들기 바탕 정지면_DH이전이 바뀜 · 원지반 자르기 · 재주입 등) 종전처럼 새로 짓는다.
+    /// 캐시는 읽기 전용(세모 배열 · 격자 · 부를 때마다 새 목록 · 꺾임 셈은 부를 때마다 표시를 새로)이라 나눠 써도 답이 같다.</summary>
+    sealed class GroundCacheKeeper : System.IDisposable
+    {
+        readonly Database _db;
+        ObjectId _id = ObjectId.Null;
+        CachedGroundSurface? _c;
+        SelfCheck.Print _pr;
+        bool _dirty, _hooked, _builtTop;
+        /// <summary>지은 수 · 다시 쓴 수 · 바뀜 알림으로 다시 지은 수 · 확인에 든 시간(ms).</summary>
+        public int Built, Reused, Dirty;
+        public long CheckMs;
+        public GroundCacheKeeper(Database db)
+        {
+            _db = db;
+            try { db.ObjectModified += OnMod; db.ObjectErased += OnErase; _hooked = true; } catch { }
+        }
+        void Flag(Autodesk.AutoCAD.DatabaseServices.DBObject? o)
+        {
+            if (_id.IsNull || _dirty) return;
+            try { if (o == null || o.ObjectId == _id) _dirty = true; } catch { _dirty = true; }   // 모르면 바뀐 것으로(다시 짓는다)
+        }
+        void OnMod(object? s, ObjectEventArgs e) { try { Flag(e.DBObject); } catch { _dirty = true; } }
+        void OnErase(object? s, ObjectErasedEventArgs e) { try { Flag(e.DBObject); } catch { _dirty = true; } }
+
+        /// <summary>이 면의 캐시 — 열쇠 셋이 맞으면 지난 것, 아니면 새로 짓는다(종전과 같은 <c>new CachedGroundSurface(t)</c>).</summary>
+        public CachedGroundSurface Get(TinSurface t)
+        {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            ObjectId id = ObjectId.Null; SelfCheck.Print pr = default; bool top = false, same = false;
+            try
+            {
+                id = t.ObjectId;
+                top = _db.TransactionManager.NumberOfActiveTransactions <= 1;
+                pr = SelfCheck.PrintOf(t);
+                same = _hooked && _c != null && !_dirty && _builtTop && top && id == _id && pr.Tris >= 0 && pr.Equals(_pr);
+            }
+            catch { same = false; }
+            CheckMs += sw.ElapsedMilliseconds;
+            if (same) { Reused++; return _c!; }
+            if (_c != null && id == _id && _dirty) Dirty++;
+            // 짓기 전에 열쇠를 먼저 바꾼다 — 짓는 동안 나온 알림도 잡는다
+            _c = null; _id = id; _pr = pr; _builtTop = top; _dirty = false;
+            var c = new CachedGroundSurface(t);
+            Built++;
+            _c = c;
+            return c;
+        }
+
+        /// <summary>지은 캐시를 버린다 — 다음 <see cref="Get"/>은 늘 새로 짓는다(종전과 같음). 원지반을 쓸 수 있는 trM 커밋 뒤에 부른다(통계 지문이 못 잡는 경계만 바뀐 경우까지 막음 — 검토 review-speed 중간).</summary>
+        public void Drop() { _c = null; _id = ObjectId.Null; _dirty = false; }
+
+        public void Dispose()
+        {
+            if (_hooked)
+            {
+                try { _db.ObjectModified -= OnMod; } catch { }
+                try { _db.ObjectErased -= OnErase; } catch { }
+                _hooked = false;
+            }
+            _c = null;
+            if (Built + Reused > 0)
+                try { DiagLog.Append($"\n■ 원지반 캐시 {Built + Reused}번 → {Built}번(다시 씀 {Reused} · 바뀜 알림으로 다시 지음 {Dirty} · 확인 {CheckMs}ms)\n"); } catch { }
+        }
+    }
+
     /// <summary>재생성 전 자리 재기 결과 — 잰 대상 번호 · 움직일 옹벽 · 못 잰 까닭(대상이 있는데 못 쟀으면 — 묻지 못하니 멈춘다) · 진단 로그 줄 · 걸린 시간.</summary>
     sealed record PreCheck(System.Collections.Generic.HashSet<int> Cand, System.Collections.Generic.List<WallPlace.WallCheck> Moving, string Fail, string Log, long Ms);
 
@@ -420,7 +489,7 @@ public sealed class CreateGradingCommand
     /// 구간 <see cref="RunZones"/> + 부분 지정 옹벽 구간 빼기 · 자리 재기 <see cref="WallPlace.CheckAll"/> — 끝 확인과 같은 함수). 읽기만 한다(trM 앞 · 아무것도 안 쓴다).
     /// <para>trM(굳힘 · XML 정리 · 합성 풀기 · 덮인 옹벽 빼기)은 경계 · 번들 · 정지옵션을 안 바꾼다(계획 검토 확인 — 번들을 쓰는 곳은 4단계 SaveAll 하나). 남은 짐작 하나 — 원지반이 아직 안 굳은 XML 면이면 trM이 굳힌다(모양 그대로로 봄 · 끝 가르기가 «미리와 다름»으로 잡는다).</para></summary>
     static PreCheck PreCheckWalls(Database db, ObjectId planPolyId, ObjectId groundId, GradeMode mode,
-        (System.Collections.Generic.List<SlopeZone> Cut, System.Collections.Generic.List<SlopeZone> Fill)? zoneOverride, bool zoneReplaceAll, int[]? coveredNos)
+        (System.Collections.Generic.List<SlopeZone> Cut, System.Collections.Generic.List<SlopeZone> Fill)? zoneOverride, bool zoneReplaceAll, int[]? coveredNos, GroundCacheKeeper gk)
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
         var none = new System.Collections.Generic.List<WallPlace.WallCheck>();
@@ -442,7 +511,7 @@ public sealed class CreateGradingCommand
             // ★[v103.1.9 · 코드 검토 낮음 2] 경계 3점 미만은 «옹벽 자리를 못 재 멈춤»이 아니라 1단계의 «닫힌 폴리곤인지 확인» 문구로 멈추게 둔다(종전 그대로 — 정지면은 안 바뀐다)
             if (boundary.Count < 3) { tr.Commit(); return new PreCheck(cand, none, "", $"\n■ 재생성 전 옹벽 자리 재기 — 계획 경계 정점 {boundary.Count}개라 안 쟀다(1단계가 멈춘다)\n", sw.ElapsedMilliseconds); }
             long t0 = sw.ElapsedMilliseconds;
-            var ground = new CachedGroundSurface((TinSurface)tr.GetObject(groundId, OpenMode.ForRead));
+            var ground = gk.Get((TinSurface)tr.GetObject(groundId, OpenMode.ForRead));
             long msG = sw.ElapsedMilliseconds - t0;
             var regionsPrev = mode != GradeMode.Fresh ? GradingBundleStore.TryLoadAll(db, tr, out _) : null;
             // ★★★[JACK 1123] 1단계와 같다 — 앞 부지 보호(경계 고침 + 자동 옹벽 구간)
@@ -1062,6 +1131,8 @@ public sealed class CreateGradingCommand
         GradingSettings.TransitionLines = null;
         bool zoneReplaceAll = GradingSettings.WallZoneReplaceAll;
         GradingSettings.WallZoneReplaceAll = false;
+        // ★[v117.34 · 속도 D-7] 이 정지면 생성 안 원지반 캐시 — 같은 면 · 바뀜 알림 없음 · 통계 지문 같음일 때만 다시 쓴다(끝나면 알림을 뗀다)
+        using var gk = new GroundCacheKeeper(db);
 
         // ══ ★★★[v103.1.9 · JACK 1002 Q1 «옹벽이 서 있던 단이 움직이면 재생성 전에 묻고 진행 — 아니오면 아무것도 안 바뀜» · Q2 «계획부지 생성 «다시»도»] ══
         //   trM(굳힘 · XML 정리 · 합성 풀기 · 덮인 옹벽 빼기) <b>앞</b>에서 — 다시 지으면 쓸 경계 · 원지반 · 제원 · 구간(1단계와 같은 함수 · 같은 입력)으로 남은 옹벽 자리를 잰다.
@@ -1069,7 +1140,7 @@ public sealed class CreateGradingCommand
         //   예면 진행하고 끝 확인(WallRerunEnd)이 그 옹벽을 지운다(정지면이 끝까지 성공했을 때만 — 실패면 목록에 남아 다음에 다시 묻는다)
         if (mode == GradeMode.RerunLast && addSpec == null)
         {
-            var pre = PreCheckWalls(db, planPolyId, groundId, mode, zoneOverride, zoneReplaceAll, rerunSpec?.CoveredNos);
+            var pre = PreCheckWalls(db, planPolyId, groundId, mode, zoneOverride, zoneReplaceAll, rerunSpec?.CoveredNos, gk);
             string head0 = $"[DHGRADE 진단] {System.DateTime.Now:yyyy-MM-dd HH:mm:ss}  [DH.Grading {GradingSettings.Version}]\n";
             if (pre.Fail.Length > 0)
             {
@@ -1257,6 +1328,7 @@ public sealed class CreateGradingCommand
                 try { prevPureId = GradingBuilder.FindSurfaceByBaseName(trM, PurePrev); } catch { }
             }
             trM.Commit();
+            gk.Drop();   // ★[v117.35 · 검토] trM(굳힘 · 합성 풀기 · 덮인 옹벽 빼기)이 원지반을 고쳤을 수 있다 → 앞 자리 재기 캐시는 다시 안 씀
             if (mode == GradeMode.Append && baseRestoreHandle != null)
                 _appendUndo = new AppendUndo { Base = baseRestoreHandle, Pure = prevPureId.IsNull ? "" : prevPureId.Handle.ToString(), PureName = pureOrigName, Stash = stash };
             // ★[v103.1.5] 들머리의 굳힘 — 커밋된 뒤에 적는다(다음 Reset을 넘겨 이번 실행의 로그 머리에 남는다)
@@ -1624,7 +1696,7 @@ public sealed class CreateGradingCommand
         //   견주는 값은 아래 1단계가 쓰는 것과 <b>같은 함수</b>로 만든다(BoundaryReader.Read · CachedGroundSurface · BuildParams) — 다르면 그 까닭을 적고 종전 길로 간다
         // ★[v103.1.10 · 속도 — v103.1.4 검토 낮음 7 «못 건너뛸 때 원지반 캐시 두 번»] 여기서 뜬 원지반 캐시를 1단계가 그대로 쓴다 — 이 견주기와 1단계 사이에는
         //   도면에 쓰는 일이 없다(합성 풀기 trM은 이미 커밋됐고 · 아래는 세션 기록 지우기 · 시계뿐). 1단계는 같은 원지반(groundId)을 읽으므로 같은 삼각형이다(지문도 남겨 견준다)
-        CachedGroundSurface? groundReuse = null; ObjectId groundReuseId = ObjectId.Null;
+        // ★[v117.34 · 속도 D-7] 다시 쓰기는 이제 gk(같은 면 · 바뀜 알림 없음 · 통계 지문 같음)가 맡는다 — 종전 «같은 ObjectId면 다시 씀»보다 엄하다
         if (mode == GradeMode.RerunLast && addSpec == null && _rerunTrMDone && zoneOverride != null
             && rerunSpec != null && rerunSpec.RevertOnly && rerunSpec.CoveredNos.Length > 0)
         {
@@ -1642,8 +1714,7 @@ public sealed class CreateGradingCommand
                 {
                     var bNow = BoundaryReader.Read(trS, planPolyId);
                     var gTinNow = (TinSurface)trS.GetObject(groundId, OpenMode.ForRead);
-                    var gNow = new CachedGroundSurface(gTinNow);
-                    groundReuse = gNow; groundReuseId = groundId;
+                    var gNow = gk.Get(gTinNow);
                     var pNow = BuildParams(bNow, gNow, zoneOverride.Value.Cut, zoneOverride.Value.Fill);   // ★[v113.1] 견줄 제원도 같은 구간으로
                     diff = SameAsLastGrade(doc.Name, db.UnmanagedObject, planPolyId.Handle.ToString(), groundId.Handle.ToString(), p0Now, bNow, pNow,
                                            zoneOverride.Value.Cut, zoneOverride.Value.Fill, gNow.Signature, SelfCheck.PrintOf(gTinNow));
@@ -1729,8 +1800,10 @@ public sealed class CreateGradingCommand
 
                 var groundTin = (TinSurface)tr.GetObject(groundId, OpenMode.ForRead);
                 // ★[v103.1.10] 되돌리기 견주기가 방금 뜬 같은 원지반 캐시가 있으면 그것(한 번 덜 뜬다 — 현장 원지반 25만 면)
-                var ground = groundReuse != null && groundReuseId == groundId ? groundReuse : new CachedGroundSurface(groundTin); // 원지반 표고 캐싱(단수 계산용)
-                if (groundReuse != null && groundReuseId == groundId) try { DiagLog.AppendCarry("\n  ★원지반 캐시 다시 씀(되돌리기 견주기에서 뜬 것 — 한 번 덜 뜸)\n"); } catch { }
+                // ★[v117.34 · 속도 D-7] 앞(재생성 전 자리 재기 · 되돌리기 견주기)에서 뜬 같은 원지반이면 그것 — gk가 같은 면 · 바뀜 알림 없음 · 통계 지문 같음을 본다
+                int reused0 = gk.Reused;
+                var ground = gk.Get(groundTin); // 원지반 표고 캐싱(단수 계산용)
+                if (gk.Reused > reused0) try { DiagLog.AppendCarry("\n  ★원지반 캐시 다시 씀(앞에서 뜬 같은 면 — 한 번 덜 뜸)\n"); } catch { }
                 groundSig = ground.Signature;
                 // ══ ★★★[JACK 1123 «이어서는 앞 계획부지를 절대 침범하면 안 돼 — 어쩔 수 없으면 자동으로 수직옹벽»] 앞 부지 보호 ══
                 //   겹친 부분 + 벽 자리를 계획선에서 빼고(조정자 결정) · 새 사면이 앞 부지에 들어가는 자리는 수직 옹벽 구간(아래 RunZones 뒤에 붙인다).
@@ -2248,7 +2321,7 @@ public sealed class CreateGradingCommand
 
                 // ── [JACK 합집합 재설계] 1) 양쪽 표면의 '순수 닫힌 교선'을 먼저 계산 ──
                 //   (계획합집합·면조각 없음 — 스텝 검증으로 정확 확인된 경로)
-                var groundSampler2 = new CachedGroundSurface(groundTin2);
+                var groundSampler2 = gk.Get(groundTin2);   // ★[v117.34 · 속도 D-7] 1단계와 같은 면이면 그 캐시
                 var pureLoops = new System.Collections.Generic.Dictionary<string, System.Collections.Generic.List<System.Collections.Generic.List<Point3>>>();
                 var vsIdOf = new System.Collections.Generic.Dictionary<string, ObjectId>();
                 // ★★★[JACK 0903 "옹벽 변환했는데 지표면이 이상하게 작성되는 부분이 발생했어"]
@@ -2294,22 +2367,8 @@ public sealed class CreateGradingCommand
                 //   <b>패드 하나만</b> 남는다(GradingGeometry가 패드를 Rings[0]으로 먼저 넣는다) —
                 //   그러면 rings[^1]이 패드가 되어 <b>사면 삼각형을 전부 버린다</b>.
                 ComputePure(fillId, "성토", fill.HasSlope && fill.Rings.Count > 1 ? fill.Rings[fill.Rings.Count - 1] : null);
-                ComputePure(cutId, "절토", cut.HasSlope && cut.Rings.Count > 1 ? cut.Rings[cut.Rings.Count - 1] : null);
-
-                // ★[v117.15 · JACK 1112 «톱니»] 자가검증 — 전이 띠 면의 교선이 정확한 데이라잇(자 선 따라 곧은 면 ∩ 원지반)을 따르나.
-                //   톱니 = 엇갈린 3점 어긋남 > 1 cm(칸마다 하나씩 꺾이면 여기서 잡힌다) · 고친 뒤 0 · 최대 어긋남 mm대여야 한다.
-                foreach (var (labB, vsB) in new[] { ("성토", fill), ("절토", cut) })
-                {
-                    if (vsB.BandDaylight.Count == 0 || !pureLoops.TryGetValue(labB, out var lpB)) continue;
-                    try
-                    {
-                        var (bnS, bnM, bnD, bnT) = GradingGeometry.BandTeeth(lpB, vsB.BandDaylight);
-                        diagX += $"\n■ 띠 데이라잇({labB}) — 정확한 선 {vsB.BandDaylight.Count}줄 · 표본 {bnS} · 최대 어긋남 {bnD * 100:0.00}cm · 톱니(엇갈린 3점 >1cm) {bnT}곳"
-                               + (bnM > 0 ? $" · 교선 못 찾음 {bnM}" : "") + (bnT > 0 ? " ⚠" : "") + "\n";
-                    }
-                    catch (System.Exception exB) { diagX += $"\n■ 띠 데이라잇({labB}) 재기 실패 — {exB.Message}\n"; }
-                }
-
+                // ★[v117.34 · 속도 D-8] 경계 추출 · 닿음 판정을 절토 교선 <b>앞</b>으로 옮겼다(종전 자리 = 절토 교선 · 띠 검사 뒤).
+                //   교선 셈(GetExactDaylight)과 띠 검사는 도면에 아무것도 안 쓰고 원지반을 안 바꾼다 — 같은 원지반에서 뽑는 같은 경계다.
                 // [0728 — JACK] 사면(데이라잇)이 원지반(측량) 경계에 닿을 정도면 경고 후 수행 중단.
                 //   경계 밖 지반 정보가 없어 결과(정지면·토량)를 신뢰할 수 없음 — 계획고/구배/측량범위 조정 필요.
                 var borderLoops = new System.Collections.Generic.List<System.Collections.Generic.List<Point3>>();
@@ -2335,24 +2394,70 @@ public sealed class CreateGradingCommand
                 string? borderHit = null;
                 // ★[검토 H2 ② · M1] 앞 부지 보호 — 클립링을 못 다듬으면 멈춤 · 광선이 놓친 침범(옹벽 기록 없는 단차) 수
                 string? guardStop = null; int guardWhy = 0, guardStepN = 0; string guardStepLog = "";
+                // 한 점이 경계 2 m 안인가(아래 NearBorder · 앞 검사가 같은 셈을 쓴다)
+                bool NearBorderPt(Point3 q)
+                {
+                    foreach (var bl in borderLoops)
+                    {
+                        int nb = bl.Count;
+                        for (int bi = 0; bi < nb; bi++)
+                        {
+                            var a = bl[bi]; var b2 = bl[(bi + 1) % nb];
+                            double ex = b2.X - a.X, ey = b2.Y - a.Y, l2 = ex * ex + ey * ey;
+                            double u = l2 < 1e-12 ? 0 : ((q.X - a.X) * ex + (q.Y - a.Y) * ey) / l2;
+                            u = u < 0 ? 0 : (u > 1 ? 1 : u);
+                            double px = a.X + ex * u, py = a.Y + ey * u;
+                            double ddx = q.X - px, ddy = q.Y - py;
+                            if (ddx * ddx + ddy * ddy <= BorderMargin * BorderMargin) return true;
+                        }
+                    }
+                    return false;
+                }
                 bool NearBorder(System.Collections.Generic.List<Point3> loop)
                 {
                     foreach (var q in loop)
-                        foreach (var bl in borderLoops)
-                        {
-                            int nb = bl.Count;
-                            for (int bi = 0; bi < nb; bi++)
-                            {
-                                var a = bl[bi]; var b2 = bl[(bi + 1) % nb];
-                                double ex = b2.X - a.X, ey = b2.Y - a.Y, l2 = ex * ex + ey * ey;
-                                double u = l2 < 1e-12 ? 0 : ((q.X - a.X) * ex + (q.Y - a.Y) * ey) / l2;
-                                u = u < 0 ? 0 : (u > 1 ? 1 : u);
-                                double px = a.X + ex * u, py = a.Y + ey * u;
-                                double ddx = q.X - px, ddy = q.Y - py;
-                                if (ddx * ddx + ddy * ddy <= BorderMargin * BorderMargin) return true;
-                            }
-                        }
+                        if (NearBorderPt(q)) return true;
                     return false;
+                }
+
+                // ══ ★[v117.34 · 속도 D-8 · JACK 1123 «거절이 계산을 다 한 뒤에 나옴»] 같은 거절을 앞당긴다 — 더 엄하지 않다 ══
+                //   아래 고리(foreach pureLoops.Keys)의 첫 차례는 먼저 넣은 «성토»다. 거기서 own = FilterPlanRelated(성토 교선, 계획선, 5㎡)(여기와 같은 함수 · 같은 입력) →
+                //   FollowRings(옹벽 링 따라가기 — 끝 점 앞 꼭짓점을 <b>모두 남기고</b> 사이에만 넣는다) → NearBorder(꼭짓점 하나라도 2 m 안이면 참) → «사면(성토)» 멈춤.
+                //   그래서 여기서 성토 교선의 꼭짓점(끝 점 빼고)이 경계 2 m 안이면 아래도 반드시 같은 글로 멈춘다 → 절토 교선 · 띠 검사만 건너뛴다(멈춤 길은 아래 그대로).
+                //   아니면 아무것도 안 바뀐다(종전 그대로 절토 교선부터).
+                bool earlyBorder = false;
+                if (borderLoops.Count > 0 && pureLoops.Count > 0 && pureLoops.Keys.First() == "성토")
+                {
+                    var ownE = RawTriangleIntersectionFinder.FilterPlanRelated(pureLoops["성토"], boundary, 5.0, out _);
+                    foreach (var lp in ownE)
+                    {
+                        for (int k = 0; k + 1 < lp.Count && !earlyBorder; k++)
+                            if (NearBorderPt(lp[k])) earlyBorder = true;
+                        if (earlyBorder) break;
+                    }
+                }
+                if (earlyBorder)
+                {
+                    borderHit = "성토";
+                    try { DiagLog.Append("\n■ 앞 검사 — 성토 교선이 원지반 경계 2m 안 → 절토 교선은 셈 안 함(아래 멈춤과 같은 판정)\n"); } catch { }
+                }
+                else
+                {
+                ComputePure(cutId, "절토", cut.HasSlope && cut.Rings.Count > 1 ? cut.Rings[cut.Rings.Count - 1] : null);
+
+                // ★[v117.15 · JACK 1112 «톱니»] 자가검증 — 전이 띠 면의 교선이 정확한 데이라잇(자 선 따라 곧은 면 ∩ 원지반)을 따르나.
+                //   톱니 = 엇갈린 3점 어긋남 > 1 cm(칸마다 하나씩 꺾이면 여기서 잡힌다) · 고친 뒤 0 · 최대 어긋남 mm대여야 한다.
+                foreach (var (labB, vsB) in new[] { ("성토", fill), ("절토", cut) })
+                {
+                    if (vsB.BandDaylight.Count == 0 || !pureLoops.TryGetValue(labB, out var lpB)) continue;
+                    try
+                    {
+                        var (bnS, bnM, bnD, bnT) = GradingGeometry.BandTeeth(lpB, vsB.BandDaylight);
+                        diagX += $"\n■ 띠 데이라잇({labB}) — 정확한 선 {vsB.BandDaylight.Count}줄 · 표본 {bnS} · 최대 어긋남 {bnD * 100:0.00}cm · 톱니(엇갈린 3점 >1cm) {bnT}곳"
+                               + (bnM > 0 ? $" · 교선 못 찾음 {bnM}" : "") + (bnT > 0 ? " ⚠" : "") + "\n";
+                    }
+                    catch (System.Exception exB) { diagX += $"\n■ 띠 데이라잇({labB}) 재기 실패 — {exB.Message}\n"; }
+                }
                 }
 
                 // ── 2) [링 2개 분리 — JACK 확정 구조] 같은 링에 두 역할을 시키던 것이 근본 버그였음.
@@ -2374,6 +2479,7 @@ public sealed class CreateGradingCommand
                 }
                 foreach (var label in pureLoops.Keys)
                 {
+                    if (borderHit != null) break;   // ★[v117.34 · D-8] 앞 검사가 이미 멈춤을 정했다(아니면 첫 차례에 늘 null — 종전 그대로)
                     string oppL = label == "성토" ? "절토" : "성토";
                     // [JACK 목적② + 짜투리 제거] 계획과 무관한 루프·미세 조각(<5㎡)을 순수 루프에서 필터.
                     var own = RawTriangleIntersectionFinder.FilterPlanRelated(pureLoops[label], boundary, 5.0, out string fdiag);
@@ -2762,7 +2868,7 @@ public sealed class CreateGradingCommand
                 try
                 {
                     var gTin3 = (TinSurface)tr3.GetObject(groundId, OpenMode.ForRead);
-                    var gSam3 = new CachedGroundSurface(gTin3);
+                    var gSam3 = gk.Get(gTin3);   // ★[v117.34 · 속도 D-7] 1 · 2단계와 같은 면이면 그 캐시
 
                     // 옹벽 구간 하나 고른다 — 수직 구배 규칙을 가진 첫 구간.
                     //   ★여러 개는 <b>다음 걸음</b>이다. 지금은 하나만 하고 그 사실을 로그에 적는다.

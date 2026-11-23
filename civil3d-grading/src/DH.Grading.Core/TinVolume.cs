@@ -125,6 +125,147 @@ public static class TinVolume
         return new Result(cut, fill, area, pairs);
     }
 
+    /// <summary>★[1123 속도 2번] <b>계 · 안 · 밖 한 번 훑기</b> — <c>Compute(cmp, bas)</c> · <c>Compute(cmp, bas, mask, true)</c> · <c>Compute(cmp, bas, mask, false)</c> 세 번과 <b>비트까지 같다</b>.
+    /// <para>기준 칸 · 쌍 차례 · 자르기 · 몫 식이 위 셈과 한 글자도 안 다르고, 세 합계가 받는 수와 더하는 차례도 따로 돌 때와 같다(계 = 모든 쌍의 부채꼴 몫 · 안/밖 = 통째로 든 세모의 같은 몫 + 걸친 세모의 다각형 조각).
+    /// 세모 상자가 마스크 상자와 안 겹치면 NTS 없이 «밖»(NTS 판정도 상자부터 봐서 늘 같음).</para>
+    /// <para><paramref name="mask"/> = null이면 안 = 밖 = 계(옛 셈에서 mask null은 안/밖을 안 가름) · 빈 mask면 안 = 0 · 밖 = 계.</para></summary>
+    public static (Result All, Result In, Result Out) ComputeSplit(IReadOnlyList<(Point3 A, Point3 B, Point3 C)> cmp, IReadOnlyList<(Point3 A, Point3 B, Point3 C)> bas,
+                                                                   NetTopologySuite.Geometries.Geometry? mask)
+    {
+        var zero = new Result(0, 0, 0, 0);
+        if (cmp.Count == 0 || bas.Count == 0) return (zero, zero, zero);
+        double ox = cmp[0].A.X, oy = cmp[0].A.Y;
+        NetTopologySuite.Geometries.Geometry? mk = null;
+        NetTopologySuite.Geometries.Prepared.IPreparedGeometry? prep = null;
+        double emnx = 0, emny = 0, emxx = 0, emxy = 0;
+        var gf = NetTopologySuite.Geometries.GeometryFactory.Default;
+        bool emptyMask = mask != null && mask.IsEmpty;
+        if (mask != null && !emptyMask)
+        {
+            mk = NetTopologySuite.Geometries.Utilities.AffineTransformation.TranslationInstance(-ox, -oy).Transform(mask);
+            prep = NetTopologySuite.Geometries.Prepared.PreparedGeometryFactory.Prepare(mk);
+            var env = mk.EnvelopeInternal;
+            emnx = env.MinX; emny = env.MinY; emxx = env.MaxX; emxy = env.MaxY;
+        }
+        // 기준면 세모 — 평면식 z = a·x + b·y + c(원점 뺀 좌표) · 상자 · 격자 (Compute와 같은 식 · 같은 차례)
+        int nb = bas.Count;
+        var bx = new double[nb * 3]; var by = new double[nb * 3];
+        var pa = new double[nb]; var pb = new double[nb]; var pc = new double[nb];
+        var ok = new bool[nb];
+        double mnx = double.MaxValue, mny = double.MaxValue, mxx = double.MinValue, mxy = double.MinValue, sumSz = 0;
+        for (int i = 0; i < nb; i++)
+        {
+            var (A, B, C) = bas[i];
+            bx[i * 3] = A.X - ox; by[i * 3] = A.Y - oy; bx[i * 3 + 1] = B.X - ox; by[i * 3 + 1] = B.Y - oy; bx[i * 3 + 2] = C.X - ox; by[i * 3 + 2] = C.Y - oy;
+            ok[i] = Plane(bx[i * 3], by[i * 3], A.Z, bx[i * 3 + 1], by[i * 3 + 1], B.Z, bx[i * 3 + 2], by[i * 3 + 2], C.Z, out pa[i], out pb[i], out pc[i]);
+            if (!ok[i]) continue;
+            for (int k = 0; k < 3; k++) { mnx = Math.Min(mnx, bx[i * 3 + k]); mxx = Math.Max(mxx, bx[i * 3 + k]); mny = Math.Min(mny, by[i * 3 + k]); mxy = Math.Max(mxy, by[i * 3 + k]); }
+            sumSz += Math.Max(Math.Max(bx[i * 3], Math.Max(bx[i * 3 + 1], bx[i * 3 + 2])) - Math.Min(bx[i * 3], Math.Min(bx[i * 3 + 1], bx[i * 3 + 2])),
+                              Math.Max(by[i * 3], Math.Max(by[i * 3 + 1], by[i * 3 + 2])) - Math.Min(by[i * 3], Math.Min(by[i * 3 + 1], by[i * 3 + 2])));
+        }
+        if (!(mnx <= mxx)) return (zero, zero, zero);
+        double cell = Math.Max(0.5, 2 * sumSz / nb);
+        int gw = Math.Max(1, (int)Math.Ceiling((mxx - mnx) / cell) + 1), gh = Math.Max(1, (int)Math.Ceiling((mxy - mny) / cell) + 1);
+        while ((long)gw * gh > 20_000_000) { cell *= 1.5; gw = (int)Math.Ceiling((mxx - mnx) / cell) + 1; gh = (int)Math.Ceiling((mxy - mny) / cell) + 1; }
+        var grid = new List<int>?[gw * gh];
+        for (int i = 0; i < nb; i++)
+        {
+            if (!ok[i]) continue;
+            int i0 = (int)((Math.Min(bx[i * 3], Math.Min(bx[i * 3 + 1], bx[i * 3 + 2])) - mnx) / cell), i1 = (int)((Math.Max(bx[i * 3], Math.Max(bx[i * 3 + 1], bx[i * 3 + 2])) - mnx) / cell);
+            int j0 = (int)((Math.Min(by[i * 3], Math.Min(by[i * 3 + 1], by[i * 3 + 2])) - mny) / cell), j1 = (int)((Math.Max(by[i * 3], Math.Max(by[i * 3 + 1], by[i * 3 + 2])) - mny) / cell);
+            for (int j = j0; j <= j1; j++) for (int q = i0; q <= i1; q++) (grid[j * gw + q] ??= new List<int>(4)).Add(i);
+        }
+
+        double cut = 0, fill = 0, area = 0; int pairs = 0;          // 계
+        double cutI = 0, fillI = 0, areaI = 0; int pairsI = 0;      // 안
+        double cutO = 0, fillO = 0, areaO = 0; int pairsO = 0;      // 밖
+        var seen = new HashSet<int>();
+        var poly = new List<(double X, double Y)>(9); var tmp = new List<(double X, double Y)>(9);
+        foreach (var (A, B, C) in cmp)
+        {
+            double ax = A.X - ox, ay = A.Y - oy, bxx = B.X - ox, byy = B.Y - oy, cx = C.X - ox, cy = C.Y - oy;
+            if (!Plane(ax, ay, A.Z, bxx, byy, B.Z, cx, cy, C.Z, out double ta, out double tb, out double tc)) continue;
+            double tx0 = Math.Min(ax, Math.Min(bxx, cx)), tx1 = Math.Max(ax, Math.Max(bxx, cx)), ty0 = Math.Min(ay, Math.Min(byy, cy)), ty1 = Math.Max(ay, Math.Max(byy, cy));
+            if (tx1 < mnx || tx0 > mxx || ty1 < mny || ty0 > mxy) continue;
+            // 0 = 마스크 없음(계만) · 1 = 통째로 안 · 2 = 통째로 밖 · 3 = 걸침
+            int cls = 0;
+            if (prep != null)
+            {
+                if (tx0 > emxx || tx1 < emnx || ty0 > emxy || ty1 < emny) cls = 2;   // 상자가 안 겹침 → Contains · Intersects 둘 다 거짓(NTS도 상자부터 봄)
+                else
+                {
+                    var tri = gf.CreatePolygon(new[] { new NetTopologySuite.Geometries.Coordinate(ax, ay), new NetTopologySuite.Geometries.Coordinate(bxx, byy), new NetTopologySuite.Geometries.Coordinate(cx, cy), new NetTopologySuite.Geometries.Coordinate(ax, ay) });
+                    if (prep.Contains(tri)) cls = 1;
+                    else if (!prep.Intersects(tri)) cls = 2;
+                    else cls = 3;
+                }
+            }
+            int i0 = Math.Max(0, (int)((tx0 - mnx) / cell)), i1 = Math.Min(gw - 1, (int)((tx1 - mnx) / cell));
+            int j0 = Math.Max(0, (int)((ty0 - mny) / cell)), j1 = Math.Min(gh - 1, (int)((ty1 - mny) / cell));
+            seen.Clear();
+            for (int j = j0; j <= j1; j++)
+                for (int q = i0; q <= i1; q++)
+                {
+                    var lst = grid[j * gw + q];
+                    if (lst == null) continue;
+                    foreach (int s in lst)
+                    {
+                        if (!seen.Add(s)) continue;
+                        // 비교 세모를 기준 세모(반시계로)의 세 반평면으로 자른다
+                        poly.Clear(); poly.Add((ax, ay)); poly.Add((bxx, byy)); poly.Add((cx, cy));
+                        double sx0 = bx[s * 3], sy0 = by[s * 3], sx1 = bx[s * 3 + 1], sy1 = by[s * 3 + 1], sx2 = bx[s * 3 + 2], sy2 = by[s * 3 + 2];
+                        if ((sx1 - sx0) * (sy2 - sy0) - (sy1 - sy0) * (sx2 - sx0) < 0) { (sx1, sx2) = (sx2, sx1); (sy1, sy2) = (sy2, sy1); }
+                        if (!Clip(poly, tmp, sx0, sy0, sx1, sy1) || !Clip(poly, tmp, sx1, sy1, sx2, sy2) || !Clip(poly, tmp, sx2, sy2, sx0, sy0)) continue;
+                        if (cls == 3)
+                        {
+                            // 걸친 조각 — 안 = 다각형과 겹친 자리 · 밖 = 뺀 자리(Compute의 edge 길과 같은 식 · 조각마다 새 다각형)
+                            double al = ta - pa[s], be = tb - pb[s], ga = tc - pc[s];
+                            var pI = EdgePiece(gf, poly, mk!, true);
+                            if (pI != null)
+                            {
+                                var (pArea, pTot, pPos) = Integrate(pI, al, be, ga);
+                                if (!(pArea <= 0)) { areaI += pArea; fillI += pPos; cutI += pPos - pTot; pairsI++; }
+                            }
+                            var pO = EdgePiece(gf, poly, mk!, false);
+                            if (pO != null)
+                            {
+                                var (pArea, pTot, pPos) = Integrate(pO, al, be, ga);
+                                if (!(pArea <= 0)) { areaO += pArea; fillO += pPos; cutO += pPos - pTot; pairsO++; }
+                            }
+                        }
+                        // 높이차 d = 비교 − 기준(둘 다 1차식) — 부채꼴 세모마다 양 · 음 몫(계는 늘 · 통째로 든 세모는 그 칸에도 같은 몫)
+                        double D((double X, double Y) p) => (ta * p.X + tb * p.Y + tc) - (pa[s] * p.X + pb[s] * p.Y + pc[s]);
+                        double d0 = D(poly[0]); bool any = false;
+                        for (int k = 1; k + 1 < poly.Count; k++)
+                        {
+                            double ar = 0.5 * Math.Abs((poly[k].X - poly[0].X) * (poly[k + 1].Y - poly[0].Y) - (poly[k].Y - poly[0].Y) * (poly[k + 1].X - poly[0].X));
+                            if (ar <= 0) continue;
+                            any = true;
+                            var (pos, neg) = Split(ar, d0, D(poly[k]), D(poly[k + 1]));
+                            area += ar; fill += pos; cut += neg;
+                            if (cls == 1) { areaI += ar; fillI += pos; cutI += neg; }
+                            else if (cls == 2) { areaO += ar; fillO += pos; cutO += neg; }
+                        }
+                        if (any) { pairs++; if (cls == 1) pairsI++; else if (cls == 2) pairsO++; }
+                    }
+                }
+        }
+        var all = new Result(cut, fill, area, pairs);
+        if (mask == null) return (all, all, all);
+        if (emptyMask) return (all, zero, all);
+        return (all, new Result(cutI, fillI, areaI, pairsI), new Result(cutO, fillO, areaO, pairsO));
+    }
+
+    /// <summary>걸친 조각 — <see cref="Compute(IReadOnlyList{ValueTuple{Point3, Point3, Point3}}, IReadOnlyList{ValueTuple{Point3, Point3, Point3}}, NetTopologySuite.Geometries.Geometry?, bool)"/>의 edge 길과 같은 식(새 좌표 배열 · 새 다각형 · 실패면 null = 그 쌍 건너뜀).</summary>
+    static NetTopologySuite.Geometries.Geometry? EdgePiece(NetTopologySuite.Geometries.GeometryFactory gf, List<(double X, double Y)> poly, NetTopologySuite.Geometries.Geometry mk, bool inside)
+    {
+        var pc0 = new NetTopologySuite.Geometries.Coordinate[poly.Count + 1];
+        for (int k = 0; k < poly.Count; k++) pc0[k] = new NetTopologySuite.Geometries.Coordinate(poly[k].X, poly[k].Y);
+        pc0[poly.Count] = pc0[0];
+        try { var pg = gf.CreatePolygon(pc0); return inside ? pg.Intersection(mk) : pg.Difference(mk); }
+        catch { return null; }
+    }
+
     /// <summary>다각형(구멍 포함 · 여럿) 위 1차식 d = α·x + β·y + γ의 (넓이, ∫d, ∫max(0,d)).</summary>
     static (double Area, double Tot, double Pos) Integrate(NetTopologySuite.Geometries.Geometry g, double al, double be, double ga)
     {

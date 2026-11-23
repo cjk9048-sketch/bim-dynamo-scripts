@@ -180,7 +180,10 @@ internal static class SiteSheetsRefresh
                     try { ed.WriteMessage($"\n[진입도로 갱신] {s.Name} — 부지가 바뀌어 새 부지에 맞춰 다시 짓습니다..."); } catch { }
                     int t0 = s.TicksErased;
                     RoadCommand.RedrawStale(doc, s);
-                    try { s.RecomputeCore(); } catch { }
+                    // ★[1123 속도 · 묶음 A 1번 1단계] 여기서 다시 계산하던 한 줄(s.RecomputeCore) 뺌 — RedrawStale가 끝에서 이미 함(run = 참이면 finally · 정리했으면 그 뒤 한 번 더 ·
+                    //   run = 거짓이면 들머리 계산 뒤 바뀐 것 없음 · 이 갱신에선 TierGuard가 늘 거짓) · 그 뒤 도면을 바꾸는 일 없음 → 같은 입력 · 같은 값
+                    //   단 계산이 예외로 실패했으면(Last = null — 잠금 충돌 같은 일시 실패 · Sweep 도중 예외) 종전처럼 한 번 더 셈(검토 review-speed 낮음 2 · 3)
+                    if (s.Last == null) try { s.RecomputeCore(); } catch { }
                     ticksErased += System.Math.Max(0, s.TicksErased - t0);
                     // ★[설치 전 검토 중간] 계산이 예외로 실패하면 RecomputeCore가 StaleKey «계산 실패…» · Last = null만 적는다(면 옛것 표시는 앞 값) — 그것도 실패로
                     bool calcBad = s.Last == null || s.Last.Error.Length > 0 || s.StaleKey.StartsWith("계산 실패", System.StringComparison.Ordinal);

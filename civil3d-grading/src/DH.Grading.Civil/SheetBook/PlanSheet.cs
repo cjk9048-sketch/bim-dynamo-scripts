@@ -243,13 +243,15 @@ internal static class PlanSheet
         log.AppendLine($"  평면 얼림 {p.FreezeNames.Count}개: {string.Join(" · ", p.FreezeNames)} · 범례 {string.Join(" · ", p.Legend.Select(l => l.Label))}");
         // ★[v112.5] 평면 꾸미기로 평면 탭만 자주 다시 — 지표면(최종 · 정지면 · 원지반 지문)이 같으면 지난 토공량 그대로(12초 셈 건너뜀)
         //   ★[검토 높음] 열쇠 = 면 머리(점 수 · 높이) + 계획면 세모 지문(꼭짓점 합 — 가운데 바닥만 바꿔도 바뀜) + 도로 면 · 평면 꾸미기 때만 · 다 맞은 셈만 남김
-        string vk = useVolCache ? VolKey(db) : "";
+        //   ★[1123 속도 9번] 이 준비 안에서 계획면 세모는 한 번만 읽음 — VolKey · Volumes가 같은 면(ObjectId 같음)이면 먼저 읽은 것을 넘겨받음(그 사이 읽기만 · 면을 안 바꿈)
+        ObjectId kId = ObjectId.Null; List<(DH.Grading.Core.Point3 A, DH.Grading.Core.Point3 B, DH.Grading.Core.Point3 C)>? kTris = null;
+        string vk = useVolCache ? VolKey(db, ref kId, ref kTris) : "";
         if (vk.Length > 0 && VolCache.TryGetValue(db, out var vc) && vc.Key == vk) { p.Volume = vc.Rows; p.Clearing = vc.Cl; log.AppendLine("  토공량 — 지표면 그대로라 지난 셈을 씀"); }
         else
         {
-            p.Volume = Volumes(db, log, warns);
+            p.Volume = VolumesCore(db, log, warns, ref kId, ref kTris);
             p.Clearing = ClearingQuantity.Measure(db, log, warns);
-            string k2 = vk.Length > 0 ? vk : VolKey(db);
+            string k2 = vk.Length > 0 ? vk : VolKey(db, ref kId, ref kTris);
             if (k2.Length > 0 && p.Volume.Count > 0 && p.Volume.All(v => double.IsFinite(v.Cut) && double.IsFinite(v.Fill))) VolCache.AddOrUpdate(db, new VolEntry(k2, p.Volume, p.Clearing));
         }
         p.Sig = Sig(e, p.Scale, def, db, inp);
@@ -258,6 +260,14 @@ internal static class PlanSheet
 
     /// <summary>★[계획 4.9 · 검토 M7] 토공량 — 계 = (최종지표면_DH, 없으면 정지면_DH) vs 원지반 · 진입도로 = 도로 자리 안 · 계획지표면 = 그 밖(칸마다 0 이상 · 계 = 합).</summary>
     internal static List<(string Name, double Cut, double Fill)> Volumes(Database db, System.Text.StringBuilder log, List<string> warns)
+    {
+        ObjectId id = ObjectId.Null; List<(DH.Grading.Core.Point3 A, DH.Grading.Core.Point3 B, DH.Grading.Core.Point3 C)>? t = null;
+        return VolumesCore(db, log, warns, ref id, ref t);
+    }
+
+    /// <summary><see cref="Volumes"/> — <paramref name="knownId"/>가 찾은 계획면과 같으면 <paramref name="knownTris"/>를 다시 읽지 않고 씀 · 끝나면 읽은(쓴) 계획면을 돌려줌.</summary>
+    static List<(string Name, double Cut, double Fill)> VolumesCore(Database db, System.Text.StringBuilder log, List<string> warns,
+                                                                     ref ObjectId knownId, ref List<(DH.Grading.Core.Point3 A, DH.Grading.Core.Point3 B, DH.Grading.Core.Point3 C)>? knownTris)
     {
         var rows = new List<(string, double, double)>();
         var sw = System.Diagnostics.Stopwatch.StartNew();
@@ -275,12 +285,13 @@ internal static class PlanSheet
             }
             NetTopologySuite.Geometries.Geometry? fp = null; int nRoads = 0; string note = "";
             using (var tr = db.TransactionManager.StartTransaction()) { fp = RoadSession.Footprints(db, tr, out nRoads, out note); tr.Commit(); }
-            var dt = EarthworkVolume.Tris(db, did); var gt = EarthworkVolume.Tris(db, gid);
-            var all = TinVolume.Compute(dt, gt);
+            var dt = did == knownId && knownTris != null ? knownTris : EarthworkVolume.Tris(db, did);
+            knownId = did; knownTris = dt;
+            var gt = EarthworkVolume.Tris(db, gid);
+            // ★[1123 속도 2번] 계 · 도로 안 · 밖을 한 번 훑기(옛 세 번 셈과 비트까지 같음 — Core 시험 TinVolumeSplitTests)
+            var (all, r, s) = TinVolume.ComputeSplit(dt, gt, fp != null && !fp.IsEmpty ? fp : null);
             if (fp != null && !fp.IsEmpty)
             {
-                var r = TinVolume.Compute(dt, gt, fp, true);
-                var s = TinVolume.Compute(dt, gt, fp, false);
                 rows.Add(("계획지표면", s.Cut, s.Fill)); rows.Add(("진입도로", r.Cut, r.Fill)); rows.Add(("계", all.Cut, all.Fill));
                 log.AppendLine(string.Create(CultureInfo.InvariantCulture, $"  토공량({dn} − {g}) 계 {all.Cut:F1}/{all.Fill:F1} · 계획지표면(도로 자리 밖) {s.Cut:F1}/{s.Fill:F1} · 진입도로(도로 {nRoads}) {r.Cut:F1}/{r.Fill:F1} · 합 오차 {s.Cut + r.Cut - all.Cut:E1}/{s.Fill + r.Fill - all.Fill:E1}{(note.Length > 0 ? " · " + note : "")}"));
             }
@@ -290,13 +301,15 @@ internal static class PlanSheet
                 log.AppendLine(string.Create(CultureInfo.InvariantCulture, $"  토공량({dn} − {g}) {all.Cut:F1}/{all.Fill:F1}"));
             }
             // 정지 창 토량(정지면_DH vs 원지반 · 도로 자리 포함)과 나란히 — 진단 로그만(창에 설명 글 안 넣음)
+            //   ★[1123 속도 2번] 이 줄만을 위해 다시 셈하지 않음 — [3D 보기]가 같은 두 면으로 이미 셈한 값(EarthworkVolume 메모)이 있을 때만
             if (dn != WallDaylightBuilder.PlanSurfaceBase || fp != null)
             {
                 var (g2, p2) = EarthworkVolume.Find(db, g, WallDaylightBuilder.PlanSurfaceBase);
                 if (!p2.IsNull && !g2.IsNull)
                 {
-                    var pv = TinVolume.Compute(EarthworkVolume.Tris(db, p2), gt);
-                    log.AppendLine(string.Create(CultureInfo.InvariantCulture, $"  (견줌) 정지면_DH − 원지반 {pv.Cut:F1}/{pv.Fill:F1} — 정지 창 · [3D 보기]와 같은 셈"));
+                    if (EarthworkVolume.Memoized(db, p2, gt) is { } pv)
+                        log.AppendLine(string.Create(CultureInfo.InvariantCulture, $"  (견줌) 정지면_DH − 원지반 {pv.Cut:F1}/{pv.Fill:F1} — 정지 창 · [3D 보기]와 같은 셈"));
+                    else log.AppendLine("  (견줌) 생략");
                 }
             }
         }
@@ -309,7 +322,7 @@ internal static class PlanSheet
     static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Database, VolEntry> VolCache = new();
 
     /// <summary>토공량 다시 쓰기 열쇠 — 못 만들면 빈 글(다시 안 씀).</summary>
-    static string VolKey(Database db)
+    static string VolKey(Database db, ref ObjectId knownId, ref List<(DH.Grading.Core.Point3 A, DH.Grading.Core.Point3 B, DH.Grading.Core.Point3 C)>? knownTris)
     {
         try
         {
@@ -319,7 +332,10 @@ internal static class PlanSheet
             if (did.IsNull) (gid, did) = EarthworkVolume.Find(db, ImportGisCommand.GroundSurfaceName, WallDaylightBuilder.PlanSurfaceBase);
             if (did.IsNull) return "";
             double h = 0; int n = 0;
-            foreach (var (a, b, c) in EarthworkVolume.Tris(db, did)) { foreach (var q in new[] { a, b, c }) h += q.X * 0.7071 + q.Y * 0.31 + q.Z * 1.618 * (1 + (n++ % 7)); }
+            // ★[1123 속도 9번] 같은 준비 안에서 이미 읽은 같은 면(ObjectId 같음)이면 그 세모 — 아니면 읽고 넘겨줌
+            var dt = did == knownId && knownTris != null ? knownTris : EarthworkVolume.Tris(db, did);
+            knownId = did; knownTris = dt;
+            foreach (var (a, b, c) in dt) { foreach (var q in new[] { a, b, c }) h += q.X * 0.7071 + q.Y * 0.31 + q.Z * 1.618 * (1 + (n++ % 7)); }
             return st + "|" + h.ToString("R", CultureInfo.InvariantCulture) + "|" + n + "|" + DrawRoadsKey(db);
         }
         catch { return ""; }
