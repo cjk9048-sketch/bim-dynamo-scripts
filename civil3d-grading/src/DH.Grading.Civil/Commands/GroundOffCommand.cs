@@ -139,7 +139,7 @@ public sealed class GroundOffCommand
 
     /// <summary>원지반마다 «그 면을 쓰는 것»(붙여넣기 소스 · 사람 표본선 · <b>그 면 위에 놓인 진입도로</b> …). 안 쓰이면 목록에 없음. 읽기만.
     /// 도로 = 기록의 원지반 핸들이 그 면이거나, 바탕면 이름이 그 면이고 정지면 위가 아닐 때(«-바탕» 종단이 그 면을 따라 그림).</summary>
-    static System.Collections.Generic.Dictionary<ObjectId, string> UsedBy(Database db, System.Collections.Generic.List<ObjectId> ids)
+    internal static System.Collections.Generic.Dictionary<ObjectId, string> UsedBy(Database db, System.Collections.Generic.List<ObjectId> ids)
     {
         var r = new System.Collections.Generic.Dictionary<ObjectId, string>();
         try

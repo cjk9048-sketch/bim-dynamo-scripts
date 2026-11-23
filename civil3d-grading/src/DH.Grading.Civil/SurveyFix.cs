@@ -62,6 +62,8 @@ internal static class SurveyFix
 
     /// <summary>시험 고리 — 마지막 결과(범위 · 새 원지반).</summary>
     internal static Result? LastForTest;
+    /// <summary>★[1123] 화면 없는 시험 고리 — 참이면 옛 원지반을 지우지 않고 숨기기만(예전 동작 · 옛 원지반과 견주는 시험용). 평소 거짓.</summary>
+    internal static bool KeepOldForTest;
 
     static Point3 P3(Point3d p) => new(p.X, p.Y, p.Z);
     static Point3d P3d(Point3 p) => new(p.X, p.Y, p.Z);
@@ -695,21 +697,62 @@ internal static class SurveyFix
             if (roadNote == null && r.Cross is { ZDiff: > 0 } cx)
                 done += $"\n  ⚠측량 선끼리 높이가 다르게 엇갈린 곳 {cx.ZDiff}곳 — 지표면이 한쪽만 씀(" + string.Join(" · ", cx.Pairs.Take(3).Select(p => p.A == p.B ? $"{p.A} {p.N}" : $"{p.A}×{p.B} {p.N}")) + ")"
                       + "\n    담장 · 건물 · 수목처럼 땅이 아닌 레이어면 창에서 빼고 다시 하세요";
+            // ★★[JACK 1123 «다듬거나 측량도 보정했으면 최종 지표면만 원지반으로 두고 지우는 게 낫지 않아? [보기 → 전부]에서 막 겹쳐 나옴» → «자동 삭제 + 이름 원지반»]
+            //   옛 원지반을 아무것도 안 쓰면 지움(그 재료 등고선 · 표고점도) + 새 원지반 이름을 옛 이름으로.
+            //   쓰면(계획부지 붙여넣기 · 진입도로 · 표본선 · 관망 …) 지우지 않고 물러남(«…(옛)» · 숨김 · 표식 → 어느 보기에서도 다시 안 켬 · [원지반 삭제]로 지움).
+            //   예전처럼 숨기기만은 KeepOldForTest(화면 없는 시험이 옛 원지반과 견줄 때)일 때만.
             string hid = surveyOnly ? $"\n  옛 '{r.BaseName}'은 그대로(다른 자리 — 둘 다 원지반으로 씀)" : "";
-            if (!surveyOnly) try
+            string hidLog = "";
+            if (!surveyOnly && KeepOldForTest) try
             {
                 using var tr = db.TransactionManager.StartTransaction();
                 if (!groundId.IsNull && !groundId.IsErased && tr.GetObject(groundId, OpenMode.ForWrite) is CivilDb.Surface old && old.Visible)
                 {
                     old.Visible = false;
                     hid = $"\n  옛 '{r.BaseName}'은 숨김(지우지 않음 — 지우려면 [원지반 삭제])";
+                    hidLog = "옛 원지반 숨김(시험)";
                 }
                 tr.Commit();
             }
             catch (System.Exception ex) { hid = "\n  ⚠옛 원지반 숨기기 못 함 — " + ex.Message; }
+            else if (!surveyOnly && !groundId.IsNull && !groundId.IsErased) try
+            {
+                var used = Commands.GroundOffCommand.UsedBy(db, new System.Collections.Generic.List<ObjectId> { groundId });
+                SurfaceRetire.Result sr;
+                using (var tr = db.TransactionManager.StartTransaction())
+                {
+                    sr = SurfaceRetire.Apply(db, tr, new[] { groundId }, used);
+                    tr.Commit();
+                }
+                if (sr.Erased > 0)
+                {
+                    string newName = r.NewName;
+                    using (var tr = db.TransactionManager.StartTransaction())
+                    {
+                        if (!r.NewId.IsNull && !r.NewId.IsErased && !string.IsNullOrEmpty(r.BaseName)
+                            && tr.GetObject(r.NewId, OpenMode.ForWrite) is CivilDb.Surface ns
+                            && SurfaceRetire.UniqueName(db, tr, r.BaseName) == r.BaseName)
+                        { ns.Name = r.BaseName; newName = r.BaseName; }
+                        tr.Commit();
+                    }
+                    int fail = 0;
+                    int nMat = Commands.GroundOffCommand.EraseMaterial(doc, ref fail);
+                    hid = $"\n  옛 '{r.BaseName}' 지움(등고선 · 표고점 {nMat:N0}개 함께) — 새 원지반 이름 '{newName}'";
+                    hidLog = $"옛 원지반 지움 · 재료 {nMat} · 못 지움 {fail} · 새 이름 {newName}";
+                    r.NewName = newName;
+                }
+                else if (sr.Retired.Count > 0 || sr.StillUsed.Count > 0)
+                {
+                    string who = string.Join(" · ", used.Values.Distinct());
+                    hid = $"\n  옛 '{r.BaseName}'은 쓰는 결과가 있어 지우지 않고 숨김({(who.Length > 0 ? who : "쓰는 것 있음")}) → 다 쓴 뒤 [원지반 삭제]";
+                    hidLog = sr.Text;
+                }
+                else if (sr.Failed.Count > 0) { hid = "\n  ⚠옛 원지반 치우기 못 함 — " + string.Join(" · ", sr.Failed); hidLog = sr.Text; }
+            }
+            catch (System.Exception ex) { hid = "\n  ⚠옛 원지반 치우기 못 함 — " + ex.Message; hidLog = ex.ToString(); }
             r.Ok = true;
             r.Message = done + hid + partWarn;
-            try { DiagLog.Append($"\n■ DHSURVEYFIX — {done} · 새 '{r.NewName}'{(hid.Length > 0 ? " · 옛 원지반 숨김" : "")}\n"); } catch { }
+            try { DiagLog.Append($"\n■ DHSURVEYFIX — {done} · 새 '{r.NewName}'{(hidLog.Length > 0 ? " · " + hidLog : "")}\n"); } catch { }
         }
         try { ed.Regen(); } catch { }
         return r;
