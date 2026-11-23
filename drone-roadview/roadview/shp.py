@@ -149,6 +149,67 @@ def prj_crs(path):
         return None
 
 
+def write_lines(path, lines, fields, prj_wkt=None, encoding='cp949'):
+    """선 SHP 쓰기 (.shp .shx .dbf .prj .cpg).
+
+    lines  = [{'pts': [[x, y], ...], 'rec': {필드: 값}}]   (2D PolyLine)
+    fields = [(이름, 'N'|'C', 길이, 소수)]   이름은 인코딩해서 10바이트 안
+    """
+    base = os.path.splitext(path)[0]
+    recs = []
+    for ln in lines:
+        pts = [(float(p[0]), float(p[1])) for p in ln['pts']]
+        if len(pts) < 2:
+            continue
+        xs = [p[0] for p in pts]; ys = [p[1] for p in pts]
+        body = struct.pack('<i4d', 3, min(xs), min(ys), max(xs), max(ys)) + struct.pack('<ii', 1, len(pts))
+        body += struct.pack('<i', 0) + b''.join(struct.pack('<2d', *p) for p in pts)
+        recs.append((body, (min(xs), min(ys), max(xs), max(ys)), ln.get('rec', {})))
+    if not recs:
+        raise ValueError('내보낼 선 없음')
+    bb = (min(r[1][0] for r in recs), min(r[1][1] for r in recs), max(r[1][2] for r in recs), max(r[1][3] for r in recs))
+
+    def header(words):
+        return struct.pack('>7i', 9994, 0, 0, 0, 0, 0, words) + struct.pack('<2i4d4d', 1000, 3, *bb, 0, 0, 0, 0)
+
+    shp = b''; shx = b''; off = 50
+    for i, (body, _, _) in enumerate(recs):
+        shx += struct.pack('>2i', off, len(body) // 2)
+        shp += struct.pack('>2i', i + 1, len(body) // 2) + body
+        off += 4 + len(body) // 2
+    with open(base + '.shp', 'wb') as f:
+        f.write(header(50 + len(shp) // 2) + shp)
+    with open(base + '.shx', 'wb') as f:
+        f.write(header(50 + len(shx) // 2) + shx)
+    # DBF
+    hl = 32 + 32 * len(fields) + 1
+    rl = 1 + sum(fl[2] for fl in fields)
+    h = struct.pack('<BBBBIHH20x', 3, 126, 11, 23, len(recs), hl, rl)
+    for name, typ, ln_, dec in fields:
+        nb = name.encode(encoding)[:10]
+        h += nb + b'\x00' * (11 - len(nb)) + typ.encode('ascii') + b'\x00' * 4 + bytes([ln_, dec]) + b'\x00' * 14
+    h += b'\x0d'
+    rows = b''
+    for _, _, rec in recs:
+        rows += b' '
+        for name, typ, ln_, dec in fields:
+            v = rec.get(name)
+            if typ == 'N':
+                s = '' if v is None else (('%.*f' % (dec, float(v))) if dec else str(int(round(float(v)))))
+                b = s.encode('ascii')[:ln_].rjust(ln_)
+            else:
+                b = str('' if v is None else v).encode(encoding, 'replace')[:ln_].ljust(ln_)
+            rows += b
+    with open(base + '.dbf', 'wb') as f:
+        f.write(h + rows + b'\x1a')
+    if prj_wkt:
+        with open(base + '.prj', 'w', encoding='ascii', errors='replace') as f:
+            f.write(prj_wkt)
+    with open(base + '.cpg', 'w', encoding='ascii') as f:
+        f.write({'cp949': 'CP949', 'utf-8': 'UTF-8'}.get(encoding.lower(), encoding))
+    return len(recs)
+
+
 DIA_HINTS = ('관경', '구경', '호칭', 'DIA', 'DIP', 'DN', 'PIPE_D', 'PIP_DIP', 'SIZE', 'STD_DIP', '직경')
 
 

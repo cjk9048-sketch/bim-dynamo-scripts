@@ -611,7 +611,8 @@ def main(argv=None):
                    for p in ln['pts']]
             ll = [[round(v, 8) for v in geo.en_to_ll(p[0], p[1])] for p in ln['pts']]
             pl.append(dict(layer=ln['layer'], label=ln['label'], dia=round(ln['dia'], 4), hasZ=bool(ln['hasZ']),
-                           pts=pts, g=[round(v, 3) if v is not None else None for v in ln['g']], ll=ll))
+                           pts=pts, g=[round(v, 3) if v is not None else None for v in ln['g']], ll=ll,
+                           ctrl=ln.get('ctrl') or list(range(len(pts)))))
     _write_atomic(os.path.join(out, 'data', 'pipes.js'),
                   ('window.RV_PIPES = ' + json.dumps({'layers': layers, 'lines': pl, 'origin': {'E': E0, 'N': N0}},
                                                     ensure_ascii=False) + ';\n').encode('utf-8'))

@@ -73,7 +73,8 @@ def update(out, path, dia_field=None, label_field=None, depth=None, layers=None,
                for p in ln['pts']]
         ll = [[round(v, 8) for v in geo.en_to_ll(p[0], p[1])] for p in ln['pts']]
         pl.append(dict(layer=ln['layer'], label=ln['label'], dia=round(ln['dia'], 4), hasZ=bool(ln['hasZ']),
-                       pts=pts, g=[round(v, 3) if v is not None else None for v in ln['g']], ll=ll))
+                       pts=pts, g=[round(v, 3) if v is not None else None for v in ln['g']], ll=ll,
+                       ctrl=ln.get('ctrl') or list(range(len(pts)))))
     _write_atomic(os.path.join(out, 'data', 'pipes.js'),
                   'window.RV_PIPES = ' + json.dumps({'layers': lay, 'lines': pl, 'origin': {'E': E0, 'N': N0},
                                                      'source': os.path.basename(path)}, ensure_ascii=False) + ';\n')
@@ -84,6 +85,127 @@ def update(out, path, dia_field=None, label_field=None, depth=None, layers=None,
     msg = '관로 %d개 → 경로 200 m 안 조각 %d개%s' % (n_raw, len(pl), (' · ' + note) if note else '')
     log(msg)
     return len(pl), msg
+
+
+# ---------------------------------------------------------------- 지장물
+
+OBST_COLORS = [  # (낱말들, 색) — 지하시설물 관례 색
+    (('가스', 'GAS', '도시가스'), '#ffd400'),
+    (('전기', '전력', '한전', 'KEPCO', 'ELEC', 'POWER'), '#ff4d4d'),
+    (('통신', 'KT', 'TEL', 'COMM', '광케이블', 'SK', 'LG'), '#3ddc84'),
+    (('하수', '우수', '오수', 'SEWER', 'DRAIN'), '#b5651d'),
+    (('상수', '급수', '배수관', 'WATER'), '#3b82f6'),
+    (('난방', '열수송', 'HEAT'), '#ff9f1a'),
+]
+_OBST_PAL = ['#c084fc', '#f472b6', '#22d3ee', '#a3e635', '#fb7185']
+
+
+def _obst_color(kind, k):
+    u = str(kind).upper()
+    for words, c in OBST_COLORS:
+        if any(w.upper() in u for w in words):
+            return c
+    return _OBST_PAL[k % len(_OBST_PAL)] if kind else '#9aa3b2'
+
+
+def update_obstacles(out, path, type_field=None, dia_field=None, depth_field=None, label_field=None,
+                     default_depth=1.0, log=print):
+    """지장물 SHP → data/obstacles.js (터파기 없음 · 고치기 없음). → (조각 수, 알림)."""
+    from .shp import read_dbf, read_shp_lines, prj_crs
+    P = _read_js(os.path.join(out, 'data', 'project.js'), 'RV_PROJECT')
+    crs = P.get('crs', 'EPSG:5186')
+    E0, N0 = float(P['origin']['E']), float(P['origin']['N'])
+    shots = P['shots']
+    sen = [(s['e'] + E0, s['n'] + N0) for s in shots]
+    sg = [s['groundZ'] for s in shots]
+    fields, recs = read_dbf(path)
+    src = prj_crs(path)
+    tr = None
+    note = ''
+    if src is not None:
+        from pyproj import CRS, Transformer
+        if not src.equals(CRS.from_user_input(crs)):
+            tr = Transformer.from_crs(src, CRS.from_user_input(crs), always_xy=True)
+            note = '좌표계 %s → %s' % (src.to_string(), crs)
+    else:
+        note = '.prj 없음 → %s 로 봄' % crs
+
+    def num(v, scale=1.0):
+        if isinstance(v, str):
+            v = ''.join(ch for ch in v if ch.isdigit() or ch == '.')
+            try:
+                v = float(v)
+            except ValueError:
+                return None
+        return float(v) * scale if isinstance(v, (int, float)) and v > 0 else None
+
+    lines = []
+    kinds = []
+    for idx, pts in read_shp_lines(path):
+        r = recs[idx] if idx < len(recs) else None
+        if r is None and recs:
+            continue
+        kind = str(r.get(type_field, '')).strip() if (r and type_field) else ''
+        kind = kind or '지장물'
+        if kind not in kinds:
+            kinds.append(kind)
+        if tr:
+            pts = [[*tr.transform(p[0], p[1]), None] for p in pts]
+        else:
+            pts = [[p[0], p[1], None] for p in pts]
+        lines.append({'layer': kinds.index(kind), 'kind': kind,
+                      'label': (str(r.get(label_field, '')).strip() if (r and label_field) else '') or kind,
+                      'dia': num(r.get(dia_field), 0.001) if (r and dia_field) else None,
+                      'depth': num(r.get(depth_field)) if (r and depth_field) else None,
+                      'hasZ': False, 'pts': pts})
+    n_raw = len(lines)
+    lines = pipeload.densify(lines, 5.0)
+    lines = pipeload.clip_near(lines, sen, 200.0)
+    lines = pipeload.ground_for(lines, sen, sg)
+    geo = Geo(crs)
+    layers = [{'name': k, 'color': _obst_color(k, i)} for i, k in enumerate(kinds)]
+    ol = []
+    for ln in lines:
+        ol.append(dict(layer=ln['layer'], kind=ln['kind'], label=ln['label'],
+                       dia=round(ln['dia'], 4) if ln['dia'] else None,
+                       depth=round(ln['depth'], 3) if ln['depth'] else None,
+                       pts=[[round(p[0] - E0, 3), round(p[1] - N0, 3), None] for p in ln['pts']],
+                       g=[round(v, 3) if v is not None else None for v in ln['g']],
+                       ll=[[round(v, 8) for v in geo.en_to_ll(p[0], p[1])] for p in ln['pts']]))
+    _write_atomic(os.path.join(out, 'data', 'obstacles.js'),
+                  'window.RV_OBST = ' + json.dumps({'layers': layers, 'lines': ol, 'origin': {'E': E0, 'N': N0},
+                                                    'defaultDepth': float(default_depth),
+                                                    'source': os.path.basename(path)}, ensure_ascii=False) + ';\n')
+    msg = '지장물 %d개 → 경로 200 m 안 조각 %d개 · 종류 %d%s' % (n_raw, len(ol), len(kinds), (' · ' + note) if note else '')
+    log(msg)
+    return len(ol), msg
+
+
+# ---------------------------------------------------------------- 고친 관로 → SHP (중심선)
+
+def export_pipes_shp(out, shp_path):
+    """data/pipes.js 의 원래 꼭짓점(ctrl · 고친 점 포함)만으로 중심선 SHP. → 선 수."""
+    from .shp import write_lines
+    from pyproj import CRS
+    P = _read_js(os.path.join(out, 'data', 'project.js'), 'RV_PROJECT')
+    D = _read_js(os.path.join(out, 'data', 'pipes.js'), 'RV_PIPES')
+    E0, N0 = float(P['origin']['E']), float(P['origin']['N'])
+    names = [l.get('name', '') for l in D.get('layers', [])]
+    lines = []
+    for ln in D.get('lines', []):
+        pts = ln['pts']
+        idx = ln.get('ctrl') or list(range(len(pts)))
+        xy = [[pts[i][0] + E0, pts[i][1] + N0] for i in idx if 0 <= i < len(pts)]
+        dia = ln.get('dia')
+        lines.append({'pts': xy, 'rec': {
+            'DIA_MM': round(dia * 1000) if dia else None,
+            'NAME': ln.get('label') or '',
+            'GROUP': names[ln['layer']] if isinstance(ln.get('layer'), int) and ln['layer'] < len(names) else '',
+            'LEN_M': sum(((xy[k + 1][0] - xy[k][0]) ** 2 + (xy[k + 1][1] - xy[k][1]) ** 2) ** 0.5
+                         for k in range(len(xy) - 1))}})
+    fields = [('DIA_MM', 'N', 6, 0), ('NAME', 'C', 60, 0), ('GROUP', 'C', 30, 0), ('LEN_M', 'N', 12, 2)]
+    wkt = CRS.from_user_input(P.get('crs', 'EPSG:5186')).to_wkt('WKT1_ESRI')
+    return write_lines(shp_path, lines, fields, wkt, 'cp949')
 
 
 def main(argv=None):

@@ -29,6 +29,8 @@ NO_WINDOW = 0x08000000 if os.name == 'nt' else 0
 # 파일 창 종류 이름은 글자 · 숫자 · 빈칸만 (pywebview 검사 [\w ]+ — «·» 하나로 창이 안 열렸음 · 1123)
 FILTER_INPUTS = ('DJI 360 영상 사진 (*.osv;*.OSV;*.jpg;*.JPG)', '모든 파일 (*.*)')
 FILTER_PIPES = ('관로 SHP DXF (*.shp;*.SHP;*.dxf;*.DXF)', '모든 파일 (*.*)')
+FILTER_OBST = ('지장물 SHP (*.shp;*.SHP)', '모든 파일 (*.*)')
+FILTER_SHP_SAVE = ('SHP (*.shp)',)
 
 
 def _cli(cmd, args):
@@ -285,6 +287,76 @@ class Api:
         except Exception as ex:
             return {'ok': False, 'msg': str(ex)[:200]}
 
+    def save_pipes(self, text):
+        """보기 화면에서 고친 관로 (window.RV_PIPES = ...;) → data/pipes.js · 처음 한 번 원본을 pipes_orig.js 로 남김."""
+        if not self._project:
+            return {'ok': False}
+        t = str(text)
+        if not t.lstrip().startswith('window.RV_PIPES'):
+            return {'ok': False}
+        p = Path(self._project) / 'data' / 'pipes.js'
+        orig = p.with_name('pipes_orig.js')
+        if p.exists() and not orig.exists():
+            shutil.copy2(p, orig)
+        tmp = p.with_suffix('.js.tmp')
+        tmp.write_text(t if t.endswith('\n') else t + '\n', encoding='utf-8')
+        os.replace(tmp, p)
+        return {'ok': True}
+
+    def export_pipes_shp(self):
+        """고친 관로 중심선(원래 꼭짓점 + 고친 점) → SHP 저장 창."""
+        if not self._project:
+            return {'ok': False, 'msg': '열린 프로젝트 없음'}
+        import webview
+        r = self._window.create_file_dialog(webview.FileDialog.SAVE, save_filename='관로_수정.shp',
+                                            file_types=FILTER_SHP_SAVE)
+        if not r:
+            return None
+        path = r[0] if isinstance(r, (list, tuple)) else r
+        if not path.lower().endswith('.shp'):
+            path += '.shp'
+        from .pipes_update import export_pipes_shp
+        try:
+            n = export_pipes_shp(self._project, path)
+            return {'ok': True, 'path': path, 'lines': n}
+        except Exception as ex:
+            return {'ok': False, 'msg': str(ex)[:200]}
+
+    def pick_obstacles(self):
+        import webview
+        r = self._window.create_file_dialog(webview.FileDialog.OPEN, file_types=FILTER_OBST)
+        if not r:
+            return None
+        path = r[0] if isinstance(r, (list, tuple)) else r
+        from .pipes_update import fields_of
+        try:
+            info = fields_of(path)
+        except Exception as ex:
+            return {'path': path, 'kind': '', 'name': os.path.basename(path), 'fields': [], 'error': str(ex)}
+
+        def guess(words):
+            for f in info.get('fields', []):
+                if any(w.lower() in f['name'].lower() for w in words):
+                    return f['name']
+            return None
+        info['guess_type'] = guess(('종류', '시설', '구분', '관종', 'TYPE', 'KIND', 'FTR', 'CDE'))
+        info['guess_depth'] = guess(('심도', '깊이', '토피', 'DEP', 'DPT'))
+        info['guess_label'] = guess(('명칭', '이름', 'NAME', 'NAM'))
+        return info
+
+    def import_obstacles(self, p):
+        if not self._project:
+            return {'ok': False, 'msg': '열린 프로젝트 없음'}
+        from .pipes_update import update_obstacles
+        nz = lambda v: v if v not in (None, '', '(없음)') else None   # noqa: E731
+        try:
+            n, msg = update_obstacles(self._project, p['path'], nz(p.get('type_field')), nz(p.get('dia_field')),
+                                      nz(p.get('depth_field')), nz(p.get('label_field')),
+                                      float(p.get('default_depth') or 1.0), log=lambda s: None)
+            return {'ok': True, 'lines': n, 'note': msg}
+        except Exception as ex:
+            return {'ok': False, 'msg': str(ex)[:200]}
+
     def save_calib(self, text):
         if not self._project:
             return {'ok': False}
@@ -324,7 +396,7 @@ def _selftest(api, w, out_path, project):
     res = {}
     try:
         from webview.util import parse_file_type
-        res['filters_ok'] = all(parse_file_type(f) for f in FILTER_INPUTS + FILTER_PIPES)
+        res['filters_ok'] = all(parse_file_type(f) for f in FILTER_INPUTS + FILTER_PIPES + FILTER_OBST + FILTER_SHP_SAVE)
         time.sleep(4)
         res['home_title'] = w.evaluate_js('document.title')
         res['home_has_api'] = w.evaluate_js('!!(window.pywebview && window.pywebview.api)')

@@ -74,10 +74,12 @@ def load(path, crs='EPSG:5186', dia_field=None, label_field=None, layer_patterns
 
 
 def densify(lines, step=5.0):
-    """꼭짓점 사이를 step(m) 이하로 — 땅 높이가 경사를 따라가게."""
+    """꼭짓점 사이를 step(m) 이하로 — 땅 높이가 경사를 따라가게.
+    원래 꼭짓점의 새 번호를 ln['ctrl'] 에 남긴다 (보기 화면 «관로 고치기» 손잡이 · SHP 내보내기 = 원래 꼭짓점)."""
     for ln in lines:
         p = ln['pts']
         q = [p[0]]
+        ctrl = [0]
         for a, b in zip(p[:-1], p[1:]):
             L = math.hypot(b[0] - a[0], b[1] - a[1])
             n = max(1, int(math.ceil(L / step)))
@@ -85,7 +87,9 @@ def densify(lines, step=5.0):
                 t = k / n
                 z = None if (a[2] is None or b[2] is None) else a[2] + t * (b[2] - a[2])
                 q.append([a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1]), z])
+            ctrl.append(len(q) - 1)
         ln['pts'] = q
+        ln['ctrl'] = ctrl
     return lines
 
 
@@ -125,6 +129,9 @@ def clip_near(lines, shot_en, radius=200.0):
             if b > a:
                 seg = dict(ln)
                 seg['pts'] = p[a:b + 1]
+                if 'ctrl' in ln:            # 원래 꼭짓점 번호 옮기기 · 잘린 두 끝도 손잡이
+                    c = sorted({k - a for k in ln['ctrl'] if a <= k <= b} | {0, b - a})
+                    seg['ctrl'] = c
                 out.append(seg)
             i = j + 1
     return out
