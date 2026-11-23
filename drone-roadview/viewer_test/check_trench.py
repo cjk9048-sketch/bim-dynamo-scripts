@@ -38,6 +38,7 @@ import make_synth as ms  # noqa: E402
 from cdp import Edge  # noqa: E402
 
 TR_DEF = dict(tp=0.2, n=0.3, margin=0.3, bed=0.1)
+PROT_DEF = 0.3                                            # 보호층 (관 위) 기본값 · 내려받는 trench 에 함께
 CFG_B = dict(tp=0.3, n=0.5, margin=0.4, bed=0.2)          # 단면 창에서 바꿈
 CFG_C = dict(tp=2.0, n=0.5, margin=0.4, bed=0.2)          # 포장이 바닥보다 깊음 → 벽 전체 직각
 CFG_FILE = dict(tp=0.25, n=0.4, margin=0.35, bed=0.15)    # calib.js 에 적은 값
@@ -511,7 +512,7 @@ def main():
         print('== (e) calib.js')
         load(ed, url_of(out_dir, v1))
         tr, txt = exported_trench(ed)
-        all_ok &= report('trench 없음 → 내려받는 글에 기본값', tr == dict(TR_DEF, on=True), json.dumps(tr))
+        all_ok &= report('trench 없음 → 내려받는 글에 기본값', tr == dict(TR_DEF, prot=PROT_DEF, on=True), json.dumps(tr))
 
         # ---- (d) 단면 창에서 바꿈 → 구멍 폭
         print('== (d) 단면 창')
@@ -535,7 +536,7 @@ def main():
         crop = Image.open(os.path.join(shots_dir, 'd_cfgB_full.png'))
         crop.save(os.path.join(shots_dir, 'd_cfgB_panel.png'))
         tr, _ = exported_trench(ed)
-        all_ok &= report('바꾼 뒤 내려받는 글 = 마지막 값', tr == dict(CFG_C, on=True), json.dumps(tr))
+        all_ok &= report('바꾼 뒤 내려받는 글 = 마지막 값', tr == dict(CFG_C, prot=PROT_DEF, on=True), json.dumps(tr))
         # 다시 열기 (같은 브라우저) → 저장된 값으로, 다른 자리
         v3 = VIEWS[2]
         load(ed, url_of(out_dir, v3))

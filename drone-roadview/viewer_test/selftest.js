@@ -582,8 +582,9 @@
       check('준비 전 (api 없음) → 프로그램 단추 숨김', !!window.pywebview && !window.pywebview.api && !shown($('hostTools')));
       await until(() => shown($('hostTools')), 6000);
     }
-    check('프로그램 단추 셋 보임', shown($('hostTools')) && [['hPipes', '관로 넣기'], ['hExport', '내보내기'], ['hHome', '처음']].every(([id, t]) => shown($(id)) && $(id).textContent === t),
-      [...$('hostTools').querySelectorAll('button')].map((b) => b.textContent).join(','));
+    const bName = (b) => b.getAttribute('aria-label') || b.textContent; // 그림 단추 = 이름은 aria-label
+    check('프로그램 단추 셋 보임', shown($('hostTools')) && [['hPipes', '관로 넣기'], ['hExport', '내보내기'], ['hHome', '처음']].every(([id, t]) => shown($(id)) && bName($(id)) === t),
+      [...$('hostTools').querySelectorAll('button')].map(bName).join(','));
   }
   if (T === 'host_late') { // 늦게 붙은 api 로도 맞춤 자동 저장
     $('calHead').click();
@@ -772,7 +773,7 @@
     $('secDef').click();
     await sleep(1300);
     sv = hcalls('save_calib');
-    check('기본값 (SAC) → 저장', sv.length === 3 && JSON.stringify(trOf(sv[2].arg)) === JSON.stringify({ tp: 0.2, n: 0.3, margin: 0.3, bed: 0.1, on: true }) && $('sec_n').value === '0.3' && $('secOn').checked,
+    check('기본값 (SAC) → 저장', sv.length === 3 && JSON.stringify(trOf(sv[2].arg)) === JSON.stringify({ tp: 0.2, n: 0.3, margin: 0.3, bed: 0.1, prot: 0.3, on: true }) && $('sec_n').value === '0.3' && $('secOn').checked,
       JSON.stringify(sv[2] && trOf(sv[2].arg)));
     // 평균매설깊이: 단면 칸 ↔ 윗줄 칸 (깊이는 맞춤 파일에 안 씀)
     const ci = $('sec_cover');

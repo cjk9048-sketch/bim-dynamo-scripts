@@ -12,25 +12,17 @@
     <div class="brand"><span class="logo"></span><span id="title">드론 로드뷰</span></div>
     <div id="shotInfo" class="chip"><b id="shotNo">-</b><span class="sep"></span><span id="shotVid">-</span><span class="sep"></span><span id="shotTime">-</span></div>
     <div class="spacer"></div>
-    <div class="tools">
-      <button id="tgPipes" class="tg on" type="button">관로</button>
-      <button id="tgObst" class="tg on" type="button" hidden>지장물</button>
-      <div class="seg" role="group">
-        <button id="mSurf" class="on" type="button">노면</button>
-        <button id="mDepth" type="button">깊이</button>
-      </div>
-      <label class="numbox" title="지표 → 관 윗면">평균매설깊이<input id="cover" type="number" step="0.1" min="0" max="20" inputmode="decimal">m</label>
-      <button id="tgSec" class="tg" type="button" title="터파기 단면">단면</button>
-      <button id="tgQty" class="tg" type="button" title="수량 · 지장물 간섭">수량</button>
-      <button id="tgEdit" class="tg" type="button" title="관로 꼭짓점 옮기기 (Esc 끝)">관로 고치기</button>
-      <button id="tgPath" class="tg on" type="button">경로</button>
-      <button id="tgMap" class="tg on" type="button" title="지도">지도</button>
-    </div>
     <div id="hostTools" class="tools host" hidden>
-      <button id="hPipes" class="tg" type="button" title="관로 파일 넣기 (SHP · DXF)">관로 넣기</button>
-      <button id="hObst" class="tg" type="button" title="지장물 파일 넣기 (SHP)">지장물 넣기</button>
-      <button id="hExport" class="tg" type="button">내보내기</button>
-      <button id="hHome" class="tg" type="button">처음</button>
+      <button id="hPipes" class="ib" type="button" title="관로 넣기 (SHP · DXF)" aria-label="관로 넣기"><svg viewBox="0 0 24 24"><path d="M3 8h9M3 16h9"/><path d="M12 8a2.2 4 0 0 1 0 8"/><path d="M18 8v8M14 12h8"/></svg></button>
+      <button id="hObst" class="ib" type="button" title="지장물 넣기 (SHP)" aria-label="지장물 넣기"><svg viewBox="0 0 24 24"><path d="M2 12h2.5M7 12h2.5M12 12h0.5"/><path d="M2 7.5h10M2 16.5h10" opacity=".45"/><path d="M18 8v8M14 12h8"/></svg></button>
+      <button id="hExport" class="ib" type="button" title="내보내기" aria-label="내보내기"><svg viewBox="0 0 24 24"><path d="M12 3v12M7 8l5-5 5 5"/><path d="M5 14v5a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-5"/></svg></button>
+      <button id="hHome" class="ib" type="button" title="처음" aria-label="처음"><svg viewBox="0 0 24 24"><path d="M3 11l9-7 9 7"/><path d="M5.5 9.5V20h4.5v-6h4v6h4.5V9.5"/></svg></button>
+    </div>
+    <div class="tools">
+      <button id="tgEdit" class="ib" type="button" title="관로 고치기 (Esc 끝)" aria-label="관로 고치기"><svg viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13 7l4 4"/></svg></button>
+      <button id="tgQty" class="ib" type="button" title="수량 · 간섭" aria-label="수량"><svg viewBox="0 0 24 24"><path d="M17 5H7l6 7-6 7h10"/></svg></button>
+      <button id="tgCal" class="ib" type="button" title="맞춤" aria-label="맞춤"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="6.5"/><path d="M12 2.5v4M12 17.5v4M2.5 12h4M17.5 12h4"/></svg></button>
+      <button id="tgMap" class="ib on" type="button" title="오른쪽 칸 (지도 · 설정)" aria-label="오른쪽 칸"><svg viewBox="0 0 24 24"><rect x="3" y="4.5" width="18" height="15" rx="2"/><path d="M14.5 4.5v15"/></svg></button>
     </div>
   </header>
   <main id="main">
@@ -50,6 +42,17 @@
         <div id="qList"></div>
       </div>
       <div id="edChip"><span id="edTip">관로 고치기 · 점 끌기 · 두 번 누르기 = 점 추가 · Delete = 삭제 · Shift 끌기 = 통째로</span><button id="edShp" type="button" hidden>SHP로 내보내기</button><button id="edDrop" type="button" hidden>고친 것 버리기</button><button id="edEnd" type="button">끝</button></div>
+      <div id="opChip"><span id="opTip">관 누르기</span><label class="opLen" title="개방 길이">길이<input id="opLen" type="range" min="5" max="100" step="1"><b id="opLenV"></b></label><label class="opEx" title="터파기 폭에 더할 폭">폭 +<input id="opEx" type="number" step="0.1" min="0" max="3" inputmode="decimal">m</label><button id="opClose" type="button" title="닫기 (Esc)">닫기</button></div>
+      <div id="pipeCard" class="card" hidden>
+        <div class="cHead"><b id="pcName"></b><button id="pcSec" class="ib s" type="button" title="이 자리 단면" aria-label="단면"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M4 9.5h16"/><circle cx="12" cy="14.5" r="2.5"/></svg></button><button id="pcX" class="x" type="button" title="닫기">×</button></div>
+        <div id="pcRows" class="kv"></div>
+      </div>
+      <div id="secCard" class="card" hidden>
+        <div class="cHead"><b id="scName"></b><span id="scSta"></span><button id="scX" class="x" type="button" title="닫기 (Esc)">×</button></div>
+        <svg id="scSvg" viewBox="0 0 360 250" role="img" aria-label="횡단면"></svg>
+        <div id="scRows" class="kv two"></div>
+        <div id="scTag" class="tag"></div>
+      </div>
     </section>
     <aside id="side">
       <section id="mapPane" class="pane">
@@ -57,7 +60,8 @@
         <div class="mapBtns">
           <button id="zIn" type="button" title="확대">+</button>
           <button id="zOut" type="button" title="축소">−</button>
-          <button id="zFit" type="button" class="wide">전체</button>
+          <button id="zFit" type="button" class="wide" title="전체 보기"><svg viewBox="0 0 24 24"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/></svg></button>
+          <button id="tgPath" type="button" class="wide tgl on" title="비행 경로"><svg viewBox="0 0 24 24"><circle cx="6" cy="18" r="2"/><circle cx="18" cy="6" r="2"/><path d="M8 18h6a3 3 0 0 0 0-6h-4a3 3 0 0 1 0-6h6"/></svg></button>
           <button id="mNames" type="button" class="wide tgl" title="지도 이름 · 도로 글자" hidden>이름</button>
         </div>
         <div id="mapNote">지도: 웹 공유 주소에서 보임 · 또는 지도 키</div>
@@ -70,6 +74,24 @@
             <button id="keyOk" type="button" class="primary">적용</button>
           </div>
         </div>
+      </section>
+      <section id="ugPane" class="pane">
+        <div class="ugHead"><b>지하 시설물</b><span id="ugTag" class="tag" title="설계값 아님 · 보기용 값"></span><button id="tgSec" class="ib s" type="button" title="터파기 설정" aria-label="터파기 설정"><svg viewBox="0 0 24 24"><path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/></svg></button></div>
+        <div id="ugMode" class="seg4" role="group" aria-label="표현">
+          <button id="mSurf" type="button" title="매설 · 땅이 관을 가림"><svg viewBox="0 0 24 24"><path d="M3 9h18"/><circle cx="12" cy="15.5" r="3"/></svg><span>매설</span></button>
+          <button id="mDepth" type="button" title="터파기 · 관로 따라 판 모습"><svg viewBox="0 0 24 24"><path d="M2 8h4l2.5 10h7L18 8h4"/><circle cx="12" cy="15" r="2"/></svg><span>터파기</span></button>
+          <button id="mOpen" type="button" title="부분 개방 · 누른 곳만 열기"><svg viewBox="0 0 24 24"><path d="M2 8h20"/><path d="M8 8v9h8V8"/><circle cx="12" cy="14" r="1.8"/></svg><span>부분 개방</span></button>
+          <button id="mSec" type="button" title="단면 · 누른 곳 횡단면"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M4 9.5h16"/><circle cx="12" cy="14.5" r="2.5"/></svg><span>단면</span></button>
+        </div>
+        <div id="ugShow" class="chips">
+          <button id="tgPipes" class="tg on" type="button" title="관로 본체">관로</button>
+          <button id="tgPit" class="tg" type="button" title="터파기 형상">터파기</button>
+          <button id="tgBed" class="tg" type="button" title="기초 · 보호층">기초·보호</button>
+          <button id="tgFill" class="tg" type="button" title="되메우기 층">되메우기</button>
+          <button id="tgObst" class="tg on" type="button" title="지장물" hidden>지장물</button>
+          <button id="tgLbl" class="tg" type="button" title="이름표 (관경 · 토피)">이름표</button>
+        </div>
+        <label class="numbox" title="지표 → 관 윗면 (관 표고 없을 때)">평균매설깊이<input id="cover" type="number" step="0.1" min="0" max="20" inputmode="decimal">m</label>
       </section>
       <section id="calPane" class="pane">
         <button id="calHead" type="button"><span class="ct">맞춤</span><span id="calVid"></span><svg class="chev" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></button>
@@ -132,14 +154,14 @@
       </div>
     </section>
   </div>
-  <section id="secDlg" class="dlg" role="dialog" aria-label="터파기 단면" hidden>
-    <div class="dlgHead"><b>터파기 단면</b><button id="secX" class="dlgX" type="button" title="닫기">×</button></div>
+  <section id="secDlg" class="dlg" role="dialog" aria-label="터파기 설정" hidden>
+    <div class="dlgHead"><b>터파기 설정</b><span id="secTag" class="tag"></span><button id="secX" class="dlgX" type="button" title="닫기">×</button></div>
     <div class="dlgBody">
-      <div class="secTop"><label>관경<select id="secDia"></select></label><label class="chk"><input id="secOn" type="checkbox">터파기</label></div>
+      <div class="secTop"><label>관경<select id="secDia"></select></label><label class="chk"><input id="secOn" type="checkbox">터파기 형상</label></div>
       <svg id="secSvg" viewBox="0 0 380 260" role="img" aria-label="단면 그림"></svg>
       <div id="secRows"></div>
     </div>
-    <div class="dlgFoot"><button id="secDef" type="button">기본값 (SAC)</button><button id="secClose" class="primary" type="button">닫기</button></div>
+    <div class="dlgFoot"><button id="secDef" type="button" title="가시화 기본값 (SAC)">기본값</button><button id="secClose" class="primary" type="button">닫기</button></div>
   </section>
   <div id="toast"></div>
 </div>

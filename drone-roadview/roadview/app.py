@@ -465,7 +465,7 @@ def _selftest(api, w, out_path, project):
             res['proj_webgl'] = w.evaluate_js('!!document.querySelector("canvas") && !!document.querySelector("canvas").getContext')
             res['proj_loading_text'] = w.evaluate_js('(document.getElementById("loading")||{}).className || ""')
             res['proj_buttons'] = w.evaluate_js(
-                '[...document.querySelectorAll("button")].filter(b => b.offsetParent).map(b => b.textContent.trim()).filter(Boolean).join("|")')
+                '[...document.querySelectorAll("button")].filter(b => b.offsetParent).map(b => (b.getAttribute("aria-label") || b.title || b.textContent).trim()).filter(Boolean).join("|")')
             pipes = os.environ.get('RV_SELFTEST_PIPES')
             if pipes:
                 res['pick'] = {k: v for k, v in __import__('roadview.pipes_update', fromlist=['x']).fields_of(pipes).items()
