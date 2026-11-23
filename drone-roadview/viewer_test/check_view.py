@@ -61,6 +61,8 @@ def shoot(ed, out_dir, case, png, page='로드뷰.html'):
     uri += '?shot=%s&yaw=%s&pitch=%s&fov=%s' % (shot, yaw, pitch, fov)
     if mode:
         uri += '&mode=' + mode
+    if mode == 'depth':
+        uri += '&trench=0'  # 여기서는 관 원통만 잰다 (구덩이는 check_trench.py)
     ed.goto(uri)
     ok = ed.wait_js(READY, timeout=60)
     ed.frames(3)

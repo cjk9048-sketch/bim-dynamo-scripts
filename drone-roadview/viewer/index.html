@@ -19,6 +19,7 @@
         <button id="mDepth" type="button">깊이</button>
       </div>
       <label class="numbox" title="지표 → 관 윗면">평균매설깊이<input id="cover" type="number" step="0.1" min="0" max="20" inputmode="decimal">m</label>
+      <button id="tgSec" class="tg" type="button" title="터파기 단면">단면</button>
       <button id="tgPath" class="tg on" type="button">경로</button>
       <button id="tgMap" class="tg on" type="button" title="지도">지도</button>
     </div>
@@ -103,6 +104,15 @@
       </div>
     </section>
   </div>
+  <section id="secDlg" class="dlg" role="dialog" aria-label="터파기 단면" hidden>
+    <div class="dlgHead"><b>터파기 단면</b><button id="secX" class="dlgX" type="button" title="닫기">×</button></div>
+    <div class="dlgBody">
+      <div class="secTop"><label>관경<select id="secDia"></select></label><label class="chk"><input id="secOn" type="checkbox">터파기</label></div>
+      <svg id="secSvg" viewBox="0 0 380 260" role="img" aria-label="단면 그림"></svg>
+      <div id="secRows"></div>
+    </div>
+    <div class="dlgFoot"><button id="secDef" type="button">기본값 (SAC)</button><button id="secClose" class="primary" type="button">닫기</button></div>
+  </section>
   <div id="toast"></div>
 </div>
 <script src="data/project.js" onerror="void 0"></script>

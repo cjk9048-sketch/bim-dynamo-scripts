@@ -742,5 +742,55 @@
     check('처음 → 맞춤 먼저 저장 → go_home', last === 'save_calib,go_home' && hcalls('save_calib').length === nSave + 1, last + ' / ' + hcalls('save_calib').length);
   }
 
+  if (T === 'trench_host') { // 프로그램 안: 터파기 값이 바뀌면 0.8 초 뒤 save_calib 한 번 (trench 포함) · 단면 창 칸
+    const trOf = (t) => { try { return JSON.parse(t.slice(t.indexOf('{'), t.lastIndexOf('}') + 1)).trench; } catch (e) { return null; } };
+    await sleep(300);
+    check('처음엔 저장 안 부름', hcalls('save_calib').length === 0);
+    $('tgSec').click();
+    check('단면 창 열림 · 기본값', shown($('secDlg')) && $('tgSec').classList.contains('on') && $('sec_tp').value === '0.2' && $('sec_n').value === '0.3'
+      && $('sec_margin').value === '0.3' && $('sec_bed').value === '0.1' && $('secOn').checked && $('sec_cover').value === $('cover').value,
+      ['tp', 'n', 'margin', 'bed', 'cover'].map((k) => $('sec_' + k).value).join(','));
+    const n = $('sec_n');
+    n.value = '0.5';
+    n.dispatchEvent(new Event('input', { bubbles: true }));
+    n.dispatchEvent(new Event('change', { bubbles: true }));
+    await sleep(400);
+    check('0.4 초 뒤엔 아직 안 저장', hcalls('save_calib').length === 0, hcalls('save_calib').length);
+    await sleep(900);
+    let sv = hcalls('save_calib');
+    const t1 = sv[0] && trOf(sv[0].arg);
+    check('기울기 0.5 → 저장 한 번 (trench 포함)', sv.length === 1 && !!t1 && t1.n === 0.5 && t1.tp === 0.2 && t1.margin === 0.3 && t1.bed === 0.1 && t1.on === true, sv.length + ' ' + JSON.stringify(t1));
+    const pw = window.pywebview;
+    window.pywebview = undefined; // 잠깐 프로그램 없는 척 → «파일로 저장» = 내려받기
+    const dl = await exportCalib();
+    window.pywebview = pw;
+    check('저장한 글 = 내려받는 calib.js 글', !!sv[0] && sv[0].arg === dl, dl.length + ' 글자');
+    $('secOn').click();
+    await sleep(1300);
+    sv = hcalls('save_calib');
+    check('터파기 끔 → 저장 (on false)', sv.length === 2 && trOf(sv[1].arg).on === false && $('secDlg').classList.contains('off'), sv.length + ' ' + JSON.stringify(sv[1] && trOf(sv[1].arg)));
+    $('secDef').click();
+    await sleep(1300);
+    sv = hcalls('save_calib');
+    check('기본값 (SAC) → 저장', sv.length === 3 && JSON.stringify(trOf(sv[2].arg)) === JSON.stringify({ tp: 0.2, n: 0.3, margin: 0.3, bed: 0.1, on: true }) && $('sec_n').value === '0.3' && $('secOn').checked,
+      JSON.stringify(sv[2] && trOf(sv[2].arg)));
+    // 평균매설깊이: 단면 칸 ↔ 윗줄 칸 (깊이는 맞춤 파일에 안 씀)
+    const ci = $('sec_cover');
+    ci.value = '1.7';
+    ci.dispatchEvent(new Event('input', { bubbles: true }));
+    check('단면 평균매설깊이 → 윗줄 같이', $('cover').value === '1.7', $('cover').value);
+    $('cover').value = '1.1';
+    $('cover').dispatchEvent(new Event('input', { bubbles: true }));
+    check('윗줄 → 단면 칸 · 그림 같이', ci.value === '1.1' && $('secSvg').innerHTML.indexOf('토피 1.10') >= 0, ci.value);
+    tap($('secRows').querySelectorAll('button')[3], 0, 0); // 포장 +
+    check('± 단추 (포장 0.2 → 0.25)', $('sec_tp').value === '0.25', $('sec_tp').value);
+    await sleep(1300);
+    check('± 도 저장', hcalls('save_calib').length === 4 && trOf(hcalls('save_calib')[3].arg).tp === 0.25, hcalls('save_calib').length);
+    keyDown('Escape');
+    await sleep(50);
+    check('Esc → 단면 창 닫힘', !shown($('secDlg')) && !$('tgSec').classList.contains('on'));
+    await snap('trench_host_end');
+  }
+
   log('DONE', fails === 0 ? 'ALL-PASS' : fails + ' FAIL');
 })();

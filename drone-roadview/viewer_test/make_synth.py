@@ -14,6 +14,8 @@
      + 땅에 칠한 네모 5개 (LANDMARKS) + 영상 0001 을 알려진 만큼 틀리게 찍음 (ALIGN_ERR, calib.js 없음 → 바른 맞춤 = 그 값).
      답은 data/align_truth.js (시험만 읽음).
   --nav: 화살표 이동 시험 (NAV_SHOTS · 찍은 순서 ≠ 자리 순서 · 영상 0002 는 calib.js 로 옮김). 작게 (--width 1024) 만들어도 됨.
+  --trench: 터파기 시험. 사진에 동서로 난 길 (TR_ROAD: 아스팔트 + 가운데 점선 · 가장자리 선) 만 그리고 (띠 없음),
+     관로 = TR_LINES (길 따라 꺾인 D300 · 길 밖 hasZ D600 (끝 하나는 빈 땅) · 끝끼리 이어진 D200 두 줄 = 한 구덩이).
 지평선 위 6° 에 N/E/S/W 글자를 쓴다.
 """
 import argparse
@@ -88,6 +90,16 @@ NAV_SHOTS = [
     (-12.0, 3.0, 0.0, 30.0, '0002'),
 ]
 NAV_CAL = {'0002': {'dx': 12.0, 'dy': -15.0, 'dz': 0.0, 'dyaw': 0.0, 'dpitch': 0.0, 'droll': 0.0}}
+# --trench: 길 (북 좌표 범위, 동서로 끝없음) · 관 (꼭짓점, 관경 m, 층, 이름, hasZ 관 중심 표고 또는 None)
+TR_ROAD = (-3.5, 6.5)
+TR_ROAD_ASPHALT = (92, 92, 98)
+TR_ROAD_LINES = (1.5, -3.3, 6.3)   # 가운데 점선 (3 m 칠 · 3 m 빔) · 가장자리 실선, 폭 0.15 m
+TR_LINES = [
+    ([(-40.0, 3.0), (14.0, 3.0), (40.0, 16.0)], 0.3, 0, 'T1', None),
+    ([(22.0, -30.0), (22.0, -6.0)], 0.6, 1, 'T2', GZ - 1.5 - 0.3),
+    ([(-20.0, -12.0), (-5.0, -12.0)], 0.2, 0, 'T3a', None),
+    ([(-5.0, -12.0), (5.0, -16.0)], 0.2, 0, 'T3b', None),
+]
 DEM_SKIP = {(3, 3)}         # 빈 타일 (높이 없음)
 DEM_NAN = (0, 3, 2, 5)      # (ix, iy, 행, 열) 부터 2×2 칸 NaN
 
@@ -119,9 +131,11 @@ def rot(cal):
     return Rz @ Rx @ Ry
 
 
-def render_pano(cam, W, H, R=None, slope=(0.0, 0.0), marks=()):
+def render_pano(cam, W, H, R=None, slope=(0.0, 0.0), marks=(), stripes=None, road=False):
     """cam = 실제 사진 자리. R 이 있으면 사진이 R 만큼 틀어진 것처럼 그린다 (w = R·p).
-    slope = (동, 북) 땅 기울기 (z = GZ + se·e + sn·n), marks = 땅에 칠할 네모 [(e, n, 색)]."""
+    slope = (동, 북) 땅 기울기 (z = GZ + se·e + sn·n), marks = 땅에 칠할 네모 [(e, n, 색)].
+    stripes = 땅에 칠할 띠 (None = STRIPES) · road = TR_ROAD 길을 그림."""
+    stripes = STRIPES if stripes is None else stripes
     se, sn = slope
     out = np.empty((H, W, 3), np.uint8)
     lam = ((np.arange(W) + 0.5) / W * 2.0 - 1.0) * math.pi
@@ -155,7 +169,15 @@ def render_pano(cam, W, H, R=None, slope=(0.0, 0.0), marks=()):
         g = np.where(((fe < 0.06) | (fn < 0.06)) & (tt < 150.0), 88.0, g)  # 먼 곳 격자는 빼서 얼룩 줄임
         gc = np.repeat(g[..., None], 3, axis=2)
         foot = np.maximum(tt * math.pi / H, 1e-3)  # 화소 하나의 땅 크기(대략)
-        for verts, hw, col, _ in STRIPES:
+        if road:  # 아스팔트 + 흰 선 (가장자리는 화소 크기로 부드럽게)
+            cov = np.clip((np.minimum(gn - TR_ROAD[0], TR_ROAD[1] - gn)) / foot + 0.5, 0.0, 1.0)[..., None]
+            gc = gc * (1.0 - cov) + np.array(TR_ROAD_ASPHALT, np.float64) * cov
+            for k, yl in enumerate(TR_ROAD_LINES):
+                cov = np.clip((0.075 - np.abs(gn - yl)) / foot + 0.5, 0.0, 1.0)
+                if k == 0:
+                    cov = cov * (((ge % 6.0) + 6.0) % 6.0 < 3.0)
+                gc = gc * (1.0 - cov[..., None]) + np.array((228.0, 228.0, 228.0)) * cov[..., None]
+        for verts, hw, col, _ in stripes:
             d = np.full(E.shape, np.inf)
             for a, b in zip(verts[:-1], verts[1:]):
                 d = np.minimum(d, seg_dist(ge, gn, a, b))
@@ -278,9 +300,12 @@ def main():
     ap.add_argument('--legacy-pipes', action='store_true', help='옛 pipes.js 형식 (dia · g · hasZ 없음) + project 에 depth 없음')
     ap.add_argument('--align', action='store_true', help='점 찍어 맞추기 시험: 비탈 땅 + dem.js + 칠한 네모 + 영상 0001 을 ALIGN_ERR 만큼 틀리게')
     ap.add_argument('--nav', action='store_true', help='화살표 이동 시험: NAV_SHOTS 자리 + 영상 0002 를 옮기는 calib.js (NAV_CAL)')
+    ap.add_argument('--trench', action='store_true', help='터파기 시험: 길만 그린 사진 + TR_LINES 관로 (calib.js 없음 = 기본 터파기)')
     args = ap.parse_args()
     if args.nav and (args.calib or args.align or args.xyz):
         ap.error('--nav 는 --calib · --align · --xyz 와 같이 못 씀')
+    if args.trench and (args.calib or args.align or args.nav or args.legacy_pipes):
+        ap.error('--trench 는 --calib · --align · --nav · --legacy-pipes 와 같이 못 씀')
     out = os.path.abspath(args.out)
     W = args.width
     H = W // 2
@@ -300,7 +325,8 @@ def main():
         R = rot(cal) if cal and not args.nav else None
         gz = ground_z(e, n, slope)  # 적힌 자리의 땅 표고
         cam = (e + cal.get('dx', 0.0), n + cal.get('dy', 0.0), gz + HEIGHT + cal.get('dz', 0.0))  # 실제 자리
-        img = render_pano(cam, W, H, R, slope, LANDMARKS if args.align else ())
+        img = render_pano(cam, W, H, R, slope, LANDMARKS if args.align else (),
+                          stripes=() if args.trench else None, road=args.trench)
         uri = 'data:image/jpeg;base64,' + base64.b64encode(jpeg_bytes(img)).decode('ascii')
         pano_js = os.path.join(out, 'data', 'pano', sid + '.js')
         if sid in args.drop:
@@ -327,7 +353,8 @@ def main():
         print('tiles', make_tiles(out, range(15, 21), 60.0, LANDMARKS) if args.align else make_tiles(out))
         basemap = {'type': 'xyz', 'url': 'tiles/{z}/{x}/{y}.png', 'maxZoom': 19}
     project = {
-        'version': 1, 'title': '시험 자료' + (' (맞춤)' if args.calib else '') + (' (점 맞춤)' if args.align else '') + (' (이동)' if args.nav else ''),
+        'version': 1, 'title': '시험 자료' + (' (맞춤)' if args.calib else '') + (' (점 맞춤)' if args.align else '') + (' (이동)' if args.nav else '')
+                 + (' (터파기)' if args.trench else ''),
         'crs': 'EPSG:5186',
         'origin': ORIGIN, 'cover': COVER,
         **({} if args.legacy_pipes else {'depth': DEPTH}),
@@ -338,7 +365,17 @@ def main():
     write_js(os.path.join(out, 'data', 'project.js'),
              'window.RV_PROJECT = ' + json.dumps(project, ensure_ascii=False, indent=1) + ';\n')
 
-    if not args.no_pipes:
+    if args.trench and not args.no_pipes:
+        pipes = {'layers': LAYERS, 'lines': []}
+        for verts, dia, layer, label, zc in TR_LINES:
+            ln = {'layer': layer, 'label': label, 'dia': dia, 'pts': [[x, y, zc] for x, y in verts],
+                  'g': [GZ] * len(verts), 'll': [en2ll(x, y) for x, y in verts]}
+            if zc is not None:
+                ln['hasZ'] = True
+            pipes['lines'].append(ln)
+        write_js(os.path.join(out, 'data', 'pipes.js'),
+                 'window.RV_PIPES = ' + json.dumps(pipes, ensure_ascii=False, indent=1) + ';\n')
+    elif not args.no_pipes:
         pipes = {'layers': LAYERS, 'lines': []}
         for verts, hw, _, layer in STRIPES:
             if args.legacy_pipes:

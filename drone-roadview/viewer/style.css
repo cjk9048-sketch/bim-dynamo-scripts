@@ -430,6 +430,29 @@ input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; margin
 .urlRow { display: flex; gap: 8px; }
 #exUrl { flex: 1; min-width: 0; }
 
+/* 터파기 단면 (띄운 창: 360 이 그대로 보이게 막지 않음) */
+#secDlg {
+  position: fixed; right: 18px; top: 66px; z-index: 8;
+  width: min(408px, calc(100% - 24px));
+  max-height: calc(100% - 78px);
+}
+.secTop { display: flex; align-items: center; gap: 14px; }
+.secTop label { display: flex; align-items: center; gap: 8px; color: var(--dim); font-weight: 600; }
+#secDia {
+  height: 30px; padding: 0 8px;
+  background: var(--bg); color: var(--text);
+  border: 1px solid var(--line-2); border-radius: 7px;
+  font: inherit; outline: none;
+}
+.secTop .chk { margin-left: auto; color: var(--text); cursor: pointer; }
+.chk input { width: 16px; height: 16px; margin: 0; accent-color: var(--acc); }
+#secSvg { width: 100%; height: auto; display: block; background: #0f131a; border: 1px solid var(--line); border-radius: 10px; }
+#secRows { display: grid; grid-template-columns: 1fr auto auto auto 18px; gap: 6px; align-items: center; }
+#secRows input[type=number] { width: 70px; height: 28px; }
+.dlg #secRows button.cb { width: 30px; height: 28px; padding: 0; font-size: 15px; }
+#secDlg .dlgFoot { justify-content: space-between; }
+#secDlg.off #secSvg, #secDlg.off #secRows { opacity: .45; }
+
 /* 알림 */
 #toast {
   position: fixed; left: 50%; bottom: 22px;
