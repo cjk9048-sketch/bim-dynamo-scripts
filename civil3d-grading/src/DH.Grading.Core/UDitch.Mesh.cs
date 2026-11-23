@@ -22,30 +22,19 @@ public static partial class UDitch
         var pr = ProfileOf(d, s);
         if (pr.Error.Length > 0) { why = pr.Error; return res; }
         if (pr.Lay is { Follow: true } lay) return FollowMeshes(d, s, lay, out why);   // ★[v117.16 · JACK 1112] 구간 · 낙차벽 · 집수정 · 관로
+        if (d.Cuts.Count > 0)   // ★[JACK 1123] 한 경사라도 합류 · 교차 · 출구 집수정 자리에서 끊음 — 구간마다
+        {
+            var lc = LayoutOf(d, s);
+            if (lc.Error.Length > 0) { why = lc.Error; return res; }
+            return FollowMeshes(d, s, lc, out why);
+        }
         var p = CleanPts(d.Pts);
         int n = p.Count;
         var secs = Sections(d, s, out why);
         if (secs == null) return res;
-        // 마디마다 옆 방향(왼쪽 +) — 끝은 그 변의 법선 · 가운데는 이등분(늘림 포함)
-        var side = new (double X, double Y)[n];
-        for (int k = 0; k < n; k++)
-        {
-            (double X, double Y) Nrm(int a, int b)
-            {
-                double dx = p[b][0] - p[a][0], dy = p[b][1] - p[a][1], l = Math.Sqrt(dx * dx + dy * dy);
-                return (-dy / l, dx / l);
-            }
-            if (k == 0) side[k] = Nrm(0, 1);
-            else if (k == n - 1) side[k] = Nrm(n - 2, n - 1);
-            else
-            {
-                var a = Nrm(k - 1, k); var b = Nrm(k, k + 1);
-                double mx = a.X + b.X, my = a.Y + b.Y, ml = Math.Sqrt(mx * mx + my * my);
-                mx /= ml; my /= ml;
-                double c = mx * a.X + my * a.Y;   // cos(꺾임/2)
-                side[k] = (mx / c, my / c);
-            }
-        }
+        // 마디마다 옆 방향(왼쪽 +) — 끝은 그 변의 법선 · 가운데는 이등분(늘림 포함) · ★[JACK 1123] 닫힌 선 갈래 시작은 둘레 이등분(Path2.Prev)
+        var path = new Path2(p) { Prev = d.StartPrev };
+        var side = Enumerable.Range(0, n).Select(path.SideAt).ToArray();
         var one = Sweep(p.Select(q => (q[0], q[1])).ToList(), side, pr.Inv, secs, out why) ?? new List<Solid>();
         foreach (var sol in one) sol.Seg = 1;
         return one;

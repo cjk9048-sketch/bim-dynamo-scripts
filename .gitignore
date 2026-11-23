@@ -16,6 +16,8 @@ __pycache__/
 
 # 빌드된 플러그인 번들 DLL (소스에서 재생성) — 어느 깊이든 매칭
 **/DH.Grading.bundle/Contents/*.dll
+# Revit 애드인 설치 단추가 싣는 DLL(revit-civil-coord 빌드 사본) — .addin 매니페스트만 저장소에
+**/DH.Grading.bundle/Contents/RevitAddin/*.dll
 
 # 개발용 진단 덤프
 dhgrade_debug.txt

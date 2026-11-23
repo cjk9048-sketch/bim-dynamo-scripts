@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 배포용 매니페스트: Addins\2026\ 루트에 두고, DLL 은 하위 DH.CivilCoord\ 폴더 -->
+<RevitAddIns>
+  <AddIn Type="Application">
+    <Name>DH Civil 좌표 맞춤</Name>
+    <Assembly>DH.CivilCoord\DH.CivilCoord.Revit.dll</Assembly>
+    <AddInId>1d455d0e-99cf-499f-a3f8-46c7ed706ddd</AddInId>
+    <FullClassName>DH.CivilCoord.Revit.App</FullClassName>
+    <VendorId>DHEC</VendorId>
+    <VendorDescription>도화엔지니어링 상하수도부</VendorDescription>
+  </AddIn>
+</RevitAddIns>

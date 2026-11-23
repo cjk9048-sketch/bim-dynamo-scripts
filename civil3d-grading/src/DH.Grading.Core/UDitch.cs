@@ -15,10 +15,11 @@ namespace DH.Grading.Core;
 /// 단위 = m · 좌표 = 도면 WCS(m로 가정). 단면 꼴은 진입도로 측구와 같은 <see cref="DitchSection.U"/>(뚜껑 자리 없음 — 1단계).</summary>
 public static partial class UDitch
 {
-    /// <summary>★[v117.17 · JACK 1116 «남은 것 모두»] 이 애드인이 읽는 가장 높은 판 — 2 = 지표 따라감 · 표본 · 그레이팅(<see cref="NeedsV2"/>). 쓸 땐 <see cref="WriteVersion"/>(새 칸을 쓸 때만 2 — 옛 애드인(판 1)은 «새 판 기록»이라 거절해 칸을 말없이 버리지 않음).</summary>
-    public const int RecordVersion = 2;
-    /// <summary>쓰는 판 — 새 칸(Follow · Grating · Samp)을 쓰면 2 · 아니면 1(옛 애드인도 읽음).</summary>
-    public static int WriteVersion(Record r) => NeedsV2(r) ? 2 : 1;
+    /// <summary>★[v117.17 · JACK 1116 «남은 것 모두»] 이 애드인이 읽는 가장 높은 판 — 2 = 지표 따라감 · 표본 · 그레이팅(<see cref="NeedsV2"/>). 쓸 땐 <see cref="WriteVersion"/>(새 칸을 쓸 때만 2 — 옛 애드인(판 1)은 «새 판 기록»이라 거절해 칸을 말없이 버리지 않음).
+    /// <para>★[JACK 1123 닫힌 선 → 두 갈래] 3 = 닫힌 선 갈래(<see cref="Ditch.Loop"/>) — 옛 애드인(판 2)은 닫는 변을 빼고 다시 읽어 두 갈래를 같은 선으로 덮으므로 «새 판 기록»으로 거절하게.</para></summary>
+    public const int RecordVersion = 3;
+    /// <summary>쓰는 판 — 닫힌 선 갈래가 있으면 3 · 새 칸(Follow · Grating · Samp)을 쓰면 2 · 아니면 1(옛 애드인도 읽음).</summary>
+    public static int WriteVersion(Record r) => r.Ditches.Any(d => d.Loop > 0) ? 3 : NeedsV2(r) ? 2 : 1;
     public static bool NeedsV2(Record r)
     {
         return r.Ditches.Any(d => d.Follow || d.Grating || (d.Samp?.Count ?? 0) > 0);
@@ -86,6 +87,13 @@ public static partial class UDitch
         public double PipeCover { get; set; } = 0.3;
         /// <summary>관로 추천에 쓰는 지름 표(m).</summary>
         public List<double> PipeSizes { get; set; } = new() { 0.3, 0.4, 0.5, 0.6, 0.8, 1.0 };
+        // ★[JACK 1123] 닫힌 선 → 두 갈래 · 합류 · 교차 집수정
+        /// <summary>닫힌 선 둘레 높이차가 이보다 작으면(m) 평평 — 출구 = 그린 첫 점 · 시작 = 둘레 반대편.</summary>
+        public double LoopFlat { get; set; } = 0.05;
+        /// <summary>측구 끝점이 다른 측구 선에서 이 거리(m) 안이면 합류(집수정).</summary>
+        public double JoinTol { get; set; } = 0.5;
+        /// <summary>합류 · 교차 집수정 안치수 = max(<see cref="BasinInner"/>, 이어진 측구 안폭 최대 + 2 × 이 값) (m · 한쪽 여유).</summary>
+        public double BasinMargin { get; set; } = 0.15;
     }
 
     /// <summary>기본 규격 표(현장타설 U형 · 기초 100 · 양쪽 100 내밈). 300×300은 JACK 도면 «24_U형측구 상세도»(벽 · 바닥 150) — 나머지 두께는 초안 값(설정 파일에서 고침).</summary>
@@ -145,6 +153,9 @@ public static partial class UDitch
         if (!Pos(s.PipeD) || s.PipeD > 5) { bad.Add("PipeD"); s.PipeD = 0.3; }
         if (!Pos(s.PipeWall) || s.PipeWall > 1) { bad.Add("PipeWall"); s.PipeWall = 0.05; }
         if (!double.IsFinite(s.PipeCover) || s.PipeCover < 0 || s.PipeCover > 5) { bad.Add("PipeCover"); s.PipeCover = 0.3; }
+        if (!double.IsFinite(s.LoopFlat) || s.LoopFlat < 0 || s.LoopFlat > 5) { bad.Add("LoopFlat"); s.LoopFlat = 0.05; }
+        if (!Pos(s.JoinTol) || s.JoinTol > 5) { bad.Add("JoinTol"); s.JoinTol = 0.5; }
+        if (!double.IsFinite(s.BasinMargin) || s.BasinMargin < 0 || s.BasinMargin > 2) { bad.Add("BasinMargin"); s.BasinMargin = 0.15; }
         var ps = (s.PipeSizes ?? new List<double>()).Where(v => Pos(v) && v <= 5).Distinct().OrderBy(v => v).ToList();
         if (ps.Count == 0) { bad.Add("PipeSizes"); ps = new Settings().PipeSizes; }
         s.PipeSizes = ps;
@@ -221,6 +232,14 @@ public static partial class UDitch
         public bool Grating { get; set; }
         /// <summary>지은 솔리드 핸들(16진) — 다시 지을 때 지움.</summary>
         public List<string> Solids { get; set; } = new();
+        /// <summary>★[JACK 1123 «닫힌 폴리선 → 출구에서 두 갈래»] 0 = 보통 선 · 1 · 2 = 닫힌 선 갈래(같은 <see cref="LineHandle"/> · 시작(가장 높은 곳) → 출구(가장 낮은 곳)).</summary>
+        public int Loop { get; set; }
+        /// <summary>닫힌 선 갈래 — 출구 · 시작을 어떻게 골랐나(보고서 · 창).</summary>
+        public string LoopNote { get; set; } = "";
+        /// <summary>★[JACK 1123] 합류 · 교차 · 출구 집수정 자리(몸체 끊음) — <see cref="Link"/>가 채움(기록엔 안 적음).</summary>
+        [JsonIgnore] public List<Cut> Cuts { get; set; } = new();
+        /// <summary>닫힌 선 갈래 — 시작 점 앞 점(짝 갈래의 둘째 점) · 시작 마구리를 둘레 이등분 면으로(<see cref="Link"/>).</summary>
+        [JsonIgnore] public double[]? StartPrev { get; set; }
     }
 
     public sealed class Record
@@ -230,6 +249,8 @@ public static partial class UDitch
         public Rain Rain { get; set; } = new();
         public List<Ditch> Ditches { get; set; } = new();
         public string Updated { get; set; } = "";
+        /// <summary>★[JACK 1123] 합류 · 교차 · 출구 집수정 — <see cref="Link"/>가 채움(기록엔 안 적음).</summary>
+        [JsonIgnore] public List<Junction> Junctions { get; set; } = new();
     }
 
     public static string ToJson(Record r)
@@ -290,7 +311,8 @@ public static partial class UDitch
             x.Site ??= new(); x.Rain ??= new(); x.Ditches ??= new();
             foreach (var d in x.Ditches)
             {
-                d.Pts ??= new(); d.Solids ??= new(); d.Size ??= DefaultSizes()[0]; d.Id ??= ""; d.LineHandle ??= ""; d.Surface ??= "";
+                d.Pts ??= new(); d.Solids ??= new(); d.Size ??= DefaultSizes()[0]; d.Id ??= ""; d.LineHandle ??= ""; d.Surface ??= ""; d.LoopNote ??= "";
+                if (d.Loop is < 0 or > 2) d.Loop = 0;
                 d.Pts = d.Pts.Where(p => p != null && p.Length >= 2).Select(p => p.Length >= 3 ? p : new[] { p[0], p[1], double.NaN }).ToList();
                 d.Samp = (d.Samp ?? new()).Where(p => p != null && p.Length >= 2 && double.IsFinite(p[0])).ToList();   // ★[v117.16]
             }
@@ -300,14 +322,27 @@ public static partial class UDitch
         catch (Exception ex) { why = "U형 측구 기록을 못 읽음 — " + ex.Message; return false; }
     }
 
-    /// <summary>다음 측구 이름 «D-00n»(있는 것 다음 번호).</summary>
+    /// <summary>다음 측구 이름 «D-00n»(있는 것 다음 번호 · ★[JACK 1123] 닫힌 선 갈래 «D-00n-1» · «-2»도 번호 n으로 셈).</summary>
     public static string NextId(IEnumerable<Ditch> ds)
     {
         int max = 0;
         foreach (var d in ds)
-            if (d.Id.StartsWith("D-", StringComparison.Ordinal) && int.TryParse(d.Id[2..], NumberStyles.Integer, Ic, out int k)) max = Math.Max(max, k);
+        {
+            if (!d.Id.StartsWith("D-", StringComparison.Ordinal)) continue;
+            string t = new(d.Id[2..].TakeWhile(char.IsAsciiDigit).ToArray());
+            if (int.TryParse(t, NumberStyles.Integer, Ic, out int k)) max = Math.Max(max, k);
+        }
         return string.Format(Ic, "D-{0:000}", max + 1);
     }
+
+    /// <summary>★[JACK 1123] 닫힌 선 갈래 이름 — 바탕 이름(«D-001» · 끝의 «-1» · «-2»는 뺌) + «-갈래».</summary>
+    public static string LoopId(string id, int branch) => LoopBase(id) + "-" + branch.ToString(Ic);
+
+    /// <summary>갈래 이름의 바탕(«D-001-2» → «D-001»).</summary>
+    public static string LoopBase(string id) => id.EndsWith("-1", StringComparison.Ordinal) || id.EndsWith("-2", StringComparison.Ordinal) ? id[..^2] : id;
+
+    /// <summary>창 · 보고서에 보이는 닫힌 선 글(초보용).</summary>
+    public const string LoopText = "닫힌 선 → 두 갈래(출구 집수정)";
 
     // ══════════════════════════════ M01 부지 대표점 ══════════════════════════════
 
@@ -534,6 +569,7 @@ public static partial class UDitch
                 if (pr.MaxAbove > 0.05) pr.Warn.Add(string.Format(Ic, "측구 윗면이 지표면 위로 최대 {0:0.00} m", pr.MaxAbove));
                 if (pr.MaxBelow > s.DropMax + 0.05) pr.Warn.Add(string.Format(Ic, "측구가 최대 {0:0.00} m 묻힘 — 지표가 솟은 곳 → [방향 바꾸기] 또는 선 확인", pr.MaxBelow));
                 if (lay.GroundMiss > 0) pr.Warn.Add("지표면 밖 점 있음 — 이웃 값으로 메움");
+                JunctionWarn(d, pr);
                 return pr;
             }
         }
@@ -556,6 +592,7 @@ public static partial class UDitch
         else if (pr.SlopePct > s.MaxSlopePct) pr.Warn.Add(string.Format(Ic, "최대 경사 {0:0.###} % 넘음({1:0.###} %)", s.MaxSlopePct, pr.SlopePct));
         if (pr.MaxAbove > 0.05) pr.Warn.Add(string.Format(Ic, "측구 윗면이 지표면 위로 최대 {0:0.00} m", pr.MaxAbove));
         if (pr.Ground.Any(g => !double.IsFinite(g))) pr.Warn.Add("지표면 밖 점이 있음(그 점은 깊이 검사 안 함)");
+        JunctionWarn(d, pr);
         return pr;
     }
 
@@ -703,6 +740,8 @@ public static partial class UDitch
         var lay = pr.Lay is { Follow: true } l0 && l0.Error.Length == 0 ? l0 : null;   // ★[v117.16] 지표 따라감
         var ex = Extras(d, s);
         rows.Add(("규격", "U형 " + d.Size.Label + string.Format(Ic, " (벽 {0:0} · 바닥 {1:0} mm)", d.Size.Tw * 1000, d.Size.Tb * 1000)));
+        if (d.Loop > 0) rows.Add(("닫힌 선", LoopText + " · 갈래 " + d.Loop.ToString(Ic)));   // ★[JACK 1123]
+        if (d.Cuts.Count > 0) rows.Add(("집수정", string.Join(" · ", d.Cuts.Select(c => c.Name + " " + c.Kind))));
         if (lay == null)
         {
             rows.Add(("길이", F(q.Length, "0.00") + " m"));
@@ -738,6 +777,7 @@ public static partial class UDitch
     /// <summary>M08 최소 보고서(글) — 강우 출처 · 측구마다 종단 · 수리(식과 값) · 수량 산근. 모델과 수리는 따로 적는다(§9).</summary>
     public static string Report(Record rec, Settings s, string dwg, string app)
     {
+        Link(rec, s);   // ★[JACK 1123] 합류 · 교차 · 출구 집수정 · 닫힌 선 갈래
         var sb = new StringBuilder();
         sb.AppendLine("U형 측구 설계 결과 (1단계 초안)");
         sb.AppendLine($"도면: {dwg} · {app} · {rec.Updated}");
@@ -762,6 +802,9 @@ public static partial class UDitch
         if (rec.Ditches.Any(d => d.Follow && d.InvertAuto))   // ★[v117.16 · JACK 1112]
             sb.AppendLine(string.Format(Ic, "  지표 따라감: 표본 {0:0.0#} m · 단차 = 지표 경사 > {1:0.#} % 이고 높이 > {2:0.00} m · 낙차 {3:0.00}~{2:0.00} m · 단차마다 집수정 둘(위 · 아래 · 안 {4:0.00} m · 벽 {5:0.00} · 바닥 {6:0.00} · 침전 {7:0.00}) · 띄움 {8:0.00} m · 관 D{9:0} · 흙덮개 ≥ {10:0.00} m(땅 속으로)",
                           s.SampleStep, s.StepGradePct, s.DropMax, s.DropMin, s.BasinInner, s.BasinWall, s.BasinFloor, s.BasinSump, s.StepSetback, s.PipeD * 1000, Math.Max(s.Cover, s.PipeCover)));
+        if (rec.Junctions.Count > 0 || rec.Ditches.Any(d => d.Loop > 0))   // ★[JACK 1123]
+            sb.AppendLine(string.Format(Ic, "  합류 · 교차 · 출구 집수정: 끝점이 다른 측구 선에서 {0:0.00} m 안 = 합류 · 가로지름 = 교차 · 끝끼리 = 출구 · 안 = max({1:0.00}, 안폭 + 2 × {2:0.00}) m(바깥 ≥ 측구 바깥폭) · 안바닥 = 측구 바닥 최저 − 침전 {3:0.00} · 닫힌 선: 출구 = 가장 낮은 곳 · 시작 = 가장 높은 곳(높이차 < {4:0.00} m면 그린 첫 점 · 반대편)",
+                          s.JoinTol, s.BasinInner, s.BasinMargin, s.BasinSump, s.LoopFlat));
         double tb = 0, tf = 0, tl = 0, tx = 0, tpipe = 0, tgr = 0;
         int tbas = 0, tdrop = 0;
         foreach (var d in rec.Ditches)
@@ -772,6 +815,8 @@ public static partial class UDitch
             sb.AppendLine($"■ {d.Id} — U형 {d.Size.Label}");
             sb.AppendLine(string.Format(Ic, "  단면: 안폭 {0:0.000} · 안높이 {1:0.000} · 벽 {2:0.000} · 바닥 {3:0.000} · 기초 {4:0.000}(내밈 {5:0.000}) m", d.Size.B, d.Size.H, d.Size.Tw, d.Size.Tb, d.Size.Tf, d.Size.Pf));
             sb.AppendLine($"  선: 점 {CleanPts(d.Pts).Count} · 길이 {F(pr.Length, "0.000")} m · 지표면 «{d.Surface}» · 방향 = 시점(상류) → 종점(하류)");
+            if (d.Loop > 0) sb.AppendLine($"  {LoopText}: 갈래 {d.Loop}/2 · {d.LoopNote}");   // ★[JACK 1123]
+            if (d.Cuts.Count > 0) sb.AppendLine("  집수정 자리(몸체 끊음): " + string.Join(" · ", d.Cuts.Select(c => string.Format(Ic, "{0} {1} 측점 {2:0.000}~{3:0.000} m", c.Name, c.Kind, c.A, c.B))));
             if (lay == null)
                 sb.AppendLine($"  종단: 바닥고 {F(d.StartInvert, "0.000")} → {F(d.EndInvert, "0.000")} m · 경사 {F(pr.SlopePct, "0.###")} % ({(d.InvertAuto ? "지표면 따라 자동" : "손 입력")})");
             else
@@ -856,10 +901,12 @@ public static partial class UDitch
                               ex.Drops, ex.DropVol, ex.Basins, ex.BasinVol, s.PipeD * 1000, ex.Pipes, ex.PipeLen, ex.Legs));
             tb += q.BodyVol; tf += q.FootVol; tl += q.Length; tx += ex.Concrete; tpipe += ex.PipeLen; tgr += ex.GrateLen; tbas += ex.Basins; tdrop += ex.Drops;
         }
+        JunctionReport(sb, rec, s);   // ★[JACK 1123]
+        tx += rec.Junctions.Sum(j => j.Volume); tbas += rec.Junctions.Count(j => j.Ok);
         sb.AppendLine();
         sb.AppendLine(string.Format(Ic, "■ 합계: 측구 {0}개 · 길이 {1:0.00} m · 콘크리트 본체 {2:0.000} ㎥ · 기초 {3:0.000} ㎥", rec.Ditches.Count, tl, tb, tf)
                       + (tx > 0 ? string.Format(Ic, " · 낙차벽 · 집수정 {0:0.000} ㎥", tx) : "") + string.Format(Ic, " · 합 {0:0.000} ㎥", tb + tf + tx)
-                      + (tbas > 0 || tdrop > 0 ? string.Format(Ic, " · 낙차 {0} · 집수정 {1} · 관로 {2:0.00} m", tdrop, tbas, tpipe) : "")
+                      + (tbas > 0 || tdrop > 0 ? string.Format(Ic, " · 낙차 {0} · 집수정 {1}개 {3:0.000} ㎥ · 관로 {2:0.00} m", tdrop, tbas, tpipe, BasinTotals(rec, s).Volume) : "")   // ★[검토 M3] 수량산출서와 같은 값
                       + (tgr > 0 ? string.Format(Ic, " · 스틸 그레이팅 {0:0.00} m", tgr) : ""));
         return sb.ToString();
     }

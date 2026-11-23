@@ -70,6 +70,8 @@ public static partial class UDitch
         public readonly List<Drop> Drops = new();
         public readonly List<Basin> Basins = new();
         public readonly List<Pipe> Pipes = new();
+        /// <summary>★[JACK 1123] 합류 · 교차 · 출구 집수정 자리(<see cref="Ditch.Cuts"/> — 합친 것 · 선 안으로 자른 것) — 이 자리엔 U 없음.</summary>
+        public readonly List<Cut> Cuts = new();
         /// <summary>진단 줄(DiagLog) — 찾은 급경사 · 단차 · 처리.</summary>
         public readonly List<string> Log = new();
         public readonly List<string> Warn = new();
@@ -134,17 +136,46 @@ public static partial class UDitch
             return (-dy / l, dx / l);
         }
 
+        /// <summary>★[JACK 1123] 닫힌 선 갈래 — 시작 점 앞 점(짝 갈래의 둘째 점) · 있으면 시작 마구리 = 둘레 이등분 면(두 갈래 마구리가 겹침 · 틈 없이 맞닿음).</summary>
+        public double[]? Prev;
+
         /// <summary>마디 k의 옆 방향(왼쪽 +) — 끝은 그 변의 법선 · 가운데는 이등분(늘림 포함).</summary>
         public (double X, double Y) SideAt(int k)
         {
             int n = P.Count;
-            if (k == 0) return Nrm(0, 1);
+            if (k == 0)
+            {
+                var b0 = Nrm(0, 1);
+                if (Prev == null || Prev.Length < 2) return b0;
+                double dx = P[0][0] - Prev[0], dy = P[0][1] - Prev[1], l = Math.Sqrt(dx * dx + dy * dy);
+                return l < 1e-6 ? b0 : Bisect((-dy / l, dx / l), b0);
+            }
             if (k == n - 1) return Nrm(n - 2, n - 1);
-            var a = Nrm(k - 1, k); var b = Nrm(k, k + 1);
+            return Bisect(Nrm(k - 1, k), Nrm(k, k + 1));
+        }
+
+        /// <summary>두 변 법선 → 꺾인 점 옆 방향(이등분 · 1/cos 늘림 — 두 변 모두 옆 거리 그대로).</summary>
+        static (double X, double Y) Bisect((double X, double Y) a, (double X, double Y) b)
+        {
             double mx = a.X + b.X, my = a.Y + b.Y, ml = Math.Sqrt(mx * mx + my * my);
+            if (ml < 1e-9) return b;   // 되돌아가는 꺾임(180°) — 끝 법선
             mx /= ml; my /= ml;
             double c = mx * a.X + my * a.Y;
             return (mx / c, my / c);
+        }
+
+        /// <summary>★[JACK 1123] 평면 점에서 가장 가까운 선 위 측점 · 거리.</summary>
+        public double Nearest(double x, double y, out double dist)
+        {
+            double best = 0; dist = double.MaxValue;
+            for (int i = 0; i + 1 < P.Count; i++)
+            {
+                double ax = P[i][0], ay = P[i][1], dx = P[i + 1][0] - ax, dy = P[i + 1][1] - ay, l2 = dx * dx + dy * dy;
+                double t = l2 > 1e-18 ? Math.Clamp(((x - ax) * dx + (y - ay) * dy) / l2, 0, 1) : 0;
+                double qx = ax + dx * t - x, qy = ay + dy * t - y, dd = Math.Sqrt(qx * qx + qy * qy);
+                if (dd < dist - 1e-12) { dist = dd; best = Sta[i] + (Sta[i + 1] - Sta[i]) * t; }
+            }
+            return best;
         }
 
         /// <summary>마디에서 2 mm 안이면 그 마디 측점(표본 측점은 mm로 반올림됨).</summary>
@@ -276,18 +307,67 @@ public static partial class UDitch
         var g = new Path2(p);
         lay.Length = g.L;
         if (lay.Length < 0.1) { lay.Error = "측구 선이 너무 짧음(0.1 m 미만)"; return lay; }
+        lay.Cuts.AddRange(MergedCuts(d, g.L));   // ★[JACK 1123] 합류 · 교차 · 출구 집수정 자리
         if (d.Follow && d.InvertAuto)
         {
             var sm = SamplesOf(d, g);
-            if (sm.Count(q => double.IsFinite(q.Z)) >= 2) { FollowLayout(d, s, g, sm, lay); return lay; }
+            if (sm.Count(q => double.IsFinite(q.Z)) >= 2)
+            {
+                FollowLayout(d, s, g, sm, lay);
+                if (lay.Error.Length == 0 && lay.Segs.Count == 0 && lay.Cuts.Count > 0) lay.Error = InsideBasin;
+                return lay;
+            }
             lay.Log.Add("지표 표본 없음 → 한 경사");
         }
         if (!double.IsFinite(d.StartInvert) || !double.IsFinite(d.EndInvert)) { lay.Error = "시작 · 끝 바닥고를 넣으세요(지표면을 못 읽음)"; return lay; }
-        var one = new Seg { S0 = 0, S1 = g.L };
-        one.Prof.Add((0, d.StartInvert)); one.Prof.Add((g.L, d.EndInvert));
-        Grades(one);
-        lay.Segs.Add(one);
+        double Lin(double x) => d.StartInvert + (d.EndInvert - d.StartInvert) * x / g.L;
+        // ★[JACK 1123] 한 경사도 집수정 자리에서 끊음(경사는 그대로 — 선 전체 시점 → 종점)
+        foreach (var (a, b) in Free(lay.Cuts, 0, g.L))
+        {
+            if (b - a < MinSegLen && lay.Cuts.Count > 0) continue;
+            var one = new Seg { S0 = a, S1 = b };
+            one.Prof.Add((a, Lin(a))); one.Prof.Add((b, Lin(b)));
+            Grades(one);
+            lay.Segs.Add(one);
+        }
+        if (lay.Segs.Count == 0) lay.Error = InsideBasin;
         return lay;
+    }
+
+    const string InsideBasin = "측구가 집수정 안에 듦(선이 집수정보다 짧음) → 선 늘이기";
+
+    /// <summary>★[JACK 1123] 측구의 집수정 자리 — 선 [0, L] 안으로 자르고 겹치면 합침(이름 «J1·J2»).</summary>
+    static List<Cut> MergedCuts(Ditch d, double L)
+    {
+        var o = new List<Cut>();
+        foreach (var c in (d.Cuts ?? new()).Where(c => c != null && double.IsFinite(c.A) && double.IsFinite(c.B)).OrderBy(c => c.A))
+        {
+            double a = Math.Clamp(Math.Min(c.A, c.B), 0, L), b = Math.Clamp(Math.Max(c.A, c.B), 0, L);
+            if (o.Count > 0 && a <= o[^1].B + 1e-9)
+            {
+                var l = o[^1];
+                o[^1] = new Cut { A = l.A, B = Math.Max(l.B, b), Name = l.Name + "·" + c.Name, Kind = l.Kind, Warn = l.Warn.Concat(c.Warn).ToList() };
+                continue;
+            }
+            o.Add(new Cut { A = a, B = b, Name = c.Name, Kind = c.Kind, Warn = c.Warn.ToList() });
+        }
+        return o;
+    }
+
+    /// <summary>[a, b]에서 집수정 자리를 뺀 토막들(차례대로).</summary>
+    static List<(double A, double B)> Free(List<Cut> cuts, double a, double b)
+    {
+        var o = new List<(double, double)>();
+        double cur = a;
+        foreach (var c in cuts)
+        {
+            if (c.B <= cur + 1e-9 || c.A >= b - 1e-9) continue;
+            if (c.A > cur + 1e-9) o.Add((cur, Math.Min(c.A, b)));
+            cur = Math.Max(cur, c.B);
+            if (cur >= b - 1e-9) break;
+        }
+        if (cur < b - 1e-9) o.Add((cur, b));
+        return o;
     }
 
     const double MinSegLen = 0.05;
@@ -369,11 +449,24 @@ public static partial class UDitch
         reaches.Add((cur, L));
 
         // ③ 측구 토막마다 — 지표 따라 · 급하면 낙차
+        //   ★[JACK 1123] 합류 · 교차 · 출구 집수정 자리(lay.Cuts)는 빼고 — 토막이 나뉨(각 토막은 그 자리 지표에서 다시 따라감)
         var starts = new List<double>(); var ends = new List<double>();
         foreach (var (a, b) in reaches)
         {
             if (b - a < MinSegLen) { starts.Add(Gat(a) - off); ends.Add(Gat(b) - off); continue; }
-            var (v0, v1) = Stair(ss, gz, a, b, off, s, lay);
+            double v0 = double.NaN, v1 = double.NaN;
+            // ★[검토 H1] 집수정을 지나가는 측구 — 하류 토막 시작 바닥 ≤ 상류 토막 끝 바닥 − 최소 경사 × 끊은 길이(평지에서 지표로 다시 올라가 역단차가 생기지 않게)
+            double prevEnd = double.NaN, prevS = double.NaN;
+            foreach (var (pa, pb) in Free(lay.Cuts, a, b))
+            {
+                if (pb - pa < MinSegLen) continue;
+                double cap = double.IsFinite(prevEnd) ? prevEnd - s.MinSlopePct / 100 * (pa - prevS) : double.PositiveInfinity;
+                var (x0, x1) = Stair(ss, gz, pa, pb, off, s, lay, cap);
+                if (!double.IsFinite(v0)) v0 = x0;
+                v1 = x1;
+                prevEnd = x1; prevS = pb;
+            }
+            if (!double.IsFinite(v0)) { v0 = Gat(a) - off; v1 = Gat(b) - off; }
             starts.Add(v0); ends.Add(v1);
         }
 
@@ -489,7 +582,7 @@ public static partial class UDitch
                                       no, b1, c0, D * 1000, pp.Legs.Count, pp.Length, pp.InvIn, pp.InvOut, cov, pp.CrownExcess));
             if (!(pp.InvIn > pp.InvOut)) lay.Warn.Add(string.Format(Ic, "관로 {0}이 안 내려감 — 흐름이 거꾸로 → [방향 바꾸기]", no));
         }
-        if (lay.Segs.Count == 0) { lay.Error = "측구 구간 없음 — 단차 사이가 너무 짧음 → 선 확인"; return; }
+        if (lay.Segs.Count == 0) { lay.Error = lay.Cuts.Count > 0 ? InsideBasin : "측구 구간 없음 — 단차 사이가 너무 짧음 → 선 확인"; return; }
 
         // ⑤ 깊이 검사(표본에서 · 집수정 · 관 자리는 뺌)
         for (int i = 0; i < ss.Length; i++)
@@ -505,15 +598,16 @@ public static partial class UDitch
 
     /// <summary>측구 토막 [a, b] — w = min(지표 바닥, 앞 − 최소경사 × Δ)를 따라감 · w가 최대 경사보다 급하면 그 자리에서 낙차(필요 높이 · DropMin ~ DropMax) →
     /// 최대 경사로 내려가다 w에 닿으면 다시 따라감(계단 — 아래 끝이 지표에 맞음). 낙차 뒤 w보다 낮으면 최소 경사로 가다 닿음. 돌려줌 = 시점 · 종점 바닥고.</summary>
-    static (double V0, double V1) Stair(double[] ss, double[] gz, double a, double b, double off, Settings s, Layout lay)
+    static (double V0, double V1) Stair(double[] ss, double[] gz, double a, double b, double off, Settings s, Layout lay, double startCap = double.PositiveInfinity)
     {
+        // startCap = 시점 바닥고 위 한도(집수정 뒤 하류 토막 — 상류 끝에서 이어 받음 · ★[검토 H1])
         var xs = new List<double> { a }; var zs = new List<double> { Interp(ss, gz, a) - off };
         for (int i = 0; i < ss.Length; i++) if (ss[i] > a + 1e-6 && ss[i] < b - 1e-6) { xs.Add(ss[i]); zs.Add(gz[i] - off); }
         xs.Add(b); zs.Add(Interp(ss, gz, b) - off);
         int n = xs.Count;
         double smin = s.MinSlopePct / 100, smax = s.MaxSlopePct / 100;
         var w = new double[n];
-        w[0] = zs[0];
+        w[0] = Math.Min(zs[0], startCap);
         for (int i = 1; i < n; i++) w[i] = Math.Min(zs[i], w[i - 1] - smin * (xs[i] - xs[i - 1]));
         double W(double x, int k) => w[k] + (w[k + 1] - w[k]) * (x - xs[k]) / (xs[k + 1] - xs[k]);
         double Slope(int k) => (w[k] - w[k + 1]) / (xs[k + 1] - xs[k]);
@@ -799,7 +893,7 @@ public static partial class UDitch
     {
         var x = new Extra();
         var lay = LayoutOf(d, s);
-        x.GrateLen = d.Grating ? (lay.Follow ? lay.ULength : Qty(d).Length) : 0;
+        x.GrateLen = d.Grating ? (lay.Follow || lay.Cuts.Count > 0 ? lay.ULength : Qty(d).Length) : 0;   // ★[JACK 1123] 집수정 자리 뺌
         if (!lay.Follow || lay.Error.Length > 0) return x;
         var p = CleanPts(d.Pts);
         var g = new Path2(p);
@@ -817,6 +911,8 @@ public static partial class UDitch
         double L = Qty(d).Length;
         string t = L.ToString(fmt, Ic) + " m";
         var lay = LayoutOf(d, s);
+        if (lay.Error.Length == 0 && lay.Cuts.Count > 0 && lay.Pipes.Count == 0)   // ★[JACK 1123] 집수정 자리를 뺀 U 길이
+            return t + "(U " + lay.ULength.ToString(fmt, Ic) + " · 집수정 " + string.Join("·", lay.Cuts.Select(c => c.Name)) + ")";
         if (!lay.Follow || lay.Error.Length > 0 || lay.Pipes.Count == 0) return t;
         // ★[v117.17 검토 LOW] U · 관 = 보고서 수량(U 평면 · 관 3D 다리)이라 더해도 전체와 다름 → 나머지 자리(집수정 수)를 같이 보임
         return t + "(U " + lay.ULength.ToString(fmt, Ic) + " · 관 " + lay.Pipes.Sum(q => q.Length).ToString(fmt, Ic)
@@ -828,7 +924,7 @@ public static partial class UDitch
     {
         var q = Qty(d);
         var lay = LayoutOf(d, s);
-        if (!lay.Follow || lay.Error.Length > 0) return q;
+        if ((!lay.Follow && lay.Cuts.Count == 0) || lay.Error.Length > 0) return q;   // ★[JACK 1123] 합류 · 교차 · 출구 집수정 자리도 뺌
         double L = lay.ULength;
         return (q.BodyArea, q.FootArea, L, q.BodyArea * L, q.FootArea * L);
     }
@@ -935,7 +1031,7 @@ public static partial class UDitch
     {
         why = "";
         var res = new List<Solid>();
-        var g = new Path2(CleanPts(d.Pts));
+        var g = new Path2(CleanPts(d.Pts)) { Prev = d.StartPrev };   // ★[JACK 1123] 닫힌 선 갈래 — 시작 마구리 맞댐
         var secs = Sections(d, s, out why);
         if (secs == null) return new List<Solid>();
         for (int si = 0; si < lay.Segs.Count; si++)

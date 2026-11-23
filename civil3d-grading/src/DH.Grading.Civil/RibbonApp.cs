@@ -47,6 +47,7 @@ using AcadApp = Autodesk.AutoCAD.ApplicationServices.Application;
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.NgiiCommand))]               // DHNGII(수치지도 DXF → 원지반)
 [assembly: CommandClass(typeof(DH.Grading.Civil.GroundPalette))]                       // ★[JACK 1121] DHGROUNDPANEL(원지반 가져오기 도킹창 — 리본 스플릿 대신)
 [assembly: CommandClass(typeof(DH.Grading.Civil.StructPalette))]                       // ★[JACK 1123] DHSTRUCTPANEL(구조물 도킹창 — 리본 스플릿 대신)
+[assembly: CommandClass(typeof(DH.Grading.Civil.Commands.RevitAddinCommand))]          // ★[JACK 1123] DHREVITADDIN(구조물 창 [Revit 애드인 설치] — 번들 RevitAddin → Revit 2026 애드인 폴더)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.SurveyFixCommand))]          // ★[JACK 1121] DHSURVEYFIX(측량도 보정 — 백판 위 측량 범위만 바꿔 원지반 새로)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.RoadSmoothCommand))]         // ★[JACK 1122] DHROADSMOOTH(원지반 도로 다듬기 — 수치지도 · 측량도 도로선으로 도로 울퉁불퉁 보정)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.GroundContourCommand))]      // ★[v113.0] DHGNDCONTOUR(도면의 등고선 → 원지반)
@@ -917,12 +918,13 @@ public sealed class RibbonApp : IExtensionApplication
             // ★★[v111.6 · JACK 1102] [공통] = 둘이 함께 쓰는 것 — 도면설정 · 노리선 · 지층 · ★[v111.7] 원지반 가져오기는 [원지반 작성]으로
             // ★★[JACK 1123 «위성지도 삽입은 기타로 · 구조물은 공통으로»] 공통설정 · 지층 구성 · 구조물 · 대안 (위성지도 삽입 → [기타] 지적도 옆)
             //   [구조물] = 스플릿 대신 단추 하나 → [구조물] 도킹창(<see cref="StructPalette"/> · DHSTRUCTPANEL). 창 안 단추는 옛 명령(DHSTRUCT · DHSTRUCTBOX · DHSTRUCTPTS · DHSTRUCTOFF)을 그대로 보낸다.
-            var btnStruct = MakeButton("구조물", "DHSTRUCTPANEL ", "구조물 창 — 불러오기 · 박스 구조물 배치 · 좌표계 내보내기 · 지우기", "구조물");
+            var btnStruct = MakeButton("구조물", "DHSTRUCTPANEL ", "구조물 창 — 불러오기 · 박스 구조물 배치 · 좌표계 내보내기 · Revit 애드인 설치 · 지우기", "구조물");
             btnStruct.ToolTip = MakeTip("구조물 (DHSTRUCTPANEL)",
                 "누르면 오른쪽에 <b>구조물 창</b>이 열립니다 — 단추에 마우스를 올리면 그림으로 설명합니다.\n" +
                 "**구조물 불러오기** — Revit 3D DWG · IFC(공유 좌표)를 붙여 평면 · 종단 · 횡단에 자른 면을 넣습니다.\n" +
                 "**박스 구조물 배치** — Revit 모델 없이 평면 외곽 × 높이로 직접(같은 수량 · 그림).\n" +
-                "**좌표계 내보내기** — 두 점 + 네모를 Revit 애드인이 읽는 파일로 저장합니다.\n" +
+                "**좌표계 내보내기** — 구조물 배치 경계의 기준점 두 곳 + 땅 범위를 파일로 → Revit 애드인이 그 파일 기준으로 모델 좌표를 맞춥니다.\n" +
+                "**Revit 애드인 설치** — 그 Revit 애드인(DH 좌표)을 이 PC Revit 2026에 설치합니다.\n" +
                 "**구조물 지우기** — 그린 것 · xref · 기록을 지웁니다(원본 파일은 그대로).", null);
             tab.Panels.Add(new RibbonPanel { Source = pCommon });
             pCommon.Items.Add(Spacer());

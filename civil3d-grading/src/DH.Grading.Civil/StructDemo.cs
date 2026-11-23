@@ -11,7 +11,9 @@ namespace DH.Grading.Civil;
 
 /// <summary>★[JACK 1123 «구조물 — 원지반 가져오기처럼 도킹 팝업 · 단추마다 설명 애니메이션»] [구조물] 창 맨 위 설명 칸 — 다른 창과 같은 틀(420 × 300 그림 + 두 줄 설명 · <see cref="DemoFrame"/>).
 /// 장면: <c>sImport</c> = Revit 파일이 제자리(공유 좌표)에 붙고 → 종단 노선 → 횡단에 자른 면 → 토공에서 공제 ·
-/// <c>sBox</c> = 평면에 점 → 닫힘 → 솟는 박스(Revit 모델 없이) · <c>sPts</c> = 두 점 + 네모 → 파일 하나 → Revit이 같은 좌표로 ·
+/// <c>sBox</c> = 평면에 점 → 닫힘 → 솟는 박스(Revit 모델 없이) ·
+/// <c>sPts</c> = 구조물 배치 경계의 기준점 두 곳 + 땅 네모 → 파일 하나 → Revit 애드인(DH 좌표)이 그 파일 기준으로 모델을 옮기고 돌려 맞춤 ·
+/// <c>sAddin</c> = 번들 안 Revit 애드인 → Revit 2026 애드인 폴더(옛 판 백업 · 해시) → Revit «DH 좌표» 탭 ·
 /// <c>sOff</c> = 도면에 그린 것만 지움(원본 파일은 그대로). 한 번 돌고 끝 그림에서 멈춤 · 처음 = 도화 로고. AutoCAD 타입 없음.</summary>
 internal sealed class StructDemoView : Border
 {
@@ -29,7 +31,8 @@ internal sealed class StructDemoView : Border
     {
         ["sImport"] = (6.6, "구조물 불러오기 — Revit 3D DWG · IFC를 제자리에 붙여 평면 · 종단 · 횡단에 자른 면 · 토공에서 공제"),
         ["sBox"] = (6.0, "박스 구조물 배치 — Revit 모델 없이 평면 외곽 × 높이로 박스(같은 그림 · 같은 수량)"),
-        ["sPts"] = (7.0, "좌표계 내보내기 — 두 점 + 네모 → 파일 하나 → Revit이 모델을 Civil 좌표에 맞춤"),
+        ["sPts"] = (10.4, "좌표계 내보내기 — 구조물 배치 경계의 기준점 두 곳 + 땅 범위 → 파일 하나 → Revit 애드인이 이 파일 기준으로 모델 좌표를 맞춤"),
+        ["sAddin"] = (7.2, "Revit 애드인 설치 — [좌표계 내보내기] 파일을 읽는 Revit 애드인(DH 좌표)을 이 PC Revit 2026에"),
         ["sOff"] = (5.0, "구조물 지우기 — 도면에 그린 것 · xref · 기록만 지움(원본 파일은 그대로)"),
     };
 
@@ -105,6 +108,7 @@ internal sealed class StructDemoView : Border
             case "sImport": SceneImport(t); break;
             case "sBox": SceneBox(t); break;
             case "sPts": ScenePts(t); break;
+            case "sAddin": SceneAddin(t); break;
             case "sOff": SceneOff(t); break;
         }
     }
@@ -394,77 +398,192 @@ internal sealed class StructDemoView : Border
         Tx(16, H - 24, foot, 11, Ink);
     }
 
-    // ── 장면 3: 좌표계 내보내기 — 두 점 + 네모 → 파일 → Revit이 같은 좌표로 ──
+    // ── 장면 3: 좌표계 내보내기 — 구조물 배치 경계의 기준점 두 곳 + 땅 네모 → 파일 → Revit 애드인이 이 파일 기준으로 모델을 맞춤 ──
+    //   ★[JACK 1123 «이걸로 구조물 배치경계의 기준점을 찍어서 레빗 애드인에서 해당 파일을 기준으로 좌표계를 맞추는 것 — 그런 위주로 설명»]
+    static readonly Point PtsFootC = new(124, 146);
+    const double PtsHx = 42, PtsHy = 24, PtsAng = -15 * Math.PI / 180, RvK = 0.82;
+    /// <summary>네모(±1, ±1) 모서리 — 가운데 <paramref name="c"/> · 반폭 · 돌림.</summary>
+    static Point Corner(Point c, double hx, double hy, double ang, double sx, double sy)
+    {
+        double co = Math.Cos(ang), si = Math.Sin(ang), x = sx * hx, y = sy * hy;
+        return new Point(c.X + x * co - y * si, c.Y + x * si + y * co);
+    }
+    static Point[] Rect4(Point c, double hx, double hy, double ang)
+        => new[] { Corner(c, hx, hy, ang, -1, -1), Corner(c, hx, hy, ang, 1, -1), Corner(c, hx, hy, ang, 1, 1), Corner(c, hx, hy, ang, -1, 1) };
+    /// <summary>Civil 평면 → Revit 창 안(땅 네모를 줄여 옮김).</summary>
+    static Point ToRv(Point p) => new(256 + (p.X - 34) * RvK, 80 + (p.Y - 62) * RvK);
+
     void ScenePts(double t)
     {
         // 왼쪽 = Civil 평면
-        var civClip = RectG(8, 30, 230, 232);
         _cv.Children.Add(new Rectangle { Width = 230, Height = 232, Stroke = DhBrand.Line, StrokeThickness = 1, RenderTransform = new TranslateTransform(8, 30) });
-        Contours(0.7, civClip);
+        Contours(0.7, RectG(8, 30, 230, 232));
         Chip(8, 4, "Civil 3D", 1);
-        Point p1 = new(64, 104), p2 = new(176, 128), start = new(210, 246), r0 = new(34, 58), r1 = new(216, 236);
-        double m1 = Seg(t, 0.2, 1.0), m2 = Seg(t, 1.3, 2.1), drag = Seg(t, 2.4, 3.3);
+        // 구조물 배치 경계(놓을 자리) — 모서리 두 곳이 기준점
+        double bnd = Seg(t, 0.2, 0.8);
+        var foot = Rect4(PtsFootC, PtsHx, PtsHy, PtsAng);
+        Pg(foot, Fz(0xB8, 0xC4, 0xC8, 0x50), BoxEdge, 1.6, bnd, dash: true);
+        Tx(foot[0].X - 4, foot[0].Y - 30, "구조물 배치 경계", 10.5, BoxEdge, true, bnd);
+        Point k1 = foot[3], k2 = foot[2], start = new(210, 250), r0 = new(34, 62), r1 = new(216, 238);
+        double m1 = Seg(t, 0.9, 1.7), m2 = Seg(t, 1.8, 2.6), drag = Seg(t, 2.8, 3.7);
         Point cur;
-        if (t < 1.2) cur = Lerp(start, p1, m1);
-        else if (t < 2.25) cur = Lerp(p1, p2, m2);
-        else if (t < 2.4) cur = Lerp(p2, r0, Seg(t, 2.1, 2.4));
+        if (t < 1.75) cur = Lerp(start, k1, m1);
+        else if (t < 2.65) cur = Lerp(k1, k2, m2);
+        else if (t < 2.8) cur = Lerp(k2, r0, Seg(t, 2.6, 2.8));
         else cur = Lerp(r0, r1, drag);
-        if (t >= 1.0) { Dot(p1.X, p1.Y, ExC, 4); Ring(p1.X, p1.Y, 6 + 8 * Seg(t, 1.0, 1.4), ExC, 1 - Seg(t, 1.2, 1.6)); Tx(p1.X - 26, p1.Y - 20, "점 1", 11, ExC, true); }
-        if (t >= 1.3 && t < 2.1) Ln(p1.X, p1.Y, cur.X, cur.Y, ExC, 1.4, true);
-        if (t >= 2.1)
+        if (t >= 1.7) { Dot(k1.X, k1.Y, ExC, 4.5); Ring(k1.X, k1.Y, 6 + 9 * Seg(t, 1.7, 2.1), ExC, 1 - Seg(t, 1.9, 2.3)); Tx(k1.X - 22, k1.Y + 6, "기준점 1", 11, ExC, true); }
+        if (t >= 1.8 && t < 2.6) Ln(k1.X, k1.Y, cur.X, cur.Y, ExC, 1.4, true);
+        if (t >= 2.6)
         {
-            Ln(p1.X, p1.Y, p2.X, p2.Y, ExC, 1.8);
-            Dot(p2.X, p2.Y, ExC, 4); Ring(p2.X, p2.Y, 6 + 8 * Seg(t, 2.1, 2.5), ExC, 1 - Seg(t, 2.3, 2.7)); Tx(p2.X + 6, p2.Y + 4, "점 2", 11, ExC, true);
-            Tx((p1.X + p2.X) / 2 - 10, (p1.Y + p2.Y) / 2 - 20, "31.0 m", 10, ExC, false, Seg(t, 2.1, 2.5));
+            Ln(k1.X, k1.Y, k2.X, k2.Y, ExC, 2);
+            Dot(k2.X, k2.Y, ExC, 4.5); Ring(k2.X, k2.Y, 6 + 9 * Seg(t, 2.6, 3.0), ExC, 1 - Seg(t, 2.8, 3.2)); Tx(k2.X - 10, k2.Y + 6, "기준점 2", 11, ExC, true);
         }
-        if (t >= 2.4)
+        if (t >= 2.8)
         {
-            var e = t < 3.3 ? cur : r1;
-            Pg(new[] { r0, new Point(e.X, r0.Y), e, new Point(r0.X, e.Y) }, Fz(0x00, 0x7A, 0x80, 0x14), Region, 1.6, 1, dash: t < 3.3);
-            Tx(r0.X + 4, e.Y - 18, "3D 영역(네모)", 10.5, Region, true, Seg(t, 3.3, 3.7));
+            var e = t < 3.7 ? cur : r1;
+            Pg(new[] { r0, new Point(e.X, r0.Y), e, new Point(r0.X, e.Y) }, Fz(0x00, 0x7A, 0x80, 0x14), Region, 1.6, 1, dash: t < 3.7);
+            Tx(r0.X + 4, e.Y - 18, "함께 보낼 땅(3D 영역)", 10.5, Region, true, Seg(t, 3.7, 4.0));
         }
-        if (t < 3.4) DrawCursor(cur.X, cur.Y);
+        if (t < 3.8) DrawCursor(cur.X, cur.Y);
 
-        // 오른쪽 = Revit 창
-        double win = Seg(t, 3.2, 3.6);
+        // 오른쪽 = Revit 창 — 제목 · 탭(«DH 좌표»가 애드인)
+        double win = Seg(t, 3.6, 4.0);
         if (win > 0)
         {
-            _cv.Children.Add(new Rectangle { Width = 162, Height = 232, Fill = Paper, Stroke = RevitBar, StrokeThickness = 1.2, Opacity = win, RenderTransform = new TranslateTransform(250, 30) });
-            _cv.Children.Add(new Rectangle { Width = 162, Height = 20, Fill = RevitBar, Opacity = win, RenderTransform = new TranslateTransform(250, 30) });
-            Tx(258, 32, "Revit", 11, Brushes.White, true, win);
+            _cv.Children.Add(new Rectangle { Width = 162, Height = 232, Fill = DhBrand.Card, Stroke = RevitBar, StrokeThickness = 1.2, Opacity = win, RenderTransform = new TranslateTransform(250, 30) });
+            _cv.Children.Add(new Rectangle { Width = 162, Height = 18, Fill = RevitBar, Opacity = win, RenderTransform = new TranslateTransform(250, 30) });
+            Tx(256, 31, "Revit", 10.5, Brushes.White, true, win);
+            Tx(256, 51, "건축   구조", 9.5, DhBrand.Sub, false, win);
+            double tab = Seg(t, 4.6, 5.0);
+            var tb = new Border { Background = tab > 0.5 ? DhBrand.Brand : DhBrand.BrandDim, CornerRadius = new CornerRadius(3), Padding = new Thickness(5, 0, 5, 0), Opacity = win,
+                Child = new TextBlock { Text = "DH 좌표", FontSize = 9.5, FontWeight = FontWeights.Bold, Foreground = tab > 0.5 ? Brushes.White : DhBrand.Brand } };
+            Canvas.SetLeft(tb, 330); Canvas.SetTop(tb, 50); _cv.Children.Add(tb);
+            Ln(250, 66, 412, 66, DhBrand.Line, 1, false, win);
         }
         // 파일 한 장 — Civil에서 나와 Revit으로
-        double fileIn = Seg(t, 3.4, 3.9), fileGo = Seg(t, 3.9, 4.7), fileOut = Seg(t, 4.8, 5.2);
+        double fileIn = Seg(t, 3.9, 4.3), fileGo = Seg(t, 4.3, 5.1), fileOut = Seg(t, 5.1, 5.5);
         if (fileIn > 0 && fileOut < 1)
         {
-            var at = Lerp(new Point(70, 150), new Point(266, 70), fileGo);
-            FileCard(at.X, at.Y, 130, 62, "구조물.json", "기준점 + 3D 영역", fileIn * (1 - fileOut), Region);
+            var at = Lerp(new Point(60, 150), new Point(266, 96), fileGo);
+            FileCard(at.X, at.Y, 132, 62, "구조물.json", "기준점 2 + 3D 영역", fileIn * (1 - fileOut), Region);
         }
-        // Revit 안 — 땅 덩어리 + 같은 두 점 + 모델이 그 좌표에 앉음
-        double land = Seg(t, 4.8, 5.4), seat = Seg(t, 5.4, 6.3);
+        // Revit 안 — 파일의 땅 + 기준점 두 곳 → Revit 모델의 같은 모서리 두 곳을 찍으면 옮기고 돌려 맞춤
+        double land = Seg(t, 5.4, 6.0), model = Seg(t, 6.1, 6.7), pair = Seg(t, 6.8, 7.4), fit = Seg(t, 7.5, 8.8);
         if (land > 0)
         {
-            Point a = new(262, 168), b = new(331, 134), c = new(400, 168), d = new(331, 202), dz = new(0, 22);
-            Pg(new[] { a, d, d + (Vector)dz, a + (Vector)dz }, Bank, BoxEdge, 1, land);
-            Pg(new[] { d, c, c + (Vector)dz, d + (Vector)dz }, Fz(0xA0, 0x84, 0x58), BoxEdge, 1, land);
-            Pg(new[] { a, b, c, d }, Tint, GroundC, 1.2, land);
-            for (int k = 1; k <= 3; k++)
-            {
-                double s = 1 - k * 0.22;
-                Point C(Point q) => new(331 + (q.X - 331) * s, 168 + (q.Y - 168) * s - k * 2);
-                Pg(new[] { C(a), C(b), C(c), C(d) }, null, BaseC, 0.8, land);
-            }
-            Point q1 = new(305, 160), q2 = new(350, 168);
-            Ln(q1.X, q1.Y, q2.X, q2.Y, ExC, 1.6, false, land);
-            Dot(q1.X, q1.Y, ExC, 3.5, land); Dot(q2.X, q2.Y, ExC, 3.5, land);
-            Tx(q1.X - 12, q1.Y + 2, "1", 10, ExC, true, land); Tx(q2.X + 4, q2.Y + 2, "2", 10, ExC, true, land);
-            // 모델 — 떠 있다가 두 점에 맞춰 내려앉음
-            var off = new Vector(34 * (1 - seat), -58 * (1 - seat));
-            IsoBox(new Point(328, 176) + off, 26, 18, 20, land);
+            var lr0 = ToRv(r0); var lr1 = ToRv(r1);
+            Pg(new[] { lr0, new Point(lr1.X, lr0.Y), lr1, new Point(lr0.X, lr1.Y) }, Tint, GroundC, 1.2, land);
+            var tf = new MatrixTransform(RvK, 0, 0, RvK, 256 - 34 * RvK, 80 - 62 * RvK); tf.Freeze();
+            int before = _cv.Children.Count;
+            Contours(0.6 * land, RectG(r0.X, r0.Y, r1.X - r0.X, r1.Y - r0.Y));
+            for (int c = before; c < _cv.Children.Count; c++) if (_cv.Children[c] is Path p) p.RenderTransform = tf;
+            Point q1 = ToRv(k1), q2 = ToRv(k2);
+            Dot(q1.X, q1.Y, ExC, 4, land); Dot(q2.X, q2.Y, ExC, 4, land);
+            Tx(q1.X - 8, q1.Y + 5, "1", 10.5, ExC, true, land); Tx(q2.X + 2, q2.Y + 5, "2", 10.5, ExC, true, land);
         }
-        Chip(262, 232, "같은 좌표에 맞춤", Seg(t, 6.2, 6.6));
-        string foot = t < 2.4 ? "두 점 = 기준점(위치 · 방향)" : t < 3.4 ? "네모 = 함께 보낼 땅(3D 영역)" : t < 4.8 ? "파일 하나로 저장(JSON · m)" : "Revit 애드인이 읽어 모델을 Civil 좌표에";
-        Tx(16, H - 24, foot, 11, Ink);
+        if (model > 0)
+        {
+            // Revit 모델 — 처음엔 Revit 자기 좌표(엉뚱한 자리 · 방향) → 두 모서리가 기준점에 닿게 옮기고 돌림
+            Point endC = ToRv(PtsFootC), startC = new(352, 196);
+            double ang = 18 * Math.PI / 180 + (PtsAng - 18 * Math.PI / 180) * fit;
+            var c = Lerp(startC, endC, fit);
+            var m = Rect4(c, PtsHx * RvK, PtsHy * RvK, ang);
+            Pg(m, BoxTop, BoxEdge, 1.4, model);
+            Pg(Rect4(c, PtsHx * RvK - 5, PtsHy * RvK - 5, ang), null, BoxEdge, 0.8, model, dash: true);
+            Point a1 = m[3], a2 = m[2];
+            Dot(a1.X, a1.Y, RevitC, 3.6, model); Dot(a2.X, a2.Y, RevitC, 3.6, model);
+            if (pair > 0 && fit < 1)
+            {
+                Point q1 = ToRv(k1), q2 = ToRv(k2);
+                Ln(a1.X, a1.Y, q1.X, q1.Y, RevitC, 1.2, true, pair * (1 - fit));
+                Ln(a2.X, a2.Y, q2.X, q2.Y, RevitC, 1.2, true, pair * (1 - fit));
+            }
+            Tx(c.X - 26, c.Y - 7, "Revit 모델", 9.5, BoxEdge, true, model);
+        }
+        Chip(256, 70, "파일 불러오기", Seg(t, 5.0, 5.4) * (1 - Seg(t, 6.6, 6.9)));
+        Chip(256, 70, "같은 모서리 두 곳 찍기", Seg(t, 6.8, 7.1) * (1 - Seg(t, 8.6, 8.9)));
+        Chip(256, 236, "이 파일 기준으로 맞춤", Seg(t, 8.9, 9.4));
+        string ft = t < 0.9 ? "구조물을 놓을 자리(배치 경계)" : t < 2.8 ? "배치 경계 모서리 두 곳 = 기준점 1 · 2" : t < 3.9 ? "네모 = 함께 보낼 땅(3D 영역)"
+                  : t < 5.4 ? "파일 하나로 저장(기준점 + 3D 영역 · JSON · m)" : t < 7.5 ? "Revit «DH 좌표» → 파일 불러오기 → 모델의 같은 모서리 두 곳"
+                  : t < 8.9 ? "애드인이 두 점이 겹치게 모델을 옮기고 돌림" : "Revit 모델 = Civil 좌표 → IFC → [구조물 불러오기]";
+        Tx(16, H - 24, ft, 11, Ink);
+    }
+
+    // ── 장면 3-2: Revit 애드인 설치 — 번들 안 Revit 애드인 → Revit 2026 애드인 폴더(옛 판 백업 · 해시) → Revit에 «DH 좌표» 탭 ──
+    void FileTile(double x, double y, string name, Brush line, double op)
+    {
+        if (op <= 0.001) return;
+        _cv.Children.Add(new Rectangle { Width = 138, Height = 24, Fill = DhBrand.Card, Stroke = line, StrokeThickness = 1.1, RadiusX = 3, RadiusY = 3, Opacity = op, RenderTransform = new TranslateTransform(x, y) });
+        Tx(x + 6, y + 4, name, 9.5, DhBrand.Ink, false, op);
+    }
+    void Folder(double x, double y, double w, double h, string title, string sub, double op)
+    {
+        if (op <= 0.001) return;
+        Pg(new[] { new Point(x, y + 8), new Point(x + 44, y + 8), new Point(x + 52, y), new Point(x + w, y), new Point(x + w, y + h), new Point(x, y + h) }, Fz(0xF6, 0xEE, 0xD8), Fz(0xC8, 0xA8, 0x5A), 1.3, op);
+        Tx(x + 8, y + 12, title, 10.5, Ink, true, op);
+        Tx(x + 8, y + 27, sub, 9, DhBrand.Sub, false, op);
+    }
+
+    void SceneAddin(double t)
+    {
+        string[] names = { "DH.CivilCoord.Revit.dll", "DH.CivilCoord.Core.dll", "DH.CivilCoord.addin" };
+        double fold = Seg(t, 0.1, 0.6) * (1 - Seg(t, 3.8, 4.2));
+        Folder(10, 44, 156, 150, "DH 부지 애드인", "번들 안 RevitAddin", fold);
+        Folder(254, 44, 156, 150, "Revit 애드인 폴더", "Addins\\2026", fold);
+        Chip(10, 8, "Revit 2026 ✓", Seg(t, 0.8, 1.1) * (1 - Seg(t, 3.8, 4.2)));
+        Chip(126, 8, "Revit 꺼짐 ✓", Seg(t, 1.1, 1.4) * (1 - Seg(t, 3.8, 4.2)));
+        // 옛 판 → 백업
+        double old = Seg(t, 1.4, 2.0);
+        Folder(254, 206, 156, 50, "백업", "%APPDATA%\\DH.CivilCoord", fold * Seg(t, 1.2, 1.5));
+        for (int i = 0; i < 3; i++)
+        {
+            var o = Lerp(new Point(262, 92 + i * 32), new Point(262, 226), old);
+            FileTile(o.X, o.Y, "옛 판 · " + names[i].Replace("DH.CivilCoord.", ""), BaseC, fold * Seg(t, 0.1, 0.6) * (1 - Seg(t, 1.8, 2.0)));
+        }
+        Tx(336, 210, "옛 판 3개", 10.5, Ink, true, fold * Seg(t, 1.9, 2.2));
+        // 새 판 — 하나씩 날아감 · 해시 ✓
+        for (int i = 0; i < 3; i++)
+        {
+            double go = Seg(t, 1.8 + 0.4 * i, 2.4 + 0.4 * i);
+            var p = Lerp(new Point(18, 92 + i * 32), new Point(262, 92 + i * 32), go);
+            FileTile(p.X, p.Y, names[i], RevitC, fold);
+            double ok = Seg(t, 3.0 + 0.1 * i, 3.4 + 0.1 * i) * fold;
+            if (ok > 0) { Dot(404, 104 + i * 32, Pick, 6, ok); Tx(400.5, 96 + i * 32, "✓", 9.5, Brushes.White, true, ok); }
+        }
+        Chip(126, 8, "해시 대조 ✓", Seg(t, 3.3, 3.5) * (1 - Seg(t, 3.8, 4.2)));
+        // Revit 창 — «DH 좌표» 탭 · [Civil 좌표 맞춤]
+        double rv = Seg(t, 4.0, 4.4);
+        if (rv > 0)
+        {
+            _cv.Children.Add(new Rectangle { Width = 392, Height = 222, Fill = DhBrand.Card, Stroke = RevitBar, StrokeThickness = 1.2, Opacity = rv, RenderTransform = new TranslateTransform(14, 30) });
+            _cv.Children.Add(new Rectangle { Width = 392, Height = 20, Fill = RevitBar, Opacity = rv, RenderTransform = new TranslateTransform(14, 30) });
+            Tx(22, 32, "Revit 2026", 11, Brushes.White, true, rv);
+            Tx(22, 56, "파일    건축    구조    뷰    관리", 10, DhBrand.Sub, false, rv);
+            double tab = Seg(t, 4.4, 4.9);
+            var tb = new Border { Background = DhBrand.Brand, CornerRadius = new CornerRadius(3), Padding = new Thickness(7, 1, 7, 1), Opacity = rv * tab,
+                Child = new TextBlock { Text = "DH 좌표", FontSize = 11, FontWeight = FontWeights.Bold, Foreground = Brushes.White } };
+            Canvas.SetLeft(tb, 236); Canvas.SetTop(tb, 54); _cv.Children.Add(tb);
+            Ln(14, 76, 406, 76, DhBrand.Line, 1, false, rv);
+            double btn = Seg(t, 4.8, 5.2);
+            if (btn > 0)
+            {
+                _cv.Children.Add(new Rectangle { Width = 96, Height = 74, Fill = DhBrand.BrandDim, Stroke = DhBrand.Line, StrokeThickness = 1, RadiusX = 4, RadiusY = 4, Opacity = btn, RenderTransform = new TranslateTransform(222, 84) });
+                IsoBox(new Point(262, 122), 10, 10, 10, btn);
+                Dot(276, 100, ExC, 3, btn); Dot(250, 106, ExC, 3, btn);
+                Tx(234, 128, "Civil 좌표 맞춤", 9.5, Ink, true, btn);
+                Tx(250, 160, "Civil 3D", 9, DhBrand.Sub, false, btn);
+            }
+            // [좌표계 내보내기] 파일 → 이 단추가 읽음
+            double cur = Seg(t, 5.4, 6.0), card = Seg(t, 6.0, 6.6);
+            if (cur > 0 && t < 6.1) { var c = Lerp(new Point(140, 230), new Point(270, 110), cur); DrawCursor(c.X, c.Y); }
+            if (t >= 6.0) Ring(270, 120, 8 + 14 * Seg(t, 6.0, 6.4), Region, 1 - Seg(t, 6.3, 6.8));
+            if (card > 0) { var at = Lerp(new Point(30, 160), new Point(60, 104), card); FileCard(at.X, at.Y, 132, 62, "구조물.json", "[좌표계 내보내기]", card, Region); }
+        }
+        Chip(30, 222, "Revit을 켜면 «DH 좌표» 탭", Seg(t, 4.9, 5.3));
+        string ft = t < 0.8 ? "DH 부지 애드인 안에 든 Revit 애드인(DLL 둘 + .addin)" : t < 1.6 ? "Revit 2026 있음 · Revit은 꺼져 있어야 함"
+                  : t < 3.0 ? "Revit 애드인 폴더로 복사 — 옛 판은 백업" : t < 3.9 ? "복사한 파일 해시 대조" : t < 5.4 ? "Revit을 켜면 «DH 좌표» 탭 · [Civil 좌표 맞춤]"
+                  : "[Civil 좌표 맞춤]에서 [좌표계 내보내기] 파일을 불러옴";
+        Tx(16, H - 24, ft, 11, Ink);
     }
 
     // ── 장면 4: 구조물 지우기 — 도면에 그린 것만 지움 · 원본 파일은 그대로 ──

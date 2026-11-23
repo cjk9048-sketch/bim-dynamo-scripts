@@ -178,13 +178,16 @@ internal sealed class UDitchPanel : UserControl
             if (_loading || Cur is not UDitch.Ditch d || _size.SelectedIndex < 0 || _size.SelectedIndex >= _v.S.Sizes.Count) return;
             d.Size = _v.S.Sizes[_size.SelectedIndex].Copy();
             UDitch.ApplyAuto(d, _v.S);
+            Relink(d);
             Changed?.Invoke();
+            FillDitches();
             LoadDitch();
         };
         _cover.SelectionChanged += (_, __) =>
         {
             if (_loading || Cur is not UDitch.Ditch d || _cover.SelectedIndex < 0) return;
             d.Grating = _cover.SelectedIndex == 1;
+            Relink(d);
             Changed?.Invoke();
             Refresh();
         };
@@ -204,8 +207,11 @@ internal sealed class UDitchPanel : UserControl
         _rev.Click += (_, __) =>
         {
             if (Cur is not UDitch.Ditch d) return;
+            // ★[JACK 1123] 닫힌 선 갈래 — 흐름은 늘 시작(가장 높은 곳) → 출구(가장 낮은 곳) · 뒤집지 않음
+            if (d.Loop > 0) { _v.Note = ""; _v.Error = $"{d.Id} — {UDitch.LoopText} · 방향 자동(출구 = 가장 낮은 곳)"; Refresh(); return; }
             UDitch.Reverse(d);   // 방향을 기록에 기억 — [모델 생성]이 원 선을 다시 읽어도 유지
             UDitch.ApplyAuto(d, _v.S);
+            Relink(d);
             Changed?.Invoke();
             LoadDitch();
         };
@@ -216,6 +222,7 @@ internal sealed class UDitchPanel : UserControl
             if (z == null) return;
             d.Size = z.Copy();
             UDitch.ApplyAuto(d, _v.S);
+            Relink(d);
             _v.Note = $"{d.Id} 규격 → U형 {z.Label}(추천 · 확정은 설계자)"; _v.Error = "";
             Changed?.Invoke();
             LoadDitch();
@@ -295,7 +302,7 @@ internal sealed class UDitchPanel : UserControl
                 verdict = h.Verdict switch { UDitch.Verdict.Ok => " · OK", UDitch.Verdict.Short => " · ⚠부족", UDitch.Verdict.Caution => " · 주의", _ => "" };
             }
             catch { }
-            _ditch.Items.Add(d.Id + " · " + UDitch.LengthText(d, _v.S) + verdict);
+            _ditch.Items.Add(d.Id + " · " + UDitch.LengthText(d, _v.S) + verdict + (d.Loop > 0 ? $" · 닫힌 선 {d.Loop}/2" : ""));   // ★[JACK 1123]
         }
         if (_v.Sel >= _v.Rec.Ditches.Count) _v.Sel = _v.Rec.Ditches.Count - 1;
         if (_v.Sel < 0 && _v.Rec.Ditches.Count > 0) _v.Sel = 0;
@@ -373,9 +380,17 @@ internal sealed class UDitchPanel : UserControl
             if (Num(_area, out double ar) && ar >= 0) d.AreaHa = ar; else bad.Add("집수면적");
             if (Num(_c, out double c) && c >= 0 && c <= 1) d.C = c; else bad.Add("C(0~1)");
         }
-        if (bad.Count == 0) Changed?.Invoke();
+        if (bad.Count == 0) { if (!invertEdited) Relink(d); else Relink(null); Changed?.Invoke(); }
         _bad = bad.Count > 0 ? "숫자를 확인하세요: " + string.Join(" · ", bad) : "";
         Refresh();
+    }
+
+    /// <summary>★[JACK 1123] 닫힌 선 갈래면 짝도 같게(규격 · 덮개 · 집수) · 합류 · 교차 · 출구 집수정 다시 셈(크기 · 바닥고가 측구를 따름).</summary>
+    void Relink(UDitch.Ditch? d)
+    {
+        // ★[검토 L4] 셈이 깨져도 창은 살림 · 까닭은 진단 로그로
+        try { if (d != null) UDitch.SyncLoop(_v.Rec, d, _v.S); UDitch.Link(_v.Rec, _v.S); }
+        catch (Exception ex) { try { DiagLog.Append($"\n■ U형 측구 창 집수정 셈 실패 — {ex.GetType().Name}: {ex.Message}\n"); } catch { } }
     }
 
     void LoadCsv()

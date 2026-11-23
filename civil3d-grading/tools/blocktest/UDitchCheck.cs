@@ -419,7 +419,7 @@ static class UDitchCheck
                        && UDitch.TryParse(j1, out var b1, out _) && b1.Version == 1 && !b1.Ditches[0].Follow
                        && UDitch.TryParse(j2, out var b2, out _) && b2.Version == 2 && b2.Ditches[0].Follow
                        && UDitch.TryParse("{\"Version\": 1, \"Ditches\": [ { \"Id\": \"D-001\" } ]}", out var bo, out _) && bo.Ditches.Count == 1
-                       && !UDitch.TryParse("{\"Version\": 3}", out _, out string w3) && w3.Contains("새 판");
+                       && !UDitch.TryParse("{\"Version\": 4}", out _, out string w3) && w3.Contains("새 판");
             var nf = Follow(60, (x, y) => x - ox2 < 30 ? 81.4 : 72.5);
             var pn = UDitch.ProfileOf(nf, S);
             bool okN = pn.Error == "" && pn.Lay is { Follow: true } && pn.Inv.All(double.IsFinite) && pn.Top.All(double.IsFinite);

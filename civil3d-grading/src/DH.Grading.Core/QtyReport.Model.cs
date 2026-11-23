@@ -60,6 +60,9 @@ public sealed class QtyReportModel
     public List<QtyDitch> Ditches = new();
     public double DitchCover = 0;
     public double DitchSlope = 0.3, DitchMargin = 0.2;
+    /// <summary>★[JACK 1123 · 검토 M3] U형 측구 집수정(단차 + 합류 · 교차 · 출구) — 개수 · 콘크리트(㎥) · U형 측구 보고서 합계와 같은 값(UDitch.BasinTotals).</summary>
+    public int BasinCount;
+    public double BasinVol;
     public QtyForest Forest = new();
     /// <summary>토공집계표 밑에 적을 줄 — 못 잰 까닭 · 가정.</summary>
     public List<string> Notes = new();

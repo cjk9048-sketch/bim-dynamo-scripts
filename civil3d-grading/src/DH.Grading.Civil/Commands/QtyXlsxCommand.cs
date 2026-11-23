@@ -182,6 +182,7 @@ public sealed class QtyXlsxCommand
             {
                 var s = UDitchStore.LoadSettings(out _, out _);
                 m.DitchCover = s.Cover;
+                UDitch.Link(rec, s);   // ★[JACK 1123] 합류 · 교차 · 출구 집수정 자리를 뺀 U 길이
                 foreach (var d in rec.Ditches)
                 {
                     double len;
@@ -192,6 +193,7 @@ public sealed class QtyXlsxCommand
                     if (g == null) m.Ditches.Add(g = new QtyDitch { Label = sz.Label, B = sz.B, H = sz.H, Tw = sz.Tw, Tb = sz.Tb, Tf = sz.Tf, Pf = sz.Pf });
                     g.Length += len; g.Count++;
                 }
+                (m.BasinCount, m.BasinVol) = UDitch.BasinTotals(rec, s);   // ★[JACK 1123 · 검토 M3] 집수정 — 보고서 합계와 같은 값
             }
             tr.Commit();
         }

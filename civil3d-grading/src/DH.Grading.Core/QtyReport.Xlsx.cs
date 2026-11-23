@@ -331,6 +331,20 @@ public static class QtyReportXlsx
             double depth = QtyReportCalc.Depth(d, m.DitchCover);
             refs.Add(new DitchRef($"{Q(ws.Name)}!AV{o + 34}", $"{Q(ws.Name)}!AV{o + 40}", depth, d.Label));
         }
+        // ★[JACK 1123 · 검토 M3] 집수정(단차 + 합류 · 교차 · 출구) — 개수 · 콘크리트(U형 측구 보고서 합계와 같은 값)
+        if (m.BasinCount > 0)
+        {
+            int o = k * Stride;
+            ws.Cell($"A{o + 1}").Value = "공   종"; ws.Cell($"C{o + 1}").Value = "산          출          근          거"; ws.Cell($"AV{o + 1}").Value = "수  량";
+            ws.Range($"A{o + 1}:AV{o + 1}").Style.Font.Bold = true;
+            ws.Cell($"A{o + 2}").Value = "집수정";
+            ws.Cell($"C{o + 2}").Value = "U형 측구 집수정(단차 + 합류 · 교차 · 출구) — U형 측구 보고서 합계 기준";
+            ws.Cell($"AV{o + 2}").Value = m.BasinCount; ws.Cell($"AV{o + 2}").Style.NumberFormat.Format = "0\" 개소\"";
+            ws.Cell($"A{o + 3}").Value = "콘크리트";
+            ws.Cell($"C{o + 3}").Value = "바깥 상자 − 안 빈 곳(벽 · 바닥)";
+            ws.Cell($"AV{o + 3}").Value = Math.Round(m.BasinVol, 3); ws.Cell($"AV{o + 3}").Style.NumberFormat.Format = "0.000\" ㎥\"";
+            ws.Range($"A{o + 1}:AV{o + 3}").Style.Border.OutsideBorder = XLBorderStyleValues.Thin;
+        }
         var ps = ws.PageSetup;
         ps.PageOrientation = XLPageOrientation.Landscape; ps.PaperSize = XLPaperSize.A4Paper; ps.Scale = 60;
         ps.Header.Center.AddText("수 로 관 산 근");
