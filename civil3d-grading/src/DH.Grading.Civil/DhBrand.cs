@@ -559,6 +559,66 @@ internal static class DhBrand
     </Setter>
   </Style>
 
+  <!-- ★[JACK 1123 «원지반 가져오는 단추 3개는 중요한 단추 — 색 · 마우스 올림 · 누름 변화»] 큰 동작 단추
+       평소 = 옅은 청록 바탕 · 왼쪽 청록 띠 · 청록 글자 · 옅은 그림자 / 올림 = 청록 바탕 · 흰 글자 · 1 px 뜸 · 그림자 진하게
+       누름 = 더 짙은 청록 · 1 px 눌림 · 그림자 얕게 / 꺼짐 = 회색 -->
+  <Style x:Key="DhAction" TargetType="Button">
+    <Setter Property="FontFamily" Value="Malgun Gothic"/>
+    <Setter Property="FontSize" Value="12"/>
+    <Setter Property="Foreground" Value="{StaticResource DhBrandB}"/>
+    <Setter Property="Cursor" Value="Hand"/>
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="Button">
+          <Border x:Name="bd" CornerRadius="6" SnapsToDevicePixels="True" Background="#E6F0F0" BorderBrush="#A9C9CB" BorderThickness="1">
+            <Border.Effect>
+              <DropShadowEffect BlurRadius="5" ShadowDepth="1" Direction="270" Opacity="0.14" Color="#00484E"/>
+            </Border.Effect>
+            <Grid>
+              <Border x:Name="bar" Width="4" HorizontalAlignment="Left" CornerRadius="5,0,0,5" Background="{StaticResource DhBrandB}"/>
+              <ContentPresenter Margin="{TemplateBinding Padding}" RecognizesAccessKey="True"
+                                HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                VerticalAlignment="{TemplateBinding VerticalContentAlignment}"/>
+            </Grid>
+          </Border>
+          <ControlTemplate.Triggers>
+            <Trigger Property="IsMouseOver" Value="True">
+              <Setter TargetName="bd" Property="Background" Value="{StaticResource DhBrandB}"/>
+              <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource DhBrandB}"/>
+              <Setter TargetName="bar" Property="Background" Value="#8FD6DA"/>
+              <Setter Property="Foreground" Value="White"/>
+              <Setter TargetName="bd" Property="RenderTransform">
+                <Setter.Value><TranslateTransform Y="-1"/></Setter.Value>
+              </Setter>
+              <Setter TargetName="bd" Property="Effect">
+                <Setter.Value><DropShadowEffect BlurRadius="10" ShadowDepth="2" Direction="270" Opacity="0.35" Color="#00484E"/></Setter.Value>
+              </Setter>
+            </Trigger>
+            <Trigger Property="IsPressed" Value="True">
+              <Setter TargetName="bd" Property="Background" Value="#003539"/>
+              <Setter TargetName="bd" Property="BorderBrush" Value="#003539"/>
+              <Setter Property="Foreground" Value="White"/>
+              <Setter TargetName="bd" Property="RenderTransform">
+                <Setter.Value><TranslateTransform Y="1"/></Setter.Value>
+              </Setter>
+              <Setter TargetName="bd" Property="Effect">
+                <Setter.Value><DropShadowEffect BlurRadius="3" ShadowDepth="0" Direction="270" Opacity="0.10" Color="#00484E"/></Setter.Value>
+              </Setter>
+            </Trigger>
+            <Trigger Property="IsEnabled" Value="False">
+              <Setter TargetName="bd" Property="Background" Value="{StaticResource DhWallB}"/>
+              <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource DhLineB}"/>
+              <Setter TargetName="bar" Property="Background" Value="{StaticResource DhLineB}"/>
+              <Setter TargetName="bd" Property="Effect" Value="{x:Null}"/>
+              <Setter Property="Foreground" Value="{StaticResource DhSubB}"/>
+              <Setter Property="Cursor" Value="Arrow"/>
+            </Trigger>
+          </ControlTemplate.Triggers>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+
   <Style x:Key="DhCaution" TargetType="Button">
     <Setter Property="FontFamily" Value="Malgun Gothic"/>
     <Setter Property="FontSize" Value="12"/>

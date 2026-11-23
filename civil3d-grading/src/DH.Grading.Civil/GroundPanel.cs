@@ -95,6 +95,12 @@ internal sealed class GroundPanel : UserControl
             HorizontalContentAlignment = HorizontalAlignment.Left, VerticalContentAlignment = VerticalAlignment.Center,
             ToolTip = tip + $"\n({cmd})",
         };
+        // ★[JACK 1123 «원지반 가져오는 단추 3개는 중요 — 색 · 마우스 올림/누름 변화»] 위 세 단추(가져오기)만 큰 동작 단추 모양
+        if (cmd is "DHNGII" or "DHCONTOUR" or "DHGNDCONTOUR")
+        {
+            var sk = DhBrand.Skin;
+            if (sk != null) try { b.Style = (Style)sk["DhAction"]; b.Padding = new Thickness(14, 6, 10, 6); } catch { }
+        }
         b.SizeChanged += (_, __) => { try { body.Width = Math.Max(0, b.ActualWidth - b.Padding.Left - b.Padding.Right - 4); } catch { } };
         b.Click += (_, __) => _send(cmd);
         b.MouseEnter += (_, __) => _demo.Play(demo);
