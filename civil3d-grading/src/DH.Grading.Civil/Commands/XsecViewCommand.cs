@@ -5327,7 +5327,7 @@ public sealed partial class XsecViewCommand
             }
 
             // ★[JACK 1116] 오른쪽 공종 길이 — 켠 항목만 · 벌개재근은 횡단선이 걸친 범위의 임상도 입목지(못 읽으면 벌개 «–» + 표 밑 안내)
-            var xo = XsecQtyOptions.OptsOf(db);
+            var xo = XsecQtyOptions.OptsOf(db, xt != null);   // ★[JACK 1123] 진입도로 횡단도는 진입도로 몫(부지와 따로 · 없으면 부지 값)
             XqCtx xqCtx = null;
             if (xo.Clear || xo.Strip || xo.Smooth || xo.Seed || xo.Bench)
             {

@@ -11,17 +11,21 @@ namespace DH.Grading.Civil;
 internal static class XsecQtyOptions
 {
     const string Key = "DH_XSECQTYOPT";
+    /// <summary>★[JACK 1123 «진입도로 횡단도에도 수량표 항목 · 진입도로 따로»] 진입도로 횡단도 몫(항목 + 층따기) — 없으면 부지 값으로 시작(옛 도면은 지금처럼).</summary>
+    const string RoadKey = "DH_XSECQTYOPT_ROAD";
+    static string KeyOf(bool road) => road ? RoadKey : Key;
     internal const int Clear = 1, Strip = 2, Smooth = 4, Seed = 8, Bench = 16;
     internal const int Default = Clear | Strip | Smooth | Seed | Bench;
 
-    internal static (int Mask, double BenchGrade, BenchSpec Spec) Read(Database db)
+    internal static (int Mask, double BenchGrade, BenchSpec Spec) Read(Database db, bool road = false)
     {
         int m = Default; var sp = BenchSpec.Soil;
         try
         {
             using var tr = db.TransactionManager.StartTransaction();
             var nod = (DBDictionary)tr.GetObject(db.NamedObjectsDictionaryId, OpenMode.ForRead);
-            if (nod.Contains(Key) && tr.GetObject(nod.GetAt(Key), OpenMode.ForRead) is Xrecord xr && xr.Data != null)
+            string rk = road && nod.Contains(RoadKey) ? RoadKey : Key;   // 진입도로 몫이 없으면 부지 값
+            if (nod.Contains(rk) && tr.GetObject(nod.GetAt(rk), OpenMode.ForRead) is Xrecord xr && xr.Data != null)
             {
                 var v = xr.Data.AsArray();
                 if (v.Length >= 1 && v[0].Value is int a && a >= 0 && a < 32) m = a;   // ★[검토 5] 저장된 층따기 비트 그대로 — 옛 두 값 기록은 «만든 때»를 못 가려(옛 빌드가 두 값으로 다시 쓰기도 함) 끈 것을 다시 켜지 않는 쪽
@@ -35,37 +39,38 @@ internal static class XsecQtyOptions
         return (m, sp.Grade, sp);
     }
 
-    internal static XsecQtyRight.Opts OptsOf(Database db)
+    internal static XsecQtyRight.Opts OptsOf(Database db, bool road = false)
     {
-        var (m, g, sp) = Read(db);
+        var (m, g, sp) = Read(db, road);
         return new XsecQtyRight.Opts((m & Clear) != 0, (m & Strip) != 0, (m & Smooth) != 0, (m & Seed) != 0, (m & Bench) != 0, g, sp);
     }
 
     /// <summary>도킹창 — 벌개 · 표토 · 면고르기 · 식생 비트만 바꾼다(층따기 켬/끔 · 값은 그대로). 명령 · 문서 잠금 안에서 부른다.</summary>
-    internal static void Write(Database db, int mask)
+    internal static void Write(Database db, int mask, bool road = false)
     {
-        var (m0, _, sp) = Read(db);
-        Store(db, (mask & ~Bench) | (m0 & Bench), sp);
+        var (m0, _, sp) = Read(db, road);
+        Store(db, (mask & ~Bench) | (m0 & Bench), sp, road);
     }
 
     /// <summary>도면 설정 창 — 층따기 켬/끔 + 값. 나머지 비트는 그대로. 명령 · 문서 잠금 안에서 부른다.</summary>
-    internal static void WriteBench(Database db, bool on, BenchSpec sp)
+    internal static void WriteBench(Database db, bool on, BenchSpec sp, bool road = false)
     {
-        int m0 = Read(db).Mask;
-        Store(db, (m0 & ~Bench) | (on ? Bench : 0), sp);
+        int m0 = Read(db, road).Mask;
+        Store(db, (m0 & ~Bench) | (on ? Bench : 0), sp, road);
     }
 
-    static void Store(Database db, int mask, BenchSpec sp)
+    static void Store(Database db, int mask, BenchSpec sp, bool road = false)
     {
         using var tr = db.TransactionManager.StartTransaction();
         var nod = (DBDictionary)tr.GetObject(db.NamedObjectsDictionaryId, OpenMode.ForRead);
         Xrecord xr;
-        if (nod.Contains(Key)) xr = (Xrecord)tr.GetObject(nod.GetAt(Key), OpenMode.ForWrite);
+        string key = KeyOf(road);
+        if (nod.Contains(key)) xr = (Xrecord)tr.GetObject(nod.GetAt(key), OpenMode.ForWrite);
         else
         {
             nod.UpgradeOpen();
             xr = new Xrecord();
-            nod.SetAt(Key, xr);
+            nod.SetAt(key, xr);
             tr.AddNewlyCreatedDBObject(xr, true);
         }
         xr.Data = new ResultBuffer(new TypedValue((int)DxfCode.Int32, mask), new TypedValue((int)DxfCode.Real, sp.Grade),

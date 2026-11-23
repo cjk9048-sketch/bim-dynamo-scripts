@@ -225,19 +225,33 @@ function decorate(mesh, ch, info, innerMat, grating) {
 }
 
 // 측점 띠 — pick(측점) = [왼 점, 오른 점, 왼 옆 거리, 오른 옆 거리] · zOf(측점) · uv = (가운데 길이, 옆 거리) / tile · 앞면 위
+// ★[JACK 1123 «스틸 그레이팅 무늬 방향이 이상해»] 꺾이는 점의 단면은 비스듬해(두 변 사이 각) 한 구간이 사다리꼴이 된다 —
+//   예전엔 왼 · 오른 점에 같은 길이(run)를 줘서 살이 대각선으로 눕고 세모 경계에서 «V»로 꺾였다.
+//   이제 구간마다 꼭짓점을 따로 두고 uv = (구간 방향으로 잰 길이, 구간에 수직으로 잰 옆 거리) — 살은 늘 측구 축에 직각 · 꺾이는 자리만 이음매.
 function band(st, pick, zOf, tile = 1) {
-  const n = st.length, pos = new Float32Array(n * 6), uv = new Float32Array(n * 4), idx = [];
+  const n = st.length, pos = [], uv = [], idx = [];
+  const at = st.map((s) => ({ lr: pick(s), z: zOf(s) }));
   let run = 0;
-  for (let k = 0; k < n; k++) {
-    if (k) run += Math.hypot(st[k].c[0] - st[k - 1].c[0], st[k].c[1] - st[k - 1].c[1]);
-    const [l, r, wl, wr] = pick(st[k]), z = zOf(st[k]);
-    pos.set([l[0], l[1], z, r[0], r[1], z], k * 6);
-    uv.set([run / tile, wl / tile, run / tile, wr / tile], k * 4);
-    if (k) { const a = 2 * (k - 1), b = a + 1, c = 2 * k, d = c + 1; idx.push(b, d, c, b, c, a); }
+  for (let k = 1; k < n; k++) {
+    const a = st[k - 1].c, b = st[k].c;
+    const dx = b[0] - a[0], dy = b[1] - a[1], len = Math.hypot(dx, dy);
+    if (len < 1e-9) continue;
+    const tx = dx / len, ty = dy / len, base = pos.length / 3;
+    for (const q of [at[k - 1], at[k]]) {
+      const [l, r] = q.lr;
+      for (const p of [l, r]) {
+        pos.push(p[0], p[1], q.z);
+        const ox = p[0] - a[0], oy = p[1] - a[1];
+        uv.push((run + ox * tx + oy * ty) / tile, (-ty * ox + tx * oy) / tile);   // 앞 = 길이 · 왼쪽 = +
+      }
+    }
+    // base = 왼(k−1) · +1 = 오른(k−1) · +2 = 왼(k) · +3 = 오른(k) — 예전과 같은 앞면 차례
+    idx.push(base + 1, base + 3, base + 2, base + 1, base + 2, base);
+    run += len;
   }
   const g = new THREE.BufferGeometry();
-  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-  g.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+  g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3));
+  g.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(uv), 2));
   g.setIndex(idx);
   g.computeVertexNormals();
   g.computeBoundingSphere();
@@ -288,3 +302,6 @@ export function describeUDitch(u) {
   for (const r of u.rows || []) if (Array.isArray(r) && r.length >= 2) rows.push([String(r[0]), String(r[1])]);
   return { title: u.title || u.name || 'U형 측구', rows };
 }
+
+// 시험용(node) — 그레이팅 uv 방향
+export { band as _bandForTest };

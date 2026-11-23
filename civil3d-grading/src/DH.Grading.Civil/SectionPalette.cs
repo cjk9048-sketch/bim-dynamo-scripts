@@ -197,6 +197,8 @@ internal sealed class SectionPanel : UserControl
                 "자동 — 배치한 칸에 가장 크게 들어가는 표준 축척 · 고정하면 그 값(넘쳐도 그대로 · 로그로 알림)\n부지 횡단도 축척과 따로");
             _rLay = SetCombo(sec2, "횡단도 배치", GradingSettings.XsecLayoutLabels, LayoutTip + "\n부지 횡단도 배치와 따로");
             AddApply(sec2);
+            // ★[JACK 1123 «진입도로 횡단도에도 수량표 항목 · 진입도로 따로»] 항목 · 층따기 모두 부지와 따로 저장(XsecQtyOptions road)
+            AddXq(sec2, demo);
             AddBench(sec2, demo);
         }
         else
@@ -686,7 +688,7 @@ internal sealed class SectionPanel : UserControl
     }
 
     // ══ ★★[JACK 1117 «층따기는 도면설정에 넣지 말고 부지 종횡단도 · 진입도로 종횡단도에 · 값 애니메이션 · 같은 것 · 바탕만 부지 / 진입도로»] ══
-    //   저장 = 옛 도면설정과 같은 자리(XsecQtyOptions.WriteBench — DH_XSECQTYOPT · 부지 · 진입도로 한 값) · 수량표 항목 체크처럼 바로 저장 · 다음 [횡단도 생성]부터
+    //   저장 = 옛 도면설정과 같은 자리(XsecQtyOptions.WriteBench — 부지 DH_XSECQTYOPT · 진입도로 DH_XSECQTYOPT_ROAD 따로 · JACK 1123) · 수량표 항목 체크처럼 바로 저장 · 다음 [횡단도 생성]부터
     private CheckBox? _benchOn;
     private readonly List<TextBox> _benchBoxes = new();   // 높이 · 폭 · 기준 1:n · 배수 %
     private readonly Dictionary<TextBox, string> _benchShown = new();
@@ -758,7 +760,7 @@ internal sealed class SectionPanel : UserControl
         try
         {
             var doc = AcadApp.DocumentManager.MdiActiveDocument;
-            var (m, _, sp) = doc != null ? XsecQtyOptions.Read(doc.Database) : (XsecQtyOptions.Default, 0.25, DH.Grading.Core.BenchSpec.Soil);
+            var (m, _, sp) = doc != null ? XsecQtyOptions.Read(doc.Database, _road) : (XsecQtyOptions.Default, 0.25, DH.Grading.Core.BenchSpec.Soil);
             if (_benchBoxes.Any(b => b.IsKeyboardFocusWithin)) return;   // 치는 중이면 그대로
             var inv = System.Globalization.CultureInfo.InvariantCulture;
             _benchLoading = true;
@@ -777,7 +779,7 @@ internal sealed class SectionPanel : UserControl
     private bool BenchTyped(out DH.Grading.Core.BenchSpec sp, out string why)
     {
         var doc = AcadApp.DocumentManager.MdiActiveDocument;
-        var sp0 = doc != null ? XsecQtyOptions.Read(doc.Database).Spec : DH.Grading.Core.BenchSpec.Soil;
+        var sp0 = doc != null ? XsecQtyOptions.Read(doc.Database, _road).Spec : DH.Grading.Core.BenchSpec.Soil;
         sp = sp0; why = "";
         var cur = new[] { sp0.HMin, sp0.WMin, 1.0 / sp0.Grade, sp0.Drain * 100 };
         for (int i = 0; i < _benchBoxes.Count && i < 4; i++)
@@ -810,7 +812,7 @@ internal sealed class SectionPanel : UserControl
             bool busy = false;
             try { busy = !string.IsNullOrEmpty(doc.CommandInProgress); } catch { }
             if (busy) { LoadBench(); return; }   // 명령 중엔 안 씀 → 도면 값으로
-            var (m0, _, sp0) = XsecQtyOptions.Read(doc.Database);
+            var (m0, _, sp0) = XsecQtyOptions.Read(doc.Database, _road);
             bool on0 = (m0 & XsecQtyOptions.Bench) != 0, on = _benchOn.IsChecked == true;
             var sp = sp0;
             if (on)
@@ -819,10 +821,10 @@ internal sealed class SectionPanel : UserControl
             }
             if (_benchMsg != null) _benchMsg.Text = "";
             if (on == on0 && sp == sp0) return;
-            using (doc.LockDocument()) XsecQtyOptions.WriteBench(doc.Database, on, sp);
+            using (doc.LockDocument()) XsecQtyOptions.WriteBench(doc.Database, on, sp, _road);
             doc.Editor.WriteMessage("\n[층따기] " + (on ? "켬" : "끔") + " — 다음 [횡단도 생성]부터 반영");
             foreach (var tb in _benchBoxes) _benchShown[tb] = tb.Text.Trim();
-            SectionPalette.ReloadBench();   // 두 창(부지 · 진입도로) 같은 값
+            SectionPalette.ReloadBench();   // 두 창 다시 읽기(각자 값 — 진입도로 몫이 아직 없으면 진입도로 창은 부지 값)
         }
         catch (System.Exception ex) { try { doc.Editor.WriteMessage("\n[층따기] 저장 실패 — " + ex.Message); } catch { } }
     }
@@ -853,7 +855,7 @@ internal sealed class SectionPanel : UserControl
             cb.MouseLeave += (_, __) => demo.Idle();
             _xq.Add(cb); box.Children.Add(cb);
         }
-        box.ToolTip = "횡단 수량표 오른쪽 칸 · 끄면 안 재고 표에 – · 다음 횡단도 생성부터 · 층따기는 아래";
+        box.ToolTip = (_road ? "진입도로 횡단 수량표 오른쪽 칸(부지와 따로)" : "횡단 수량표 오른쪽 칸(진입도로와 따로)") + " · 끄면 안 재고 표에 – · 다음 횡단도 생성부터 · 층따기는 아래";
         sec.Children.Add(box);
         LoadXq();
     }
@@ -864,7 +866,7 @@ internal sealed class SectionPanel : UserControl
         try
         {
             var doc = AcadApp.DocumentManager.MdiActiveDocument;
-            int m = doc != null ? XsecQtyOptions.Read(doc.Database).Mask : XsecQtyOptions.Default;
+            int m = doc != null ? XsecQtyOptions.Read(doc.Database, _road).Mask : XsecQtyOptions.Default;
             _xqLoading = true;
             for (int i = 0; i < _xq.Count; i++) _xq[i].IsChecked = (m & XqItems[i].Bit) != 0;
         }
@@ -880,7 +882,7 @@ internal sealed class SectionPanel : UserControl
             var doc = AcadApp.DocumentManager.MdiActiveDocument;
             if (doc == null) return;
             int m = XqMaskNow();
-            using (doc.LockDocument()) XsecQtyOptions.Write(doc.Database, m);
+            using (doc.LockDocument()) XsecQtyOptions.Write(doc.Database, m, _road);
             demo.XqMask = m; demo.Redraw();
         }
         catch (System.Exception ex) { try { AcadApp.DocumentManager.MdiActiveDocument?.Editor?.WriteMessage("\n[수량표 항목] 저장 실패 — " + ex.Message); } catch { } }
