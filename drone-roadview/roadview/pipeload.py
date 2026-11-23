@@ -130,6 +130,43 @@ def clip_near(lines, shot_en, radius=200.0):
     return out
 
 
+class ShotGround:
+    """촬영점 땅 높이로 만든 땅 높이 함수 (관로 g 와 같은 규칙) — 보기 화면 높이 타일용.
+    가까운 촬영점(40 m 안 · 6개까지) 거리 가중 평균, 없으면 가장 가까운 것 (단 radius_far 밖은 NaN)."""
+
+    def __init__(self, shot_en, shot_g, radius=40.0, k=6, radius_far=250.0):
+        self.S = np.asarray(shot_en, float)
+        self.G = np.asarray(shot_g, float)
+        self.radius, self.k, self.far = radius, k, radius_far
+
+    def __call__(self, x, y):
+        x = np.asarray(x, float); y = np.asarray(y, float)
+        shp = x.shape
+        X = x.ravel(); Y = y.ravel()
+        out = np.full(X.shape, np.nan)
+        if len(X) == 0:
+            return out.reshape(shp)
+        m = ((self.S[:, 0] >= X.min() - self.far) & (self.S[:, 0] <= X.max() + self.far) &
+             (self.S[:, 1] >= Y.min() - self.far) & (self.S[:, 1] <= Y.max() + self.far))
+        S, G = self.S[m], self.G[m]
+        if len(S) == 0:
+            return out.reshape(shp)
+        for a in range(0, len(X), 4096):
+            xs, ys = X[a:a + 4096], Y[a:a + 4096]
+            d = np.hypot(xs[:, None] - S[None, :, 0], ys[:, None] - S[None, :, 1])
+            kk = min(self.k, d.shape[1])
+            idx = np.argpartition(d, kk - 1, axis=1)[:, :kk]
+            dd = np.take_along_axis(d, idx, 1)
+            gg = G[idx]
+            w = np.where(dd <= self.radius, 1.0 / np.maximum(dd, 1.0) ** 2, 0.0)
+            ws = w.sum(1)
+            near = np.argmin(dd, 1)
+            v = np.where(ws > 0, (gg * w).sum(1) / np.where(ws > 0, ws, 1), gg[np.arange(len(xs)), near])
+            v = np.where(dd.min(1) <= self.far, v, np.nan)
+            out[a:a + 4096] = v
+        return out.reshape(shp)
+
+
 def ground_for(lines, shot_en, shot_g, radius=40.0, k=6):
     """꼭짓점마다 땅 높이 = 가까운 촬영점 땅 높이의 거리 가중 평균 (없으면 가장 가까운 것)."""
     if len(shot_en) == 0:

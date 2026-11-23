@@ -56,6 +56,8 @@ class App:
         self.layers = tk.StringVar()
         self.crs = tk.StringVar(value=CRS_LIST[0])
         self.width = tk.StringVar(value=WIDTHS[0])
+        self.use_dem = tk.BooleanVar(value=True)
+        self.use_sat = tk.BooleanVar(value=True)
         self.status = tk.StringVar(value='영상을 고르세요')
         self.url = tk.StringVar()
         self._style()
@@ -127,6 +129,12 @@ class App:
         ttk.Label(c, text='사진 크기', style='Card.TLabel').grid(row=2, column=0, sticky='w', pady=(6, 0))
         ttk.Combobox(c, textvariable=self.width, values=WIDTHS, state='readonly', width=22).grid(
             row=2, column=1, sticky='w', padx=10, pady=(6, 0))
+        st = ttk.Style()
+        st.configure('Card.TCheckbutton', background=CARD)
+        ttk.Checkbutton(c, text='수치지도 표고 (회사 DB)', variable=self.use_dem, style='Card.TCheckbutton').grid(
+            row=3, column=0, columnspan=2, sticky='w', pady=(8, 0))
+        ttk.Checkbutton(c, text='위성 지도 (VWorld · 그레이딩 키)', variable=self.use_sat, style='Card.TCheckbutton').grid(
+            row=4, column=0, columnspan=2, sticky='w', pady=(4, 0))
 
         # 4. 실행
         c = ttk.Frame(r, padding=(16, 4))
@@ -258,6 +266,10 @@ class App:
         a = [_python_exe(), '-u', '-m', 'roadview.build'] + self.osvs + [
             '--out', out, '--interval', '%g' % gap, '--depth', '%g' % depth,
             '--crs', self.crs.get().split()[0], '--width', self.width.get().split()[0]]
+        if not self.use_dem.get():
+            a += ['--terrain', 'none']
+        if not self.use_sat.get():
+            a += ['--no-vworld']
         p = self.pipe_path.get()
         if p:
             a += ['--pipes', p]

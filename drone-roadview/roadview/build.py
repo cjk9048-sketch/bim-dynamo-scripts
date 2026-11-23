@@ -217,7 +217,8 @@ def main(argv=None):
     ap.add_argument('--home-z', type=float, help='이륙점 땅 높이 (EL, m). 없으면 관로에서 추정')
     ap.add_argument('--width', type=int, default=6144, help='360 사진 가로 화소 (기본 6144)')
     ap.add_argument('--quality', type=int, default=85)
-    ap.add_argument('--vworld-key', help='VWorld 지도 키 (넣으면 결과 파일에 저장됨 — 공유 주의)')
+    ap.add_argument('--vworld-key', help='VWorld 지도 키 (없으면 DH.Grading 키 — 내 키 → 설치 키)')
+    ap.add_argument('--no-vworld', action='store_true', help='위성 지도 키를 넣지 않음 (OSM)')
     ap.add_argument('--ffmpeg', help='ffmpeg.exe 경로')
     ap.add_argument('--title', help='제목')
     ap.add_argument('--workers', type=int, default=0, help='동시 작업 수 (기본 자동)')
@@ -225,6 +226,12 @@ def main(argv=None):
     ap.add_argument('--from-time', type=float, default=0.0, help='시험용: 이 초부터')
     ap.add_argument('--to-time', type=float, default=1e9, help='시험용: 이 초까지')
     ap.add_argument('--no-terrain', action='store_true', help='땅 높이 자동 재기 끄기 (이륙점 높이 그대로)')
+    ap.add_argument('--terrain', choices=['auto', 'db', 'none'], default='auto',
+                    help='수치지도 표고: auto = 사내 DB 되면 씀 · db · none')
+    ap.add_argument('--ngii', nargs='+', help='수치지도 DXF 파일 (주면 DB 대신 이것)')
+    ap.add_argument('--terrain-mode', choices=['datum', 'surface'], default='datum',
+                    help='datum = 수치지도로 표고 기준만 (촬영점 사이 높낮이는 영상 값 · 기본) · '
+                         'surface = 점마다 수치지도 높이 (표고점 촘촘한 1:1000 DXF 일 때)')
     ap.add_argument('--normal-priority', action='store_true', help='보통 우선순위로 (기본은 낮음 — PC 쓰면서 돌려도 안 버벅이게)')
     a = ap.parse_args(argv)
     try:
@@ -353,8 +360,53 @@ def main(argv=None):
             log('촬영점 없음 → 끝', fp)
             return 1
 
-        # 높이 기준 (이륙점 땅 높이 Z_home)
-        if a.home_z is not None:
+        # 수치지도 땅 높이 (있으면 촬영점 · 관로 땅 높이를 이것으로 — 표고 EL)
+        dem = None
+        dem_note = ''
+        if a.terrain != 'none':
+            from . import terrain
+            es = np.array([sh['E'] for sh in shots]); ns = np.array([sh['N'] for sh in shots])
+            bbox = (es.min() - 300, ns.min() - 300, es.max() + 300, ns.max() + 300)
+            try:
+                if a.ngii:
+                    pts = terrain.points_from_ngii_dxf(a.ngii, bbox)
+                    dem_note = '수치지도 DXF %d장' % len(a.ngii)
+                elif a.terrain in ('auto', 'db') and terrain.db_available():
+                    epsg = int(a.crs.split(':')[1])
+                    cl = terrain.contours_from_db(bbox, epsg)
+                    pts = terrain.lines_to_points(cl, 2.0)
+                    dem_note = '사내 수치지도 DB 등고선 %d개' % len(cl)
+                else:
+                    pts = None
+                    if a.terrain == 'db':
+                        log('수치지도: 사내 DB 접속 정보 없음 → 안 씀', fp)
+                if pts is not None and len(pts) >= 3:
+                    dem = terrain.Dem(pts)
+                    log('수치지도 땅 높이: %s · 점 %d' % (dem_note, dem.n), fp)
+                elif pts is not None:
+                    log('수치지도: 이 범위에 높이 자료 없음 → 안 씀', fp)
+            except Exception as ex:
+                log('수치지도 못 씀 → 영상 높이만: %s' % str(ex)[:160], fp)
+                dem = None
+        if dem is not None:
+            dg = dem([sh['E'] for sh in shots], [sh['N'] for sh in shots])
+            n_ok = 0
+            for sh, g in zip(shots, dg):
+                sh['dem'] = float(g) if np.isfinite(g) else None
+                n_ok += sh['dem'] is not None
+            log('  촬영점 %d / %d 에 표고' % (n_ok, len(shots)), fp)
+
+        # 높이 기준 (이륙점 땅 높이 Z_home) — 수치지도 표고가 없는 촬영점에만 쓰임
+        if dem is not None and any(sh.get('dem') is not None for sh in shots):
+            vals = [sh['dem'] - (sh['T'] or 0.0) for sh in shots if sh.get('dem') is not None]
+            zhome = float(np.median(vals))
+            log('이륙점 높이 = %.2f (수치지도에서 추정 · %s)' % (zhome, '표고 기준만' if a.terrain_mode == 'datum' else '지형 그대로'), fp)
+            if a.terrain_mode == 'datum':
+                # 5 m 등고선 삼각망은 평평한 도로에도 가짜 경사(0.5 m 쯤)를 만든다 (1123 0014 실측) →
+                # 표고 기준(EL)만 수치지도로 맞추고 촬영점 사이 높낮이는 영상으로 잰 값을 쓴다
+                for sh in shots:
+                    sh['dem'] = None
+        elif a.home_z is not None:
             zhome = a.home_z
             log('이륙점 높이 = %.2f (지정)' % zhome, fp)
         elif any(ln['hasZ'] for ln in lines):
@@ -435,16 +487,27 @@ def main(argv=None):
     # project.js
     proj_shots = []
     for k, sh in enumerate(shots):
-        z = zhome + sh['rel']
-        g = z - sh['agl']
+        if sh.get('dem') is not None:          # 수치지도 표고 + 영상으로 잰 땅 위 높이
+            g = sh['dem']
+            z = g + sh['agl']
+        else:
+            z = zhome + sh['rel']
+            g = z - sh['agl']
         proj_shots.append(dict(id=sh['id'], seq=k + 1, video=sh['video'], frame=sh['frame'], time=sh['time'],
                                lat=round(sh['lat'], 8), lon=round(sh['lon'], 8),
                                e=round(sh['E'] - E0, 3), n=round(sh['N'] - N0, 3),
                                z=round(z, 3), groundZ=round(g, 3), agl=sh['agl'], relAlt=round(sh['rel'], 2),
                                yaw=sh['yaw'], file='data/pano/%s.js' % sh['id'], thumb='data/thumb/%s.jpg' % sh['id']))
-    basemap = {'type': 'vworld', 'key': a.vworld_key} if a.vworld_key else {'type': 'osm'}
+    # 위성 지도 키: 그레이딩과 같은 키 (JACK 1123) — 파일로 열어도 위성이 나온다 (출처 없이도 VWorld 응답 확인)
+    vkey, vsrc = (a.vworld_key, '지정') if a.vworld_key else ('', '')
+    if not vkey and not a.no_vworld:
+        from .keys import vworld_key
+        vkey, vsrc = vworld_key()
+    basemap = {'type': 'vworld', 'key': vkey} if vkey else {'type': 'osm'}
+    log('바탕 지도: %s' % ('VWorld 위성 (%s)' % vsrc if vkey else 'OSM (VWorld 키 없음)'), fp)
     project = dict(version=1, title=a.title or os.path.basename(out), crs=a.crs, origin=dict(E=E0, N=N0),
                    depth=a.depth, cover=a.depth, homeZ=zhome, interval=a.interval, basemap=basemap,
+                   terrain=(dem_note if dem is not None else '영상으로 잰 높이 (표고 아님)'),
                    videos=[{'id': v['id'], 'name': v['name']} for v in videos], shots=proj_shots)
     _write_atomic(os.path.join(out, 'data', 'project.js'),
                   ('window.RV_PROJECT = ' + json.dumps(project, ensure_ascii=False, indent=1) + ';\n').encode('utf-8'))
@@ -459,6 +522,10 @@ def main(argv=None):
         n0 = len(lines)
         lines = pipeload.clip_near(lines, sen, 200.0)
         lines = pipeload.ground_for(lines, sen, sg)
+        if dem is not None and a.terrain_mode == 'surface':   # 점마다 수치지도 높이
+            for ln in lines:
+                dz = dem([p[0] for p in ln['pts']], [p[1] for p in ln['pts']])
+                ln['g'] = [float(v) if np.isfinite(v) else g for v, g in zip(dz, ln['g'])]
         log('관로: 경로 200 m 안 조각 %d개 (원래 선 %d개)' % (len(lines), n0), fp)
         for ln in lines:
             pts = [[round(p[0] - E0, 3), round(p[1] - N0, 3), (round(p[2], 3) if (ln['hasZ'] and p[2] is not None) else None)]
@@ -469,6 +536,20 @@ def main(argv=None):
     _write_atomic(os.path.join(out, 'data', 'pipes.js'),
                   ('window.RV_PIPES = ' + json.dumps({'layers': layers, 'lines': pl, 'origin': {'E': E0, 'N': N0}},
                                                     ensure_ascii=False) + ';\n').encode('utf-8'))
+    # 보기 화면용 높이 타일 (점 찍어 맞추기 · 지도 점의 땅 높이)
+    dem_path = os.path.join(out, 'data', 'dem.js')
+    if dem is not None:
+        from . import terrain, pipeload
+        sen = [(sh['E'], sh['N']) for sh in shots]
+        # datum: 관로 · 촬영점과 같은 규칙의 땅 높이 (촬영점 땅 높이로) — 점 찍어 맞추기가 관로와 어긋나지 않게
+        gfun = dem if a.terrain_mode == 'surface' else pipeload.ShotGround(sen, [ps['groundZ'] for ps in proj_shots])
+        dj = terrain.dem_tiles(gfun, sen, (E0, N0))
+        if dj and dj['tiles']:
+            dj['source'] = dem_note + (' · 표고 기준만' if a.terrain_mode == 'datum' else '')
+            _write_atomic(dem_path, ('window.RV_DEM = ' + json.dumps(dj, ensure_ascii=False) + ';\n').encode('utf-8'))
+            log('높이 타일 %d장 (%.1f MB)' % (len(dj['tiles']), os.path.getsize(dem_path) / 1e6), fp)
+    elif os.path.exists(dem_path):
+        os.remove(dem_path)                    # 옛 높이 타일이 다른 원점으로 남지 않게
     calib_path = os.path.join(out, 'data', 'calib.js')
     if not os.path.exists(calib_path):                          # 맞춤 값은 있으면 절대 안 덮음
         _write_atomic(calib_path, 'window.RV_CALIB = {"videos": {}};\n'.encode('utf-8'))
