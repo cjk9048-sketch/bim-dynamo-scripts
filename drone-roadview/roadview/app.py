@@ -174,10 +174,13 @@ class Api:
             shots = P.get('shots', [])
             info['shots'] = len(shots)
             info['videos'] = len(P.get('videos', []))
-            if shots:                                   # 썸네일 = 가운데쯤 촬영점 미리보기
+            if shots:                                   # 썸네일 = 가운데쯤 촬영점 · 컷 = 고르게 6장
                 t = Path(folder) / shots[len(shots) // 2].get('thumb', '')
                 if t.exists():
                     info['thumb'] = str(t)
+                k = max(1, len(shots) // 6)
+                info['cuts'] = [str(Path(folder) / s_['thumb']) for s_ in shots[::k][:6]
+                                if (Path(folder) / s_.get('thumb', '')).exists()]
         except Exception:
             pass
         try:
@@ -199,6 +202,7 @@ class Api:
             x['exists'] = bool(_page_url(x['path']))
             t = x.get('thumb')
             x['thumb_url'] = Path(t).as_uri() if t and os.path.exists(t) else ''
+            x['cut_urls'] = [Path(c).as_uri() for c in x.get('cuts', []) if os.path.exists(c)]
             out.append(x)
         return out
 

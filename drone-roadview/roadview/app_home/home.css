@@ -80,3 +80,7 @@ pre#log { background:#141414; border-radius:6px; padding:8px 10px; color:#9a9a9a
 .dfoot { display:flex; justify-content:flex-end; gap:8px; margin-top:14px; }
 #toast { position:fixed; left:50%; bottom:26px; transform:translateX(-50%); background:#0b0b0bee; border:1px solid #3a3a3a; padding:9px 16px; border-radius:8px; opacity:0; transition:opacity .25s; pointer-events:none; z-index:20; }
 #toast.show { opacity:1; }
+
+/* 가운데 희미한 문구 (JACK 1123) */
+.wm { position:fixed; left:210px; right:0; top:50%; transform:translateY(-50%); text-align:center; pointer-events:none; user-select:none;
+      font: 600 44px/1 'Segoe UI','Malgun Gothic',sans-serif; letter-spacing:6px; color:#ffffff; opacity:.045; }

@@ -34,7 +34,17 @@
       const d = document.createElement('div');
       d.className = 'card' + (x.exists ? '' : ' gone');
       d.innerHTML = '<div class="thumb"></div><div class="t"></div><div class="m"></div><button class="rm" title="목록에서 빼기">×</button>';
-      if (x.thumb_url) d.querySelector('.thumb').style.backgroundImage = 'url("' + x.thumb_url.replace(/"/g, '%22') + '")';
+      const th = d.querySelector('.thumb');
+      const bg = (u) => 'url("' + String(u).replace(/"/g, '%22') + '")';
+      if (x.thumb_url) th.style.backgroundImage = bg(x.thumb_url);
+      // 컷: 마우스를 올리면 그 프로젝트의 여러 장면이 넘어감
+      const cuts = (x.cut_urls || []).filter(Boolean);
+      if (cuts.length > 1) {
+        let k = 0, iv = 0;
+        d.addEventListener('mouseenter', () => { iv = setInterval(() => { k = (k + 1) % cuts.length; th.style.backgroundImage = bg(cuts[k]); }, 650); });
+        d.addEventListener('mouseleave', () => { clearInterval(iv); k = 0; if (x.thumb_url) th.style.backgroundImage = bg(x.thumb_url); });
+        cuts.forEach((u) => { const im = new Image(); im.src = u; });
+      }
       d.querySelector('.t').textContent = x.title || '(이름 없음)';
       d.querySelector('.m').textContent = (x.exists ? '' : '폴더 없음 · ') + (x.size_gb != null ? x.size_gb + ' GB · ' : '') + (x.shots ? x.shots + '곳 · ' : '') + fmtDate(x.updated);
       d.title = x.path;
