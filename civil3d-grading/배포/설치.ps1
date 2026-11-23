@@ -1,4 +1,4 @@
-# DH.Grading 애드인 설치 스크립트 (JACK 0723, 0728 갱신)
+﻿# DH.Grading 애드인 설치 스크립트 (JACK 0723, 0728 갱신)
 #   ① .bundle 폴더를 Civil3D 자동로드 위치로 복사
 #   ② 한국 좌표계 정의(KOREA_GRS80/BESSEL ###TM + UTM-K, 9종)가 없으면 사용자 좌표계 사전에 설치(딱 한 번)
 #      ※ v12.1부터 애드인 자체도 시작 시 좌표계를 검사·설치하므로(계정별 자동), 이 스크립트를 못 쓴
@@ -37,7 +37,11 @@ if ($bundleSrc) {
     # /E=하위폴더 포함 복사(삭제 안 함). 로그 최소화.
     $rc = robocopy $bundleSrc $pluginDir /E /NFL /NDL /NJH /NJS /NP
     if ($LASTEXITCODE -ge 8) { Say "  번들 복사 실패(코드 $LASTEXITCODE) — Civil3D를 닫고 재시도하세요." 'Red' }
-    else { Say "  번들 복사 완료" 'Green' }
+    else {
+        # ★[배포 점검 1123] 인터넷 · 메신저로 받은 ZIP을 풀면 파일마다 «웹에서 받은 파일» 표시가 붙고 robocopy가 그대로 옮긴다 — 설치된 우리 파일에서만 지운다
+        Get-ChildItem -LiteralPath $pluginDir -Recurse -File -ErrorAction SilentlyContinue | Unblock-File -ErrorAction SilentlyContinue
+        Say "  번들 복사 완료" 'Green'
+    }
 } else {
     Say "번들 소스를 못 찾음 — 좌표계 정의만 확인/설치합니다." 'Yellow'
 }
@@ -86,7 +90,12 @@ $frameSrc = @(
     (Join-Path $env:USERPROFILE 'Desktop\AI\참고자료\그레이딩 참고도면\xr-수자원공사(BOX)_토목.dwg')
 ) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
 $frameDst = Join-Path $pluginDir 'Contents\Frames\KWATER.dwg'
-if (-not $frameSrc) {
+# ★[배포 점검 1123] 설치 묶음(ZIP · EXE)에는 도곽이 이미 들어 있다 — 새 PC에는 참고자료가 없어 늘 «못 찾음»이 떴다(겁만 줌)
+$frameOk = (Test-Path -LiteralPath $frameDst) -and ((Get-FileHash -LiteralPath $frameDst -Algorithm SHA256).Hash -eq $frameSha)
+if ($frameOk) {
+    Say "기본 도곽(K-water) 있음" 'Green'
+}
+elseif (-not $frameSrc) {
     Say "기본 도곽(K-water) 원본을 못 찾음 — 도면화는 «단순 도곽»으로 됩니다(도면설정 «4. 도곽»에서 고를 수 있음)." 'Yellow'
 } else {
     $h = (Get-FileHash -LiteralPath $frameSrc -Algorithm SHA256).Hash

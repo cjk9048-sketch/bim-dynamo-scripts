@@ -77,8 +77,18 @@ out = "배포/DH정지플러그인_" + v + "_수동설치.zip"
 if os.path.exists(out):
     os.remove(out)
 with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as z:
-    for f in ["설치.bat", "설치.ps1"]:
-        z.write(os.path.join("배포", f), f)
+    # ★[배포 점검 1123] cmd는 줄끝이 LF뿐인 .bat을 잘못 읽는다(실측: 'rshell' is not recognized → 아무것도 안 깔림) → CRLF로 맞춘다.
+    #   Windows PowerShell 5.1은 BOM 없는 UTF-8 .ps1을 ANSI(CP949)로 읽어 한글이 깨진다 → BOM을 붙인다.
+    _bat = io.open(os.path.join("배포", "설치.bat"), "rb").read().replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
+    try:
+        _bat.decode("ascii")
+    except UnicodeDecodeError:
+        raise SystemExit("배포/설치.bat 에 한글(ASCII 밖 글자)이 있습니다 — cmd가 잘못 읽습니다. 영문으로만 쓰세요")
+    z.writestr("설치.bat", _bat)
+    _ps = io.open(os.path.join("배포", "설치.ps1"), "rb").read()
+    if not _ps.startswith(b"\xef\xbb\xbf"):
+        _ps = b"\xef\xbb\xbf" + _ps
+    z.writestr("설치.ps1", _ps)
     z.write(readme, "읽어보세요.txt")
     for root, dirs, names in os.walk(dstb):
         for nm in names:

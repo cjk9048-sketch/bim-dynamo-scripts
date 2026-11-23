@@ -145,6 +145,20 @@ try
     }
 
     Console.WriteLine();
+
+    // ── ③ [배포 점검 1123] Civil 3D 판 — 매니페스트는 R25.0~R25.1만 받고 DLL은 2026 것으로 빌드한다.
+    //    다른 판만 있는 PC는 설치는 «완료»인데 리본이 안 뜬다 → 여기서 미리 알린다(설치는 그대로 · 알림만).
+    Console.WriteLine("③ Civil 3D 판 확인");
+    var civ = OperatingSystem.IsWindows() ? FindCivil() : new List<(string Series, string Name)>();
+    if (civ.Exists(c => c.Series == "R25.1"))
+        Console.WriteLine("   Civil 3D 2026 있음");
+    else
+    {
+        Console.WriteLine("   ! Civil 3D 2026을 못 찾았습니다 — 이 애드인은 Civil 3D 2026용입니다.");
+        foreach (var c in civ)
+            Console.WriteLine("     이 PC: " + c.Name + (c.Series == "R25.0" ? " — 확인 안 된 판" : " — 리본이 안 뜹니다"));
+    }
+    Console.WriteLine();
     Pause("==== 설치 완료 ==== Civil3D를 실행하면 'DH 정지' 리본이 나타납니다.");
 }
 catch (Exception ex)
@@ -159,6 +173,32 @@ static void Pause(string msg)
     Console.Write("아무 키나 누르면 창이 닫힙니다...");
     try { Console.ReadKey(); } catch { }   // 리다이렉트/자동실행 환경 대비
     Console.WriteLine();
+}
+
+// 설치된 Civil 3D(HKLM\SOFTWARE\Autodesk\AutoCAD\R*\ACAD-*) — AcadLocation\C3D\AeccDbMgd.dll 이 있는 것만. 읽기만 한다.
+[System.Runtime.Versioning.SupportedOSPlatform("windows")]
+static List<(string Series, string Name)> FindCivil()
+{
+    var list = new List<(string Series, string Name)>();
+    try
+    {
+        using var root = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Autodesk\AutoCAD");
+        if (root == null) return list;
+        foreach (var series in root.GetSubKeyNames())
+        {
+            using var s = root.OpenSubKey(series);
+            if (s == null) continue;
+            foreach (var prod in s.GetSubKeyNames())
+            {
+                using var p = s.OpenSubKey(prod);
+                string loc = p?.GetValue("AcadLocation") as string ?? "";
+                if (loc.Length > 0 && File.Exists(Path.Combine(loc, "C3D", "AeccDbMgd.dll")))
+                    list.Add((series, p?.GetValue("ProductName") as string ?? series));
+            }
+        }
+    }
+    catch { }
+    return list;
 }
 
 static bool ContainsAscii(string path, string needle)
