@@ -205,8 +205,9 @@ internal sealed class GradingPanel : UserControl
         // ★[계획 §5.1] <b>이어서/새로시작</b> — 기존 정지 결과가 있을 때만 보인다.
         //   종전 명령은 계획선을 찍은 <b>뒤</b> 이것을 묻고, 그 답에 따라 원지반을 아예 안 물었다.
         //   창에서는 <b>미리 보여 주고</b>, 뜻을 가리는 것은 [생성]을 누르는 순간 다시 한다.
-        _append = GradingDialog.AddRadioPair(secTarget, "기존 결과", "이어서", true, out _restart, "새로시작",
-            "이어서 = 지금 정지면을 기준 삼아 새 구역을 더합니다. 새로시작 = 처음부터 다시 만듭니다.",
+        // ★★★[JACK 1123] 이어서 = 앞 계획부지 보호(닿으면 자동 옹벽) · 새로 만들기 = 지금 땅을 원지형으로 — 처음부터는 [계획지표면 초기화]
+        _append = GradingDialog.AddRadioPair(secTarget, "기존 결과", "이어서", true, out _restart, "새로 만들기",
+            "이어서: 앞 계획부지는 그대로 · 닿으면 자동 옹벽\n새로 만들기: 지금 땅 기준으로 깎음(앞 부지도)\n처음부터: [계획지표면 초기화]",
             out _modeRow);
         _append.Checked += (_, __) => PickSession.AppendMode = true;
         _restart.Checked += (_, __) => PickSession.AppendMode = false;
@@ -975,7 +976,8 @@ internal sealed class GradingPanel : UserControl
             if (_modeRow != null) _modeRow.Visibility = Visibility.Visible;
 
             // ★이어서·다시는 원지반이 <b>자동</b>으로 정해진다 — 그때는 안 골라도 만들 수 있다.
-            bool needGround = !(hasPrev && _append.IsChecked == true);
+            //   ★[JACK 1123] «새로 만들기»도 앞 결과가 있으면 지금 정지면이 바탕(자동)
+            bool needGround = !hasPrev;
             _pickPlan.IsEnabled = !busy;
             // ★★[검토 0909 · 높음] <b>안 쓸 거면 잠근다.</b> 종전엔 흐리게만 하고 눌리게 뒀는데,
             //   눌러서 고른 것이 <b>결과에 안 쓰였다</b> — 알림은 명령창 한 줄뿐이었다.
@@ -992,7 +994,7 @@ internal sealed class GradingPanel : UserControl
             //   ★<c>이어서</c>인지도 함께 적는다 — 그것이 원지반을 자동으로 바꿔 버리기 때문이다.
             _badgePicks = "· 경계 " + (hasPlan ? "●" : "○")
                         + " 지반 " + (needGround ? (hasGround ? "●" : "○") : "자동")
-                        + (hasPrev ? (_append.IsChecked == true ? " · 이어서" : " · 새로시작") : "");
+                        + (hasPrev ? (_append.IsChecked == true ? " · 이어서" : " · 새로 만들기") : "");
             SyncBadge();
             _picksOk = !busy && hasPlan && (hasGround || !needGround);
             // ★[8단계] 사면 수정은 <b>이미 만든 정지면</b>이 있어야 한다 —

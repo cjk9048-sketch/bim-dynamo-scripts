@@ -170,6 +170,68 @@ public static class GradingBundleStore
         tr.AddNewlyCreatedDBObject(xr, true);
     }
 
+    // ══ ★★★[JACK 1123 «이어서 = 앞 계획부지 침범 금지»] 보호로 지은 구역 — 번들 형식(v14)은 그대로 두고 옆 칸(DH_GRADING/PROTECT)에 계획선 핸들만 ══
+    //   «마지막 구역 다시»(옹벽 · 사면 변환 · 같은 선 다시)가 그 구역을 «이어서»(보호)로 지었는지 알아야 같은 보호를 다시 건다 — «새로 만들기»로 지은 구역은 안 건다.
+    private const string ProtectRec = "PROTECT";
+
+    /// <summary>이 계획선 구역을 «이어서»(앞 부지 보호)로 지었나.</summary>
+    public static bool IsProtected(Database db, Transaction tr, string planHandle)
+        => planHandle.Length > 0 && LoadProtected(db, tr).Contains(planHandle);
+
+    /// <summary>★[2차 검토 · 조정자 결정] 이 계획선 구역을 «새로 만들기»로 지었나 — 그 앞 구역들은 «땅»이라 다음 «이어서»가 보호하지 않는다(같은 레코드에 «O:» 머리로 · 옛 레코드는 머리 없음 = 보호).</summary>
+    public static bool IsOver(Database db, Transaction tr, string planHandle)
+        => planHandle.Length > 0 && LoadProtected(db, tr).Contains(OverTag + planHandle);
+
+    private const string OverTag = "O:";
+
+    private static HashSet<string> LoadProtected(Database db, Transaction tr)
+    {
+        var set = new HashSet<string>(System.StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            var nod = (DBDictionary)tr.GetObject(db.NamedObjectsDictionaryId, OpenMode.ForRead);
+            if (!nod.Contains(DictName)) return set;
+            var dict = (DBDictionary)tr.GetObject(nod.GetAt(DictName), OpenMode.ForRead);
+            if (!dict.Contains(ProtectRec)) return set;
+            var xr = (Xrecord)tr.GetObject(dict.GetAt(ProtectRec), OpenMode.ForRead);
+            using var rb = xr.Data;
+            if (rb == null) return set;
+            foreach (var tv in rb.AsArray()) if (tv.TypeCode == (int)DxfCode.Text && tv.Value is string s && s.Length > 0) set.Add(s);
+        }
+        catch { }
+        return set;
+    }
+
+    /// <summary>번들 저장(4단계)과 같은 트랜잭션에서 — 이 구역의 보호 표시를 켜거나 끈다 · <paramref name="clearOthers"/>면(새로 시작) 다른 표시는 다 지운다.</summary>
+    public static void SetProtected(Database db, Transaction tr, string planHandle, bool on, bool clearOthers, bool over = false)
+    {
+        var set = clearOthers ? new HashSet<string>(System.StringComparer.OrdinalIgnoreCase) : LoadProtected(db, tr);
+        if (on) set.Add(planHandle); else set.Remove(planHandle);
+        if (over) set.Add(OverTag + planHandle); else set.Remove(OverTag + planHandle);
+        var nod = (DBDictionary)tr.GetObject(db.NamedObjectsDictionaryId, OpenMode.ForRead);
+        if (!nod.Contains(DictName))
+        {
+            if (set.Count == 0) return;
+            nod.UpgradeOpen();
+            var d0 = new DBDictionary();
+            nod.SetAt(DictName, d0);
+            tr.AddNewlyCreatedDBObject(d0, true);
+        }
+        // ★[검토 L2] 새 레코드를 먼저 다 만든 뒤 바꾼다 — 지운 뒤 터지면 보호 표시가 모두 사라져 «다시»가 앞 부지를 깎는다
+        Xrecord? xr = null;
+        if (set.Count > 0)
+        {
+            var vals = new List<TypedValue>();
+            foreach (var h in set) vals.Add(new((int)DxfCode.Text, h));
+            xr = new Xrecord { Data = new ResultBuffer(vals.ToArray()) };
+        }
+        var dict = (DBDictionary)tr.GetObject(nod.GetAt(DictName), OpenMode.ForWrite);
+        if (dict.Contains(ProtectRec)) dict.Remove(ProtectRec);
+        if (xr == null) return;
+        dict.SetAt(ProtectRec, xr);
+        tr.AddNewlyCreatedDBObject(xr, true);
+    }
+
     /// <summary>[JACK 0731 — 초기화] 저장된 번들(NOD DH_GRADING/BUNDLE)을 지운다 — DHRESET용.
     /// 번들이 없으면 아무것도 안 함. 반환=지웠으면 true.</summary>
     public static bool Clear(Database db, Transaction tr)

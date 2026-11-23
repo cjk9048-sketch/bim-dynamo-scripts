@@ -58,7 +58,7 @@ internal static class GradeStart
     /// <para>명령판(<c>DHGRADE</c>)의 판정 규칙을 <b>그대로</b> 옮겼다 —
     /// 같은 계획선을 다시 고르면 <b>마지막 구역 재실행</b>, 처음 보는 계획선이면 <b>구역 추가</b>,
     /// <b>중간 구역</b>이면 막는다(아직 지원 안 함).</para></summary>
-    /// <param name="append">사용자가 <b>이어서</b>를 골랐는가. 거짓이면 무조건 새로 시작.</param>
+    /// <param name="append">사용자가 <b>이어서</b>를 골랐는가. 거짓이면 «새로 만들기»(★JACK 1123 — 앞 결과가 있으면 지금 정지면을 바탕으로 · 앞 부지 보호 없음 · 없으면 처음부터).</param>
     internal static Plan Decide(AcDoc doc, ObjectId planPolyId, bool append)
     {
         var db = doc.Database;
@@ -71,16 +71,18 @@ internal static class GradeStart
                         && GradingBuilder.SurfaceExistsByBaseName(tr, "정지면_DH");
             // ★[v101.1 · 코드 검토 낮음 4] 정지면_DH 없이 옹벽 합성 전 면만 남았다(예상 못 한 실패) — «이어서»를 골랐는데
             //   말없이 새로 시작으로 가면 합성 전 면·구역을 지운다. 옹벽·사면 변환(마지막 구역 다시)이 합성 전 면을 정지면_DH로 되살린다
-            if (!hasPrev && append && regions0 != null && regions0.Count > 0
+            //   ★[JACK 1123] «새로 만들기»도 앞 기록을 남기는 길이라 같이 막는다(말없이 처음부터로 가면 앞 구역 기록을 지운다)
+            if (!hasPrev && regions0 != null && regions0.Count > 0
                 && GradingBuilder.SurfaceExistsByBaseName(tr, Commands.WallCompositeCommand.BaseName))
             {
                 tr.Commit();
                 return new Plan(Commands.GradeMode.Fresh, ObjectId.Null,
                     $"정지면_DH가 없고 옹벽 합성 전 정지면('{Commands.WallCompositeCommand.BaseName}')만 남아 있습니다.\n\n"
                   + "[옹벽 변환]이나 [사면 변환]을 한 번 돌리면 합성 전 면이 정지면_DH로 돌아옵니다 — 그 뒤에 이어서 하세요.\n"
-                  + "(처음부터 다시 만들려면 [새로시작])", true);
+                  + "(처음부터 다시 만들려면 [계획지표면 초기화])", true);
             }
-            if (!hasPrev || !append) { tr.Commit(); return fresh; }
+            // ★★★[JACK 1123] 앞 결과가 없으면 «이어서» · «새로 만들기» 둘 다 처음부터(Fresh — 고른 원지반)
+            if (!hasPrev) { tr.Commit(); return fresh; }
 
             // 선택한 계획선이 기존 구역과 같은가 — 핸들 또는 fingerprint로 판정.
             string ph = planPolyId.Handle.ToString();
@@ -95,9 +97,15 @@ internal static class GradeStart
             Plan r;
             if (matchIdx < 0)
             {
-                r = new Plan(Commands.GradeMode.Append,
+                // ★★★[JACK 1123] 이어서 = 앞 계획부지 보호 · 새로 만들기 = 지금 정지면을 원지형으로(보호 없음) — 바탕은 둘 다 지금 정지면_DH(자동)
+                r = append
+                    ? new Plan(Commands.GradeMode.Append,
                              GradingBuilder.FindSurfaceByBaseName(tr, "정지면_DH"),   // 기준=현재 누적면(자동)
-                             $"[이어서] 기준 지반 = 현재 정지면_DH (기존 구역 {regions0.Count}개 유지, 새 구역 추가)",
+                             $"[이어서] 바탕 = 지금 정지면_DH · 앞 계획부지 {regions0.Count}개 보호(닿으면 자동 옹벽)",
+                             false)
+                    : new Plan(Commands.GradeMode.Over,
+                             GradingBuilder.FindSurfaceByBaseName(tr, "정지면_DH"),
+                             $"[새로 만들기] 바탕 = 지금 정지면_DH(앞 구역 {regions0.Count}개는 땅으로 · 기록은 그대로)",
                              false);
             }
             else if (matchIdx == regions0.Count - 1)
@@ -112,15 +120,17 @@ internal static class GradeStart
                     ? new Plan(Commands.GradeMode.Fresh, ObjectId.Null,
                         "마지막 구역을 만들 때 쓴 기준 지반을 찾을 수 없습니다(지웠거나 이름이 바뀌었습니다).\n\n"
                       + "다른 면으로 대신 만들면 그 구역의 형상과 수량이 달라집니다 —\n"
-                      + "[새로시작]으로 처음부터 다시 만들거나, 그 지표면을 되살린 뒤 다시 시도하세요.", true)
-                    : new Plan(Commands.GradeMode.RerunLast, g,
-                        "[다시] 마지막 구역을 새 값으로 다시 만듭니다", false);
+                      + "[계획지표면 초기화] 뒤 처음부터 다시 만들거나, 그 지표면을 되살린 뒤 다시 시도하세요.", true)
+                    // ★[2차 검토 · 조정자 결정] 고른 모드를 따른다 — «새로 만들기»면 마지막 구역 다시도 앞 부지 보호를 끈다(RerunOver)
+                    : append
+                        ? new Plan(Commands.GradeMode.RerunLast, g, "[다시] 마지막 구역을 새 값으로 다시", false)
+                        : new Plan(Commands.GradeMode.RerunOver, g, "[다시 · 새로 만들기] 마지막 구역을 새 값으로 다시(앞 부지 보호 없음)", false);
             }
             else
             {
                 r = new Plan(Commands.GradeMode.Fresh, ObjectId.Null,
                              $"이 계획선은 이미 구역{matchIdx + 1}로 정지되어 있습니다.\n" +
-                             "중간 구역 수정은 아직 지원하지 않습니다 — [새로시작]으로 처음부터 다시 만들어 주세요.",
+                             "중간 구역은 고칠 수 없음 → [계획지표면 초기화] 뒤 처음부터",
                              true);
             }
             tr.Commit();

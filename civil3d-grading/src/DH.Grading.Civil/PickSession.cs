@@ -463,9 +463,10 @@ public sealed class PickCommands
             return;
         }
         // ★★★[v103.1.12 · JACK 1015 ② · 계획 4판 H4] «이어서» 합성 관문 — DHGRADE와 같다(Decide 밖 · 합성했으면 Decide 다시)
-        if (!plan.Blocked && plan.Mode == Commands.GradeMode.Append)
+        //   ★[JACK 1123] «새로 만들기»(Over)도 같은 기계(정지면_DH가 바탕에 굳는다) — 같은 관문
+        if (!plan.Blocked && (plan.Mode == Commands.GradeMode.Append || plan.Mode == Commands.GradeMode.Over))
         {
-            if (!CompositeGate.Ensure(doc, "이어서", "빠진 옹벽은 정지면_DH이전에 안 들어가고 목록에서 지워집니다")) return;
+            if (!CompositeGate.Ensure(doc, plan.Mode == Commands.GradeMode.Over ? "새로 만들기" : "이어서", "빠진 옹벽은 정지면_DH이전에 안 들어가고 목록에서 지워집니다")) return;
             plan = GradeStart.Decide(doc, planId, PickSession.AppendMode);
         }
         if (plan.Blocked)

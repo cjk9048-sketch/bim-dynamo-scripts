@@ -431,6 +431,10 @@ public sealed class NoriCommand
                         var edges = SlopeHatchGenerator.GenerateEdgeLinesTagged(
                             vs.Rings, ng, up, finalRing, b.Boundary, zones, b.Boundary,
                             null, null, bs, ms, later, wallPts);
+                        // ★★[조정자 1123] 앞 부지 보호 자동 옹벽은 한 단 · 실제 높이(종단 글씨 · 막대 · 측점) — 자동 구간 선만 · 번들 옹벽선(정본)의 높이로
+                        var gz = zones?.Where(z => CreateGradingCommand.IsGuardZone(z, b.Params.MinSlope)).ToList();
+                        if (gz != null && gz.Count > 0)
+                            wallPts = PadGuard.SingleTierWallLines(wallPts, up, b.Boundary, gz, up ? b.CutWallRuns : b.FillWallRuns);
                         foreach (var e in edges)
                         {
                             if (e.Pts == null || e.Pts.Count < 2) continue;

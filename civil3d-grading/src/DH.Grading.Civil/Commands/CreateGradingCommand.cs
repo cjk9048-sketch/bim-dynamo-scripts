@@ -17,7 +17,11 @@ namespace DH.Grading.Civil.Commands;
 /// </summary>
 /// <summary>[다중 구역 0729 — 방식A] 정지 실행 모드 — Fresh=새로시작, Append=이어서(누적, 새 구역 추가),
 /// RerunLast=마지막 구역만 재실행(DHWALL 옹벽 적용·설정 변경 재실행).</summary>
-internal enum GradeMode { Fresh, Append, RerunLast }
+/// <para>★★★[JACK 1123] <b>Over = «새로 만들기»(앞 결과가 있을 때)</b> — 지금 정지면을 원지형으로 보고 깎는다(앞 구역 기록은 남김 · 앞 부지 보호 없음).
+/// <see cref="CreateGradingCommand.DoGrade"/> 들머리에서 Append 기계로 바뀐다(정지면_DH → 정지면_DH이전 바탕 · 번들 · 굳은 옹벽 그대로) — 다른 것은 보호를 끄는 것 하나.
+/// Append(«이어서»)는 앞 계획부지를 보호한다(<see cref="DH.Grading.Core.PadGuard"/>). Fresh(처음부터)는 앞 결과가 없을 때만 화면에서 고른다 — 다시 처음부터는 [계획지표면 초기화].</para>
+/// <para>★[2차 검토 · 조정자 결정] RerunOver = «새로 만들기»를 고르고 마지막 구역 계획선을 다시 고름 — 마지막 구역 다시 + 보호 끔(고른 모드를 따른다).</para>
+internal enum GradeMode { Fresh, Append, RerunLast, Over, RerunOver }
 
 /// <summary>★★[v32.15] <b>붙여넣기 줄 제거 스위치 — 켠다.</b>
 ///
@@ -115,10 +119,11 @@ public sealed class CreateGradingCommand
             bool append = true;
             if (GradeStart.HasPrevious(doc.Database, out int nRegion))
             {
+                // ★★★[JACK 1123] 이어서 = 앞 계획부지 보호(닿으면 자동 옹벽) · 새로 만들기 = 지금 땅을 원지형으로(앞 부지도 깎임) — 처음부터는 [계획지표면 초기화]
                 var pko = new PromptKeywordOptions(
-                    $"\n기존 정지면_DH(구역 {nRegion}개)가 있습니다 — 이어서 추가할까요, 새로 시작할까요?");
+                    $"\n기존 정지면_DH(구역 {nRegion}개) — 이어서(앞 부지 보호) / 새로만들기(지금 땅 기준)?");
                 pko.Keywords.Add("이어서");
-                pko.Keywords.Add("새로시작");
+                pko.Keywords.Add("새로만들기");
                 pko.Keywords.Default = "이어서";
                 pko.AllowNone = true;
                 var kr = ed.GetKeywords(pko);
@@ -131,9 +136,10 @@ public sealed class CreateGradingCommand
             var plan = GradeStart.Decide(doc, rPoly.ObjectId, append);
             // ★★★[v103.1.12 · JACK 1015 ② · 계획 4판 H4] «이어서»는 지금 정지면_DH(옹벽 합성)가 새 구역의 기준면에 굳는다 — 빠진 옹벽이 있으면 먼저 합성하고 그래도 빠지면 묻는다.
             //   관문은 Decide 밖(트랜잭션 밖)에서 · 합성을 했으면 Decide를 다시 불러 기준면(GroundAuto)을 새로 잡는다(합성이 정지면_DH 객체를 바꾼다)
-            if (!plan.Blocked && plan.Mode == GradeMode.Append)
+            //   ★[JACK 1123] «새로 만들기»(Over)도 같은 기계(정지면_DH가 바탕에 굳는다) — 같은 관문
+            if (!plan.Blocked && (plan.Mode == GradeMode.Append || plan.Mode == GradeMode.Over))
             {
-                if (!CompositeGate.Ensure(doc, "이어서", "빠진 옹벽은 정지면_DH이전에 안 들어가고 목록에서 지워집니다")) return;
+                if (!CompositeGate.Ensure(doc, plan.Mode == GradeMode.Over ? "새로 만들기" : "이어서", "빠진 옹벽은 정지면_DH이전에 안 들어가고 목록에서 지워집니다")) return;
                 plan = GradeStart.Decide(doc, rPoly.ObjectId, append);
             }
             if (plan.Blocked)
@@ -167,7 +173,9 @@ public sealed class CreateGradingCommand
             }
         }
         else if (mode == GradeMode.Append)
-            ed.WriteMessage("\n[이어서] 기준 지반 = 현재 정지면_DH (기존 구역 유지, 새 구역 추가)");
+            ed.WriteMessage("\n[이어서] 바탕 = 지금 정지면_DH · 앞 계획부지 보호");
+        else if (mode == GradeMode.Over)
+            ed.WriteMessage("\n[새로 만들기] 바탕 = 지금 정지면_DH(앞 구역은 땅으로)");
 
         DoGrade(doc, rPoly.ObjectId, groundSel, mode);
     }
@@ -183,11 +191,17 @@ public sealed class CreateGradingCommand
         // ★[v103.1.9 · 계획 검토 낮음 5] «아니오로 멈췄다» 표시는 <b>맨 먼저</b> 비운다 — 아래 자가점검 준비가 터져도 부르는 쪽(창의 «다시»)이 지난 값을 읽지 않게
         GradingSettings.LastGradeDeclined = false;
         _preCand = null; _preYes = null; _preWarn = "";
+        // ★★★[JACK 1123] «새로 만들기»(Over)는 «이어서» 기계 그대로 + 앞 부지 보호 끔 — 안쪽은 Append만 본다
+        bool overPrev = _overMode; _overMode = mode == GradeMode.Over || mode == GradeMode.RerunOver;
+        string guardPrev = _guardNote; _guardNote = "";
+        string? alertPrev = _pendingAlert; _pendingAlert = null;
+        if (mode == GradeMode.Over) mode = GradeMode.Append;
+        else if (mode == GradeMode.RerunOver) mode = GradeMode.RerunLast;   // ★[2차 검토] 마지막 구역 다시 · 보호 끔
         // [JACK 0731] 정지면 생성 중 이벤트 뷰어 알림(팝업)만 끄기 — 기록은 남음. 어떤 경로로 끝나든 원복.
         var evPrev = EventViewerMute.Begin();
         // ★★★[v103.1.7 · JACK 1014 «현장확인 말고 로그로»] 자가점검 — 정지면 생성 한 번 = 판정 한 줄(DH_자가점검.log). 부르는 길(명령 · 도킹창 · 옹벽/사면 변환)과 상관없이 여기서 연다.
         //   Civil이 이 도중에 죽으면 진행 표지가 남아 다음 시작 때 «⚠ 끝나지 않았다»로 알린다
-        using var job = new SelfCheckLog.Job($"정지면 생성({(mode == GradeMode.Append ? "이어서" : mode == GradeMode.RerunLast ? "마지막 구역 다시" : "새로")})", doc.Name);
+        using var job = new SelfCheckLog.Job($"정지면 생성({(mode == GradeMode.Append ? (_overMode ? "새로 만들기" : "이어서") : mode == GradeMode.RerunLast ? (_overMode ? "마지막 구역 다시 · 새로 만들기" : "마지막 구역 다시") : "새로")})", doc.Name);
         var jobPrev = _job; _job = job;
         var issuesPrev = _issuesBefore; _issuesBefore = SelfCheck.IssuesNow(doc.Database);   // ★[v103.1.7 · 검토 낮음 6] 작업 앞 상태(새로 생긴 문제만 ⚠로)
         string stage3Prev = _stage3Warn; _stage3Warn = "";
@@ -202,6 +216,9 @@ public sealed class CreateGradingCommand
             // ★★[v103.2 · 계획 2-7 ③ · 확인 중간 2] «이어서»의 되돌리기는 출구 하나 — 새 정지면_DH가 없으면 이름 셋을 되돌린다(3단계 합성 자체 실패도 여기로 온다)
             RestoreAppend(doc.Database);
             _appendUndo = undoPrev;
+            LastGuardNote = _guardNote;
+            if (_pendingAlert != null && !SelfCheckLog.Headless) try { AcadApp.ShowAlertDialog(_pendingAlert); } catch { }
+            _overMode = overPrev; _guardNote = guardPrev; _pendingAlert = alertPrev;
             _job = jobPrev; _issuesBefore = issuesPrev; _stage3Warn = stage3Prev; _blendWarn = blendPrev;
             // ★[v103.2 · 계획 2-6] 그려 둔 종단 · 횡단이 옛 면 기준이면 한 줄 — 옹벽 합성을 줄 세웠으면 그 끝에서 한 번(낮음 1)
             //   ★★[v116.10 · JACK 1110 «부지를 고쳐도 종단이 업데이트가 안 돼» · 인터뷰 «자동으로 그 자리에»] 알림 대신 그려 둔 종단(· 횡단)을 같은 자리에 다시 그린다
@@ -212,6 +229,142 @@ public sealed class CreateGradingCommand
                 else PureWithWallsBuilder.NotifyStale(doc);
             }
         }
+    }
+
+    // ══ ★★★[JACK 1123 «이어서는 앞 계획부지 절대 침범 금지 · 어쩔 수 없으면 자동 수직옹벽»] 앞 부지 보호 ══
+    /// <summary>지금 도는 정지면 생성이 «새로 만들기»(Over — 보호 끔)인가. DoGrade가 들머리에서 켜고 출구에서 되돌린다.</summary>
+    static bool _overMode;
+    /// <summary>이번 정지면 생성의 보호 알림 한 줄(완료창 · 명령줄 · 자가점검) — 보호가 안 돌았으면 빈 값.</summary>
+    static string _guardNote = "";
+    /// <summary>마지막 정지면 생성의 보호 알림(시험 · 창이 읽는다).</summary>
+    internal static string LastGuardNote = "";
+    /// <summary>★[2차 검토] 앞 부지 보호로 멈출 때 띄울 알림 — 트랜잭션 안에서 띄우지 않고 DoGrade 출구에서 한 번(화면 없는 Civil은 안 띄움).</summary>
+    static string? _pendingAlert;
+    /// <summary>마지막 보호 검사 — 앞 부지 안 표본 수 · 가장 큰 높이 변화(m · 못 쟀으면 NaN).</summary>
+    internal static int LastGuardSamples;
+    internal static double LastGuardMaxDz = double.NaN;
+
+    /// <summary>보호할 앞 부지(계획선) — 이어서 = 앞 구역 · 마지막 구역 다시 = 그 구역을 «이어서»(보호)로 지었고 이번에 «새로 만들기»를 안 골랐으면 그 앞 구역들 · 그 밖(새로 · 새로 만들기) = null.
+    /// <para>★[2차 검토 · 조정자 결정] «새로 만들기»로 지은 구역이 있으면 그 앞 구역들은 «땅»이다 — 마지막 새로 만들기 구역부터 보호한다.
+    /// 넓이가 거의 0인 계획선(1 c㎡ 미만)은 뺀다(MeasurePads도 같은 목록을 쓴다).</para></summary>
+    static System.Collections.Generic.List<System.Collections.Generic.IReadOnlyList<Point3>>? PadsToGuard(Database db, Transaction tr, GradeMode mode,
+        System.Collections.Generic.List<GradingBundle>? regionsPrev)
+    {
+        if (regionsPrev == null || regionsPrev.Count == 0) return null;
+        System.Collections.Generic.List<GradingBundle> src;
+        if (mode == GradeMode.Append) { if (_overMode) return null; src = regionsPrev; }
+        else if (mode == GradeMode.RerunLast && !_overMode && regionsPrev.Count >= 2 && GradingBundleStore.IsProtected(db, tr, regionsPrev[^1].PlanHandle))
+            src = regionsPrev.Take(regionsPrev.Count - 1).ToList();
+        else return null;
+        // 마지막 «새로 만들기» 구역부터(그 앞은 땅)
+        int from = 0;
+        for (int k = src.Count - 1; k >= 0; k--)
+            if (GradingBundleStore.IsOver(db, tr, src[k].PlanHandle)) { from = k; break; }
+        static double Area(System.Collections.Generic.IReadOnlyList<Point3> r)
+        {
+            double a = 0; for (int i = 0; i < r.Count; i++) { var u = r[i]; var v = r[(i + 1) % r.Count]; a += u.X * v.Y - v.X * u.Y; }
+            return System.Math.Abs(a) / 2;
+        }
+        var l = src.Skip(from).Where(r => r.Boundary is { Count: >= 3 } && Area(r.Boundary) > 1e-4)
+                   .Select(r => (System.Collections.Generic.IReadOnlyList<Point3>)r.Boundary).ToList();
+        return l.Count > 0 ? l : null;
+    }
+
+    /// <summary>자동 보호 옹벽 구간인가 — ★[2차 검토] 모양이 아니라 명시 표지(<see cref="PadGuard.GuardMarkBench"/> 둘째 규칙)로. «마지막 구역 다시»가 번들에서 물려받은 지난 자동 구간을 빼고 새로 붙인다(쌓이지 않게).</summary>
+    internal static bool IsGuardZone(SlopeZone z) => PadGuard.IsGuardZone(z);
+    /// <summary>같은 판정(옛 부르는 쪽 · NoriCommand) — 표지로 알아보므로 MinSlope는 안 본다.</summary>
+    internal static bool IsGuardZone(SlopeZone z, double minSlope) => PadGuard.IsGuardZone(z);
+
+    /// <summary>보호를 건 경계 · 구간 — 1단계와 «재생성 전 자리 재기»가 같은 함수로(같은 입력이면 같은 답). pads가 null이면 그대로.</summary>
+    static (System.Collections.Generic.List<Point3> Boundary, PadGuard.Result? Guard) GuardBoundary(
+        System.Collections.Generic.List<Point3> boundary, System.Collections.Generic.List<System.Collections.Generic.IReadOnlyList<Point3>>? pads, IGroundSurface ground)
+    {
+        if (pads == null) return (boundary, null);
+        var g = PadGuard.Apply(boundary, pads, ground, GradingSettings.ToParams());
+        return (g.Blocked.Length == 0 ? g.Boundary : boundary, g);
+    }
+
+    /// <summary>앞 부지 안 높이 변화 — 바탕(정지면_DH이전) vs 새 정지면_DH · 표본 = Core <see cref="PadGuard.SamplePoints"/>(격자 + 둘레 2 cm 안쪽 줄). 새 트랜잭션(읽기만).</summary>
+    static (int N, double MaxDz, string Where) MeasurePads(Database db, ObjectId baseId, ObjectId newId,
+        System.Collections.Generic.List<System.Collections.Generic.IReadOnlyList<Point3>> pads)
+    {
+        int n = 0; double mx = 0; string where = "";
+        try
+        {
+            using var tr = db.TransactionManager.StartTransaction();
+            var b = (TinSurface)tr.GetObject(baseId, OpenMode.ForRead);
+            var s = (TinSurface)tr.GetObject(newId, OpenMode.ForRead);
+            foreach (var pad in pads)
+                foreach (var (x, y) in PadGuard.SamplePoints(pad))
+                {
+                    double zb, zs;
+                    try { zb = b.FindElevationAtXY(x, y); zs = s.FindElevationAtXY(x, y); } catch { continue; }
+                    n++;
+                    double d = System.Math.Abs(zs - zb);
+                    if (d > mx) { mx = d; where = $" @({x:F2},{y:F2}) 바탕 {zb:F3} → {zs:F3}"; }
+                }
+            tr.Commit();
+        }
+        catch (System.Exception ex) { return (0, double.NaN, $" — 못 쟀다({ex.GetType().Name}: {ex.Message})"); }
+        return (n, n > 0 ? mx : double.NaN, mx > 0.001 ? where : "");
+    }
+
+    /// <summary>구간 목록에 자동 보호 옹벽을 붙인다(지난 자동 구간은 빼고 — 나중 것이 이긴다).</summary>
+    static System.Collections.Generic.List<SlopeZone> WithGuardZones(System.Collections.Generic.List<SlopeZone> zones, System.Collections.Generic.List<SlopeZone>? add)
+    {
+        var l = zones.Where(z => !IsGuardZone(z)).ToList();
+        if (add != null) l.AddRange(add);
+        return l;
+    }
+
+    /// <summary>★[조정자 Q1] 위와 같고 + 사용자 구간(자 없음 = 계획선 호길이)이 자동 구간과 겹치면 겹친 길이만큼 뺀다(자동 구간이 이긴다 · 0.5 m 미만 조각은 버림).
+    /// 자(링)로 잰 구간은 같은 축이 아니라 못 뺀다 — 그래도 자동 구간이 뒤에 붙어 그 자리 모양은 자동 옹벽이 이긴다. <paramref name="cut"/> = 줄이거나 없앤 사용자 구간 수.</summary>
+    static System.Collections.Generic.List<SlopeZone> WithGuardZones(System.Collections.Generic.List<SlopeZone> zones, System.Collections.Generic.List<SlopeZone>? add,
+        ref int cut, System.Collections.Generic.IReadOnlyList<Point3> boundary)
+    {
+        if (add == null || add.Count == 0 || boundary.Count < 3) return WithGuardZones(zones, add);
+        double total = GradingGeometry.CumLen2D(boundary)[^1];
+        var guards = add.Select(g => (A: g.T0, B: g.T1 >= g.T0 ? g.T1 : g.T1 + total)).ToList();
+        var l = new System.Collections.Generic.List<SlopeZone>();
+        foreach (var z in zones)
+        {
+            if (IsGuardZone(z)) continue;
+            if (z.Ref != null) { l.Add(z); continue; }
+            double u0 = z.T0, u1 = z.T1 >= z.T0 ? z.T1 : z.T1 + total;
+            // ★[2차 검토] 안 겹치면 길이와 상관없이 그대로
+            bool overlaps = false;
+            foreach (var (ga, gb) in guards)
+                foreach (double sh in new[] { -total, 0.0, total })
+                    if (gb + sh > u0 && ga + sh < u1) overlaps = true;
+            if (!overlaps) { l.Add(z); continue; }
+            var pieces = new System.Collections.Generic.List<(double A, double B)> { (u0, u1) };
+            foreach (var (ga, gb) in guards)
+                foreach (double sh in new[] { -total, 0.0, total })
+                {
+                    double a = ga + sh, b = gb + sh;
+                    var next = new System.Collections.Generic.List<(double A, double B)>();
+                    foreach (var (pa, pb) in pieces)
+                    {
+                        if (b <= pa || a >= pb) { next.Add((pa, pb)); continue; }
+                        if (a > pa) next.Add((pa, a));
+                        if (b < pb) next.Add((b, pb));
+                    }
+                    pieces = next;
+                }
+            pieces = pieces.Where(q => q.B - q.A >= 0.5).ToList();
+            if (pieces.Count == 1 && System.Math.Abs(pieces[0].A - u0) < 1e-9 && System.Math.Abs(pieces[0].B - u1) < 1e-9) { l.Add(z); continue; }
+            cut++;
+            foreach (var (pa, pb) in pieces)
+            {
+                // ★[2차 검토] 날개는 제 끝을 가진 조각에만(가운데 조각에 날개가 붙으면 엉뚱한 자리에 가시설 날개)
+                var nz = new SlopeZone { T0 = ((pa % total) + total) % total, T1 = ((pb % total) + total) % total, Partial = z.Partial,
+                                         WingT0 = System.Math.Abs(pa - u0) < 1e-9 ? z.WingT0 : null, WingT1 = System.Math.Abs(pb - u1) < 1e-9 ? z.WingT1 : null };
+                nz.Rules.AddRange(z.Rules);
+                l.Add(nz);
+            }
+        }
+        l.AddRange(add);
+        return l;
     }
 
     /// <summary>★[v103.1.7 · 확인 검토 낮음 2] 3단계(결과만 보기)에서 물린 정지면_DH 재작성 — 판정 · 명령줄에 ⚠로.</summary>
@@ -292,7 +445,12 @@ public sealed class CreateGradingCommand
             var ground = new CachedGroundSurface((TinSurface)tr.GetObject(groundId, OpenMode.ForRead));
             long msG = sw.ElapsedMilliseconds - t0;
             var regionsPrev = mode != GradeMode.Fresh ? GradingBundleStore.TryLoadAll(db, tr, out _) : null;
+            // ★★★[JACK 1123] 1단계와 같다 — 앞 부지 보호(경계 고침 + 자동 옹벽 구간)
+            var (bG, gd) = GuardBoundary(boundary, PadsToGuard(db, tr, mode, regionsPrev), ground);
+            boundary = bG;
             var rz = RunZones(mode, zoneOverride, zoneReplaceAll, regionsPrev, boundary);
+            int cutUser0 = 0;
+            if (gd != null && gd.Blocked.Length == 0) rz = (WithGuardZones(rz.Cut, gd.CutWalls, ref cutUser0, boundary), WithGuardZones(rz.Fill, gd.FillWalls, ref cutUser0, boundary), rz.AddC, rz.AddF);
             var p = BuildParams(boundary, ground, rz.Cut, rz.Fill);   // ★[v113.1] 부지 둘레 땅 예산이 구간 구배를 본다 — 1단계(정지면 만들기)와 같은 구간
             var cut = rz.Cut; var fill = rz.Fill;
             // 1단계와 같다 — 부분 지정 옹벽 구간은 링 셈에서 뺀다(더하기 명세가 없을 때는 번들에서도 뺀다 · 1단계 «옛 판 부분 지정 옹벽 구간»)
@@ -917,7 +1075,8 @@ public sealed class CreateGradingCommand
             {
                 // ★[계획 검토 낮음 3] 대상이 있는데 못 쟀다 — 묻지 못하니 멈춘다(아무것도 안 바꿈). 로그는 새 판으로(다음 실행의 머리에 안 섞이게 — 검토 낮음 2)
                 // ★[코드 검토 낮음 2] 빠져나갈 길 한 줄 — 원인을 못 풀면 «새로시작»(옹벽은 다시 지정)
-                string fm = $"남은 옹벽의 자리를 미리 재지 못해 멈췄습니다(정지면 · 옹벽은 그대로).\n\n{pre.Fail}\n\n원인을 못 풀면 [새로시작]으로 처음부터 만들 수 있습니다(옹벽은 다시 지정).\n진단 로그: {DiagLog.FilePath}";
+                // ★[검토 M4 · JACK 1123] 없는 단추 «[새로시작]» → [계획지표면 초기화] · 단답형
+                string fm = $"남은 옹벽 자리 못 잼 → 멈춤(정지면 · 옹벽 그대로)\n\n{pre.Fail}\n\n안 풀리면 → [계획지표면 초기화] 뒤 처음부터(옹벽은 다시 지정)\n진단 로그: {DiagLog.FilePath}";
                 try { DiagLog.Reset(head0 + $"■ 재생성 전 옹벽 자리 재기 실패 — 멈춤(정지면 · 옹벽 그대로): {pre.Fail}\n" + pre.Log); } catch { }
                 try { ed.WriteMessage($"\n[DHGRADE] ⚠남은 옹벽의 자리를 미리 재지 못해 멈췄습니다(정지면 · 옹벽 그대로) — {pre.Fail}"); } catch { }
                 if (!SelfCheckLog.Headless) try { AcadApp.ShowAlertDialog(fm); } catch { }
@@ -964,7 +1123,7 @@ public sealed class CreateGradingCommand
             }
             catch (System.Exception ax) { appendWf = new PureWithWallsBuilder.Result { Kind = PureWithWallsBuilder.Kind.NotReflected, Why = $"옹벽면을 못 지었다({ax.GetType().Name}: {ax.Message})" }; }
             try { DiagLog.AppendCarry($"\n■ {System.DateTime.Now:HH:mm:ss} 이어서 — 앞 구역 옹벽면({swA.ElapsedMilliseconds}ms)\n{wlog}  → {appendWf.StatusText}\n"); } catch { }
-            _job?.Note($"이어서 — 앞 구역 옹벽면: {SelfCheckLog.Clean(appendWf.StatusText)} · {swA.ElapsedMilliseconds}ms");
+            _job?.Note($"{(_overMode ? "새로 만들기" : "이어서")} — 앞 구역 옹벽면: {SelfCheckLog.Clean(appendWf.StatusText)} · {swA.ElapsedMilliseconds}ms");
             if (appendWf.Kind == PureWithWallsBuilder.Kind.NotReflected && !PureWithWallsBuilder.AskAppend(doc, appendWf))
             {
                 GradingSettings.LastGradeDeclined = true;
@@ -1116,8 +1275,10 @@ public sealed class CreateGradingCommand
         if (mode == GradeMode.Append && (regionsPrev == null || regionsPrev.Count == 0))
         {
             TryRestoreBase(db, baseRestoreHandle);
-            ed.WriteMessage("\n[DHGRADE] 기존 구역 번들을 읽지 못해 '이어서'를 중단합니다.");
-            AcadApp.ShowAlertDialog("기존 구역 정보를 읽지 못해 '이어서'를 중단합니다.\n[새로시작]으로 실행하거나 도면을 확인하세요.");
+            // ★[검토 M4] 새로 만들기(Over)에서도 뜬다 — 모드 이름 · [계획지표면 초기화] · 단답형
+            string mName = _overMode ? "새로 만들기" : "이어서";
+            ed.WriteMessage($"\n[DHGRADE] 앞 구역 기록 못 읽음 → {mName} 멈춤");
+            if (!SelfCheckLog.Headless) AcadApp.ShowAlertDialog($"앞 구역 기록 못 읽음 → {mName} 멈춤\n도면 확인 · 안 되면 [계획지표면 초기화] 뒤 처음부터");
             _job?.Done(false, "멈춤 — 기존 구역 번들을 못 읽어 «이어서»를 중단");   // ★[v103.1.7 · 검토 중간 3]
             return;
         }
@@ -1475,6 +1636,8 @@ public sealed class CreateGradingCommand
                 // ★[검토 1012 높음] 표지가 가리키는 핸들이 아니라 <b>정지면_DH 자신</b>이 합성 아닌 그 면이어야 한다(PlainP0) — 아니면 값은 견주지도 않는다
                 var (p0Now, p0IdS, p0Why) = PlainP0(db, trS, groundId);
                 if (p0Why.Length > 0) diff = p0Why;
+                // ★[JACK 1123] 앞 부지 보호 구역은 경계 · 구간이 바탕에 따라 바뀐다 — 견주지 않고 다시 짓는다(느릴 뿐 안전)
+                else if (PadsToGuard(db, trS, mode, regionsPrev) != null) diff = "앞 부지 보호 구역 — 견주지 않고 다시 짓는다";
                 else
                 {
                     var bNow = BoundaryReader.Read(trS, planPolyId);
@@ -1532,6 +1695,10 @@ public sealed class CreateGradingCommand
         try
         {
             System.Collections.Generic.List<Point3> boundary;
+            // ★★★[JACK 1123] 앞 부지 보호 — 계획선 원본(번들 지문용) · 보호할 앞 부지 · 보호 결과(경계 고침 · 자동 옹벽)
+            System.Collections.Generic.List<Point3>? boundaryPlan = null;
+            System.Collections.Generic.List<System.Collections.Generic.IReadOnlyList<Point3>>? guardPads = null;
+            PadGuard.Result? guard = null;
             GradingParams p;
             ulong groundSig = 0;   // ★[v103.1.4] 이번 정지면을 지은 원지반의 지문 — 끝까지 성공하면 세션에 적어 둔다(되돌리기 때 견줌)
             VirtualSlope cut, fill;
@@ -1565,6 +1732,36 @@ public sealed class CreateGradingCommand
                 var ground = groundReuse != null && groundReuseId == groundId ? groundReuse : new CachedGroundSurface(groundTin); // 원지반 표고 캐싱(단수 계산용)
                 if (groundReuse != null && groundReuseId == groundId) try { DiagLog.AppendCarry("\n  ★원지반 캐시 다시 씀(되돌리기 견주기에서 뜬 것 — 한 번 덜 뜸)\n"); } catch { }
                 groundSig = ground.Signature;
+                // ══ ★★★[JACK 1123 «이어서는 앞 계획부지를 절대 침범하면 안 돼 — 어쩔 수 없으면 자동으로 수직옹벽»] 앞 부지 보호 ══
+                //   겹친 부분 + 벽 자리를 계획선에서 빼고(조정자 결정) · 새 사면이 앞 부지에 들어가는 자리는 수직 옹벽 구간(아래 RunZones 뒤에 붙인다).
+                //   새로 만들기(Over) · 새로 · 보호 안 한 구역 다시 = 그대로(guardPads null)
+                boundaryPlan = boundary;
+                guardPads = PadsToGuard(db, tr, mode, regionsPrev);
+                if (guardPads != null)
+                {
+                    var swG = System.Diagnostics.Stopwatch.StartNew();
+                    (boundary, guard) = GuardBoundary(boundary, guardPads, ground);
+                    string gl = $"앞 부지 보호({guardPads.Count}곳) — {guard!.Log}{(guard.Blocked.Length > 0 ? " · ⚠멈춤: " + guard.Blocked : "")} · {swG.ElapsedMilliseconds}ms";
+                    try { DiagLog.AppendCarry($"\n■ {System.DateTime.Now:HH:mm:ss} {gl}\n"); } catch { }
+                    _job?.Note(SelfCheckLog.Clean(gl.Split('\n')[0]));
+                    if (guard.Blocked.Length > 0)
+                    {
+                        // («이어서» 들머리가 바꾼 이름은 DoGrade 출구(RestoreAppend)가 되돌린다 — 이 트랜잭션 안에서 되돌리면 함께 버려진다)
+                        ed.WriteMessage("\n[DHGRADE] " + guard.Blocked);
+                        _pendingAlert = guard.Blocked;   // ★[2차 검토] 알림창은 트랜잭션 밖(DoGrade 출구)에서
+                        _job?.Done(false, "멈춤 — 앞 부지 보호: " + guard.Blocked);
+                        return;
+                    }
+                    if (boundary.Count < 3)
+                    {
+                        // ★[검토 L4] 글 없이 멈추던 것
+                        const string few = "앞 부지를 빼니 계획선이 너무 작음 → 계획선 확인";
+                        ed.WriteMessage("\n[DHGRADE] " + few);
+                        _pendingAlert = few;   // ★[2차 검토] 트랜잭션 밖에서
+                        _job?.Done(false, "멈춤 — 앞 부지를 뺀 계획선 정점이 3개 미만");
+                        return;
+                    }
+                }
                 // ★[v113.1] 제원(수직 예산)은 구간이 정해진 뒤에 — 부지 둘레 땅 예산이 구간 구배를 본다(아래 RunZones 바로 다음)
 
                 // [0729 — JACK 계획고 실수 감지] 경계를 따라 지반고를 표본해 '절토/성토가 필요한가'와
@@ -1596,6 +1793,22 @@ public sealed class CreateGradingCommand
                 // ★[v103.1.9] 구간은 «재생성 전 옹벽 자리 재기»와 <b>같은 함수</b>(RunZones)로 — 한 벌이라 미리 잰 자리와 실제로 짓는 자리가 같다.
                 //   (zoneOverride면 그것 · 아니면 옛 옹벽 선택 + «다시»면 번들 마지막 구역과 병합 — 종전 이 자리의 셈을 그대로 옮겼다)
                 var rz = RunZones(mode, zoneOverride, zoneReplaceAll, regionsPrev, boundary);
+                // ★★★[JACK 1123] 앞 부지에 들어가는 자리 = 수직 옹벽 구간(나중 것이 이긴다 — 지난 자동 구간은 빼고 새로)
+                if (guard != null)
+                {
+                    // ★[조정자 Q1] 사용자 구간(사면 · 옹벽 변환)이 자동 구간과 겹치면 자동 구간이 이기고 겹친 길이만큼 사용자 구간을 뺀다(기록 · 수량이 둘로 안 잡히게)
+                    int cutUser = 0;
+                    rz = (WithGuardZones(rz.Cut, guard.CutWalls, ref cutUser, boundary), WithGuardZones(rz.Fill, guard.FillWalls, ref cutUser, boundary), rz.AddC, rz.AddF);
+                    var gn = new System.Collections.Generic.List<string>();
+                    // ★[조정자 1123 «초보용 단답형» 예: «앞 부지 보호 — 옹벽 자동 2곳(31 m) · 겹친 부분 뺌 12 ㎡»] 소수 · 표본 수는 로그로
+                    if (guard.WallCount > 0) gn.Add($"옹벽 자동 {guard.WallCount}곳({guard.WallLen:F0} m)");
+                    if (guard.OverlapArea > 0.01) gn.Add($"겹친 부분 뺌 {System.Math.Max(1, System.Math.Round(guard.OverlapArea)):F0} ㎡");
+                    if (guard.DroppedPieces > 0) gn.Add($"떨어진 조각 뺌 {System.Math.Max(1, System.Math.Round(guard.DroppedArea)):F0} ㎡");   // ★[검토 L3] 넓이
+                    if (cutUser > 0) gn.Add("앞 부지 보호 구간은 자동 옹벽 그대로");
+                    _guardNote = "앞 부지 보호 — " + (gn.Count > 0 ? string.Join(" · ", gn) : "닿는 곳 없음");
+                    try { ed.WriteMessage("\n[이어서] " + _guardNote); } catch { }
+                    if (cutUser > 0) try { DiagLog.AppendCarry($"\n■ 앞 부지 보호 — 사용자 구간 {cutUser}개가 자동 옹벽 구간과 겹쳐 그 길이만큼 뺐다\n"); } catch { }
+                }
                 cutZones = rz.Cut; fillZones = rz.Fill;
                 p = BuildParams(boundary, ground, rz.Cut, rz.Fill);   // ★[v113.1] 부지 둘레 땅 예산(구간 구배까지 본다)
                 if (zoneOverride != null)
@@ -1897,7 +2110,7 @@ public sealed class CreateGradingCommand
                         // ★★★[v103.2 · 계획 2-7 ④ · 확인 중간 1] 목록 비우기 · 굳은 옹벽 칸은 새 정지면_DH가 커밋되는 3단계 트랜잭션으로 옮겼다(FreezeAppendWalls) —
                         //   여기서 먼저 비우면 그 뒤에 멈출 때 옹벽이 이미 …이전에 굳었는데 목록에서도 굳은 칸에서도 사라진다(관문 «예» 번호 · 대기 지우기도 함께 옮겼다)
                         if (listOk && wList.Count > 0)
-                            wallGone = $"이어서 — 앞 구역 옹벽 {wList.Count}개는 새 정지면_DH를 만드는 3단계에서 굳은 옹벽 칸으로 옮긴다";
+                            wallGone = $"{(_overMode ? "새로 만들기" : "이어서")} — 앞 구역 옹벽 {wList.Count}개는 새 정지면_DH를 만드는 3단계에서 굳은 옹벽 칸으로 옮긴다";
                     }
                     else
                     {
@@ -2120,6 +2333,8 @@ public sealed class CreateGradingCommand
 
                 const double BorderMargin = 2.0; // 경계 '닿음' 판정 여유(m)
                 string? borderHit = null;
+                // ★[검토 H2 ② · M1] 앞 부지 보호 — 클립링을 못 다듬으면 멈춤 · 광선이 놓친 침범(옹벽 기록 없는 단차) 수
+                string? guardStop = null; int guardWhy = 0, guardStepN = 0; string guardStepLog = "";
                 bool NearBorder(System.Collections.Generic.List<Point3> loop)
                 {
                     foreach (var q in loop)
@@ -2202,6 +2417,18 @@ public sealed class CreateGradingCommand
                         own, opp, boundary, groundSampler2, out string udiag, subtractOpposite: false);
                     diagX += $"\n■ 클립링({label}) {udiag}\n";
                     var clipBest = Largest(clipRings, out double clipArea);
+                    // ★★★[JACK 1123 · 키트 gm1123a 실측] 앞 부지 보호 — 붙여넣을 범위에서 가시(옹벽 구간 끝 모서리에서 교선이 수직 면을 타고 꼭대기까지 오른 2.8 cm 폭 혀)를 없애고
+                    //   앞 부지(+2 cm)를 뺀다. 붙여넣는 면이 앞 부지에 닿지 않으니 앞 부지 높이는 바탕 그대로다(1단계 경계 고침 · 자동 옹벽 다음의 마지막 울타리)
+                    if (guardPads != null && clipBest != null)
+                    {
+                        var tc = PadGuard.TrimClip(clipBest, boundary, guardPads);
+                        diagX += $"■ 앞 부지 보호 클립링({label}) — {(tc.Log.Length > 0 ? tc.Log : "그대로")}\n";
+                        // ★[검토 H2 ②] 다듬지 못하면(터짐 · 절반 미만 · 앞 부지를 둘러싸 구멍) 보호 없는 원 클립으로 물러나지 않고 멈춘다(아래 borderHit와 같은 길)
+                        if (tc.Fail) { guardStop ??= tc.Log; guardWhy = tc.Why; break; }
+                        // ★[검토 M1] 광선이 놓친 침범 — 다듬기 전 클립이 앞 부지에 0.05 ㎡ 넘게 들어갔다(가시는 수 c㎡) = 옹벽 기록 없는 단차
+                        if (tc.InPad > 0.05) { guardStepN += System.Math.Max(1, tc.InPadPieces); guardStepLog += $" {label} {tc.InPad:F2}㎡"; }
+                        if (tc.Ring != null && tc.Ring.Count >= 3) clipBest = tc.Ring;
+                    }
                     if (clipBest != null && pureBest != null)
                     {
                         // [0728 — 계단식 산지 IllegalBoundary] 자기접촉(핀치) 링은 주입이 거부됨 →
@@ -2261,6 +2488,54 @@ public sealed class CreateGradingCommand
                     AcadApp.ShowAlertDialog(wmsg);
                     _job?.Done(false, $"멈춤 — 사면({borderHit})이 원지반 경계를 벗어난다(여유 2m 안)");   // ★[v103.1.7 · 검토 중간 3]
                     return;
+                }
+
+                // ══ ★★★[검토 H2 ① · ②] 앞 부지 보호 — 가상 절토 · 성토면에 앞 부지 + 2 cm를 Hide로(도넛과 같은 방식) — 클립 모양과 상관없이 붙여넣는 면이 앞 부지를 못 덮는다 ══
+                //   클립링을 못 다듬었거나(guardStop) Hide를 못 넣으면 멈춘다(보호 없이 확정하지 않는다)
+                if (guardPads != null && guardStop == null)
+                {
+                    try
+                    {
+                        var hides = PadGuard.HideRings(guardPads);
+                        int nh = 0;
+                        foreach (var sid in new[] { cutId, fillId })
+                        {
+                            if (sid.IsNull) continue;
+                            var t = (TinSurface)tr2.GetObject(sid, OpenMode.ForWrite);
+                            foreach (var h in hides) { GradingBuilder.AddHideBoundary(t, h); nh++; }
+                        }
+                        bndMsg += $"\n앞 부지 보호 Hide {hides.Count}개 × 면 → {nh}개 넣음";
+                    }
+                    catch (System.Exception hx) { guardStop = "앞 부지 Hide 못 넣음(" + hx.Message + ")"; guardWhy = 4; }
+                }
+                if (guardStop != null)
+                {
+                    EraseSurface(tr2, cutId);
+                    EraseSurface(tr2, fillId);
+                    tr2.Commit();
+                    TryRestoreBase(db, baseRestoreHandle);
+                    // ★[2차 검토] 까닭마다 단답형
+                    string gmsg = guardWhy switch
+                    {
+                        3 => "앞 부지를 둘러싸는 사면 → 계획선을 앞 부지와 떨어지게 · 나눠 그리기",
+                        2 => "사면이 앞 부지에 크게 걸림 → 계획선 확인",
+                        4 => "앞 부지 보호 경계 못 넣음 → 진단 로그",
+                        _ => "앞 부지 보호 계산 실패 → 진단 로그",
+                    };
+                    ed.WriteMessage("\n[DHGRADE 중단] " + gmsg);
+                    try { DiagLog.Append($"\n■ 수행 중단 — 앞 부지 보호: {guardStop}\n"); } catch { }
+                    _pendingAlert = gmsg;   // ★[2차 검토] 트랜잭션 밖에서
+                    _job?.Done(false, "멈춤 — 앞 부지 보호: " + guardStop);
+                    return;
+                }
+                if (guardStepN > 0)
+                {
+                    // ★[검토 M1] 광선(전역 구배 · 단높이 · 소단만 봄)이 놓친 침범 — 클립은 앞 부지 앞에서 잘려 높이는 지키지만 그 자리는 옹벽 기록 없는 단차다
+                    string sw = $"⚠옹벽 기록 없는 단차 {guardStepN}곳 → 진단 로그";
+                    _guardNote += (_guardNote.Length > 0 ? " · " : "") + sw;
+                    _stage3Warn = _stage3Warn.Length > 0 ? _stage3Warn + " · " + sw : sw;
+                    try { DiagLog.Append($"\n■ 앞 부지 보호 — 다듬기 전 클립이 앞 부지에 들어감:{guardStepLog} → 광선이 놓친 침범(옹벽 기록 없는 단차)\n"); } catch { }
+                    try { ed.WriteMessage("\n[DHGRADE] " + sw); } catch { }
                 }
 
                 // [겹침 제거 — 도넛] 성토·절토가 pad(계획 내부)를 둘 다 가지면 최종 합성의 마지막 paste가
@@ -2404,6 +2679,9 @@ public sealed class CreateGradingCommand
             //   → 됐을 때만 그 이름을 켠다.
             bool pureWallOk = false;
             string appendFrozen = "";   // ★[v103.2] «이어서» 굳은 옹벽 한 줄
+            string? guardBreach = null;   // ★[검토 H2 ③] 커밋 직전 앞 부지 검사가 어긋남 — 커밋 안 하고 되돌린다
+            var pastedRings = new System.Collections.Generic.Dictionary<string, System.Collections.Generic.IReadOnlyList<Point3>>();
+            ObjectId cutId0 = cutId, fillId0 = fillId;   // ★[2차 검토] 되돌린 뒤 지울 가상면 — 3단계가 변수를 Null로 바꿔도(되돌려진 지움) 원 id로 지운다
             bool wallSlabBuilt = false;   // ★[v102.2 · 코드 검토 낮음 8] 이번 실행이 가상옹벽_DH(전이면)를 짓고 굳혔나 — 3.5단계가 이것만 다시 켠다
             try
             {
@@ -2440,6 +2718,8 @@ public sealed class CreateGradingCommand
                 // 절토=원본 실패/정규화 OK — NTS 검사로는 구분 불가). → paste 결과로 판단해 실패한 표면만
                 // 경계를 5mm 정규화 링으로 교체하고 재시도(표면당 1회).
                 var order = new System.Collections.Generic.List<(ObjectId, string)> { (groundId, "원지반") };
+                // ★[2차 검토] 커밋 직전 검사가 잴 «실제로 넣은 클립링»(재주입하면 바꿔 적는다)
+                foreach (var kv in injectedRings) pastedRings[kv.Key] = kv.Value.ring;
                 if (!fillId.IsNull) order.Add((fillId, "성토"));
                 if (!cutId.IsNull) order.Add((cutId, "절토"));
 
@@ -2891,6 +3171,9 @@ public sealed class CreateGradingCommand
                     bool donut = failLabel == "절토" && !cutId.IsNull && !fillId.IsNull
                               && finalRings.ContainsKey("절토") && finalRings.ContainsKey("성토");
                     GradingBuilder.ReplaceOuterBoundary(vsT, cleanedR, donut ? boundary : null);
+                    pastedRings[failLabel] = cleanedR;   // ★[2차 검토] 검사가 실제로 넣은 링을 재게
+                    // ★[검토 H2 ①] 경계를 다 지우고 다시 넣으므로 앞 부지 Hide도 다시
+                    if (guardPads != null) foreach (var h in PadGuard.HideRings(guardPads)) GradingBuilder.AddHideBoundary(vsT, h);
                     // [링 2개 구조] finalRings는 순수교선 유지 — 클립링 정규화는 injected(클립)에만 반영.
                     pasteLog += $"\n  → {failLabel} 경계 정규화 재주입(정점 {cleanedR.Count})";
                     TraceRing("②경계 정규화 재주입 뒤", failLabel,
@@ -3586,10 +3869,47 @@ public sealed class CreateGradingCommand
                     if (ns > 0) pasteLog += $"\n  더 옛 «…이전» 면 {ns}개 지움(들머리에서 비켜 둔 것)";
                 }
 
-                tr3.Commit();
-                wallSlabBuilt = !wallSlabId.IsNull;
+                // ══ ★★★[검토 H2 ③ · L7] 앞 부지 보호 검사 — <b>커밋 직전</b>(같은 트랜잭션 안 읽기 · 재작성 안 부름) ══
+                //   ①주입한 클립링 ∩ 앞 부지 넓이(직접 잼 — 표본이 놓치는 수 cm 가시까지) ②앞 부지 안 표본 높이(바탕 vs 새 정지면_DH).
+                //   하나라도 어긋나면(1 mm · 1 c㎡ 넘음 · 못 잼) 커밋하지 않고 되돌린다 — 앞 부지는 «절대 침범 금지»(JACK 1123). 실패한 재작성을 커밋하는 함정과 무관(Abort)
+                LastGuardSamples = 0; LastGuardMaxDz = double.NaN;
+                if (guardPads != null && !finalSurfId.IsNull)
+                {
+                    double ov = double.NaN;
+                    try { ov = PadGuard.ClipPadOverlap(pastedRings.Values, guardPads); } catch { }   // ★[2차 검토] 재주입한 링까지(실제로 넣은 것)
+                    var (gnS, gmax, gwhere) = MeasurePads(db, groundId, finalSurfId, guardPads);
+                    LastGuardSamples = gnS; LastGuardMaxDz = gmax;
+                    string gm = (gnS == 0 ? "앞 부지 높이를 못 쟀다" : $"앞 부지 변화 {gmax * 1000:F1}mm(표본 {gnS})") + $" · 클립 ∩ 앞 부지 {(double.IsNaN(ov) ? "못 잼" : $"{ov * 1e4:F1}c㎡")}";
+                    pasteLog += "\n  ★" + gm + gwhere;
+                    _job?.Note("앞 부지 보호 검사 — " + gm);
+                    if (gnS == 0 || !(gmax <= 0.001) || double.IsNaN(ov) || ov > 1e-4) guardBreach = gm + gwhere;
+                    // ★[2차 검토 · 조정자] 시험 고리 — 키트만 켠다(환경변수 · 평소 영향 0): 되돌리기 길을 실제로 한 번 돌린다
+                    if (guardBreach == null && System.Environment.GetEnvironmentVariable("DH_TEST_FORCE_BREACH") == "1") guardBreach = "시험 고리 — 억지 침범 · " + gm;
+                }
+                if (guardBreach != null)
+                {
+                    tr3.Abort();   // 새 정지면_DH · 순수면 · 굳은 옹벽 칸 · 더 옛 면 지우기 모두 되돌아간다 — 이름은 DoGrade 출구(RestoreAppend)가 되돌린다
+                    finalSurfId = ObjectId.Null;
+                }
+                else
+                {
+                    tr3.Commit();
+                    wallSlabBuilt = !wallSlabId.IsNull;
+                }
             }
             catch (System.Exception ex) { pasteLog += $"  합성 자체 실패: {ex.Message}"; appendFrozen = ""; }
+            if (guardBreach != null)
+            {
+                appendFrozen = "";
+                try { DiagLog.Append("\n■ 합성(Paste) 검증\n  " + pasteLog + $"\n■ 수행 중단 — 앞 부지 침범(커밋 안 함 · 되돌림): {guardBreach}\n"); } catch { }
+                try { using var trE = db.TransactionManager.StartTransaction(); EraseSurface(trE, cutId0); EraseSurface(trE, fillId0); trE.Commit(); } catch { }
+                TryRestoreBase(db, baseRestoreHandle);
+                const string bmsg = "앞 부지 침범 → 계획선 확인(정지면 그대로)";
+                ed.WriteMessage("\n[DHGRADE 중단] " + bmsg);
+                if (!SelfCheckLog.Headless) try { AcadApp.ShowAlertDialog(bmsg); } catch { }
+                _job?.Done(false, "멈춤 — 앞 부지 침범(커밋 안 함): " + SelfCheckLog.Clean(guardBreach));
+                return;
+            }
             if (appendFrozen.Length > 0)
             {
                 pasteLog += "\n  [옹벽 결과물] " + appendFrozen;
@@ -3815,6 +4135,22 @@ public sealed class CreateGradingCommand
                 if (fillRuns != null && fillRuns.Count == 0) fillRuns = null;
                 runMsg = $"옹벽선 확정 — 절토 {(cutRuns?.Count ?? 0)}줄 · 성토 {(fillRuns?.Count ?? 0)}줄" +
                          (cut.HasSlope ? $"\n  절토: {cd}" : "") + (fill.HasSlope ? $"\n  성토: {fd}" : "");
+                // ★★[조정자 1123] 앞 부지 보호 자동 옹벽 = 한 단 · 실제 높이(종단 글씨 · 막대가 첫 단 5 m로 적히던 것) — 자동 구간 안 옹벽선만 · WallRunBuilder는 그대로
+                if (guardPads != null)
+                {
+                    var gzC = cutZonesR.Where(z => IsGuardZone(z)).ToList(); var gzF = fillZonesR.Where(z => IsGuardZone(z)).ToList();
+                    if (gzC.Count > 0 || gzF.Count > 0)
+                    {
+                        using var trB = db.TransactionManager.StartTransaction();
+                        var baseTin = (TinSurface)trB.GetObject(groundId, OpenMode.ForRead);
+                        double? BaseZ(double x, double y) { try { return baseTin.FindElevationAtXY(x, y); } catch { return null; } }
+                        cutRuns = PadGuard.SingleTierRuns(cutRuns, boundary, gzC, BaseZ, out string lc);
+                        fillRuns = PadGuard.SingleTierRuns(fillRuns, boundary, gzF, BaseZ, out string lf);
+                        trB.Commit();
+                        if (lc.Length > 0) runMsg += $"\n  절토 {lc}";
+                        if (lf.Length > 0) runMsg += $"\n  성토 {lf}";
+                    }
+                }
             }
             catch (System.Exception rex) { runMsg = "옹벽선 확정 실패(내보내기는 옛 경로로 폴백) — " + rex.Message; }
             try { DiagLog.Append("\n■ 옹벽선 확정(4단계 전)\n  " + runMsg.Replace("\n", "\n  ") + "\n"); }
@@ -3823,7 +4159,8 @@ public sealed class CreateGradingCommand
             stw.Stage("4단계 번들 저장");
             try
             {
-                var fp = GradingBundle.Fingerprint(boundary);
+                // ★[JACK 1123] 지문은 계획선 원본으로(앞 부지 보호가 경계를 고쳐도 «같은 계획선» 판정 · 계획선 바뀜 알림이 그대로) — Boundary는 실제로 지은 경계
+                var fp = GradingBundle.Fingerprint(boundaryPlan ?? boundary);
                 var bundle = new GradingBundle
                 {
                     PlanHandle = planPolyId.Handle.ToString(),
@@ -3892,6 +4229,15 @@ public sealed class CreateGradingCommand
                 catch (System.Exception tex) { trimMsg = "\n앞 구역 옹벽선 갱신 실패 — " + tex.Message; }
                 using Transaction tr4 = db.TransactionManager.StartTransaction();
                 GradingBundleStore.SaveAll(db, tr4, save);
+                // ★★★[JACK 1123] 이 구역을 보호(«이어서»)로 지었나 — «마지막 구역 다시»가 같은 보호를 다시 건다 · 새로 시작이면 다른 표시도 다 지운다
+                //   ★[2차 검토] «새로 만들기» 표시 — 새로 만들기(Over · RerunOver)면 켜고, 그냥 «마지막 구역 다시»(옹벽 · 사면 변환)는 지은 때 표시를 그대로 둔다
+                try
+                {
+                    string ph4 = planPolyId.Handle.ToString();
+                    bool over4 = _overMode || (mode == GradeMode.RerunLast && GradingBundleStore.IsOver(db, tr4, ph4));
+                    GradingBundleStore.SetProtected(db, tr4, ph4, guardPads != null, mode == GradeMode.Fresh, over: over4);
+                }
+                catch (System.Exception px) { trimMsg += $"\n⚠보호 표시 저장 실패 — {px.Message}"; }
                 tr4.Commit();
                 TraceRing("④번들에 담기 직전", "절토", bundle.CutFinalRing);
                 TraceRing("④번들에 담기 직전", "성토", bundle.FillFinalRing);
@@ -3965,6 +4311,7 @@ public sealed class CreateGradingCommand
             box.AppendLine(headline);
             box.AppendLine();
             box.AppendLine(volMsg);
+            if (_guardNote.Length > 0) { box.AppendLine(); box.AppendLine(_guardNote); }   // ★[JACK 1123] 자동 옹벽 · 겹침 뺌 · 앞 부지 변화
             if (wallEnd.Length > 0) { box.AppendLine(); box.AppendLine(wallEnd.Replace("<b>", "").Replace("</b>", "")); }
             if (!gradeOk)
                 box.AppendLine("\n자세한 내용은 진단 로그를 확인하세요:\n" + DiagLog.FilePath);
@@ -4066,7 +4413,7 @@ public sealed class CreateGradingCommand
                                + (_preWarn.Length > 0 ? " · " + _preWarn : "")                                                                              // ★[v103.1.9 · 계획 검토 낮음 6] 재생성 전 자리 재기의 모순
                                + (_blendWarn.Length > 0 ? " · " + _blendWarn : "");                                                                         // ★[v103.1.15] 사면 구간 끝 이음 · 가파른 띠
                 bool okJ = gradeOk && !bundleFailed && sb == 0 && snapWarn.Length == 0 && endWarn.Length == 0;
-                _job?.Done(okJ, $"{headline} · {volMsg}" + (wallEnd.Length > 0 ? " · " + wallEnd : "") + (bundleFailed ? " · ⚠번들 저장 실패" : "")
+                _job?.Done(okJ, $"{headline} · {volMsg}" + (_guardNote.Length > 0 ? " · " + _guardNote : "") + (wallEnd.Length > 0 ? " · " + wallEnd : "") + (bundleFailed ? " · ⚠번들 저장 실패" : "")
                     + " · " + st + (snapWarn.Length > 0 ? " · 마무리 재작성: " + snapWarn : "") + (endWarn.Length > 0 ? " · " + endWarn : "") + " · " + gradeTime);
                 if (sb > 0 || snapWarn.Length > 0) SelfCheck.Warn(doc, "정지면 생성 뒤 " + (sb > 0 ? st : "") + (snapWarn.Length > 0 ? (sb > 0 ? " · " : "") + snapWarn : ""));
                 SelfCheck.RecheckAtIdle(doc, "정지면 생성", sb, _issuesBefore);
@@ -4350,7 +4697,7 @@ public sealed class CreateGradingCommand
             wHead.PlanHandle = "";
             WallListStore.Save(db, tr, wHead, new System.Collections.Generic.List<WallRec>());
             var lost = committed.Where(w => !refl.Contains(w.No)).Select(w => w.No).ToList();
-            return $"이어서 — 앞 구역의 옹벽 {committed.Count}개({string.Join(",", committed.Select(w => w.No))})는 정지면_DH이전에 굳었다(결과물은 숨긴 채 둔다 · 옹벽 목록은 새 구역으로 비웠다)"
+            return $"{(_overMode ? "새로 만들기" : "이어서")} — 앞 구역의 옹벽 {committed.Count}개({string.Join(",", committed.Select(w => w.No))})는 정지면_DH이전에 굳었다(결과물은 숨긴 채 둔다 · 옹벽 목록은 새 구역으로 비웠다)"
                  + (committed.Count > 0 ? $" · 굳은 옹벽 칸에 적었다(종단 · 횡단 반영 {committed.Count - lost.Count}개" + (lost.Count > 0 ? $" · ⚠반영 안 됨 {string.Join(",", lost)}" : "") + ")" : "")
                  + pendTxt;
         }
