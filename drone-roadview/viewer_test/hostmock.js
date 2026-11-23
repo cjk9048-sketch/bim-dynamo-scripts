@@ -4,11 +4,13 @@
  * save_pipes (관로 고치기 저장) · export_pipes_shp: window.__host.shps 가 차례로 돌려줄 답 (없으면 저장함 · 경로).
  * import_pipes 는 파이썬 시험기에 'SELFTEST HOSTCMD write_pipes' 를 보내 data/pipes.js 를 새 자료로 바꿔 쓰게 하고,
  * 다 썼다는 답 (window.__hostAck.write_pipes) 을 기다린다 (진짜 프로그램처럼 파일을 쓴 뒤 돌아옴).
+ * pick_obstacles: window.__host.opicks 가 차례로 돌려줄 답 · import_obstacles: type_field 'FAIL' → 못 넣음,
+ * 아니면 'SELFTEST HOSTCMD write_obstacles' 로 시험기가 data/obstacles.js 를 쓰게 하고 답을 기다린다.
  * ?late=1 → 처음엔 api 없음, 1.5 초 뒤 api 를 채우고 'pywebviewready'. */
 (function () {
   'use strict';
   const Q = new URLSearchParams(location.search);
-  const H = window.__host = { calls: [], picks: [], shps: [], jobs: 0 };
+  const H = window.__host = { calls: [], picks: [], opicks: [], shps: [], jobs: 0 };
   const rec = (name, arg) => { H.calls.push({ name: name, arg: arg, t: performance.now() }); };
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   function ask(cmd) {
@@ -24,6 +26,12 @@
       rec('import_pipes', o);
       if (o && o.layers === 'FAIL') return wait(30).then(() => ({ ok: false, msg: '도면층 없음' }));
       return ask('write_pipes').then(() => ({ ok: true, lines: 2, note: '' }));
+    },
+    pick_obstacles: () => { rec('pick_obstacles'); return wait(30).then(() => (H.opicks.length ? H.opicks.shift() : null)); },
+    import_obstacles: (o) => {
+      rec('import_obstacles', o);
+      if (o && o.type_field === 'FAIL') return wait(30).then(() => ({ ok: false, msg: '종류 항목 없음' }));
+      return ask('write_obstacles').then(() => ({ ok: true, lines: 2, note: '' }));
     },
     save_calib: (text) => { rec('save_calib', text); return wait(10).then(() => ({ ok: true })); },
     save_pipes: (text) => { rec('save_pipes', text); return wait(10).then(() => ({ ok: true })); },
