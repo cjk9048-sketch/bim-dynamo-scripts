@@ -12,17 +12,24 @@ os.makedirs(os.path.join(WORK, 'ffmpeg'), exist_ok=True)
 FF = os.path.join(WORK, 'ffmpeg', 'ffmpeg.exe')
 shutil.copy2(imageio_ffmpeg.get_ffmpeg_exe(), FF)          # 이름을 ffmpeg.exe 로 (frames.find_ffmpeg 가 찾는 이름)
 
+# 보기 화면은 «마지막으로 커밋된 것»을 넣는다 — 다른 일이 viewer/ 를 고치는 중이어도 설치본이 섞이지 않게 (1123)
+import subprocess
+SNAP = os.path.join(WORK, 'viewer')
+os.makedirs(SNAP, exist_ok=True)
+for fn in ('index.html', 'app.js', 'style.css'):
+    data = subprocess.run(['git', 'show', 'HEAD:drone-roadview/viewer/' + fn], cwd=ROOT, capture_output=True, check=True).stdout
+    open(os.path.join(SNAP, fn), 'wb').write(data)
 datas = [
-    (os.path.join(ROOT, 'viewer', 'index.html'), 'viewer'),
-    (os.path.join(ROOT, 'viewer', 'app.js'), 'viewer'),
-    (os.path.join(ROOT, 'viewer', 'style.css'), 'viewer'),
+    (os.path.join(SNAP, 'index.html'), 'viewer'),
+    (os.path.join(SNAP, 'app.js'), 'viewer'),
+    (os.path.join(SNAP, 'style.css'), 'viewer'),
     (os.path.join(ROOT, 'roadview', 'app_home'), 'app_home'),
     (os.path.join(ROOT, 'roadview', 'rig_avata360.json'), 'roadview'),
     (FF, 'ffmpeg'),
 ]
 hidden = ['roadview.build', 'roadview.share', 'roadview.pipes_update', 'roadview.terrain', 'roadview.photos',
           'roadview.keys', 'roadview.shp', 'roadview.pipeload', 'roadview.pipes', 'roadview.height',
-          'matplotlib.tri', 'pg8000', 'pg8000.native', 'ezdxf', 'pyproj', 'webview', 'clr']
+          'matplotlib.tri', 'pg8000', 'pg8000.native', 'ezdxf', 'pyproj', 'webview', 'clr', 'cv2']
 excludes = ['tkinter', 'roadview.gui', 'IPython', 'pytest']
 
 a = Analysis([os.path.join(ROOT, 'rv_app.py'), os.path.join(ROOT, 'rv_cli.py')],

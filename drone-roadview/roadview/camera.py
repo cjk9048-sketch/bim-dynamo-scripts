@@ -185,11 +185,33 @@ def _stitch_map(rig: Rig, R_world_cam, W, H, step, scale, blend_deg):
     return np.concatenate([m, m[:, :1]], axis=1)
 
 
-def stitch(img0, img1, rig: Rig, R_world_cam: np.ndarray, W=6144, step=4, blend_deg=3.0, gain=True, strip=256):
+def _stitch_cv2(cv2, img0, img1, m, g, W, H, step, strip=512):
+    """OpenCV 로 같은 계산 (성긴 격자 펼치기 · 어안에서 색 뽑기 = cv2.remap). numpy 판보다 10배쯤 빠름."""
+    out = np.empty((H, W, 3), np.uint8)
+    m4 = np.ascontiguousarray(m[..., :4])
+    mw = np.ascontiguousarray(m[..., 4])
+    xs = (np.arange(W, dtype=np.float32) / step)[None, :]
+    g = g.astype(np.float32)
+    for r0 in range(0, H, strip):
+        r1 = min(H, r0 + strip)
+        ys = (np.arange(r0, r1, dtype=np.float32) / step)[:, None]
+        mx = np.ascontiguousarray(np.broadcast_to(xs, (r1 - r0, W)))
+        my = np.ascontiguousarray(np.broadcast_to(ys, (r1 - r0, W)))
+        uv = cv2.remap(m4, mx, my, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
+        w = cv2.remap(mw, mx, my, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)[..., None]
+        c0 = cv2.remap(img0, uv[..., 0], uv[..., 1], cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
+        c1 = cv2.remap(img1, uv[..., 2], uv[..., 3], cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
+        o = (c1.astype(np.float32) / g) * w + (c0.astype(np.float32) * g) * (1.0 - w)
+        out[r0:r1] = np.clip(o + 0.5, 0, 255).astype(np.uint8)
+    return out
+
+
+def stitch(img0, img1, rig: Rig, R_world_cam: np.ndarray, W=6144, step=4, blend_deg=3.0, gain=True, strip=256,
+           use_cv2=True):
     """두 어안 그림 → 360 사진 (H=W/2) uint8. R_world_cam: 카메라 틀(아래 렌즈) → ENU.
 
     방향 계산은 step 간격 성긴 격자에서 하고 화소마다 겹선형으로 메운다 (빠름).
-    띠(strip 행)씩 처리해 메모리를 아낀다.
+    띠(strip 행)씩 처리해 메모리를 아낀다. OpenCV 가 있으면 그것으로 (같은 결과 · 훨씬 빠름).
     """
     H = W // 2
     scale = img0.shape[0] / rig.size
@@ -203,6 +225,12 @@ def stitch(img0, img1, rig: Rig, R_world_cam: np.ndarray, W=6144, step=4, blend_
             c0 = _bilinear(img0, mb[:, 0], mb[:, 1])
             c1 = _bilinear(img1, mb[:, 2], mb[:, 3])
             g = np.sqrt((c1.mean(0) + 1.0) / (c0.mean(0) + 1.0)).astype(np.float32)
+    if use_cv2:
+        try:
+            import cv2
+            return _stitch_cv2(cv2, np.ascontiguousarray(img0), np.ascontiguousarray(img1), m, g, W, H, step)
+        except ImportError:
+            pass
     out = np.empty((H, W, 3), np.uint8)
     gh, gw = m.shape[:2]
     # 성긴 격자 j 는 화소 j·step 자리 (equirect_dirs) → 화소 x 의 성긴 좌표 = x / step

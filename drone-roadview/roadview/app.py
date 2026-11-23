@@ -19,7 +19,7 @@ import uuid
 from pathlib import Path
 
 APP_NAME = '드론 로드뷰'
-APP_VERSION = '1.0.0'
+APP_VERSION = '1.0.1'
 FROZEN = getattr(sys, 'frozen', False)
 BASE = Path(sys._MEIPASS) if FROZEN else Path(__file__).resolve().parent.parent      # noqa: SLF001
 HOME_HTML = (BASE / 'roadview' / 'app_home' / 'index.html') if not FROZEN else (BASE / 'app_home' / 'index.html')
@@ -216,10 +216,17 @@ class Api:
             return None
         files = list(r)
         size = sum(os.path.getsize(f) for f in files if os.path.exists(f)) / 1e9
+        # 기본 결과 폴더 = 로드뷰_<영상 번호…> (다른 영상으로 만든 «로드뷰» 폴더를 덮지 않게 · 1123)
+        nums = []
+        for f in files:
+            parts = Path(f).stem.split('_')
+            nums.append(parts[2] if len(parts) >= 3 and parts[2].isdigit() else Path(f).stem[:12])
+        tag = nums[0] if len(nums) == 1 else ('%s-%s' % (min(nums), max(nums)) if all(n.isdigit() for n in nums) else nums[0] + '외')
+        base = os.path.join(os.path.dirname(files[0]), '로드뷰_' + tag)
         return {'files': files, 'size_gb': round(size, 1), 'dir': os.path.dirname(files[0]),
                 'osv': sum(f.lower().endswith('.osv') for f in files),
                 'jpg': sum(f.lower().endswith(('.jpg', '.jpeg')) for f in files),
-                'out': os.path.join(os.path.dirname(files[0]), '로드뷰')}
+                'out': base}
 
     def pick_folder(self):
         import webview

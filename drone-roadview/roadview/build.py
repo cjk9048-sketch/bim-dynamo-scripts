@@ -190,6 +190,11 @@ def terrain_at(samples, s_query, window=75.0):
 def _pano_job(args):
     osv, ffmpeg, rig_dict, t, R, width, quality, pano_js, thumb_jpg, sid = args
     from PIL import Image
+    try:
+        import cv2
+        cv2.setNumThreads(2)               # 일꾼 여럿이 스레드를 서로 다투지 않게
+    except ImportError:
+        pass
     if isinstance(osv, dict):                 # 사진 모드 JPG (카메라가 이미 꿰맴)
         from .photos import to_grid_north
         im = Image.fromarray(to_grid_north(osv['path'], osv['heading'], osv['gamma'], width))
@@ -245,6 +250,7 @@ def main(argv=None):
     ap.add_argument('--terrain-mode', choices=['datum', 'surface'], default='datum',
                     help='datum = 수치지도로 표고 기준만 (촬영점 사이 높낮이는 영상 값 · 기본) · '
                          'surface = 점마다 수치지도 높이 (표고점 촘촘한 1:1000 DXF 일 때)')
+    ap.add_argument('--overwrite', action='store_true', help='다른 영상으로 만든 폴더라도 덮어 만듦')
     ap.add_argument('--normal-priority', action='store_true', help='보통 우선순위로 (기본은 낮음 — PC 쓰면서 돌려도 안 버벅이게)')
     a = ap.parse_args(argv)
     try:
@@ -276,6 +282,19 @@ def main(argv=None):
         return 2
 
     out = os.path.abspath(a.out)
+    # 다른 영상으로 만든 로드뷰 폴더면 덮지 않는다 (옛 사진을 지우게 되므로 · 1123)
+    try:
+        oldp = json.loads(open(os.path.join(out, 'data', 'project.js'), encoding='utf-8').read()
+                          .split('=', 1)[1].strip().rstrip(';'))
+        old_names = {v.get('name') for v in oldp.get('videos', [])}
+        new_names = {os.path.splitext(os.path.basename(p))[0] for p in osvs}
+        if jpgs:
+            new_names |= {n for n in old_names if str(n).startswith('360 사진')}
+        if old_names and old_names != new_names and not a.overwrite:
+            print('이 폴더에는 다른 영상으로 만든 로드뷰가 있음 → 다른 결과 폴더를 고르세요 (%s)' % out)
+            return 3
+    except (OSError, ValueError, KeyError, IndexError):
+        pass
     os.makedirs(os.path.join(out, 'data', 'pano'), exist_ok=True)
     os.makedirs(os.path.join(out, 'data', 'thumb'), exist_ok=True)
     fp = open(os.path.join(out, '만들기_기록.txt'), 'a', encoding='utf-8')
