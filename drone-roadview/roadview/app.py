@@ -171,9 +171,22 @@ class Api:
             s = (Path(folder) / 'data' / 'project.js').read_text(encoding='utf-8')
             P = json.loads(s.split('=', 1)[1].strip().rstrip(';'))
             info['title'] = P.get('title') or info['title']
-            info['shots'] = len(P.get('shots', []))
+            shots = P.get('shots', [])
+            info['shots'] = len(shots)
             info['videos'] = len(P.get('videos', []))
+            if shots:                                   # 썸네일 = 가운데쯤 촬영점 미리보기
+                t = Path(folder) / shots[len(shots) // 2].get('thumb', '')
+                if t.exists():
+                    info['thumb'] = str(t)
         except Exception:
+            pass
+        try:
+            size = 0
+            for root, _, fs in os.walk(Path(folder) / 'data'):
+                for fn in fs:
+                    size += os.path.getsize(os.path.join(root, fn))
+            info['size_gb'] = round(size / 1e9, 2)
+        except OSError:
             pass
         lst = [x for x in self._load_list() if os.path.normcase(x['path']) != os.path.normcase(folder)]
         lst.insert(0, info)
@@ -184,8 +197,26 @@ class Api:
         for x in self._load_list():
             x = dict(x)
             x['exists'] = bool(_page_url(x['path']))
+            t = x.get('thumb')
+            x['thumb_url'] = Path(t).as_uri() if t and os.path.exists(t) else ''
             out.append(x)
         return out
+
+    def list_shares(self):
+        """NAS 에 올린 로드뷰 (share.py 기록)."""
+        p = Path(os.environ.get('APPDATA', '')) / 'DH.Grading' / 'roadview_share.json'
+        try:
+            m = json.loads(p.read_text(encoding='utf-8'))
+        except Exception:
+            return []
+        return [{'path': k, 'title': Path(k).name, 'url': v.get('url', ''), 'files': len(v.get('files', {}))}
+                for k, v in m.items() if v.get('url')]
+
+    def open_url(self, url):
+        import webbrowser
+        if str(url).startswith('https://'):
+            webbrowser.open(url)
+        return {'ok': True}
 
     def remove_project(self, path):
         self._save_list([x for x in self._load_list() if os.path.normcase(x['path']) != os.path.normcase(path)])
@@ -400,7 +431,7 @@ def _selftest(api, w, out_path, project):
         time.sleep(4)
         res['home_title'] = w.evaluate_js('document.title')
         res['home_has_api'] = w.evaluate_js('!!(window.pywebview && window.pywebview.api)')
-        res['home_items'] = w.evaluate_js('document.querySelectorAll(".item").length')
+        res['home_items'] = w.evaluate_js('document.querySelectorAll(".card").length')
         res['home_ver'] = w.evaluate_js('document.getElementById("ver").textContent')
         if project:
             res['open'] = api.open_project(project)

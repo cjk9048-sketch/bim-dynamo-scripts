@@ -7,25 +7,52 @@
 <link rel="stylesheet" href="home.css">
 </head>
 <body>
-<header>
-  <div class="brand"><span class="dot"></span>드론 로드뷰 <small id="ver"></small></div>
-  <div class="acts">
-    <button id="bNew" class="pri">새로 만들기</button>
-    <button id="bOpen">폴더 열기</button>
+<aside id="side">
+  <nav>
+    <a class="nav on" data-page="home"><svg viewBox="0 0 24 24"><path d="M3 11.5 12 4l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg>홈</a>
+    <a class="nav" data-page="share"><svg viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zm6.9 8h-3a14 14 0 0 0-1.2-5.2A7 7 0 0 1 18.9 11zM12 5.1c.9 1.2 1.8 3.3 2 5.9h-4c.2-2.6 1.1-4.7 2-5.9zM9.3 5.8A14 14 0 0 0 8.1 11h-3a7 7 0 0 1 4.2-5.2zM5.1 13h3a14 14 0 0 0 1.2 5.2A7 7 0 0 1 5.1 13zm6.9 5.9c-.9-1.2-1.8-3.3-2-5.9h4c-.2 2.6-1.1 4.7-2 5.9zm2.7-.7a14 14 0 0 0 1.2-5.2h3a7 7 0 0 1-4.2 5.2z"/></svg>웹 공유</a>
+  </nav>
+  <div class="appcard">
+    <div class="logo"></div>
+    <div><b>드론 로드뷰</b><br><span id="ver"></span></div>
   </div>
-</header>
+</aside>
 
 <main>
-  <section id="newPane" class="card hide">
-    <div class="head">새 로드뷰 <button class="x" id="bNewClose" title="닫기">×</button></div>
-    <div class="row">
-      <button id="bPick">영상 · 사진 고르기</button>
-      <span id="pickInfo" class="sub">OSV 영상 또는 360 사진(JPG)</span>
+  <!-- 홈 -->
+  <section id="pageHome">
+    <button id="bCreate" class="create"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M12 8v8M8 12h8" stroke="#1b1b1b" stroke-width="2.2"/></svg>프로젝트 생성</button>
+    <div class="bar">
+      <div class="h">최근 프로젝트 <span id="cnt"></span></div>
+      <div class="tools"><button id="bOpen" class="mini">폴더 열기</button></div>
     </div>
-    <div class="grid">
+    <div id="grid" class="grid"></div>
+    <div id="empty" class="empty hide">아직 없음 · 위 [프로젝트 생성]</div>
+  </section>
+
+  <!-- 웹 공유 -->
+  <section id="pageShare" class="hide">
+    <div class="bar"><div class="h">웹 공유 <span id="scnt"></span></div></div>
+    <div id="shares" class="shares"></div>
+    <div id="sempty" class="empty hide">아직 올린 것 없음 · 프로젝트 화면 [내보내기] → 웹 주소로 올리기</div>
+  </section>
+</main>
+
+<!-- 작업 표시 (만드는 중) -->
+<button id="jobPill" class="pill hide"><span class="spin"></span><span id="jobPillText">만드는 중</span></button>
+
+<!-- 새 프로젝트 -->
+<div id="dlg" class="dlgwrap hide">
+  <div class="dlg">
+    <div class="dh">프로젝트 생성 <button class="x" id="bClose" title="닫기">×</button></div>
+    <div class="pick" id="bPick">
+      <svg viewBox="0 0 24 24"><path d="M4 6h5l2 2h9v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/></svg>
+      <div><b>영상 · 사진 고르기</b><br><span id="pickInfo">DJI 360 영상(OSV) · 360 사진(JPG)</span></div>
+    </div>
+    <div class="form">
+      <label>이름</label><input id="title" type="text" placeholder="예: 조치원 0012">
       <label>간격 (m)</label><input id="gap" type="number" min="0.5" max="500" step="0.5" value="5">
-      <label>이름</label><input id="title" type="text" placeholder="예: 조치원 1120">
-      <label>결과 폴더</label><div class="pathrow"><input id="out" type="text"><button id="bOut">바꾸기</button></div>
+      <label>결과 폴더</label><div class="row"><input id="out" type="text"><button id="bOut" class="mini">바꾸기</button></div>
       <label>사진 크기</label>
       <select id="width"><option value="8192">8192 · 선명하게</option><option value="6144">6144 · 보통</option><option value="4096">4096 · 가볍게</option></select>
       <label></label>
@@ -34,21 +61,16 @@
         <label><input id="sat" type="checkbox" checked> 위성 지도</label>
       </div>
     </div>
-    <div class="row run">
-      <button id="bBuild" class="pri">만들기</button>
-      <button id="bStop" disabled>멈추기</button>
-      <div class="prog"><div id="bar"></div></div>
-    </div>
+    <div class="prog"><div id="bar"></div></div>
     <div id="status" class="sub">영상을 고르세요</div>
     <pre id="log" class="hide"></pre>
-  </section>
-
-  <section>
-    <div class="listhead">프로젝트</div>
-    <div id="list" class="list"></div>
-    <div id="empty" class="empty hide">아직 없음 · [새로 만들기]</div>
-  </section>
-</main>
+    <div class="dfoot">
+      <button id="bHide" class="mini hide">숨기기</button>
+      <button id="bStop" class="mini" disabled>멈추기</button>
+      <button id="bBuild" class="pri">만들기</button>
+    </div>
+  </div>
+</div>
 <div id="toast"></div>
 <script src="home.js"></script>
 </body>
