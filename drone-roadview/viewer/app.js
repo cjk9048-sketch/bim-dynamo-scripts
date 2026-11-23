@@ -49,14 +49,22 @@
 
   // ---------------------------------------------------------------- 알림 · 저장
   let toastTimer = 0;
-  function toast(text, onClick) {
+  // btn = 알림 안 단추 글 (그 단추만 onClick) · 없으면 알림 전체가 onClick
+  function toast(text, onClick, btn) {
     const t = $('toast');
     t.textContent = text;
-    t.onclick = onClick || null;
-    t.classList.toggle('click', !!onClick);
+    t.onclick = btn ? null : onClick || null;
+    if (btn && onClick) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = btn;
+      b.addEventListener('click', (e) => { e.stopPropagation(); t.classList.remove('show'); onClick(); });
+      t.appendChild(b);
+    }
+    t.classList.toggle('click', !!onClick && !btn);
     t.classList.add('show');
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => t.classList.remove('show'), onClick ? 6000 : 3000);
+    toastTimer = setTimeout(() => t.classList.remove('show'), btn ? 10000 : onClick ? 6000 : 3000);
   }
   function viewMsg(text) {
     const m = $('viewMsg');
@@ -140,42 +148,63 @@
 
   // 관로 자료 (RV_PIPES) → 그리기 꼴. 처음 한 번 + [관로 넣기] 뒤 data/pipes.js 를 다시 읽을 때 (reloadPipes).
   // 관 한 줄: pts = [e, n, z] (z 는 hasZ 일 때만 관 중심 표고), g = 꼭짓점마다 지표 표고, dia = 관경 m.
+  // ctrl = 원래 꼭짓점 번호 (pts 는 5 m 마다 늘린 점 · 없으면 모든 점) · src = RV_PIPES.lines 의 번호 (관로 고치기).
+  let pipeLayers = [];
   function buildLines(PIPES) {
     PIPES = PIPES || {};
-    const layers = (Array.isArray(PIPES.layers) ? PIPES.layers : [])
+    pipeLayers = (Array.isArray(PIPES.layers) ? PIPES.layers : [])
       .map((l) => ({ name: String((l && l.name) || ''), color: String((l && l.color) || '#00e5ff') }));
-    const lines = [];
-    (Array.isArray(PIPES.lines) ? PIPES.lines : []).forEach((l) => {
-      if (!l || !Array.isArray(l.pts)) return;
-      const hasZ = l.hasZ === true;
-      const gIn = Array.isArray(l.g) && l.g.length === l.pts.length ? l.g : null;
-      const p = [], g = [];
-      l.pts.forEach((q, k) => {
-        if (!Array.isArray(q) || !isNum(q[0]) || !isNum(q[1])) return;
-        p.push(Number(q[0]), Number(q[1]), hasZ ? num(q[2], NaN) : NaN);
-        g.push(gIn ? num(gIn[k], NaN) : NaN);
-      });
-      if (p.length < 6) return;
-      const lay = layers[num(l.layer, 0) | 0] || { name: '', color: '#00e5ff' };
-      let e0 = Infinity, e1 = -Infinity, n0 = Infinity, n1 = -Infinity;
-      for (let k = 0; k < p.length; k += 3) {
-        e0 = Math.min(e0, p[k]); e1 = Math.max(e1, p[k]);
-        n0 = Math.min(n0, p[k + 1]); n1 = Math.max(n1, p[k + 1]);
-      }
-      const ll = Array.isArray(l.ll) && l.ll.length * 3 === p.length && l.ll.every((q) => Array.isArray(q) && isNum(q[0]) && isNum(q[1])) ? l.ll : null;
-      const diaKnown = isNum(l.dia) && Number(l.dia) > 0;
-      const dia = diaKnown ? Number(l.dia) : 0.2;
-      const base = String(l.label || lay.name || '');
-      const dTxt = 'D' + Math.round(dia * 1000);
-      const label = !diaKnown ? base : !base || base === dTxt ? dTxt : base.indexOf(dTxt + ' ') === 0 ? base : dTxt + ' · ' + base;
-      const bi = [0]; // 평면에서 겹치지 않는 꼭짓점 번호 (노면 띠)
-      for (let k = 3; k < p.length; k += 3) {
-        const j = bi[bi.length - 1] * 3;
-        if (Math.hypot(p[k] - p[j], p[k + 1] - p[j + 1]) > 1e-6) bi.push(k / 3);
-      }
-      lines.push({ color: lay.color, rgb: hexRgb(lay.color), label: label, dia: dia, hasZ: hasZ, pts: Float64Array.from(p), g: Float64Array.from(g), bi: bi, ll: ll, e0, e1, n0, n1, mx: null, my: null });
+    const out = [];
+    (Array.isArray(PIPES.lines) ? PIPES.lines : []).forEach((l, i) => { const L = buildLine(l, i); if (L) out.push(L); });
+    return out;
+  }
+  const ptOk = (q) => Array.isArray(q) && isNum(q[0]) && isNum(q[1]);
+  // 원래 꼭짓점 번호 (오름차순 · 처음 · 끝 포함). ctrl 이 없거나 틀리면 모든 점.
+  function ctrlOf(l) {
+    const P = l && Array.isArray(l.pts) ? l.pts : [], all = [];
+    P.forEach((q, k) => { if (ptOk(q)) all.push(k); });
+    if (!Array.isArray(l.ctrl)) return all;
+    const c = [...new Set(l.ctrl.filter((k) => Number.isInteger(k) && k >= 0 && k < P.length && ptOk(P[k])))].sort((a, b) => a - b);
+    if (c.length < 2 || !all.length) return all;
+    if (c[0] !== all[0]) c.unshift(all[0]);
+    if (c[c.length - 1] !== all[all.length - 1]) c.push(all[all.length - 1]);
+    return c;
+  }
+  function buildLine(l, src) {
+    if (!l || !Array.isArray(l.pts)) return null;
+    const hasZ = l.hasZ === true;
+    const gIn = Array.isArray(l.g) && l.g.length === l.pts.length ? l.g : null;
+    const p = [], g = [], at = new Int32Array(l.pts.length).fill(-1);
+    l.pts.forEach((q, k) => {
+      if (!ptOk(q)) return;
+      at[k] = p.length / 3;
+      p.push(Number(q[0]), Number(q[1]), hasZ ? num(q[2], NaN) : NaN);
+      g.push(gIn ? num(gIn[k], NaN) : NaN);
     });
-    return lines;
+    if (p.length < 6) return null;
+    const lay = pipeLayers[num(l.layer, 0) | 0] || { name: '', color: '#00e5ff' };
+    let e0 = Infinity, e1 = -Infinity, n0 = Infinity, n1 = -Infinity;
+    for (let k = 0; k < p.length; k += 3) {
+      e0 = Math.min(e0, p[k]); e1 = Math.max(e1, p[k]);
+      n0 = Math.min(n0, p[k + 1]); n1 = Math.max(n1, p[k + 1]);
+    }
+    const ll = Array.isArray(l.ll) && l.ll.length * 3 === p.length && l.ll.every((q) => Array.isArray(q) && isNum(q[0]) && isNum(q[1])) ? l.ll : null;
+    const diaKnown = isNum(l.dia) && Number(l.dia) > 0;
+    const dia = diaKnown ? Number(l.dia) : 0.2;
+    const base = String(l.label || lay.name || '');
+    const dTxt = 'D' + Math.round(dia * 1000);
+    const label = !diaKnown ? base : !base || base === dTxt ? dTxt : base.indexOf(dTxt + ' ') === 0 ? base : dTxt + ' · ' + base;
+    const bi = [0]; // 평면에서 겹치지 않는 꼭짓점 번호 (노면 띠)
+    for (let k = 3; k < p.length; k += 3) {
+      const j = bi[bi.length - 1] * 3;
+      if (Math.hypot(p[k] - p[j], p[k + 1] - p[j + 1]) > 1e-6) bi.push(k / 3);
+    }
+    const rgb = hexRgb(lay.color), rgbHi = rgb.map((v) => v + (1 - v) * 0.4); // 고른 관 (관로 고치기) = 밝게
+    return {
+      src: src, color: lay.color, rgb: rgb, rgbHi: rgbHi, colorHi: 'rgb(' + rgbHi.map((v) => Math.round(v * 255)).join(',') + ')',
+      label: label, dia: dia, hasZ: hasZ, pts: Float64Array.from(p), g: Float64Array.from(g), bi: bi, ll: ll,
+      ctrl: ctrlOf(l).map((k) => at[k]).filter((k) => k >= 0), e0, e1, n0, n1, mx: null, my: null,
+    };
   }
   let lines = buildLines(window.RV_PIPES);
 
@@ -415,6 +444,14 @@
     marks: [], hover: -1,
   };
   const V = { W: 1, H: 1, w: 1, h: 1, dpr: 1, tanH: 1, tanV: 1, hfov: 90, f: [0, 1, 0], r: [1, 0, 0], u: [0, 0, 1] };
+  // 관로 고치기: sel = 고른 관 (RV_PIPES.lines 번호) · hi = 고른 손잡이 · hov = 마우스 올린 손잡이 (원래 꼭짓점 차례)
+  // down = 누른 채 끄는 것 · want = 다음 그림에서 옮길 마우스 자리 · undo / redo = [{ src, before, after }] (줄 JSON)
+  const ED = {
+    on: false, sel: -1, hi: -1, hov: -1, down: null, want: null, undo: [], redo: [],
+    dirty: new Set(), orig: new Map(), origSig: '', origEdited: false, shpBusy: false, Lof: null, Lsel: -2, L: null,
+  };
+  let pipeGen = 0, selGen = 0; // 관 그물 다시: pipeGen = 고른 관 말고 바뀜 · selGen = 고른 관이 바뀜
+  S.hnd = []; // 360 손잡이 (화면 자리)
 
   // ---------------------------------------------------------------- 터파기 설정 (관중심 터파기 · 회사 SAC 기준)
   // tp = 포장 직각 절단 두께 · n = 기울기 1:n (수직 1 에 수평 n) · margin = 관 양옆 여유폭 · bed = 모래 기초 · on = 깊이 방식에서 구덩이로.
@@ -461,6 +498,7 @@
   }
   function frame() {
     rafId = 0;
+    if (ED.want) edApply(); // 관로 고치기: 마우스 움직임은 그림 한 장에 한 번만 반영
     flushView();
     if (needMap) { needMap = false; drawMap(); }
   }
@@ -468,8 +506,12 @@
   // ---------------------------------------------------------------- WebGL 360°
   const glc = $('gl'), ovc = $('ov'), ov = ovc.getContext('2d');
   let gl = null, prog = null, tex = null, vao = null, U = {}, maxTex = 4096, glImg = null;
-  let pprog = null, pvao = null, pvbo = null, pibo = null, PU = {}, pCount = 0, pKey = '', pOrg = [0, 0, 0];
-  let tprog = null, tvao = null, tvbo = null, tibo = null, TU = {}, tN = 0, tNo = 0, tKey = '', tOrg = [0, 0, 0];
+  // 관 · 터파기 그물은 둘씩: [0] = 고치지 않는 관 (그대로 둠) · [1] = 고른 관 (관로 고치기 · 끄는 동안 이것만 다시)
+  // n = 삼각형 번호 수 · no = 앞쪽 구멍 번호 수 (터파기) · o = 만든 자리 (카메라) · key = 다시 만들지 정하는 열쇠
+  let pprog = null, PU = {}, tprog = null, TU = {};
+  const meshNew = () => ({ vao: null, vbo: null, ibo: null, n: 0, no: 0, key: '', o: [0, 0, 0] });
+  const tubeM = [meshNew(), meshNew()], pitM = [meshNew(), meshNew()];
+  const NO_MESH = { o: [0, 0, 0], v: new Float32Array(0), i: new Uint32Array(0), no: 0 };
 
   const VS = '#version 300 es\n' +
     'in vec2 a_pos; out vec2 v_ndc;\n' +
@@ -568,9 +610,33 @@
     setBlank();
     initPipeGL();
   }
+  // 그물 그릇 (꼭짓점: 자리 3 + 법선 3 + 색 3)
+  function meshInit(m) {
+    m.key = ''; m.n = 0; m.no = 0;
+    m.vao = gl.createVertexArray();
+    gl.bindVertexArray(m.vao);
+    m.vbo = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, m.vbo);
+    for (let i = 0; i < 3; i++) { gl.enableVertexAttribArray(i); gl.vertexAttribPointer(i, 3, gl.FLOAT, false, 36, i * 12); }
+    m.ibo = gl.createBuffer();
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, m.ibo);
+    gl.bindVertexArray(null);
+  }
+  // 열쇠가 바뀌었을 때만 다시 만들어 올린다
+  function meshPut(m, key, build) {
+    if (key === m.key) return;
+    m.key = key;
+    const b = build();
+    gl.bindVertexArray(m.vao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, m.vbo);
+    gl.bufferData(gl.ARRAY_BUFFER, b.v, gl.DYNAMIC_DRAW);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, b.i, gl.DYNAMIC_DRAW);
+    gl.bindVertexArray(null);
+    m.n = b.i.length; m.no = b.no || 0; m.o = b.o;
+  }
   // 관 그리기 준비. 안 되면 pprog = null → 겹쳐 그리기에서 선으로 대신한다.
   function initPipeGL() {
-    pprog = null; pKey = ''; pCount = 0;
+    pprog = null;
     try {
       const p = gl.createProgram();
       gl.attachShader(p, compile(gl.VERTEX_SHADER, PVS));
@@ -579,21 +645,14 @@
       gl.linkProgram(p);
       if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p) || 'link');
       ['u_off', 'u_f', 'u_r', 'u_u', 'u_tan', 'u_nf', 'u_fade', 'u_alpha'].forEach((n) => { PU[n] = gl.getUniformLocation(p, n); });
-      pvao = gl.createVertexArray();
-      gl.bindVertexArray(pvao);
-      pvbo = gl.createBuffer();
-      gl.bindBuffer(gl.ARRAY_BUFFER, pvbo);
-      for (let i = 0; i < 3; i++) { gl.enableVertexAttribArray(i); gl.vertexAttribPointer(i, 3, gl.FLOAT, false, 36, i * 12); }
-      pibo = gl.createBuffer();
-      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, pibo);
-      gl.bindVertexArray(null);
+      tubeM.forEach(meshInit);
       pprog = p;
     } catch (e) { pprog = null; }
     initTrenchGL();
   }
   // 터파기 준비. 스텐실이 없거나 안 되면 tprog = null → 깊이 방식은 예전처럼 관만.
   function initTrenchGL() {
-    tprog = null; tKey = ''; tN = 0; tNo = 0;
+    tprog = null;
     const ca = gl.getContextAttributes && gl.getContextAttributes();
     if (!pprog || !ca || !ca.stencil) return;
     try {
@@ -604,14 +663,7 @@
       gl.linkProgram(p);
       if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p) || 'link');
       ['u_off', 'u_f', 'u_r', 'u_u', 'u_tan', 'u_nf', 'u_fade'].forEach((n) => { TU[n] = gl.getUniformLocation(p, n); });
-      tvao = gl.createVertexArray();
-      gl.bindVertexArray(tvao);
-      tvbo = gl.createBuffer();
-      gl.bindBuffer(gl.ARRAY_BUFFER, tvbo);
-      for (let i = 0; i < 3; i++) { gl.enableVertexAttribArray(i); gl.vertexAttribPointer(i, 3, gl.FLOAT, false, 36, i * 12); }
-      tibo = gl.createBuffer();
-      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, tibo);
-      gl.bindVertexArray(null);
+      pitM.forEach(meshInit);
       tprog = p;
     } catch (e) { tprog = null; }
   }
@@ -683,28 +735,25 @@
   function gAt(L, k) { const g = L.g[k]; return Number.isFinite(g) ? g : S.gz; }
   // 관 중심 표고: hasZ 면 z, 아니면 지표 − 평균매설깊이 − 관경/2
   function zcAt(L, k) { const z = L.pts[k * 3 + 2]; return L.hasZ && Number.isFinite(z) ? z : gAt(L, k) - S.cover - L.dia / 2; }
+  // 관로 고치기에서 고른 관 (없으면 −1): 그 관 그물만 따로 (끄는 동안 그것만 다시 만든다)
+  const edSel = () => (ED.on ? ED.sel : -1);
   function drawTubes() {
-    const key = S.cur + '|' + S.cam.join(',') + '|' + S.gz + '|' + S.cover;
-    if (key !== pKey) {
-      pKey = key;
-      const m = buildTubes();
-      gl.bindVertexArray(pvao);
-      gl.bindBuffer(gl.ARRAY_BUFFER, pvbo);
-      gl.bufferData(gl.ARRAY_BUFFER, m.v, gl.DYNAMIC_DRAW);
-      gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, m.i, gl.DYNAMIC_DRAW);
-      gl.bindVertexArray(null);
-      pCount = m.i.length;
-      pOrg = m.o;
-    }
+    const sel = edSel(), base = S.cur + '|' + S.cam.join(',') + '|' + S.gz + '|' + S.cover;
+    meshPut(tubeM[0], base + '|' + pipeGen + '|' + sel, () => buildTubes((L) => L.src !== sel, false));
+    meshPut(tubeM[1], sel < 0 ? '' : base + '|' + pipeGen + '|' + selGen + '|' + sel, () => (sel < 0 ? NO_MESH : buildTubes((L) => L.src === sel, true)));
     // 터파기: 구멍을 스텐실에 쓰고 안쪽 면을 그린 뒤, 관도 구멍 안에서만 (스텐실 시험은 관을 그린 뒤 끈다)
-    const pit = trGL() && drawTrench();
-    if (pCount) drawTubeMesh();
+    const pit = trGL() && drawTrench(base, sel);
+    if (tubeM[0].n || tubeM[1].n) drawTubeMesh();
     if (pit) gl.disable(gl.STENCIL_TEST);
   }
   function drawTubeMesh() {
+    const ms = tubeM.filter((m) => m.n);
+    const each = (m) => {
+      gl.bindVertexArray(m.vao);
+      gl.uniform3f(PU.u_off, m.o[0] - S.cam[0], m.o[1] - S.cam[1], m.o[2] - S.cam[2]);
+      gl.drawElements(gl.TRIANGLES, m.n, gl.UNSIGNED_INT, 0);
+    };
     gl.useProgram(pprog);
-    gl.bindVertexArray(pvao);
-    gl.uniform3f(PU.u_off, pOrg[0] - S.cam[0], pOrg[1] - S.cam[1], pOrg[2] - S.cam[2]);
     gl.uniform3fv(PU.u_f, V.f);
     gl.uniform3fv(PU.u_r, V.r);
     gl.uniform3fv(PU.u_u, V.u);
@@ -713,30 +762,31 @@
     gl.uniform2f(PU.u_fade, FADE0, FADE1);
     gl.uniform1f(PU.u_alpha, 0.9);
     gl.enable(gl.DEPTH_TEST);
-    // 1) 깊이만 → 2) 맨 앞 면만 색칠 (반투명이어도 뒷면이 비치지 않게)
+    // 1) 깊이만 → 2) 맨 앞 면만 색칠 (반투명이어도 뒷면이 비치지 않게) · 그물 둘을 한 몸처럼
     gl.depthFunc(gl.LESS);
     gl.colorMask(false, false, false, false);
-    gl.drawElements(gl.TRIANGLES, pCount, gl.UNSIGNED_INT, 0);
+    ms.forEach(each);
     gl.colorMask(true, true, true, true);
     gl.depthMask(false);
     gl.depthFunc(gl.LEQUAL);
     gl.enable(gl.BLEND);
     gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ZERO, gl.ONE);
-    gl.drawElements(gl.TRIANGLES, pCount, gl.UNSIGNED_INT, 0);
+    ms.forEach(each);
     gl.disable(gl.BLEND);
     gl.disable(gl.DEPTH_TEST);
     gl.depthMask(true);
     gl.bindVertexArray(null);
   }
-  // 지금 자리에서 FADE1 안의 관을 원통 그물로 (좌표 = 카메라 기준 m). 꼭짓점: 자리 3 + 법선 3 + 색 3.
-  function buildTubes() {
+  // 지금 자리에서 FADE1 안의 관 (use(L) 인 것만) 을 원통 그물로 (좌표 = 카메라 기준 m). hi = 밝은 색 (고른 관).
+  function buildTubes(use, hi) {
     const o = S.cam.slice(), VB = [], IB = [];
     for (const L of lines) {
+      if (!use(L)) continue;
       const bx = Math.max(L.e0 - o[0], 0, o[0] - L.e1), by = Math.max(L.n0 - o[1], 0, o[1] - L.n1);
       if (bx * bx + by * by > FADE1 * FADE1) continue;
       const P = L.pts, cnt = P.length / 3, r = L.dia / 2;
       let run = [];
-      const flush = () => { if (run.length >= 6) addTube(run, r, L.rgb, VB, IB); run = []; };
+      const flush = () => { if (run.length >= 6) addTube(run, r, hi ? L.rgbHi : L.rgb, VB, IB); run = []; };
       const push = (k) => {
         const x = P[k * 3] - o[0], y = P[k * 3 + 1] - o[1], z = zcAt(L, k) - o[2], n = run.length;
         if (n && Math.abs(run[n - 3] - x) + Math.abs(run[n - 2] - y) + Math.abs(run[n - 1] - z) < 1e-6) return;
@@ -914,7 +964,8 @@
         P[j * 2] = L.pts[k * 3]; P[j * 2 + 1] = L.pts[k * 3 + 1];
         e0 = Math.min(e0, P[j * 2]); e1 = Math.max(e1, P[j * 2]); n0 = Math.min(n0, P[j * 2 + 1]); n1 = Math.max(n1, P[j * 2 + 1]);
       }
-      return { nd: nd, m: m, P: P, D: nd[0].dia, e0, e1, n0, n1, ext: [true, true], wall: [true, true] };
+      const ids = [...new Set(nd.filter((x, j) => !(j & 1)).map((L) => L.src))]; // 든 관 (RV_PIPES 번호)
+      return { nd: nd, m: m, P: P, D: nd[0].dia, ids: ids, e0, e1, n0, n1, ext: [true, true], wall: [true, true] };
     });
     // 끝마다 다른 관에 닿는지
     const dPoly = (x, y, c) => {
@@ -983,8 +1034,16 @@
     trSec = out;
     return out;
   }
-  // 지금 자리에서 FADE1 안의 구덩이 그물 (카메라 기준 m): 구멍 삼각형 no 개 뒤에 안쪽 면.
-  function buildTrench() {
+  // 고른 관이 없는 이은 줄의 모양 (끝이 닿는지 바뀌면 그대로 둔 그물도 다시 만들게)
+  function trStaticSig(sel) {
+    let s = '';
+    for (const c of trChainsGet()) {
+      if (c.ids.indexOf(sel) < 0) s += c.ids.join(',') + ':' + (+c.ext[0]) + (+c.ext[1]) + (+c.wall[0]) + (+c.wall[1]) + ';';
+    }
+    return s;
+  }
+  // 지금 자리에서 FADE1 안의 구덩이 그물 (이은 줄 use(c) 인 것만 · 카메라 기준 m): 구멍 삼각형 no 개 뒤에 안쪽 면.
+  function buildTrench(use) {
     const o = S.cam.slice(), VB = [], OI = [], II = [];
     const vtx = (p, nr, c) => { VB.push(p[0], p[1], p[2], nr[0], nr[1], nr[2], c[0], c[1], c[2]); };
     const pt = (T, j, w, z) => [T.E[j] + T.LX[j] * w - o[0], T.N[j] + T.LY[j] * w - o[1], z - o[2]]; // w + 왼쪽 · − 오른쪽
@@ -1033,6 +1092,7 @@
         [dk(T, j, T.ZM[j]), dk(T, j, T.ZS[j]), dk(T, j, T.ZS[j]), dk(T, j, T.ZM[j])]);
     };
     for (const T of trSecGet()) {
+      if (!use(T.c)) continue;
       const bx = Math.max(T.e0 - o[0], 0, o[0] - T.e1), by = Math.max(T.n0 - o[1], 0, o[1] - T.n1);
       if (bx * bx + by * by > FADE1 * FADE1) continue;
       const m = T.m;
@@ -1046,22 +1106,18 @@
     return { o: o, v: Float32Array.from(VB), i: Uint32Array.from(OI.concat(II)), no: OI.length };
   }
   // 구덩이 그리기. 그린 것이 있으면 스텐실 시험 (구멍 안 = 1) 을 켠 채로 true → 관도 구멍 안에서만.
-  function drawTrench() {
-    const key = S.cur + '|' + S.cam.join(',') + '|' + S.gz + '|' + S.cover + '|' + [TR.tp, TR.n, TR.margin, TR.bed].join(',');
-    if (key !== tKey) {
-      tKey = key;
-      const m = buildTrench();
-      gl.bindVertexArray(tvao);
-      gl.bindBuffer(gl.ARRAY_BUFFER, tvbo);
-      gl.bufferData(gl.ARRAY_BUFFER, m.v, gl.DYNAMIC_DRAW);
-      gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, m.i, gl.DYNAMIC_DRAW);
-      gl.bindVertexArray(null);
-      tN = m.i.length; tNo = m.no; tOrg = m.o;
-    }
-    if (!tNo) return false;
+  // 그물 둘: 고른 관이 든 이은 줄 (끄는 동안 이것만 다시) · 나머지 (이은 모양이 바뀔 때만 다시)
+  function drawTrench(base, sel) {
+    const tb = base + '|' + [TR.tp, TR.n, TR.margin, TR.bed].join(',') + '|' + pipeGen + '|' + sel;
+    meshPut(pitM[0], tb + '|' + (sel >= 0 ? trStaticSig(sel) : ''), () => buildTrench((c) => c.ids.indexOf(sel) < 0));
+    meshPut(pitM[1], sel < 0 ? '' : tb + '|' + selGen, () => (sel < 0 ? NO_MESH : buildTrench((c) => c.ids.indexOf(sel) >= 0)));
+    const ms = pitM.filter((m) => m.no);
+    if (!ms.length) return false;
+    const off = (m) => {
+      gl.bindVertexArray(m.vao);
+      gl.uniform3f(TU.u_off, m.o[0] - S.cam[0], m.o[1] - S.cam[1], m.o[2] - S.cam[2]);
+    };
     gl.useProgram(tprog);
-    gl.bindVertexArray(tvao);
-    gl.uniform3f(TU.u_off, tOrg[0] - S.cam[0], tOrg[1] - S.cam[1], tOrg[2] - S.cam[2]);
     gl.uniform3fv(TU.u_f, V.f);
     gl.uniform3fv(TU.u_r, V.r);
     gl.uniform3fv(TU.u_u, V.u);
@@ -1078,7 +1134,7 @@
     gl.colorMask(false, false, false, false);
     gl.stencilFunc(gl.ALWAYS, 1, 0xff);
     gl.stencilOp(gl.KEEP, gl.KEEP, gl.REPLACE);
-    gl.drawElements(gl.TRIANGLES, tNo, gl.UNSIGNED_INT, 0);
+    ms.forEach((m) => { off(m); gl.drawElements(gl.TRIANGLES, m.no, gl.UNSIGNED_INT, 0); });
     // 2) 안쪽 면: 구멍 안에서만 · 깊이 씀 (관이 이 깊이와 견줌)
     gl.colorMask(true, true, true, true);
     gl.depthMask(true);
@@ -1088,7 +1144,7 @@
     gl.stencilOp(gl.KEEP, gl.KEEP, gl.KEEP);
     gl.enable(gl.BLEND);
     gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ZERO, gl.ONE);
-    if (tN > tNo) gl.drawElements(gl.TRIANGLES, tN - tNo, gl.UNSIGNED_INT, tNo * 4);
+    ms.forEach((m) => { if (m.n > m.no) { off(m); gl.drawElements(gl.TRIANGLES, m.n - m.no, gl.UNSIGNED_INT, m.no * 4); } });
     gl.disable(gl.BLEND);
     gl.disable(gl.DEPTH_TEST);
     gl.bindVertexArray(null);
@@ -1294,12 +1350,12 @@
     // ---- 관로: 노면 = 땅 위 관경 폭 띠 · 깊이 = WebGL 관 (여기서는 땅 위 옅은 점선 + 이름표)
     const labels = [];
     if (S.pipes && lines.length) {
-      const depth = S.depth, pit = trGL();
-      const buckets = new Map(); // 색 · 흐림 단계별
+      const depth = S.depth, pit = trGL(), selSrc = edSel();
+      const buckets = new Map(); // 색 · 흐림 단계별 (고른 관은 따로: 밝게 · 흰 테두리)
       const bucket = (L, a) => {
-        const key = L.color + '|' + a;
+        const sel = L.src === selSrc, key = L.color + '|' + a + (sel ? '|s' : '');
         let bk = buckets.get(key);
-        if (!bk) { bk = { color: L.color, a: a / 10, poly: [], edge: [], line: [], tube: [] }; buckets.set(key, bk); }
+        if (!bk) { bk = { color: sel ? L.colorHi : L.color, sel: sel, a: a / 10, poly: [], edge: [], line: [], tube: [] }; buckets.set(key, bk); }
         return bk;
       };
       const addEdge = (bk, p, q) => { vc(p[0], p[1], p[2], A3); vc(q[0], q[1], q[2], B3); if (projSeg(A3, B3, SEG)) bk.edge.push(SEG[0], SEG[1], SEG[2], SEG[3]); };
@@ -1403,8 +1459,9 @@
       };
       ov.lineCap = 'round';
       ov.lineJoin = 'round';
+      const bks = [...buckets.values()].sort((p, q) => p.sel - q.sel); // 고른 관은 맨 위
       if (!depth) {
-        for (const bk of buckets.values()) {
+        for (const bk of bks) {
           if (!bk.poly.length) continue;
           ov.beginPath();
           for (const pg of bk.poly) {
@@ -1412,15 +1469,15 @@
             for (let k = 2; k < pg.length; k += 2) ov.lineTo(pg[k], pg[k + 1]);
             ov.closePath();
           }
-          ov.globalAlpha = 0.85 * bk.a;
+          ov.globalAlpha = (bk.sel ? 0.95 : 0.85) * bk.a;
           ov.fillStyle = bk.color;
           ov.fill();
-          // 1 px 어두운 테두리: 띠 모양으로 자른 2 px 선 → 띠 안쪽 1 px 만 남는다 (띠 폭 = 관경 그대로)
+          // 1 px 어두운 테두리 (고른 관은 흰색): 띠 모양으로 자른 2 px 선 → 띠 안쪽 1 px 만 남는다 (띠 폭 = 관경 그대로)
           ov.save();
           ov.clip();
           path(bk.edge);
           ov.globalAlpha = bk.a;
-          ov.strokeStyle = 'rgba(0, 0, 0, 0.45)';
+          ov.strokeStyle = bk.sel ? '#ffffff' : 'rgba(0, 0, 0, 0.45)';
           ov.lineWidth = 2;
           ov.stroke();
           ov.restore();
@@ -1428,8 +1485,15 @@
       } else {
         ov.setLineDash([6, 6]);
         ov.lineWidth = 1.5;
-        if (!pit) for (const bk of buckets.values()) { ov.globalAlpha = 0.6 * bk.a; ov.strokeStyle = bk.color; path(bk.line); ov.stroke(); }
+        if (!pit) for (const bk of bks) { if (bk.sel) continue; ov.globalAlpha = 0.6 * bk.a; ov.strokeStyle = bk.color; path(bk.line); ov.stroke(); }
         ov.setLineDash([]);
+        for (const bk of bks) { // 고른 관: 땅 위 흰 선
+          if (!bk.sel) continue;
+          path(bk.line);
+          ov.globalAlpha = bk.a;
+          ov.strokeStyle = 'rgba(8, 10, 14, 0.8)'; ov.lineWidth = 4; ov.stroke();
+          ov.strokeStyle = '#ffffff'; ov.lineWidth = 2; ov.stroke();
+        }
         if (!pprog) { // WebGL 관을 못 그리면 관 중심선으로
           ov.strokeStyle = 'rgba(8, 10, 14, 0.9)';
           ov.lineWidth = 7;
@@ -1606,6 +1670,40 @@
       }
     }
 
+    // ---- 관로 고치기 손잡이: 고른 관의 원래 꼭짓점마다 땅 위 청록 원판 (고른 것 노랑 · 마우스 올린 것 크게)
+    S.hnd = [];
+    const EL = edLine();
+    if (EL) {
+      const P = EL.pts;
+      EL.ctrl.forEach((k, i) => {
+        const e = P[k * 3], n = P[k * 3 + 1], g = gAt(EL, k);
+        vc(e, n, g, A3);
+        if (A3[2] < 0.3) return;
+        const hov = i === ED.hov, rad = Math.max(MARK_R * (hov ? 1.7 : 1), (hov ? 8 : 5) * A3[2] / kx); // 올리면 조금만 (끄는 자리를 가리지 않게)
+        const sx = cx + A3[0] / A3[2] * kx, sy = cy - A3[1] / A3[2] * ky, poly = [];
+        for (let q = 0; q < 24; q++) {
+          const t = q / 24 * 2 * Math.PI;
+          vc(e + rad * Math.cos(t), n + rad * Math.sin(t), g, B3);
+          if (B3[2] < NEAR) return;
+          poly.push(cx + B3[0] / B3[2] * kx, cy - B3[1] / B3[2] * ky);
+        }
+        if (sx < -20 || sy < -20 || sx > w + 20 || sy > h + 20) return;
+        S.hnd.push({ i: i, sx: sx, sy: sy, poly: poly });
+      });
+      for (const hd of S.hnd) {
+        const p = hd.poly;
+        ov.beginPath();
+        ov.moveTo(p[0], p[1]);
+        for (let q = 2; q < p.length; q += 2) ov.lineTo(p[q], p[q + 1]);
+        ov.closePath();
+        ov.fillStyle = hd.i === ED.hi ? PIN : PIN2;
+        ov.fill();
+        ov.strokeStyle = PIN_DARK;
+        ov.lineWidth = hd.i === ED.hov ? 2.5 : 1.5;
+        ov.stroke();
+      }
+    }
+
     // ---- 점 찍어 맞추기 핀 (맨 위)
     drawPins(w, h, kx, ky);
   }
@@ -1698,7 +1796,7 @@
       pts.set(e.pointerId, p);
       if (pts.size === 1) {
         g = { mode: 'drag', x0: p.x, y0: p.y, lx: p.x, ly: p.y, moved: false };
-        if (h.start) h.start(p.x, p.y);
+        if (h.start) h.start(p.x, p.y, e);
       } else if (pts.size === 2) {
         const [a, b] = [...pts.values()];
         g = { mode: 'pinch', d0: Math.hypot(a.x - b.x, a.y - b.y) || 1 };
@@ -1725,6 +1823,7 @@
       const p = pos(e);
       pts.delete(e.pointerId);
       if (g && g.mode === 'drag' && !g.moved && e.type === 'pointerup' && h.tap) h.tap(p.x, p.y);
+      if (g && g.mode === 'drag' && h.end) h.end(g.moved);
       if (pts.size === 0 || (g && g.mode === 'pinch')) { g = null; el.classList.remove('grabbing'); }
     };
     el.addEventListener('pointerup', up);
@@ -1734,8 +1833,10 @@
   // 360° 보기 조작
   let vStart = null;
   gestures(ovc, {
-    start: () => { vStart = { yaw: S.yaw, pitch: S.pitch, fov: S.fov }; },
+    start: (x, y, e) => { vStart = { yaw: S.yaw, pitch: S.pitch, fov: S.fov }; edStart('v', x, y, e); },
+    end: (moved) => edEnd(moved),
     drag: (dx, dy) => {
+      if (ED.down) { edMove(dx, dy); return; } // 관로 고치기: 손잡이 · 관 끌기
       if (!vStart) return;
       updView(); // 휠 직후라도 지금 시야각으로 잰다
       const k = R2D * V.tanH / (V.w / 2); // 화면 가운데에서 1 px 당 각도
@@ -1743,22 +1844,33 @@
       S.pitch = clamp(vStart.pitch + dy * k, -89, 89);
       dirty();
     },
-    pinchStart: () => { vStart = { yaw: S.yaw, pitch: S.pitch, fov: S.fov }; },
+    pinchStart: () => { edEnd(true); vStart = { yaw: S.yaw, pitch: S.pitch, fov: S.fov }; },
     pinch: (sc) => { if (vStart) { S.fov = clamp(vStart.fov / sc, FOV_MIN, FOV_MAX); dirty(); } },
     tap: (x, y) => {
       flushView();
+      if (ED.on) { edTap('v', x, y); return; } // 관로 고치기 동안은 원판 눌러 옮겨 가지 않음
       if (AL.on) { alPhoto(x, y); return; }
       const i = markAt(x, y);
       if (i >= 0) openShot(i);
     },
     hover: (x, y) => {
       flushView();
+      if (ED.on) { edHover('v', x, y); return; }
       const i = AL.on ? -1 : markAt(x, y); // 점 찍는 동안은 원판을 키우지 않음 (십자 표시)
       ovc.classList.toggle('point', i >= 0);
       if (i !== S.hover) { S.hover = i; needView = true; kick(); }
     },
   });
-  ovc.addEventListener('pointerleave', () => { if (S.hover >= 0) { S.hover = -1; ovc.classList.remove('point'); needView = true; kick(); } });
+  ovc.addEventListener('pointerleave', () => {
+    if (ED.on) { edHover('v', -1e9, -1e9); return; }
+    if (S.hover >= 0) { S.hover = -1; ovc.classList.remove('point'); needView = true; kick(); }
+  });
+  ovc.addEventListener('dblclick', (e) => {
+    if (!ED.on) return;
+    const r = ovc.getBoundingClientRect();
+    flushView();
+    edInsert('v', e.clientX - r.left, e.clientY - r.top);
+  });
   ovc.addEventListener('wheel', (e) => {
     e.preventDefault();
     const d = e.deltaMode === 1 ? e.deltaY * 33 : e.deltaY;
@@ -1774,6 +1886,7 @@
     if (dlgOpen()) { if (e.key === 'Escape') { e.preventDefault(); dlgClose(); } return; }
     if (e.key === 'Escape' && !secDlg.hidden) { e.preventDefault(); secShow(false); return; }
     if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
+    if (ED.on && edKey(e)) { e.preventDefault(); return; } // 관로 고치기: Esc · Delete · Ctrl+Z / Y (화살표는 그대로 이동)
     const nav = !(e.altKey || e.ctrlKey || e.metaKey), dir = Object.prototype.hasOwnProperty.call(ARROW, e.key) ? ARROW[e.key] : null;
     if (nav && dir !== null) { e.preventDefault(); moveDir(dir); }
     else if (nav && e.key === 'PageUp') { e.preventDefault(); stepShot(-1); }
@@ -1805,6 +1918,7 @@
   document.title = (PRJ.title ? String(PRJ.title) + ' · ' : '') + '드론 로드뷰';
   function setPipes(on) {
     S.pipes = !!on;
+    if (!S.pipes && ED.on) edMode(false); // 관로를 끄면 고치기도 끝
     setOn($('tgPipes'), S.pipes);
     $('mSurf').parentNode.classList.toggle('off', !S.pipes);
     dirty();
@@ -2121,18 +2235,17 @@
     }
   }
   // 관로 지도 자리 (위경도 ll 이 있으면 그것, 없으면 격자 → 닮음 변환)
-  function linesToMap() {
-    lines.forEach((L) => {
-      const cnt = L.pts.length / 3;
-      if (L.ll) {
-        L.mx = new Float64Array(cnt); L.my = new Float64Array(cnt);
-        L.ll.forEach((q, k) => { L.mx[k] = lon2x(Number(q[1])); L.my[k] = lat2y(Number(q[0])); });
-      } else if (SIM) {
-        L.mx = new Float64Array(cnt); L.my = new Float64Array(cnt);
-        for (let k = 0; k < cnt; k++) { const m = en2m(L.pts[k * 3], L.pts[k * 3 + 1]); L.mx[k] = m[0]; L.my[k] = m[1]; }
-      }
-    });
+  function lineToMap(L) {
+    const cnt = L.pts.length / 3;
+    if (L.ll) {
+      L.mx = new Float64Array(cnt); L.my = new Float64Array(cnt);
+      L.ll.forEach((q, k) => { L.mx[k] = lon2x(Number(q[1])); L.my[k] = lat2y(Number(q[0])); });
+    } else if (SIM) {
+      L.mx = new Float64Array(cnt); L.my = new Float64Array(cnt);
+      for (let k = 0; k < cnt; k++) { const m = en2m(L.pts[k * 3], L.pts[k * 3 + 1]); L.mx[k] = m[0]; L.my[k] = m[1]; }
+    }
   }
+  function linesToMap() { lines.forEach(lineToMap); }
   linesToMap();
   // data/pipes.js 다시 읽기 (프로그램이 [관로 넣기] 로 새로 쓴 뒤). 같은 주소는 캐시에서 올 수 있어 ?v= 를 붙인다.
   // 그 뒤 관 · 깊이 방식 관 그물 · 지도 선 · 이름표를 새 자료로 다시 만든다. 못 읽으면 옛 자료 그대로.
@@ -2146,10 +2259,10 @@
       sc.src = 'data/pipes.js?v=' + Date.now();
       document.head.appendChild(sc);
     }).then(() => {
+      edReset(); // 고치던 것 · 되돌리기는 옛 자료 것 → 비움
       lines = buildLines(window.RV_PIPES);
       linesToMap();
-      pKey = ''; // 깊이 방식 관 그물 다시
-      tKey = ''; // 터파기 그물도 (이은 줄 · 단면은 lines 가 바뀌면 저절로 다시)
+      pipeGen++; // 깊이 방식 관 · 터파기 그물 다시 (이은 줄 · 단면은 lines 가 바뀌면 저절로 다시)
       if (!secDlg.hidden) { secOptions(); secUI(); }
       dirty();
       return lines.length;
@@ -2343,10 +2456,11 @@
     mx.lineCap = 'round';
     mx.lineJoin = 'round';
 
-    // 관로
+    // 관로 (관로 고치기에서 고른 관은 맨 위 · 흰 테두리 · 밝게)
+    const EL = S.pipes ? edLine() : null;
     if (S.pipes) {
       for (const L of lines) {
-        if (!L.mx) continue;
+        if (!L.mx || L === EL) continue;
         mx.beginPath();
         for (let j = 0; j < L.mx.length; j++) {
           const x = L.mx[j] * k + ox, y = L.my[j] * k + oy;
@@ -2430,6 +2544,33 @@
       }
     }
     if (SIM && S.cur >= 0) drawMapPins();
+    // 관로 고치기: 고른 관 + 원래 꼭짓점 네모 손잡이 (사진 점보다 위)
+    if (EL && EL.mx) {
+      mx.beginPath();
+      for (let j = 0; j < EL.mx.length; j++) {
+        const x = EL.mx[j] * k + ox, y = EL.my[j] * k + oy;
+        if (j) mx.lineTo(x, y); else mx.moveTo(x, y);
+      }
+      const lw = clamp(EL.dia * 10, 2, 8);
+      mx.strokeStyle = 'rgba(8, 10, 14, 0.75)';
+      mx.lineWidth = lw + 7;
+      mx.stroke();
+      mx.strokeStyle = '#ffffff';
+      mx.lineWidth = lw + 4;
+      mx.stroke();
+      mx.strokeStyle = EL.colorHi;
+      mx.lineWidth = lw;
+      mx.stroke();
+      EL.ctrl.forEach((q, i) => {
+        const x = EL.mx[q] * k + ox, y = EL.my[q] * k + oy, s = i === ED.hov ? 6 : 4;
+        if (x < -20 || y < -20 || x > w + 20 || y > h + 20) return;
+        mx.fillStyle = i === ED.hi ? PIN : PIN2;
+        mx.fillRect(x - s, y - s, 2 * s, 2 * s);
+        mx.strokeStyle = PIN_DARK;
+        mx.lineWidth = i === ED.hov ? 2 : 1.5;
+        mx.strokeRect(x - s, y - s, 2 * s, 2 * s);
+      });
+    }
   }
   // 지도: 찍은 점 = 노란 핀 · 사진 점이 지금 맞춤으로 닿는 곳 = 청록 고리
   function drawMapPins() {
@@ -2486,9 +2627,13 @@
   }
   let mStart = null;
   gestures(mc, {
-    start: () => { mStart = null; },
-    drag: (dx, dy, ddx, ddy) => { const k = mk(); M.cx -= ddx / k; M.cy -= ddy / k; mapDirty(); },
-    pinchStart: (x, y) => { mStart = { z: M.z, X: s2m(x, y) }; },
+    start: (x, y, e) => { mStart = null; edStart('m', x, y, e); },
+    end: (moved) => edEnd(moved),
+    drag: (dx, dy, ddx, ddy) => {
+      if (ED.down) { edMove(dx, dy); return; } // 관로 고치기: 손잡이 · 관 끌기 (지도는 그대로)
+      const k = mk(); M.cx -= ddx / k; M.cy -= ddy / k; mapDirty();
+    },
+    pinchStart: (x, y) => { edEnd(true); mStart = { z: M.z, X: s2m(x, y) }; },
     pinch: (sc, x, y) => {
       if (!mStart) return;
       M.z = clamp(mStart.z + Math.log2(sc), MAP_ZMIN, MAP_ZMAX);
@@ -2498,12 +2643,22 @@
       mapDirty();
     },
     tap: (x, y) => {
+      if (ED.on) { edTap('m', x, y); return; } // 관로 고치기 동안은 사진 점 눌러 옮겨 가지 않음
       if (AL.on && AL.pend) { alMap(x, y); return; }
       const i = shotAtMap(x, y);
       if (i >= 0) openShot(i);
       else if (AL.on) toast('① 사진에서 먼저');
     },
-    hover: (x, y) => { mc.classList.toggle('point', !(AL.on && AL.pend) && shotAtMap(x, y) >= 0); },
+    hover: (x, y) => {
+      if (ED.on) { edHover('m', x, y); return; }
+      mc.classList.toggle('point', !(AL.on && AL.pend) && shotAtMap(x, y) >= 0);
+    },
+  });
+  mc.addEventListener('pointerleave', () => { if (ED.on) edHover('m', -1e9, -1e9); });
+  mc.addEventListener('dblclick', (e) => {
+    if (!ED.on) return;
+    const r = mc.getBoundingClientRect();
+    edInsert('m', e.clientX - r.left, e.clientY - r.top);
   });
   mc.addEventListener('wheel', (e) => {
     e.preventDefault();
@@ -2553,6 +2708,7 @@
   // ① 사진에서 점 → ② 지도에서 같은 점 → 짝 하나. 짝이 생기거나 지워질 때마다 그 영상 맞춤을 다시 푼다.
   function alMode(on) {
     if (on && !SIM) { toast('지도 없음'); return; }
+    if (on && ED.on) edMode(false); // 점 찍어 맞추기 ↔ 관로 고치기 는 하나만
     AL.on = !!on;
     AL.pend = null;
     ovc.classList.toggle('pick', AL.on);
@@ -2736,7 +2892,7 @@
     };
     pmMsg('');
     pmBusy(true, '넣는 중');
-    hostCall('import_pipes', arg).then((r) => {
+    pipesFlush().then(() => hostCall('import_pipes', arg)).then((r) => { // 고친 관로를 먼저 써 두고 넣는다
       if (!r || !r.ok) { pmBusy(false); pmMsg((r && r.msg) || '못 넣음'); return null; }
       return reloadPipes().then((n) => {
         pmBusy(false);
@@ -2775,7 +2931,7 @@
     if (EX.job != null) return;
     $('exDone').hidden = true;
     exState('run', 0, '준비');
-    hostCall('export_web').then((r) => {
+    pipesFlush().then(() => hostCall('export_web')).then((r) => {
       if (!r || r.job == null) { exState('fail', 0, (r && r.msg) || '못 올림'); return; }
       EX.job = r.job;
       exPoll();
@@ -2793,7 +2949,7 @@
     EX.folder = true;
     b.disabled = true;
     b.textContent = '내보내는 중';
-    hostCall('export_folder').then((r) => {
+    pipesFlush().then(() => hostCall('export_folder')).then((r) => {
       done();
       if (!r) return; // 취소
       const path = String(r.path || '');
@@ -2801,6 +2957,482 @@
       else toast(String(r.msg || '못 내보냄'));
     }, (e) => { done(); toast(errText(e)); });
   });
+
+  // ---------------------------------------------------------------- 관로 고치기
+  // 원래 꼭짓점 (ctrl) 만 옮긴다. 고칠 때마다 그 줄을 다시 만든다: 꼭짓점 사이 곧은 선을 5 m 이하로 나눈 점 (pts) ·
+  // z (hasZ 면 꼭짓점 사이 선형 · 아니면 null) · ctrl · g (groundAt) · ll (격자 → 지도 닮음 변환의 거꾸로).
+  // 프로그램 안: 끝난 고침마다 0.8 초 모아 save_pipes (data/pipes.js 와 같은 글) · 밖: 이 브라우저 (localStorage) 에 고친 줄만.
+  const ED_STEP = 5;     // m, 꼭짓점 사이 (빌더 densify 와 같음)
+  const ED_R = 40, ED_K = 6; // 땅 높이: 사진 땅 높이 거리 가중 (빌더 ground_for 와 같음)
+  const PIPE_KEY = 'rv_pipes:' + String(PRJ.title || 'project');
+  const shotCell = new Map(); // 40 m 칸 → 사진
+  shots.forEach((s) => {
+    const k = Math.floor(s.e / ED_R) + ',' + Math.floor(s.n / ED_R);
+    if (!shotCell.has(k)) shotCell.set(k, []);
+    shotCell.get(k).push(s);
+  });
+  // 땅 높이: 높이 타일 → 없으면 40 m 안 사진 (가까운 6 개, 무게 1/max(d,1)²) → 없으면 가장 가까운 사진
+  function groundAt(e, n) {
+    const z = demAt(e, n);
+    if (Number.isFinite(z)) return z;
+    const cx = Math.floor(e / ED_R), cy = Math.floor(n / ED_R), near = [];
+    for (let a = -1; a <= 1; a++) {
+      for (let b = -1; b <= 1; b++) {
+        for (const s of shotCell.get((cx + a) + ',' + (cy + b)) || []) {
+          const d = Math.hypot(s.e - e, s.n - n);
+          if (d <= ED_R) near.push([d, s.gz]);
+        }
+      }
+    }
+    if (near.length) {
+      near.sort((p, q) => p[0] - q[0]);
+      let sw = 0, sz = 0;
+      near.slice(0, ED_K).forEach(([d, g]) => { const w = 1 / Math.pow(Math.max(d, 1), 2); sw += w; sz += w * g; });
+      return sz / sw;
+    }
+    let bd = Infinity, bz = NaN;
+    for (const s of shots) { const d = Math.hypot(s.e - e, s.n - n); if (d < bd) { bd = d; bz = s.gz; } }
+    return bz;
+  }
+  const en2ll = (e, n) => { const m = en2m(e, n); return [round(y2lat(m[1]), 9), round(x2lon(m[0]), 9)]; };
+  // 원래 꼭짓점 [[e, n, z|null], …]
+  function ctrlPts(l) {
+    return ctrlOf(l).map((k) => { const q = l.pts[k]; return [Number(q[0]), Number(q[1]), isNum(q[2]) ? Number(q[2]) : null]; });
+  }
+  // 원래 꼭짓점 cp 로 줄 l 을 다시 만든다 (빌더 densify · ground_for 와 같은 규칙)
+  function edRebuild(l, cp) {
+    const hasZ = l.hasZ === true, r3 = (v) => round(v, 3);
+    const c = cp.map((q) => [r3(q[0]), r3(q[1]), hasZ && isNum(q[2]) ? r3(Number(q[2])) : null]);
+    const pts = [c[0].slice()], ctrl = [0];
+    for (let i = 1; i < c.length; i++) {
+      const a = c[i - 1], b = c[i], m = Math.max(1, Math.ceil(Math.hypot(b[0] - a[0], b[1] - a[1]) / ED_STEP));
+      for (let k = 1; k < m; k++) {
+        const t = k / m;
+        pts.push([r3(a[0] + t * (b[0] - a[0])), r3(a[1] + t * (b[1] - a[1])), a[2] !== null && b[2] !== null ? r3(a[2] + t * (b[2] - a[2])) : null]);
+      }
+      pts.push(b.slice());
+      ctrl.push(pts.length - 1);
+    }
+    l.pts = pts;
+    l.ctrl = ctrl;
+    l.g = pts.map((q) => { const g = groundAt(q[0], q[1]); return Number.isFinite(g) ? round(g, 3) : null; });
+    if (SIM) l.ll = pts.map((q) => en2ll(q[0], q[1])); else delete l.ll;
+  }
+  // 고른 그리기 줄 (관로 고치기 · 없으면 null)
+  function edLine() {
+    if (!ED.on || ED.sel < 0) return null;
+    if (ED.Lof !== lines || ED.Lsel !== ED.sel) { ED.Lof = lines; ED.Lsel = ED.sel; ED.L = lines.find((L) => L.src === ED.sel) || null; }
+    return ED.L;
+  }
+  const edRaw = () => window.RV_PIPES.lines[ED.sel];
+  // RV_PIPES.lines[src] 가 바뀜 → 그 줄만 다시 (지도 자리 · 360 띠 · 관 · 구덩이 그물은 고른 것만)
+  function edPut(src) {
+    const L = buildLine(window.RV_PIPES.lines[src], src);
+    if (L) lineToMap(L);
+    const nl = lines.slice(), i = nl.findIndex((q) => q.src === src);
+    if (i >= 0) { if (L) nl[i] = L; else nl.splice(i, 1); } else if (L) {
+      let j = 0;
+      while (j < nl.length && nl[j].src < src) j++;
+      nl.splice(j, 0, L);
+    }
+    lines = nl;
+    if (src === edSel()) selGen++; else pipeGen++;
+    dirty();
+  }
+
+  // ---- 화면 ↔ 땅
+  function camc(e, n, z) { // 격자 → 360 카메라 좌표 (겹쳐 그리기와 같은 약속)
+    const dx = e - S.cam[0], dy = n - S.cam[1], dz = z - S.cam[2];
+    return [dx * V.r[0] + dy * V.r[1], dx * V.u[0] + dy * V.u[1] + dz * V.u[2], dx * V.f[0] + dy * V.f[1] + dz * V.f[2]];
+  }
+  function scr(q) { return [V.w / 2 + q[0] / q[2] * (V.w / 2) / V.tanH, V.h / 2 - q[1] / q[2] * (V.h / 2) / V.tanV]; }
+  // 화면 점 → 땅 [e, n, z]: z0 높이 면과 만난 뒤 그 자리 땅 높이로 세 번 더. 땅을 안 보면 null.
+  function groundHit(x, y, z0) {
+    const nx = (x - V.w / 2) / (V.w / 2), ny = (V.h / 2 - y) / (V.h / 2);
+    const w = unit3([0, 1, 2].map((i) => V.f[i] + nx * V.tanH * V.r[i] + ny * V.tanV * V.u[i]));
+    if (w[2] > -0.02) return null;
+    const C = S.cam;
+    let z = Number.isFinite(z0) ? z0 : S.gz, h = null;
+    for (let it = 0; it < 4; it++) {
+      const t = (z - C[2]) / w[2];
+      if (!(t > 0)) return null;
+      h = [C[0] + t * w[0], C[1] + t * w[1], z];
+      if (it === 3) break;
+      const g = groundAt(h[0], h[1]);
+      if (!Number.isFinite(g)) break;
+      z = g;
+    }
+    return h;
+  }
+  // 화면 (x, y) 에서 카메라 좌표 선분 a → b 까지 화면 거리 d · 그 점의 선분 매개 t (가까운 면으로 자름)
+  function segPick(a, b, x, y) {
+    if (a[2] < NEAR && b[2] < NEAR) return null;
+    let ta = 0, tb = 1;
+    if (a[2] < NEAR) ta = (NEAR - a[2]) / (b[2] - a[2]); else if (b[2] < NEAR) tb = (NEAR - a[2]) / (b[2] - a[2]);
+    const at = (t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+    const qa = at(ta), qb = at(tb), sa = scr(qa), sb = scr(qb);
+    const dx = sb[0] - sa[0], dy = sb[1] - sa[1], l2 = dx * dx + dy * dy;
+    const s = l2 > 0 ? clamp(((x - sa[0]) * dx + (y - sa[1]) * dy) / l2, 0, 1) : 0;
+    const u = s / qb[2] / ((1 - s) / qa[2] + s / qb[2]); // 화면에서는 1/z 가 선형
+    return { d: Math.hypot(x - sa[0] - s * dx, y - sa[1] - s * dy), t: ta + (tb - ta) * u };
+  }
+  // 360: 관 L 에서 화면 (x, y) 에 가장 가까운 곳 { k (나눈 점 마디), t, d (px), de (띠 · 관 가장자리에서 px) }
+  function viewPick(L, x, y) {
+    const P = L.pts, cnt = P.length / 3, Cx = S.cam[0], Cy = S.cam[1], kx = (V.w / 2) / V.tanH;
+    const bx = Math.max(L.e0 - Cx, 0, Cx - L.e1), by = Math.max(L.n0 - Cy, 0, Cy - L.n1);
+    if (bx * bx + by * by > FADE1 * FADE1) return null;
+    const zf = S.depth ? [gAt, zcAt] : [gAt]; // 깊이 방식은 관 (중심) 도
+    let best = null;
+    for (let k = 0; k + 1 < cnt; k++) {
+      if (distPtSeg(Cx, Cy, P[k * 3], P[k * 3 + 1], P[k * 3 + 3], P[k * 3 + 4]) > FADE1) continue;
+      for (const f of zf) {
+        const a = camc(P[k * 3], P[k * 3 + 1], f(L, k)), b = camc(P[k * 3 + 3], P[k * 3 + 4], f(L, k + 1));
+        const r = segPick(a, b, x, y);
+        if (!r) continue;
+        const z = a[2] + (b[2] - a[2]) * r.t, de = r.d - (z > NEAR ? L.dia / 2 * kx / z : 0);
+        if (!best || de < best.de) best = { k: k, t: r.t, d: r.d, de: de };
+      }
+    }
+    return best;
+  }
+  // 지도: 관 L 에서 화면 (x, y) 에 가장 가까운 곳
+  function mapPick(L, x, y) {
+    if (!L.mx) return null;
+    const k = mk(), ox = M.w / 2 - M.cx * k, oy = M.h / 2 - M.cy * k;
+    let best = null;
+    for (let j = 0; j + 1 < L.mx.length; j++) {
+      const ax = L.mx[j] * k + ox, ay = L.my[j] * k + oy, dx = L.mx[j + 1] * k + ox - ax, dy = L.my[j + 1] * k + oy - ay, l2 = dx * dx + dy * dy;
+      const t = l2 > 0 ? clamp(((x - ax) * dx + (y - ay) * dy) / l2, 0, 1) : 0, d = Math.hypot(x - ax - t * dx, y - ay - t * dy);
+      if (!best || d < best.d) best = { k: j, t: t, d: d, de: d - clamp(L.dia * 10, 2, 8) / 2 };
+    }
+    return best;
+  }
+  const PICK_DE = 6; // px, 띠 · 선 가장자리에서 이만큼 안이면 그 관
+  const pickOf = (view, L, x, y) => (view === 'v' ? viewPick(L, x, y) : mapPick(L, x, y));
+  function lineAt(view, x, y) {
+    let best = -1, bd = PICK_DE;
+    for (const L of lines) {
+      const r = pickOf(view, L, x, y);
+      if (r && r.de <= bd) { bd = r.de; best = L.src; }
+    }
+    return best;
+  }
+  function inPoly(p, x, y) {
+    let inside = false;
+    for (let a = 0, b = p.length - 2; a < p.length; b = a, a += 2) {
+      if ((p[a + 1] > y) !== (p[b + 1] > y) && x < (p[b] - p[a]) * (y - p[a + 1]) / (p[b + 1] - p[a + 1]) + p[a]) inside = !inside;
+    }
+    return inside;
+  }
+  // 손잡이 (원래 꼭짓점 차례) · 없으면 −1
+  function handleAt(view, x, y) {
+    const L = edLine();
+    if (!L) return -1;
+    let best = -1, bd = Infinity;
+    if (view === 'v') {
+      for (const hd of S.hnd) {
+        const d = Math.hypot(x - hd.sx, y - hd.sy);
+        if ((d < 10 || inPoly(hd.poly, x, y)) && d < bd) { bd = d; best = hd.i; }
+      }
+    } else if (L.mx) {
+      const k = mk(), ox = M.w / 2 - M.cx * k, oy = M.h / 2 - M.cy * k;
+      L.ctrl.forEach((q, i) => {
+        const d = Math.max(Math.abs(L.mx[q] * k + ox - x), Math.abs(L.my[q] * k + oy - y));
+        if (d <= 8 && d < bd) { bd = d; best = i; }
+      });
+    }
+    return best;
+  }
+  // 고른 관 위 점 (나눈 점 마디 k · t) 의 [e, n, z|null, g]
+  function pickPoint(L, pk) {
+    const P = L.pts, k = pk.k, t = pk.t, za = P[k * 3 + 2], zb = P[k * 3 + 5];
+    return [P[k * 3] + (P[k * 3 + 3] - P[k * 3]) * t, P[k * 3 + 1] + (P[k * 3 + 4] - P[k * 3 + 1]) * t,
+      L.hasZ && Number.isFinite(za) && Number.isFinite(zb) ? za + (zb - za) * t : null, gAt(L, k) + (gAt(L, k + 1) - gAt(L, k)) * t];
+  }
+
+  // ---- 조작
+  function edStart(view, x, y, e) {
+    ED.down = null;
+    if (!ED.on) return;
+    if (view === 'v') flushView();
+    const L = edLine();
+    if (!L) return;
+    const hi = handleAt(view, x, y);
+    const on = hi < 0 && e && e.shiftKey ? pickOf(view, L, x, y) : null;
+    if (hi >= 0) ED.down = { view: view, kind: e && e.shiftKey ? 'move' : 'pt', i: hi, x0: x, y0: y, started: false };
+    else if (on && on.de <= PICK_DE) ED.down = { view: view, kind: 'move', i: -1, pk: on, x0: x, y0: y, started: false };
+  }
+  function edMove(dx, dy) {
+    const d = ED.down;
+    if (!d) return;
+    if (!d.started && !edBegin(d)) { ED.down = null; return; }
+    ED.want = [d.x0 + dx, d.y0 + dy];
+    needView = true; needMap = true; kick();
+  }
+  // 끌기 시작: 처음 모양 · 손잡이와 누른 곳의 화면 차이 (손잡이가 마우스로 튀지 않게) · 통째 옮기기의 기준 땅점
+  function edBegin(d) {
+    const L = edLine(), raw = edRaw();
+    if (!L || !raw) return false;
+    d.before = JSON.stringify(raw);
+    d.cp0 = ctrlPts(raw);
+    if (d.cp0.length !== L.ctrl.length) return false;
+    if (d.kind === 'pt') {
+      const q = L.ctrl[d.i];
+      let hs = null;
+      if (d.view === 'v') { const c = camc(L.pts[q * 3], L.pts[q * 3 + 1], gAt(L, q)); hs = c[2] > NEAR ? scr(c) : null; } else if (L.mx) hs = m2s(L.mx[q], L.my[q]);
+      d.off = hs ? [hs[0] - d.x0, hs[1] - d.y0] : [0, 0];
+      ED.hi = d.i;
+    } else if (d.view === 'v') {
+      const z0 = d.i >= 0 ? gAt(L, L.ctrl[d.i]) : pickPoint(L, d.pk)[3];
+      d.ref = groundHit(d.x0, d.y0, z0);
+      if (!d.ref) return false;
+    } else {
+      const m = s2m(d.x0, d.y0);
+      d.ref = mer2en(m[0], m[1]);
+    }
+    d.started = true;
+    return true;
+  }
+  // 다음 그림 전에: 마지막 마우스 자리로 그 줄을 다시 만든다
+  function edApply() {
+    const d = ED.down, at = ED.want;
+    ED.want = null;
+    if (!d || !d.started || !at) return;
+    const L = edLine(), raw = edRaw();
+    if (!L || !raw) return;
+    const cp = d.cp0.map((q) => q.slice());
+    if (d.kind === 'pt') {
+      const tx = at[0] + d.off[0], ty = at[1] + d.off[1];
+      let en;
+      if (d.view === 'v') en = groundHit(tx, ty, gAt(L, L.ctrl[d.i]));
+      else { const m = s2m(tx, ty); en = mer2en(m[0], m[1]); }
+      if (!en) return;
+      cp[d.i][0] = en[0]; cp[d.i][1] = en[1]; // hasZ 관 중심 표고는 그대로
+    } else {
+      let en;
+      if (d.view === 'v') en = groundHit(at[0], at[1], d.ref[2]);
+      else { const m = s2m(at[0], at[1]); en = mer2en(m[0], m[1]); }
+      if (!en) return;
+      const de = en[0] - d.ref[0], dn = en[1] - d.ref[1];
+      cp.forEach((q) => { q[0] += de; q[1] += dn; });
+    }
+    edRebuild(raw, cp);
+    edPut(ED.sel);
+  }
+  function edEnd(moved) {
+    const d = ED.down;
+    if (!d) return;
+    if (d.started && ED.want) edApply();
+    ED.down = null;
+    ED.want = null;
+    if (!d.started || !moved) return;
+    const after = JSON.stringify(edRaw());
+    if (after !== d.before) edCommit(ED.sel, d.before, after);
+  }
+  // 끝난 고침 하나 → 되돌리기 · 저장
+  function edCommit(src, before, after) {
+    if (!ED.orig.has(src)) ED.orig.set(src, JSON.parse(before)); // [고친 것 버리기] 로 돌아갈 파일 모양
+    ED.undo.push({ src: src, before: before, after: after });
+    if (ED.undo.length > 300) ED.undo.shift();
+    ED.redo = [];
+    ED.dirty.add(src);
+    pipesSaveSoon();
+  }
+  function edTap(view, x, y) {
+    const hi = handleAt(view, x, y);
+    if (hi >= 0) { ED.hi = hi; dirty(); return; }
+    const src = lineAt(view, x, y);
+    if (src >= 0) {
+      if (src !== ED.sel) { ED.sel = src; ED.hi = -1; ED.hov = -1; }
+    } else if (ED.hi >= 0) ED.hi = -1; else ED.sel = -1;
+    dirty();
+  }
+  function edHover(view, x, y) {
+    const el = view === 'v' ? ovc : mc, hi = handleAt(view, x, y);
+    el.classList.toggle('move', hi >= 0);
+    el.classList.toggle('point', hi < 0 && lineAt(view, x, y) >= 0);
+    if (hi !== ED.hov) { ED.hov = hi; dirty(); }
+  }
+  // 두 번 누르기: 고른 관의 그 마디에 꼭짓점 넣기
+  function edInsert(view, x, y) {
+    const L = edLine(), raw = edRaw();
+    if (!L || !raw || ED.down || handleAt(view, x, y) >= 0) return;
+    const pk = pickOf(view, L, x, y);
+    if (!pk || pk.de > PICK_DE) return;
+    const p = pickPoint(L, pk), cp = ctrlPts(raw);
+    if (cp.length !== L.ctrl.length) return;
+    let j = 0;
+    while (j + 2 < L.ctrl.length && L.ctrl[j + 1] <= pk.k) j++;
+    if (Math.hypot(p[0] - cp[j][0], p[1] - cp[j][1]) < 0.05 || Math.hypot(p[0] - cp[j + 1][0], p[1] - cp[j + 1][1]) < 0.05) return;
+    const before = JSON.stringify(raw);
+    cp.splice(j + 1, 0, [p[0], p[1], p[2]]);
+    edRebuild(raw, cp);
+    edPut(ED.sel);
+    ED.hi = j + 1;
+    edCommit(ED.sel, before, JSON.stringify(raw));
+  }
+  function edDelete() {
+    const raw = ED.sel >= 0 ? edRaw() : null;
+    if (!raw || ED.hi < 0) { toast('점 먼저 누르기'); return; }
+    const cp = ctrlPts(raw);
+    if (cp.length <= 2) { toast('점 2개는 남김'); return; }
+    if (ED.hi >= cp.length) return;
+    const before = JSON.stringify(raw);
+    cp.splice(ED.hi, 1);
+    edRebuild(raw, cp);
+    edPut(ED.sel);
+    ED.hi = -1;
+    ED.hov = -1;
+    edCommit(ED.sel, before, JSON.stringify(raw));
+  }
+  function edUndo(redo) {
+    const o = (redo ? ED.redo : ED.undo).pop();
+    if (!o) { toast(redo ? '다시 할 것 없음' : '되돌릴 것 없음'); return; }
+    (redo ? ED.undo : ED.redo).push(o);
+    window.RV_PIPES.lines[o.src] = JSON.parse(redo ? o.after : o.before);
+    ED.sel = o.src; // 바뀐 관을 보여 줌
+    ED.hi = -1;
+    ED.hov = -1;
+    edPut(o.src);
+    ED.dirty.add(o.src);
+    pipesSaveSoon();
+  }
+  function edKey(e) {
+    const k = e.key || '', lk = k.toLowerCase(), mod = e.ctrlKey || e.metaKey;
+    if (k === 'Escape') { edMode(false); return true; }
+    if (k === 'Delete' || k === 'Backspace') { edDelete(); return true; }
+    if (mod && (e.code === 'KeyZ' || lk === 'z')) { edUndo(e.shiftKey); return true; }
+    if (mod && (e.code === 'KeyY' || lk === 'y')) { edUndo(true); return true; }
+    return false;
+  }
+  function edUI() {
+    setOn($('tgEdit'), ED.on);
+    $('edChip').classList.toggle('show', ED.on);
+    $('app').classList.toggle('edOn', ED.on); // 알림을 안내 줄 위로
+    $('edShp').hidden = !HOST();
+    $('edDrop').hidden = !!HOST() || !ED.dirty.size;
+  }
+  function edMode(on) {
+    on = !!on;
+    if (on && !lines.length) { toast('관로 없음'); return; }
+    if (on && AL.on) alMode(false);
+    if (ED.down) edEnd(true);
+    ED.on = on;
+    ED.sel = -1; ED.hi = -1; ED.hov = -1; ED.down = null; ED.want = null;
+    if (on && !S.pipes) setPipes(true);
+    S.hover = -1;
+    [ovc, mc].forEach((el) => el.classList.remove('point', 'move'));
+    edUI();
+    dirty();
+  }
+  // 관로 파일을 새로 읽음 ([관로 넣기]): 고치던 것 · 되돌리기 비움
+  function edReset() {
+    if (ED.on) edMode(false);
+    clearTimeout(pipeSaveT);
+    pipeSaveT = 0;
+    ED.undo = []; ED.redo = []; ED.dirty.clear(); ED.orig.clear();
+    ED.origSig = pipesSig(window.RV_PIPES);
+    ED.origEdited = !!(window.RV_PIPES && window.RV_PIPES.edited);
+    edUI();
+  }
+
+  // ---- 저장: 프로그램 = save_pipes (0.8 초 모아) · 밖 = 이 브라우저 (고친 줄만, 파일이 같을 때만 되살림)
+  let pipeSaveT = 0, pipeSaving = Promise.resolve(null);
+  const pipesText = () => 'window.RV_PIPES = ' + JSON.stringify(window.RV_PIPES) + ';\n';
+  function pipesSig(P) { // 파일 관로 지문 (줄 수 · 줄마다 점 수 · 처음 · 끝 점)
+    let h = 2166136261;
+    const add = (s) => { for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; } };
+    const ls = P && Array.isArray(P.lines) ? P.lines : [];
+    add(String(ls.length));
+    ls.forEach((l) => { const p = l && Array.isArray(l.pts) ? l.pts : []; add('|' + p.length + JSON.stringify(p[0] || null) + JSON.stringify(p[p.length - 1] || null)); });
+    return h.toString(16);
+  }
+  function pipesSaveSoon() {
+    window.RV_PIPES.edited = true;
+    if (HOST()) {
+      clearTimeout(pipeSaveT);
+      pipeSaveT = setTimeout(pipesFlush, 800);
+    } else {
+      const out = {};
+      ED.dirty.forEach((i) => { out[i] = window.RV_PIPES.lines[i]; });
+      try { localStorage.setItem(PIPE_KEY, JSON.stringify({ sig: ED.origSig, lines: out })); } catch (e) { toast('이 브라우저에 저장 못 함'); }
+    }
+    edUI();
+  }
+  function pipesFlush() {
+    if (pipeSaveT) {
+      clearTimeout(pipeSaveT);
+      pipeSaveT = 0;
+      pipeSaving = pipeSaving.then(() => hostCall('save_pipes', pipesText())).then((r) => {
+        if (!r || r.ok === false) toast('관로 저장 안 됨');
+        return r;
+      }, () => { toast('관로 저장 안 됨'); return null; });
+    }
+    return pipeSaving;
+  }
+  // [고친 것 버리기]: 파일 관로로 (이 브라우저 것 지움)
+  function edDiscard() {
+    const P = window.RV_PIPES;
+    if (P && Array.isArray(P.lines)) {
+      ED.orig.forEach((l, i) => { P.lines[i] = l; });
+      if (ED.origEdited) P.edited = true; else delete P.edited;
+    }
+    ED.orig.clear(); ED.dirty.clear(); ED.undo = []; ED.redo = [];
+    try { localStorage.removeItem(PIPE_KEY); } catch (e) { /* 없어도 됨 */ }
+    ED.sel = -1; ED.hi = -1; ED.hov = -1;
+    lines = buildLines(P);
+    linesToMap();
+    pipeGen++;
+    edUI();
+    dirty();
+    toast('고친 것 버림');
+  }
+  // SHP 로 내보내기 (프로그램만): 아직 안 쓴 고침을 먼저 저장 → export_pipes_shp
+  function edShp() {
+    if (!HOST() || ED.shpBusy) return;
+    const bs = [$('edShp'), $('pmShpOut')];
+    const busy = (on) => { ED.shpBusy = on; bs.forEach((b) => { b.disabled = on; }); };
+    busy(true);
+    pipesFlush().then(() => hostCall('export_pipes_shp')).then((r) => {
+      busy(false);
+      if (!r) return; // 취소
+      const p = String(r.path || '');
+      if (r.ok) toast('SHP 저장 · ' + p, () => hostCall('copy_text', p).then(() => toast('복사됨'), () => copyText(p)));
+      else toast(String(r.msg || 'SHP 못 씀'));
+    }, (e) => { busy(false); toast(errText(e)); });
+  }
+  $('tgEdit').addEventListener('click', () => edMode(!ED.on));
+  $('edEnd').addEventListener('click', () => edMode(false));
+  $('edShp').addEventListener('click', edShp);
+  $('pmShpOut').addEventListener('click', edShp);
+  $('edDrop').addEventListener('click', () => toast('고친 관로 모두 버리기', edDiscard, '버리기'));
+  const homeCal = beforeHome;
+  beforeHome = () => Promise.all([homeCal(), pipesFlush()]); // [처음] 전에 안 쓴 고침도 저장
+  window.addEventListener('pagehide', () => { if (pipeSaveT) pipesFlush(); });
+  window.addEventListener('pywebviewready', edUI);
+  // 시작: 이 브라우저에 고친 관로가 있으면 (같은 파일일 때만) 되살림
+  ED.origSig = pipesSig(window.RV_PIPES);
+  ED.origEdited = !!(window.RV_PIPES && window.RV_PIPES.edited);
+  (function restore() {
+    const st = lsGet(PIPE_KEY), P = window.RV_PIPES;
+    // 다른 pipes.js (이름만 같은 프로젝트 · 다시 넣은 관로) 면 쓰지 않음 (지우지도 않음)
+    if (!st || HOST() || !P || !Array.isArray(P.lines) || st.sig !== ED.origSig || !st.lines || typeof st.lines !== 'object') return;
+    let n = 0;
+    Object.keys(st.lines).forEach((k) => {
+      const i = Number(k), l = st.lines[k];
+      if (!Number.isInteger(i) || i < 0 || i >= P.lines.length || !l || !Array.isArray(l.pts)) return;
+      ED.orig.set(i, P.lines[i]);
+      P.lines[i] = l;
+      ED.dirty.add(i);
+      n++;
+    });
+    if (!n) return;
+    P.edited = true;
+    lines = buildLines(P);
+    linesToMap();
+    toast('고친 관로 불러옴', edDiscard, '버리기');
+  })();
+  edUI();
 
   // ---------------------------------------------------------------- 크기 맞춤
   function resizeAll() {

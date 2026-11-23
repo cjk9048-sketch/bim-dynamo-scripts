@@ -16,6 +16,8 @@
   --nav: 화살표 이동 시험 (NAV_SHOTS · 찍은 순서 ≠ 자리 순서 · 영상 0002 는 calib.js 로 옮김). 작게 (--width 1024) 만들어도 됨.
   --trench: 터파기 시험. 사진에 동서로 난 길 (TR_ROAD: 아스팔트 + 가운데 점선 · 가장자리 선) 만 그리고 (띠 없음),
      관로 = TR_LINES (길 따라 꺾인 D300 · 길 밖 hasZ D600 (끝 하나는 빈 땅) · 끝끼리 이어진 D200 두 줄 = 한 구덩이).
+  --edit: 관로 고치기 시험. --align 의 비탈 땅 · dem.js · 칠한 네모 (맞춤 틀림 없음 · 띠 안 칠함) +
+     EDIT_LINES (5 m 마다 늘린 점 + ctrl · hasZ 하나 · ctrl 없는 옛 꼴 하나).
 지평선 위 6° 에 N/E/S/W 글자를 쓴다.
 """
 import argparse
@@ -100,6 +102,15 @@ TR_LINES = [
     ([(-20.0, -12.0), (-5.0, -12.0)], 0.2, 0, 'T3a', None),
     ([(-5.0, -12.0), (5.0, -16.0)], 0.2, 0, 'T3b', None),
 ]
+# --edit: 관로 고치기 시험. 비탈 땅 + dem.js + 칠한 네모 (--align 과 같음 · 맞춤 틀림 없음 · 띠 안 칠함).
+#   관로 = EDIT_LINES: 빌더처럼 5 m 마다 늘린 점 + ctrl (원래 꼭짓점 번호) · g = 비탈 땅 · ll = en2ll.
+#   (꼭짓점, 관경 m, 층, 이름, 꼭짓점 관 중심 표고 (hasZ) 또는 None, ctrl 을 적는지)
+EDIT_LINES = [
+    ([(-30.0, 5.0), (15.0, 5.0), (45.0, 20.0)], 0.3, 0, 'E1', None, True),
+    ([(22.0, -40.0), (22.0, 0.0), (22.0, 40.0)], 0.6, 1, 'E2', (47.0, 47.5, 48.5), True),
+    ([(-12.0, -10.0), (-2.0, -12.0)], 0.2, 0, 'E3', None, False),   # 옛 꼴: ctrl 없음 · 늘리지 않음
+]
+EDIT_STEP = 5.0
 DEM_SKIP = {(3, 3)}         # 빈 타일 (높이 없음)
 DEM_NAN = (0, 3, 2, 5)      # (ix, iy, 행, 열) 부터 2×2 칸 NaN
 
@@ -271,6 +282,35 @@ def make_tiles(out, zooms=range(15, 20), margin=400.0, marks=()):
     return count
 
 
+def densify(verts, zs=None, step=EDIT_STEP):
+    """빌더 pipeload.densify 와 같은 규칙: 꼭짓점 사이를 ceil(L/step) 등분 · 원래 꼭짓점 번호 ctrl."""
+    pts, ctrl = [(verts[0][0], verts[0][1], zs[0] if zs else None)], [0]
+    for i in range(1, len(verts)):
+        (ax, ay), (bx, by) = verts[i - 1], verts[i]
+        m = max(1, int(math.ceil(math.hypot(bx - ax, by - ay) / step)))
+        for k in range(1, m + 1):
+            t = k / m
+            pts.append((ax + t * (bx - ax), ay + t * (by - ay), zs[i - 1] + t * (zs[i] - zs[i - 1]) if zs else None))
+        ctrl.append(len(pts) - 1)
+    return pts, ctrl
+
+
+def edit_pipes(slope):
+    lines = []
+    for verts, dia, layer, label, zs, with_ctrl in EDIT_LINES:
+        if with_ctrl:
+            pts, ctrl = densify(verts, zs)
+        else:
+            pts, ctrl = [(x, y, None) for x, y in verts], None
+        ln = {'layer': layer, 'label': label, 'dia': dia, 'hasZ': zs is not None,
+              'pts': [[round(x, 3), round(y, 3), (round(z, 3) if z is not None else None)] for x, y, z in pts],
+              'g': [round(ground_z(x, y, slope), 3) for x, y, _ in pts], 'll': [en2ll(x, y) for x, y, _ in pts]}
+        if ctrl is not None:
+            ln['ctrl'] = ctrl
+        lines.append(ln)
+    return {'layers': LAYERS, 'lines': lines, 'origin': ORIGIN}
+
+
 def dem_dict(slope):
     """빌더와 같은 RV_DEM 꼴: 타일 (ix,iy) = (tile+1)² Float32 LE, 행 = 남→북, 열 = 서→동, 한 줄 겹침, NaN = 없음."""
     T, cell = DEM_TILE, DEM_CELL
@@ -301,11 +341,14 @@ def main():
     ap.add_argument('--align', action='store_true', help='점 찍어 맞추기 시험: 비탈 땅 + dem.js + 칠한 네모 + 영상 0001 을 ALIGN_ERR 만큼 틀리게')
     ap.add_argument('--nav', action='store_true', help='화살표 이동 시험: NAV_SHOTS 자리 + 영상 0002 를 옮기는 calib.js (NAV_CAL)')
     ap.add_argument('--trench', action='store_true', help='터파기 시험: 길만 그린 사진 + TR_LINES 관로 (calib.js 없음 = 기본 터파기)')
+    ap.add_argument('--edit', action='store_true', help='관로 고치기 시험: 비탈 땅 + dem.js + 칠한 네모 + EDIT_LINES (ctrl)')
     args = ap.parse_args()
     if args.nav and (args.calib or args.align or args.xyz):
         ap.error('--nav 는 --calib · --align · --xyz 와 같이 못 씀')
     if args.trench and (args.calib or args.align or args.nav or args.legacy_pipes):
         ap.error('--trench 는 --calib · --align · --nav · --legacy-pipes 와 같이 못 씀')
+    if args.edit and (args.calib or args.align or args.nav or args.legacy_pipes or args.trench):
+        ap.error('--edit 는 다른 시험 자료와 같이 못 씀')
     out = os.path.abspath(args.out)
     W = args.width
     H = W // 2
@@ -317,7 +360,7 @@ def main():
         if os.path.exists(p):
             os.remove(p)  # 없을 때도 되는지 본다
 
-    slope = (SLOPE_E, SLOPE_N) if args.align else (0.0, 0.0)
+    slope = (SLOPE_E, SLOPE_N) if (args.align or args.edit) else (0.0, 0.0)
     shots = []
     for k, (e, n, yaw, tm, vid) in enumerate(NAV_SHOTS if args.nav else SHOTS, start=1):
         sid = '%04d' % k
@@ -325,8 +368,8 @@ def main():
         R = rot(cal) if cal and not args.nav else None
         gz = ground_z(e, n, slope)  # 적힌 자리의 땅 표고
         cam = (e + cal.get('dx', 0.0), n + cal.get('dy', 0.0), gz + HEIGHT + cal.get('dz', 0.0))  # 실제 자리
-        img = render_pano(cam, W, H, R, slope, LANDMARKS if args.align else (),
-                          stripes=() if args.trench else None, road=args.trench)
+        img = render_pano(cam, W, H, R, slope, LANDMARKS if (args.align or args.edit) else (),
+                          stripes=() if (args.trench or args.edit) else None, road=args.trench)
         uri = 'data:image/jpeg;base64,' + base64.b64encode(jpeg_bytes(img)).decode('ascii')
         pano_js = os.path.join(out, 'data', 'pano', sid + '.js')
         if sid in args.drop:
@@ -354,7 +397,7 @@ def main():
         basemap = {'type': 'xyz', 'url': 'tiles/{z}/{x}/{y}.png', 'maxZoom': 19}
     project = {
         'version': 1, 'title': '시험 자료' + (' (맞춤)' if args.calib else '') + (' (점 맞춤)' if args.align else '') + (' (이동)' if args.nav else '')
-                 + (' (터파기)' if args.trench else ''),
+                 + (' (터파기)' if args.trench else '') + (' (관로 고치기)' if args.edit else ''),
         'crs': 'EPSG:5186',
         'origin': ORIGIN, 'cover': COVER,
         **({} if args.legacy_pipes else {'depth': DEPTH}),
@@ -365,7 +408,10 @@ def main():
     write_js(os.path.join(out, 'data', 'project.js'),
              'window.RV_PROJECT = ' + json.dumps(project, ensure_ascii=False, indent=1) + ';\n')
 
-    if args.trench and not args.no_pipes:
+    if args.edit and not args.no_pipes:
+        write_js(os.path.join(out, 'data', 'pipes.js'),
+                 'window.RV_PIPES = ' + json.dumps(edit_pipes(slope), ensure_ascii=False) + ';\n')
+    elif args.trench and not args.no_pipes:
         pipes = {'layers': LAYERS, 'lines': []}
         for verts, dia, layer, label, zc in TR_LINES:
             ln = {'layer': layer, 'label': label, 'dia': dia, 'pts': [[x, y, zc] for x, y in verts],
@@ -398,8 +444,9 @@ def main():
                                    'pts': [[x, y, None] for x, y in v], 'g': [ground_z(x, y, slope) for x, y in v], 'll': [en2ll(x, y) for x, y in v]})
         write_js(os.path.join(out, 'data', 'pipes.js'),
                  'window.RV_PIPES = ' + json.dumps(pipes, ensure_ascii=False, indent=1) + ';\n')
-    if args.align:
+    if args.align or args.edit:
         write_js(os.path.join(out, 'data', 'dem.js'), 'window.RV_DEM = ' + json.dumps(dem_dict(slope), ensure_ascii=False) + ';\n')
+    if args.align:
         truth = {'video': '0001', 'err': ALIGN_ERR['0001'], 'gz': GZ, 'slope': list(slope), 'lat0': LAT0, 'lon0': LON0,
                  'landmarks': [[me, mn] for me, mn, _ in LANDMARKS]}
         write_js(os.path.join(out, 'data', 'align_truth.js'), 'window.RV_ALIGN_TRUTH = ' + json.dumps(truth) + ';\n')

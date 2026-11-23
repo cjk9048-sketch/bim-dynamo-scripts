@@ -132,6 +132,7 @@ input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; margin
 #map.grabbing { cursor: grabbing; }
 #map.point { cursor: pointer; }
 #ov.pick:not(.grabbing), #map.pick:not(.grabbing):not(.point) { cursor: crosshair; }
+#ov.move:not(.grabbing), #map.move:not(.grabbing) { cursor: move; }
 .pane.pickHere { outline: 2px solid var(--yel); outline-offset: -2px; }
 
 .pill {
@@ -351,6 +352,29 @@ input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; margin
   font-weight: 700;
 }
 #alEnd:hover { filter: brightness(1.1); }
+/* 관로 고치기 */
+#edChip {
+  position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%);
+  display: none; align-items: center; gap: 8px;
+  height: 36px; padding: 0 6px 0 14px; max-width: calc(100% - 24px);
+  background: rgba(15, 18, 25, .85);
+  border: 1px solid rgba(34, 211, 238, .6);
+  border-radius: 999px;
+  backdrop-filter: blur(6px);
+  white-space: nowrap;
+}
+#edChip.show { display: flex; }
+#edTip { color: var(--text); min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+#edChip button {
+  flex: none; height: 26px; padding: 0 12px;
+  border: 1px solid var(--line-2); border-radius: 999px;
+  background: var(--panel-2); color: var(--text);
+  font-weight: 600;
+}
+#edChip button:hover { background: var(--panel-3); }
+#edChip button:disabled { opacity: .5; pointer-events: none; }
+#edChip #edEnd { background: #22d3ee; border-color: #22d3ee; color: #11141a; font-weight: 700; }
+#edChip #edEnd:hover { filter: brightness(1.1); }
 
 .calBtns { display: flex; gap: 8px; margin-top: 12px; }
 .calBtns button {
@@ -388,7 +412,8 @@ input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; margin
 }
 .dlgX:hover { background: var(--panel-3); color: var(--text); }
 .dlgBody { display: flex; flex-direction: column; gap: 10px; padding: 14px 16px; }
-.dlgFoot { display: flex; justify-content: flex-end; padding: 0 16px 14px; }
+.dlgFoot { display: flex; justify-content: flex-end; gap: 8px; padding: 0 16px 14px; }
+#pipeDlg .dlgFoot { justify-content: space-between; }
 .dlg button:not(.dlgX) {
   height: 32px; padding: 0 14px;
   border: 1px solid var(--line-2);
@@ -471,7 +496,15 @@ input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; margin
   z-index: 10;
 }
 #toast.show { opacity: 1; transform: translate(-50%, 0); pointer-events: auto; }
+#app.edOn #toast { bottom: 66px; } /* 관로 고치기 안내 줄을 가리지 않게 */
 #toast.click { cursor: pointer; }
+#toast button {
+  margin-left: 12px; height: 26px; padding: 0 12px;
+  border: 0; border-radius: 999px;
+  background: var(--acc); color: #fff;
+  font-weight: 700;
+}
+#toast button:hover { filter: brightness(1.1); }
 #toast.click:hover { border-color: var(--acc); }
 
 /* 좁은 화면 */
