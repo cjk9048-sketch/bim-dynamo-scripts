@@ -738,21 +738,25 @@ public sealed class ImportGisCommand
     ///   등고선 정의는 <b>선만</b> 받으므로 점은 조용히 무시된다. 봉우리·안부·계곡 바닥처럼
     ///   등고선 사이에 표고점만 있는 자리가 <b>납작해지는데</b> "표고점 851개"라고 보고되어 맞아 보인다.</param>
     /// <param name="breakIds">★[v113.0 · JACK 1104 «원지반 — 등고선으로 작성»] 표고가 제각각인 3D 선 — 등고선이 아니라 브레이크라인으로 넣는다(서버 · DXF 길은 안 줌 = 그대로).</param>
+    /// <param name="noGapContourIds">★[JACK 1123 «도로 다듬기 뒤 도로를 가로질러 솟구침»] 이 등고선들은 따로 넣고 Civil «평탄부 최소화 — 등고선 틈 메우기»를 끈다(나머지는 그대로 켬).
+    ///   도로 다듬기 재합성(등고선 전체) — 켜 두면 도로 범위에서 같은 높이로 잘린 두 끝을 도로 위로 다시 이어 칼날 · 골이 생김(실측: 도로를 가로지른 잘린 끝끼리 변 최장 52 ~ 115 m). null = 예전 그대로.</param>
     internal static string BuildGroundSurfaceFrom(Database db, Editor ed,
                                                   ObjectIdCollection contourIds,
                                                   ObjectIdCollection spotIds = null,
-                                                  ObjectIdCollection breakIds = null)
+                                                  ObjectIdCollection breakIds = null,
+                                                  ObjectIdCollection noGapContourIds = null)
     {
         // ★[JACK 1122 스샷 «이벤트 오류가 많이 뜸»] 측량 · 등고선 자료는 엇갈린 3D 선 · 겹친 점이 흔하다 — Civil이 이벤트 뷰어 창을 띄우며 수백 줄을 적음.
         //   계획부지 생성 · 옹벽 합성처럼 자동 알림 창만 끈다(기록은 남음 · EVENTVIEWER로 볼 수 있음 · 끝나면 원래 설정). 엇갈림 수는 우리 알림에 따로 적는다.
         var evPrev = EventViewerMute.Begin();
-        try { return BuildGroundSurface(db, ed, contourIds, spotIds, breakIds); }
+        try { return BuildGroundSurface(db, ed, contourIds, spotIds, breakIds, noGapContourIds); }
         finally { EventViewerMute.End(evPrev); }
     }
 
     private static string BuildGroundSurface(Database db, Editor ed, ObjectIdCollection contourIds,
                                              ObjectIdCollection spotIds = null,
-                                             ObjectIdCollection breakIds = null)
+                                             ObjectIdCollection breakIds = null,
+                                             ObjectIdCollection noGapContourIds = null)
     {
         if (contourIds.Count == 0) { DiscardGround(db, ObjectId.Null, spotIds, breakIds); return "지표면 생략(등고선 없음)"; }
         ObjectId surfId = ObjectId.Null;
@@ -790,14 +794,26 @@ public sealed class ImportGisCommand
             //      (등고선만으로 만드는 지표면이 뭉뚱그려 보이는 주된 원인이 이 평탄 삼각형이다.)
             //   ※ 보충점은 **등고선 위**에 찍히므로 표고가 그 등고선 값 그대로다(없는 표고를 지어내지 않음 — JACK 조건).
             //      원본 정점 간격이 평균 4.0m라 3m 기준이면 긴 직선 구간에만 점이 보태진다.
-            var flat = new SurfaceMinimizeFlatAreaOptions(true, true, true, true);
-            try { surf.ContoursDefinition.AddContours(contourIds, 0.05, 3.0, 0.01, 0.1, flat); }
-            catch
+            void AddC(ObjectIdCollection ids, SurfaceMinimizeFlatAreaOptions flat)
             {
-                // 옵션 조합을 거부하는 환경 대비 — 평탄부 최소화만 유지하고 보완값을 완화.
-                try { surf.ContoursDefinition.AddContours(contourIds, 1.0, 15.0, 0.1, 1.0, flat); }
-                catch { surf.ContoursDefinition.AddContours(contourIds, 1.0, 100.0, 0.3, 1.0); }
+                try { surf.ContoursDefinition.AddContours(ids, 0.05, 3.0, 0.01, 0.1, flat); }
+                catch
+                {
+                    // 옵션 조합을 거부하는 환경 대비 — 평탄부 최소화만 유지하고 보완값을 완화.
+                    try { surf.ContoursDefinition.AddContours(ids, 1.0, 15.0, 0.1, 1.0, flat); }
+                    catch { surf.ContoursDefinition.AddContours(ids, 1.0, 100.0, 0.3, 1.0); }
+                }
             }
+            // ★[JACK 1123] 틈 메우기 끌 등고선(범위에서 잘린 옛 등고선)은 따로 — Civil의 틈 메우기는 AddContours 한 번마다 걸림
+            var gapIds = contourIds; ObjectIdCollection noGapIds = null;
+            if (noGapContourIds != null && noGapContourIds.Count > 0)
+            {
+                var ng = new System.Collections.Generic.HashSet<ObjectId>(noGapContourIds.Cast<ObjectId>());
+                gapIds = new ObjectIdCollection(); noGapIds = new ObjectIdCollection();
+                foreach (ObjectId id in contourIds) (ng.Contains(id) ? noGapIds : gapIds).Add(id);
+            }
+            if (gapIds.Count > 0) AddC(gapIds, new SurfaceMinimizeFlatAreaOptions(true, true, true, true));
+            if (noGapIds != null && noGapIds.Count > 0) AddC(noGapIds, new SurfaceMinimizeFlatAreaOptions(false, true, true, true));
             // [JACK 0731] 처음 만들어질 때 스타일은 삼각망이 아니라 **등고선**(주 10m·보조 2m — JACK 0901)으로.
             try
             {

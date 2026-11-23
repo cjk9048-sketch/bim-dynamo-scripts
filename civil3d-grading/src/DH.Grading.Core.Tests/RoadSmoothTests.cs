@@ -73,6 +73,66 @@ public class RoadSmoothTests
         Assert.True(r.Region!.Contains(NtsSupport.Factory().CreatePoint(new NetTopologySuite.Geometries.Coordinate(10, 4))));
     }
 
+    [Fact]
+    public void Open_edges_with_center_keep_road_width_not_strip()
+    {
+        // ★[JACK 1123] 경계선이 끝에서 안 닫혀(끊긴 끝) 도로 면이 옆 땅과 한 면 — 예전엔 «면 ∩ 중심선 ± 20 m» = 40 m 띠. 이제 경계선까지 잰 폭(8 m)만
+        var edges = new[] { P((20, 0), (180, 0)), P((20, 8), (180, 8)), P((0, 60), (200, 60)), P((0, -40), (200, -40)) };
+        var cen = new[] { P((20, 4), (180, 4)) };
+        var r = RoadSmooth.Build(edges, cen, Array.Empty<IReadOnlyList<(double, double)>>(), (_, _) => 10);
+        var gf = NtsSupport.Factory();
+        double area = r.Roads.Sum(g => g.Area);
+        Assert.InRange(area, 160 * 8 * 0.9, 160 * 8 * 1.1);
+        Assert.Contains(r.Roads, g => g.Contains(gf.CreatePoint(new NetTopologySuite.Geometries.Coordinate(100, 4))));
+        Assert.DoesNotContain(r.Roads, g => g.Contains(gf.CreatePoint(new NetTopologySuite.Geometries.Coordinate(100, 15))));
+    }
+
+    static bool InRoads(RoadSmooth.Result r, double x, double y) => r.Roads.Any(g => g.Contains(NtsSupport.Factory().CreatePoint(new NetTopologySuite.Geometries.Coordinate(x, y))));
+
+    [Fact]
+    public void One_side_edge_is_mirrored()
+    {
+        // 한쪽(아래) 경계선만 · 끝이 안 닫힘 → 중심선에서 잰 4 m를 위쪽에도
+        var edges = new[] { P((20, 0), (180, 0)), P((0, 60), (200, 60)), P((0, -40), (200, -40)) };
+        var r = RoadSmooth.Build(edges, new[] { P((20, 4), (180, 4)) }, Array.Empty<IReadOnlyList<(double, double)>>(), (_, _) => 10);
+        Assert.True(InRoads(r, 100, 7));
+        Assert.False(InRoads(r, 100, 12));
+    }
+
+    [Fact]
+    public void Closed_loop_center_has_no_seam_gap()
+    {
+        // 블록을 도는 고리 도로(폭 8 m) — 바깥 경계 한 변이 4 m 끊겨 샌 면 · 중심선은 닫힌 고리(시작 = 왼쪽 아래 모서리)
+        var edges = new[]
+        {
+            P((0, 0), (100, 0)), P((100, 0), (100, 100)), P((100, 100), (0, 100)), P((0, 100), (0, 52)), P((0, 48), (0, 0)),
+            P((8, 8), (92, 8), (92, 92), (8, 92), (8, 8)),
+            P((-60, -60), (160, -60)), P((-60, 160), (160, 160)),
+        };
+        var cen = new[] { P((4, 4), (96, 4), (96, 96), (4, 96), (4, 4)) };
+        var r = RoadSmooth.Build(edges, cen, Array.Empty<IReadOnlyList<(double, double)>>(), (_, _) => 10);
+        Assert.True(InRoads(r, 4, 20));   // 시작점 곁 이음매
+        Assert.True(InRoads(r, 20, 4));
+        Assert.False(InRoads(r, -10, 50)); // 샌 면의 바깥 땅은 아님
+        Assert.False(InRoads(r, 50, 50));  // 블록
+    }
+
+    [Fact]
+    public void Closed_t_junction_keeps_inner_corner()
+    {
+        // 제대로 닫힌 T자 — 면 그대로(띠를 안 씀) · 안쪽 모서리 가까이도 도로
+        var edges = new[]
+        {
+            P((0, 0), (200, 0)), P((0, 8), (96, 8)), P((104, 8), (200, 8)), P((0, 0), (0, 8)), P((200, 0), (200, 8)),
+            P((96, 8), (96, 100)), P((104, 8), (104, 100)), P((96, 100), (104, 100)),
+        };
+        var cen = new[] { P((0, 4), (100, 4)), P((100, 4), (200, 4)), P((100, 4), (100, 100)) };
+        var r = RoadSmooth.Build(edges, cen, Array.Empty<IReadOnlyList<(double, double)>>(), (_, _) => 10);
+        Assert.True(InRoads(r, 96.5, 7.5));
+        Assert.True(InRoads(r, 103.5, 7.5));
+        Assert.True(InRoads(r, 100, 99));
+    }
+
     // ── 실물 수치지도(있을 때만) — 결과를 JSON으로(그림 확인용) ──
     static readonly string Ngii = @"C:\Users\19990\Desktop\AI\참고자료\(B010)수치지도_37713025_2025_00000387802312.dxf";
 

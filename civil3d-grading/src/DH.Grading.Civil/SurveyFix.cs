@@ -632,7 +632,9 @@ internal static class SurveyFix
 
             // ── 원지반 — 세 길과 같은 한 벌(새 이름 원지반_N · 주인 표시 · 스타일 · 레이어) ──
             try { r.Cross = SurveyMerge.Crossings(use.Where(i => i.Kind != SurveyKind.Spot).Select(i => (i.Layer, (IReadOnlyList<Point3>)i.Pts, i.Closed)).ToList()); } catch { }
-            string surfNote = ImportGisCommand.BuildGroundSurfaceFrom(db, ed, contourIds, spotIds, breakIds);
+            // ★[JACK 1123 «도로를 가로질러 솟구침»] 도로 다듬기는 등고선 전체를 «틈 메우기» 없이 — 도로 범위에서 잘린 같은 높이 두 끝을 Civil이 도로 위로 다시 잇지 않게
+            //   (잘린 것만 따로 넣으면 첫 묶음의 평탄부 최소화가 빈 도로 자리를 먼저 채워 45° 칸이 늘어남 — 실측 VWorld 171 → 499)
+            string surfNote = ImportGisCommand.BuildGroundSurfaceFrom(db, ed, contourIds, spotIds, breakIds, roadNote != null ? contourIds : null);
             DrawOrderFix.Apply(db);
             bool built = !surfNote.StartsWith("지표면 생성 실패", StringComparison.Ordinal) && !surfNote.StartsWith("지표면 생략", StringComparison.Ordinal);
             foreach (var g in GroundSet.List(db, legacy: false)) if (!before.Contains(g.Id)) { r.NewId = g.Id; r.NewName = g.Name; }

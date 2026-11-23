@@ -65,6 +65,7 @@ public static class RoadSmooth
     }
 
     static readonly GeometryFactory Gf = NtsSupport.Factory();
+    static readonly PrecisionModel MmGrid = new(1000);
 
     static LineString? Ls(IReadOnlyList<(double X, double Y)> p)
     {
@@ -110,6 +111,16 @@ public static class RoadSmooth
         var cenAll = cenLs.Count > 0 ? UnaryUnionOp.Union(cenLs.Cast<Geometry>().ToList()) : null;
         var cenPrep = cenAll != null ? PreparedGeometryFactory.Prepare(cenAll) : null;
         var cenBuf = cenAll?.Buffer(o.CenterHalfWidth, 4);
+        // ★[JACK 1123 «수치지도 도로선이 VWorld보다 덜 펴짐» · 계수기 실측] 경계선이 어딘가 안 닫히면(끊긴 끝 · 막다른 길) 도로 면이 옆 땅과 한 면이 되어
+        //   «면 ∩ 중심선 ± 20 m»가 40 m 띠(비탈 포함)가 됨 → 평균 상자(±9 m)가 가로를 못 덮어 비탈 기울기가 그대로 남음.
+        //   중심선마다 양옆 가장 가까운 경계선까지 잰 폭(VWorld 도로폭처럼)으로 띠를 만들어 면과 겹친 몫만 도로로.
+        //   ★[검토 1123] 띠는 «샌 면»에만 — 제대로 닫힌 면(면 ∩ ± 20 m가 면 ∩ 띠의 1.5배 이하)은 예전 그대로(교차로 연석 안쪽 모서리를 안 잃게).
+        string corrNote = "";   // 진단 로그에만(실패 알림 글에 안 섞이게 끝 요약 줄에 붙임)
+        int corrFail = 0, leaked = 0;
+        Geometry? cenCorr = null;
+        if (cenLs.Count > 0)
+            try { cenCorr = CenterCorridor(cenLs, edgeLs, o.CenterHalfWidth, o.MaxWidth / 2, out corrNote); }
+            catch (Exception ex) { cenCorr = null; corrNote = " · 중심선 띠 못 만듦(± " + o.CenterHalfWidth.ToString("0") + " m로) — " + ex.Message; }
         foreach (var f in faces)
         {
             double width = 2 * f.Area / Math.Max(1e-9, f.Length);
@@ -117,12 +128,20 @@ public static class RoadSmooth
             if (hasCenter)
             {
                 // 면 중 중심선 곁 몫만(블록 · 산과 한 면이어도)
-                var part = f.Intersection(cenBuf!);
+                Geometry part = f.Intersection(cenBuf!);
+                if (cenCorr != null)
+                    try
+                    {
+                        var pc = NetTopologySuite.Precision.GeometryPrecisionReducer.Reduce(NetTopologySuite.Operation.OverlayNG.OverlayNGRobust.Overlay(f, cenCorr, NetTopologySuite.Operation.Overlay.SpatialFunction.Intersection), MmGrid);   // 1 mm 격자 — 뒤 겹침 셈이 안 깨지게
+                        if (part.Area > 1.5 * pc.Area) { part = pc; leaked++; }
+                    }
+                    catch { corrFail++; }
                 foreach (var q in Polys(part)) if (q.Area >= o.MinArea) r.Roads.Add(q);
             }
             else if (width <= o.MaxWidth && f.Length * f.Length / f.Area >= 40) r.Roads.Add(f);
         }
         r.RoadFaces = r.Roads.Count;
+        if (cenCorr != null) corrNote += $" · 샌 면 {leaked}개에 띠" + (corrFail > 0 ? $" · 띠 겹침 못 함 {corrFail}면(예전 방식)" : "");
         if (r.Roads.Count == 0) { r.Log.Add($"도로 면을 못 찾음(면 {r.Faces}개 — 모두 넓은 블록)"); return r; }
 
         // ③ 테두리 읽기 · 다듬기 · 둑 찾기(1차 제외로 자른 뒤)
@@ -144,7 +163,7 @@ public static class RoadSmooth
             var bnd = new NetTopologySuite.Operation.Distance.IndexedFacetDistance(roadU0.Boundary);
             foreach (var cl in cenLs)
             {
-                var inRoad = cl.Intersection(roadU0);
+                var inRoad = NetTopologySuite.Operation.OverlayNG.OverlayNGRobust.Overlay(cl, roadU0, NetTopologySuite.Operation.Overlay.SpatialFunction.Intersection);
                 for (int gi = 0; gi < inRoad.NumGeometries; gi++)
                 {
                     if (inRoad.GetGeometryN(gi) is not LineString seg0 || seg0.Length < 5) continue;
@@ -313,7 +332,7 @@ public static class RoadSmooth
             var (sp, rg, ms) = FlattenGrid(CascadedUnion(r.Roads), r.Excluded, ground, o.SmoothLen / 2, o.GridCell, 2 * o.JumpMax);
             r.Spots = sp; r.Lines = rg; r.MaxShift = ms;
         }
-        r.Log.Add($"면 {r.Faces} · 도로 면 {r.RoadFaces} · 입체 교차 {r.Crossings}곳 · 둑/입체 구간 {r.JumpSpans}곳 · 다듬은 선 {r.Lines.Count}가닥 · 최대 보정 {r.MaxShift:0.00} m · 범위 {region.Area:N0} ㎡");
+        r.Log.Add($"면 {r.Faces} · 도로 면 {r.RoadFaces} · 입체 교차 {r.Crossings}곳 · 둑/입체 구간 {r.JumpSpans}곳 · 다듬은 선 {r.Lines.Count}가닥 · 최대 보정 {r.MaxShift:0.00} m · 범위 {region.Area:N0} ㎡{corrNote}");
         return r;
     }
 
@@ -556,6 +575,130 @@ public static class RoadSmooth
                 if (l.Count >= 2) { if (ring.IsClosed && l.Count == pts.Count) l.Add(l[0]); rings.Add(l); }
             }
         return (spots, rings, maxShift);
+    }
+
+    /// <summary>★[JACK 1123] 중심선 띠 — 2 m마다 법선 양쪽으로 가장 가까운 경계선까지(최대 <paramref name="maxHalf"/>) 잰 반폭 → 길이 방향 중앙값(± 6 m)으로 튐을 뺌.
+    /// 한쪽만 닿으면 그 값을 양쪽에 · 못 잰 표본은 앞뒤 값 · 줄 전체를 못 재면 파일 전체 중앙값(그것도 없으면 <paramref name="fallbackHalf"/>).
+    /// 띠 = 이웃 표본 사이 사각형(닫힌 고리는 끝 → 처음도) + 끝마다 원(교차점 = 그 줄 반폭 중앙값 · 막다른 끝 = 끝 반폭 · fb × 1.5까지).</summary>
+    static Geometry? CenterCorridor(List<LineString> cens, List<LineString> edges, double maxHalf, double fallbackHalf, out string note)
+    {
+        const double St = 2.0;
+        note = "";
+        double hi = Math.Max(0.75, maxHalf);   // CenterHalfWidth가 0.75 아래여도 Clamp 예외 없게
+        var swc = System.Diagnostics.Stopwatch.StartNew();
+        var tree = new NetTopologySuite.Index.Strtree.STRtree<(double X0, double Y0, double X1, double Y1)>();
+        foreach (var e in edges)
+        {
+            var c = e.Coordinates;
+            for (int k = 1; k < c.Length; k++) tree.Insert(new Envelope(c[k - 1], c[k]), (c[k - 1].X, c[k - 1].Y, c[k].X, c[k].Y));
+        }
+        if (tree.Count == 0) return null;
+        tree.Build();
+        double Hit(double x, double y, double ux, double uy)
+        {
+            double ex = x + ux * maxHalf, ey = y + uy * maxHalf, best = double.NaN;
+            foreach (var s in tree.Query(new Envelope(Math.Min(x, ex), Math.Max(x, ex), Math.Min(y, ey), Math.Max(y, ey))))
+            {
+                double dx1 = ex - x, dy1 = ey - y, dx2 = s.X1 - s.X0, dy2 = s.Y1 - s.Y0, den = dx1 * dy2 - dy1 * dx2;
+                if (Math.Abs(den) < 1e-12) continue;
+                double u = ((s.X0 - x) * dy2 - (s.Y0 - y) * dx2) / den, v = ((s.X0 - x) * dy1 - (s.Y0 - y) * dx1) / den;
+                if (u <= 1e-6 || u > 1 || v < 0 || v > 1) continue;
+                double d = u * maxHalf;
+                if (!(d >= best)) best = d;
+            }
+            return best;
+        }
+        static double[] Median(double[] a, int h)
+        {
+            var o = new double[a.Length]; var w = new List<double>(2 * h + 1);
+            for (int i = 0; i < a.Length; i++)
+            {
+                w.Clear();
+                for (int j = Math.Max(0, i - h); j <= Math.Min(a.Length - 1, i + h); j++) if (double.IsFinite(a[j])) w.Add(a[j]);
+                if (w.Count == 0) { o[i] = double.NaN; continue; }
+                w.Sort(); o[i] = w.Count % 2 == 1 ? w[w.Count / 2] : (w[w.Count / 2 - 1] + w[w.Count / 2]) / 2;
+            }
+            return o;
+        }
+        var rows = new List<(LineString C, List<(double X, double Y)> P, double[] L, double[] R, double[] Nx, double[] Ny)>();
+        var all = new List<double>();
+        int ns = 0, both = 0, one = 0, none = 0;
+        foreach (var cl in cens)
+        {
+            var p = Resample(cl, St); int n = p.Count;
+            if (n < 2) continue;
+            var L = new double[n]; var R = new double[n]; var nx = new double[n]; var ny = new double[n];
+            for (int i = 0; i < n; i++)
+            {
+                bool ring = cl.IsClosed && n > 2;   // 닫힌 고리 중심선 — 앞뒤가 이어짐
+                var a = p[ring ? (i - 1 + n) % n : Math.Max(0, i - 1)]; var b = p[ring ? (i + 1) % n : Math.Min(n - 1, i + 1)];
+                double tx = b.X - a.X, ty = b.Y - a.Y, tl = Math.Sqrt(tx * tx + ty * ty);
+                if (tl < 1e-9) { tx = 1; ty = 0; tl = 1; }
+                nx[i] = -ty / tl; ny[i] = tx / tl;
+                L[i] = Hit(p[i].X, p[i].Y, nx[i], ny[i]); R[i] = Hit(p[i].X, p[i].Y, -nx[i], -ny[i]);
+                ns++;
+                bool fl = double.IsFinite(L[i]), fr = double.IsFinite(R[i]);
+                if (fl && fr) both++; else if (fl || fr) one++; else none++;
+                // ★[검토 1123] 한쪽이 다른 쪽의 2배를 넘고 3 m 넘게 멀면 «못 닿음»(두 도로 사이 비탈이 띠에 드는 것 막음)
+                if (fl && fr && L[i] > 2 * R[i] && L[i] - R[i] > 3) fl = false;
+                else if (fl && fr && R[i] > 2 * L[i] && R[i] - L[i] > 3) fr = false;
+                if (!fl && fr) L[i] = R[i]; else if (fl && !fr) R[i] = L[i];
+            }
+            L = Median(L, 3); R = Median(R, 3);
+            foreach (var v in L.Concat(R)) if (double.IsFinite(v)) all.Add(v);
+            rows.Add((cl, p, L, R, nx, ny));
+        }
+        if (rows.Count == 0) return null;
+        all.Sort();
+        double fb = Math.Clamp(all.Count > 0 ? all[all.Count / 2] : fallbackHalf, 0.75, hi);
+        int noLine = 0; double noLen = 0;
+        var cenTree = new NetTopologySuite.Index.Strtree.STRtree<LineString>();
+        foreach (var c in cens) cenTree.Insert(c.EnvelopeInternal, c);
+        cenTree.Build();
+        var polys = new List<Geometry>();
+        foreach (var (cl, p, L, R, nx, ny) in rows)
+        {
+            int n = p.Count;
+            foreach (var a in new[] { L, R })
+            {
+                // 못 잰 표본 = 가장 가까운 잰 값 · 줄 전체가 없으면 파일 중앙값
+                int last = -1;
+                for (int i = 0; i < n; i++) if (double.IsFinite(a[i])) { for (int j = last + 1; j < i; j++) a[j] = last < 0 || i - j < j - last ? a[i] : a[last]; last = i; }
+                if (last < 0 && ReferenceEquals(a, L)) { noLine++; noLen += cl.Length; }
+                for (int j = last + 1; j < n; j++) a[j] = last < 0 ? fb : a[last];
+                for (int i = 0; i < n; i++) a[i] = Math.Clamp(a[i], 0.75, hi);
+            }
+            bool closedRing = cl.IsClosed && n > 2;
+            for (int i = 0; i + 1 < n || (closedRing && i < n); i++)
+            {
+                int i2 = (i + 1) % n;   // 닫힌 고리는 마지막 → 첫 표본도
+                polys.Add(Gf.CreateMultiPointFromCoords(new[]
+                {
+                    new Coordinate(p[i].X + nx[i] * L[i], p[i].Y + ny[i] * L[i]), new Coordinate(p[i2].X + nx[i2] * L[i2], p[i2].Y + ny[i2] * L[i2]),
+                    new Coordinate(p[i2].X - nx[i2] * R[i2], p[i2].Y - ny[i2] * R[i2]), new Coordinate(p[i].X - nx[i] * R[i], p[i].Y - ny[i] * R[i]),
+                }).ConvexHull());
+            }
+            if (closedRing) continue;
+            // ★[검토 1123] 끝 원 — 교차점(다른 중심선과 닿음) = 그 줄 반폭 중앙값(끝 표본은 법선이 상대 도로 쪽 먼 경계에 닿기 쉬움) · 막다른 끝 = 끝 반폭(둥근 마감) · 둘 다 fb × 1.5까지 · 10 m보다 짧은 줄은 fb
+            var lr = L.Concat(R).OrderBy(v => v).ToList();
+            double rMed = cl.Length < 10 ? fb : Math.Min(lr[lr.Count / 2], fb * 1.5);
+            foreach (int e in new[] { 0, n - 1 })
+            {
+                var ep = Gf.CreatePoint(new Coordinate(p[e].X, p[e].Y));
+                bool joint = false;
+                foreach (var o2 in cenTree.Query(new Envelope(p[e].X - 1, p[e].X + 1, p[e].Y - 1, p[e].Y + 1)))
+                    if (!ReferenceEquals(o2, cl) && o2.Distance(ep) < 1.0) { joint = true; break; }
+                polys.Add(ep.Buffer(joint ? rMed : Math.Min(Math.Max(L[e], R[e]), fb * 1.5), 6));
+            }
+        }
+        polys = polys.Where(g => g is Polygon && !g.IsEmpty).ToList();
+        if (polys.Count == 0) return null;
+        var u = NetTopologySuite.Operation.OverlayNG.OverlayNGRobust.Union(polys);
+        if (u == null || u.IsEmpty) return null;
+        u = NetTopologySuite.Simplify.TopologyPreservingSimplifier.Simplify(u, 0.3);   // 2 m 표본 사각형 이음매의 잔 꼭짓점 줄임(뒤 셈이 무거워짐)
+        if (!u.IsValid) u = u.Buffer(0);
+        note = $" · 중심선 폭 잼 — 표본 {ns} · 양쪽 닿음 {both} · 한쪽 {one} · 없음 {none} · 가운데 반폭 {fb:0.0} m · 못 잰 줄 {noLine}({noLen:0} m) · {swc.Elapsed.TotalSeconds:0.0}초";
+        return u.IsEmpty ? null : u;
     }
 
     static Coordinate[] Pad(this Coordinate[] c) => c.Length >= 2 ? c : new[] { c[0], new Coordinate(c[0].X + 0.01, c[0].Y) };
