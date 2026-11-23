@@ -226,10 +226,28 @@ class Api:
         self._save_list([x for x in self._load_list() if os.path.normcase(x['path']) != os.path.normcase(path)])
         return {'ok': True}
 
+    def _refresh_viewer(self, folder):
+        """프로젝트 폴더의 보기 화면을 이 프로그램 판으로 (옛 판으로 만든 폴더도 새 기능이 보이게 · 1123)."""
+        src = BASE / 'viewer'
+        if not (src / 'app.js').exists():
+            return
+        dst = Path(folder)
+        pairs = [(src / 'app.js', dst / 'viewer' / 'app.js'), (src / 'style.css', dst / 'viewer' / 'style.css'),
+                 (src / 'index.html', dst / 'index.html'), (src / 'index.html', dst / '로드뷰.html')]
+        for a, b in pairs:
+            try:
+                if not b.exists() or a.read_bytes() != b.read_bytes():
+                    b.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(a, b)
+            except OSError:
+                pass
+
     def open_project(self, path):
         url = _page_url(path)
         if not url:
             return {'ok': False, 'msg': '로드뷰 폴더가 아님 (index.html 없음)'}
+        self._refresh_viewer(path)
+        url = _page_url(path)
         self._project = str(Path(path).resolve())
         self._remember(self._project)
         self._window.load_url(url)
