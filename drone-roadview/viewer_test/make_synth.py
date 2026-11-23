@@ -13,6 +13,7 @@
   --align: 점 찍어 맞추기 시험. 비탈 땅 z = 50 + 0.05·n − 0.03·e (data/dem.js, 타일 여럿 · 빈 타일 하나)
      + 땅에 칠한 네모 5개 (LANDMARKS) + 영상 0001 을 알려진 만큼 틀리게 찍음 (ALIGN_ERR, calib.js 없음 → 바른 맞춤 = 그 값).
      답은 data/align_truth.js (시험만 읽음).
+  --nav: 화살표 이동 시험 (NAV_SHOTS · 찍은 순서 ≠ 자리 순서 · 영상 0002 는 calib.js 로 옮김). 작게 (--width 1024) 만들어도 됨.
 지평선 위 6° 에 N/E/S/W 글자를 쓴다.
 """
 import argparse
@@ -74,6 +75,19 @@ LANDMARKS = [
 ]
 LM_HALF = 0.4
 DEM_CELL, DEM_TILE, DEM_X0, DEM_Y0, DEM_N = 2.0, 8, -29.0, -27.0, 4  # 타일 16 m · 4×4 장
+# --nav: 화살표 (보는 방향 기준 이동) 시험. 찍은 순서와 자리 순서가 다르다.
+#   1 (0,0) · 2 (10,0) 동 · 3 (0,10) 북 · 4 (10,10) · 5 (40,0) · 6 (130,0) 60 m 밖
+#   7 = 영상 0002, 적힌 자리 (−12, 3) (1 의 서쪽) · calib.js dx 12 · dy −15 → 맞춘 자리 (0, −12) (1 의 남쪽)
+NAV_SHOTS = [
+    (0.0, 0.0, 0.0, 10.0, '0001'),
+    (10.0, 0.0, 0.0, 11.0, '0001'),
+    (0.0, 10.0, 0.0, 12.0, '0001'),
+    (10.0, 10.0, 0.0, 13.0, '0001'),
+    (40.0, 0.0, 0.0, 14.0, '0001'),
+    (130.0, 0.0, 0.0, 15.0, '0001'),
+    (-12.0, 3.0, 0.0, 30.0, '0002'),
+]
+NAV_CAL = {'0002': {'dx': 12.0, 'dy': -15.0, 'dz': 0.0, 'dyaw': 0.0, 'dpitch': 0.0, 'droll': 0.0}}
 DEM_SKIP = {(3, 3)}         # 빈 타일 (높이 없음)
 DEM_NAN = (0, 3, 2, 5)      # (ix, iy, 행, 열) 부터 2×2 칸 NaN
 
@@ -263,7 +277,10 @@ def main():
     ap.add_argument('--drop', nargs='*', default=[], help='사진 파일을 만들지 않을 사진 번호 (예: 0003)')
     ap.add_argument('--legacy-pipes', action='store_true', help='옛 pipes.js 형식 (dia · g · hasZ 없음) + project 에 depth 없음')
     ap.add_argument('--align', action='store_true', help='점 찍어 맞추기 시험: 비탈 땅 + dem.js + 칠한 네모 + 영상 0001 을 ALIGN_ERR 만큼 틀리게')
+    ap.add_argument('--nav', action='store_true', help='화살표 이동 시험: NAV_SHOTS 자리 + 영상 0002 를 옮기는 calib.js (NAV_CAL)')
     args = ap.parse_args()
+    if args.nav and (args.calib or args.align or args.xyz):
+        ap.error('--nav 는 --calib · --align · --xyz 와 같이 못 씀')
     out = os.path.abspath(args.out)
     W = args.width
     H = W // 2
@@ -277,10 +294,10 @@ def main():
 
     slope = (SLOPE_E, SLOPE_N) if args.align else (0.0, 0.0)
     shots = []
-    for k, (e, n, yaw, tm, vid) in enumerate(SHOTS, start=1):
+    for k, (e, n, yaw, tm, vid) in enumerate(NAV_SHOTS if args.nav else SHOTS, start=1):
         sid = '%04d' % k
-        cal = CALIB_ERR[vid] if args.calib else ALIGN_ERR.get(vid, {}) if args.align else {}
-        R = rot(cal) if cal else None
+        cal = CALIB_ERR[vid] if args.calib else ALIGN_ERR.get(vid, {}) if args.align else NAV_CAL.get(vid, {}) if args.nav else {}
+        R = rot(cal) if cal and not args.nav else None
         gz = ground_z(e, n, slope)  # 적힌 자리의 땅 표고
         cam = (e + cal.get('dx', 0.0), n + cal.get('dy', 0.0), gz + HEIGHT + cal.get('dz', 0.0))  # 실제 자리
         img = render_pano(cam, W, H, R, slope, LANDMARKS if args.align else ())
@@ -310,7 +327,8 @@ def main():
         print('tiles', make_tiles(out, range(15, 21), 60.0, LANDMARKS) if args.align else make_tiles(out))
         basemap = {'type': 'xyz', 'url': 'tiles/{z}/{x}/{y}.png', 'maxZoom': 19}
     project = {
-        'version': 1, 'title': '시험 자료' + (' (맞춤)' if args.calib else '') + (' (점 맞춤)' if args.align else ''), 'crs': 'EPSG:5186',
+        'version': 1, 'title': '시험 자료' + (' (맞춤)' if args.calib else '') + (' (점 맞춤)' if args.align else '') + (' (이동)' if args.nav else ''),
+        'crs': 'EPSG:5186',
         'origin': ORIGIN, 'cover': COVER,
         **({} if args.legacy_pipes else {'depth': DEPTH}),
         'basemap': basemap,
@@ -348,9 +366,9 @@ def main():
         truth = {'video': '0001', 'err': ALIGN_ERR['0001'], 'gz': GZ, 'slope': list(slope), 'lat0': LAT0, 'lon0': LON0,
                  'landmarks': [[me, mn] for me, mn, _ in LANDMARKS]}
         write_js(os.path.join(out, 'data', 'align_truth.js'), 'window.RV_ALIGN_TRUTH = ' + json.dumps(truth) + ';\n')
-    if args.calib:
+    if args.calib or args.nav:
         write_js(os.path.join(out, 'data', 'calib.js'),
-                 'window.RV_CALIB = ' + json.dumps({'videos': CALIB_ERR}, indent=1) + ';\n')
+                 'window.RV_CALIB = ' + json.dumps({'videos': NAV_CAL if args.nav else CALIB_ERR}, indent=1) + ';\n')
 
     shutil.copyfile(os.path.join(VIEWER, 'index.html'), os.path.join(out, '로드뷰.html'))
     shutil.copyfile(os.path.join(VIEWER, 'index.html'), os.path.join(out, 'index.html'))  # 빌더처럼 같은 쪽을 둘로

@@ -84,10 +84,32 @@
     else fallback();
   }
 
+  // ---------------------------------------------------------------- 프로그램 연결 (pywebview · WebView2)
+  // 프로그램 안에서 열면 window.pywebview.api 가 있다 → 윗줄에 [관로 넣기] · [내보내기] · [처음]. 웹 공유 · 브라우저에서는 숨김.
+  const HOST = () => (window.pywebview && window.pywebview.api) || null;
+  function hostCall(name, arg) {
+    const h = HOST();
+    if (!h || typeof h[name] !== 'function') return Promise.reject(new Error('프로그램 연결 없음'));
+    return Promise.resolve().then(() => (arg === undefined ? h[name]() : h[name](arg)));
+  }
+  const errText = (e) => String((e && e.message) || e || '오류');
+  function hostShow() { $('hostTools').hidden = !HOST(); }
+  let beforeHome = () => Promise.resolve(); // [처음] 전에 할 일 (맞춤 저장)
+  $('hHome').addEventListener('click', () => {
+    beforeHome().catch(() => {}).then(() => hostCall('go_home')).catch((e) => toast(errText(e)));
+  });
+  window.addEventListener('pywebviewready', hostShow);
+
   // ---------------------------------------------------------------- 자료
   const PRJ = window.RV_PROJECT;
+  function noData(text) { // 자료가 없어도 프로그램에서는 [처음] 으로 돌아갈 수 있게
+    viewMsg(text);
+    $('hPipes').hidden = true;
+    $('hExport').hidden = true;
+    hostShow();
+  }
   if (!PRJ || !Array.isArray(PRJ.shots) || !PRJ.shots.length) {
-    viewMsg('자료 없음 · data/project.js');
+    noData('자료 없음 · data/project.js');
     return;
   }
   const shots = PRJ.shots
@@ -110,47 +132,52 @@
       };
     })
     .sort((a, b) => a.seq - b.seq);
-  if (!shots.length) { viewMsg('자료 없음'); return; }
+  if (!shots.length) { noData('자료 없음'); return; }
   shots.forEach((s, i) => { s.i = i; });
 
   const videoName = {};
   (Array.isArray(PRJ.videos) ? PRJ.videos : []).forEach((v) => { if (v && v.id != null) videoName[String(v.id)] = String(v.name || v.id); });
 
-  const PIPES = window.RV_PIPES || {};
-  const layers = (Array.isArray(PIPES.layers) ? PIPES.layers : [])
-    .map((l) => ({ name: String((l && l.name) || ''), color: String((l && l.color) || '#00e5ff') }));
+  // 관로 자료 (RV_PIPES) → 그리기 꼴. 처음 한 번 + [관로 넣기] 뒤 data/pipes.js 를 다시 읽을 때 (reloadPipes).
   // 관 한 줄: pts = [e, n, z] (z 는 hasZ 일 때만 관 중심 표고), g = 꼭짓점마다 지표 표고, dia = 관경 m.
-  const lines = [];
-  (Array.isArray(PIPES.lines) ? PIPES.lines : []).forEach((l) => {
-    if (!l || !Array.isArray(l.pts)) return;
-    const hasZ = l.hasZ === true;
-    const gIn = Array.isArray(l.g) && l.g.length === l.pts.length ? l.g : null;
-    const p = [], g = [];
-    l.pts.forEach((q, k) => {
-      if (!Array.isArray(q) || !isNum(q[0]) || !isNum(q[1])) return;
-      p.push(Number(q[0]), Number(q[1]), hasZ ? num(q[2], NaN) : NaN);
-      g.push(gIn ? num(gIn[k], NaN) : NaN);
+  function buildLines(PIPES) {
+    PIPES = PIPES || {};
+    const layers = (Array.isArray(PIPES.layers) ? PIPES.layers : [])
+      .map((l) => ({ name: String((l && l.name) || ''), color: String((l && l.color) || '#00e5ff') }));
+    const lines = [];
+    (Array.isArray(PIPES.lines) ? PIPES.lines : []).forEach((l) => {
+      if (!l || !Array.isArray(l.pts)) return;
+      const hasZ = l.hasZ === true;
+      const gIn = Array.isArray(l.g) && l.g.length === l.pts.length ? l.g : null;
+      const p = [], g = [];
+      l.pts.forEach((q, k) => {
+        if (!Array.isArray(q) || !isNum(q[0]) || !isNum(q[1])) return;
+        p.push(Number(q[0]), Number(q[1]), hasZ ? num(q[2], NaN) : NaN);
+        g.push(gIn ? num(gIn[k], NaN) : NaN);
+      });
+      if (p.length < 6) return;
+      const lay = layers[num(l.layer, 0) | 0] || { name: '', color: '#00e5ff' };
+      let e0 = Infinity, e1 = -Infinity, n0 = Infinity, n1 = -Infinity;
+      for (let k = 0; k < p.length; k += 3) {
+        e0 = Math.min(e0, p[k]); e1 = Math.max(e1, p[k]);
+        n0 = Math.min(n0, p[k + 1]); n1 = Math.max(n1, p[k + 1]);
+      }
+      const ll = Array.isArray(l.ll) && l.ll.length * 3 === p.length && l.ll.every((q) => Array.isArray(q) && isNum(q[0]) && isNum(q[1])) ? l.ll : null;
+      const diaKnown = isNum(l.dia) && Number(l.dia) > 0;
+      const dia = diaKnown ? Number(l.dia) : 0.2;
+      const base = String(l.label || lay.name || '');
+      const dTxt = 'D' + Math.round(dia * 1000);
+      const label = !diaKnown ? base : !base || base === dTxt ? dTxt : base.indexOf(dTxt + ' ') === 0 ? base : dTxt + ' · ' + base;
+      const bi = [0]; // 평면에서 겹치지 않는 꼭짓점 번호 (노면 띠)
+      for (let k = 3; k < p.length; k += 3) {
+        const j = bi[bi.length - 1] * 3;
+        if (Math.hypot(p[k] - p[j], p[k + 1] - p[j + 1]) > 1e-6) bi.push(k / 3);
+      }
+      lines.push({ color: lay.color, rgb: hexRgb(lay.color), label: label, dia: dia, hasZ: hasZ, pts: Float64Array.from(p), g: Float64Array.from(g), bi: bi, ll: ll, e0, e1, n0, n1, mx: null, my: null });
     });
-    if (p.length < 6) return;
-    const lay = layers[num(l.layer, 0) | 0] || { name: '', color: '#00e5ff' };
-    let e0 = Infinity, e1 = -Infinity, n0 = Infinity, n1 = -Infinity;
-    for (let k = 0; k < p.length; k += 3) {
-      e0 = Math.min(e0, p[k]); e1 = Math.max(e1, p[k]);
-      n0 = Math.min(n0, p[k + 1]); n1 = Math.max(n1, p[k + 1]);
-    }
-    const ll = Array.isArray(l.ll) && l.ll.length * 3 === p.length && l.ll.every((q) => Array.isArray(q) && isNum(q[0]) && isNum(q[1])) ? l.ll : null;
-    const diaKnown = isNum(l.dia) && Number(l.dia) > 0;
-    const dia = diaKnown ? Number(l.dia) : 0.2;
-    const base = String(l.label || lay.name || '');
-    const dTxt = 'D' + Math.round(dia * 1000);
-    const label = !diaKnown ? base : !base || base === dTxt ? dTxt : base.indexOf(dTxt + ' ') === 0 ? base : dTxt + ' · ' + base;
-    const bi = [0]; // 평면에서 겹치지 않는 꼭짓점 번호 (노면 띠)
-    for (let k = 3; k < p.length; k += 3) {
-      const j = bi[bi.length - 1] * 3;
-      if (Math.hypot(p[k] - p[j], p[k + 1] - p[j + 1]) > 1e-6) bi.push(k / 3);
-    }
-    lines.push({ color: lay.color, rgb: hexRgb(lay.color), label: label, dia: dia, hasZ: hasZ, pts: Float64Array.from(p), g: Float64Array.from(g), bi: bi, ll: ll, e0, e1, n0, n1, mx: null, my: null });
-  });
+    return lines;
+  }
+  let lines = buildLines(window.RV_PIPES);
 
   // ---------------------------------------------------------------- 맞춤 (영상마다)
   const CAL_F = ['dx', 'dy', 'dz', 'dyaw', 'dpitch', 'droll'];
@@ -174,7 +201,25 @@
     localCal[vid] = c;
     calMemo.delete(vid);
     lsSet(CAL_KEY, { videos: localCal });
+    hostCalSoon();
   }
+  // 프로그램 안: 맞춤 값 · 점 짝이 바뀌면 0.8 초 뒤 한 번 프로젝트 폴더에 저장 (save_calib, «파일로 저장» 과 같은 글)
+  let hostCalT = 0;
+  function hostCalSoon() {
+    if (!HOST()) return;
+    clearTimeout(hostCalT);
+    hostCalT = setTimeout(hostCalFlush, 800);
+  }
+  function hostCalFlush() {
+    clearTimeout(hostCalT);
+    hostCalT = 0;
+    return hostCall('save_calib', calibText()).then((r) => {
+      if (!r || r.ok === false) toast('맞춤 저장 안 됨');
+      return r;
+    }, () => { toast('맞춤 저장 안 됨'); return null; });
+  }
+  beforeHome = () => (hostCalT ? hostCalFlush() : Promise.resolve());
+  window.addEventListener('pagehide', () => { if (hostCalT) hostCalFlush(); });
   function mul3(A, B) {
     const C = new Array(9);
     for (let i = 0; i < 3; i++) {
@@ -255,6 +300,7 @@
   function setPairs(vid, list) {
     localPairs[vid] = list;
     lsSet(PAIR_KEY, { videos: localPairs });
+    hostCalSoon();
   }
   // 지도 점의 땅 표고: 높이 타일, 없으면 찍은 사진의 groundZ
   function pairGround(q, s) { const z = demAt(q.e, q.n); return Number.isFinite(z) ? z : s.gz; }
@@ -812,6 +858,26 @@
     const j = base + d;
     if (j >= 0 && j < shots.length) openShot(j);
   }
+  // 보는 방향 기준으로 옆 사진에 (로드뷰처럼): off = 0 앞 · 180 뒤 · −90 왼쪽 · 90 오른쪽.
+  // 이웃 원판과 같은 맞춘 자리 (e, n + 그 영상 dx, dy) · NEIGH_R 안 · 그 방향 ±45° 안에서
+  // 거리 · (1 + 2·(각/45°)²) 가 가장 작은 사진. 보는 방향은 그대로.
+  function moveDir(off) {
+    const bi = S.want >= 0 ? S.want : S.cur;
+    if (bi < 0) return;
+    const b = shots[bi], cb = calibFor(b.video), be = b.e + cb.dx, bn = b.n + cb.dy;
+    const want = S.yaw + off;
+    let best = -1, bs = Infinity;
+    for (const s of shots) {
+      if (s.i === bi) continue;
+      const c = calibFor(s.video), de = s.e + c.dx - be, dn = s.n + c.dy - bn, d = Math.hypot(de, dn);
+      if (d > NEIGH_R || d < 1e-3) continue;
+      const ang = Math.abs(((Math.atan2(de, dn) * R2D - want) % 360 + 540) % 360 - 180);
+      if (ang > 45) continue;
+      const sc = d * (1 + 2 * (ang / 45) * (ang / 45));
+      if (sc < bs) { bs = sc; best = s.i; }
+    }
+    if (best >= 0) openShot(best); else toast('그쪽 사진 없음');
+  }
 
   // ---------------------------------------------------------------- 겹쳐 그리기 (관로 · 이웃 사진)
   const A3 = [0, 0, 0], B3 = [0, 0, 0], SEG = [0, 0, 0, 0];
@@ -1317,11 +1383,16 @@
   }, { passive: false });
   $('prev').addEventListener('click', () => stepShot(-1));
   $('next').addEventListener('click', () => stepShot(1));
+  // 화살표 = 보는 방향 기준 옆 사진 · PageUp / PageDown = 찍은 순서 앞 / 뒤
+  const ARROW = { ArrowUp: 0, ArrowRight: 90, ArrowDown: 180, ArrowLeft: -90 };
   document.addEventListener('keydown', (e) => {
     const t = e.target;
-    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
-    if (e.key === 'ArrowLeft') { e.preventDefault(); stepShot(-1); }
-    else if (e.key === 'ArrowRight') { e.preventDefault(); stepShot(1); }
+    if (dlgOpen()) { if (e.key === 'Escape') { e.preventDefault(); dlgClose(); } return; }
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
+    const nav = !(e.altKey || e.ctrlKey || e.metaKey), dir = Object.prototype.hasOwnProperty.call(ARROW, e.key) ? ARROW[e.key] : null;
+    if (nav && dir !== null) { e.preventDefault(); moveDir(dir); }
+    else if (nav && e.key === 'PageUp') { e.preventDefault(); stepShot(-1); }
+    else if (nav && e.key === 'PageDown') { e.preventDefault(); stepShot(1); }
     else if (e.key === 'Escape' && AL.on) { // 반쯤 만든 짝 취소 · 없으면 끝
       e.preventDefault();
       if (AL.pend) { AL.pend = null; alUI(); dirty(); } else alMode(false);
@@ -1347,12 +1418,13 @@
   function setOn(el, on) { el.classList.toggle('on', !!on); }
   $('title').textContent = String(PRJ.title || '드론 로드뷰');
   document.title = (PRJ.title ? String(PRJ.title) + ' · ' : '') + '드론 로드뷰';
-  $('tgPipes').addEventListener('click', () => {
-    S.pipes = !S.pipes;
+  function setPipes(on) {
+    S.pipes = !!on;
     setOn($('tgPipes'), S.pipes);
     $('mSurf').parentNode.classList.toggle('off', !S.pipes);
     dirty();
-  });
+  }
+  $('tgPipes').addEventListener('click', () => setPipes(!S.pipes));
   const setMode = (depth) => { S.depth = depth; setOn($('mSurf'), !depth); setOn($('mDepth'), depth); dirty(); };
   setOn($('mSurf'), !S.depth);
   setOn($('mDepth'), S.depth);
@@ -1458,7 +1530,8 @@
     });
     updCalMarks();
   }
-  function saveCalFile() {
+  // calib.js 글 (내려받기 · 프로그램 저장이 같은 글을 쓴다)
+  function calibText() {
     const ids = new Set();
     (Array.isArray(PRJ.videos) ? PRJ.videos : []).forEach((v) => { if (v && v.id != null) ids.add(String(v.id)); });
     shots.forEach((s) => ids.add(s.video));
@@ -1473,7 +1546,14 @@
       if (pl.length) o.pairs = pl; // 점 찍어 맞추기 짝 (다른 PC 에서도 이어서 고치게)
       out.videos[id] = o;
     });
-    const text = 'window.RV_CALIB = ' + JSON.stringify(out, null, 2) + ';\n';
+    return 'window.RV_CALIB = ' + JSON.stringify(out, null, 2) + ';\n';
+  }
+  function saveCalFile() {
+    if (HOST()) { // 프로그램 안: 내려받기 대신 프로젝트 폴더에 바로
+      hostCalFlush().then((r) => { if (r && r.ok !== false) toast('맞춤 저장됨'); });
+      return;
+    }
+    const text = calibText();
     const url = URL.createObjectURL(new Blob([text], { type: 'text/javascript;charset=utf-8' }));
     const a = document.createElement('a');
     a.href = url;
@@ -1534,16 +1614,39 @@
       } else { s.mx = s.gx; s.my = s.gy; }
     }
   }
-  lines.forEach((L) => {
-    const cnt = L.pts.length / 3;
-    if (L.ll) {
-      L.mx = new Float64Array(cnt); L.my = new Float64Array(cnt);
-      L.ll.forEach((q, k) => { L.mx[k] = lon2x(Number(q[1])); L.my[k] = lat2y(Number(q[0])); });
-    } else if (SIM) {
-      L.mx = new Float64Array(cnt); L.my = new Float64Array(cnt);
-      for (let k = 0; k < cnt; k++) { const m = en2m(L.pts[k * 3], L.pts[k * 3 + 1]); L.mx[k] = m[0]; L.my[k] = m[1]; }
-    }
-  });
+  // 관로 지도 자리 (위경도 ll 이 있으면 그것, 없으면 격자 → 닮음 변환)
+  function linesToMap() {
+    lines.forEach((L) => {
+      const cnt = L.pts.length / 3;
+      if (L.ll) {
+        L.mx = new Float64Array(cnt); L.my = new Float64Array(cnt);
+        L.ll.forEach((q, k) => { L.mx[k] = lon2x(Number(q[1])); L.my[k] = lat2y(Number(q[0])); });
+      } else if (SIM) {
+        L.mx = new Float64Array(cnt); L.my = new Float64Array(cnt);
+        for (let k = 0; k < cnt; k++) { const m = en2m(L.pts[k * 3], L.pts[k * 3 + 1]); L.mx[k] = m[0]; L.my[k] = m[1]; }
+      }
+    });
+  }
+  linesToMap();
+  // data/pipes.js 다시 읽기 (프로그램이 [관로 넣기] 로 새로 쓴 뒤). 같은 주소는 캐시에서 올 수 있어 ?v= 를 붙인다.
+  // 그 뒤 관 · 깊이 방식 관 그물 · 지도 선 · 이름표를 새 자료로 다시 만든다. 못 읽으면 옛 자료 그대로.
+  function reloadPipes() {
+    const old = window.RV_PIPES;
+    return new Promise((resolve, reject) => {
+      window.RV_PIPES = undefined;
+      const sc = document.createElement('script');
+      sc.onload = () => { sc.remove(); resolve(); };
+      sc.onerror = () => { sc.remove(); window.RV_PIPES = old; reject(new Error('관로 파일 못 읽음')); };
+      sc.src = 'data/pipes.js?v=' + Date.now();
+      document.head.appendChild(sc);
+    }).then(() => {
+      lines = buildLines(window.RV_PIPES);
+      linesToMap();
+      pKey = ''; // 깊이 방식 관 그물 다시
+      dirty();
+      return lines.length;
+    });
+  }
   // 비디오별 비행 경로
   const paths = (function () {
     const by = new Map();
@@ -1565,7 +1668,7 @@
     return {
       layers: [
         { id: 'vs', vw: true, tpl: 'https://api.vworld.kr/req/wmts/1.0.0/' + k + '/Satellite/{z}/{y}/{x}.jpeg', min: 6, max: 19 },
-        { id: 'vh', tpl: 'https://api.vworld.kr/req/wmts/1.0.0/' + k + '/Hybrid/{z}/{y}/{x}.png', min: 6, max: 19 },
+        { id: 'vh', names: true, tpl: 'https://api.vworld.kr/req/wmts/1.0.0/' + k + '/Hybrid/{z}/{y}/{x}.png', min: 6, max: 19 }, // 이름 · 도로 글자
       ],
       attrib: '© VWorld',
       vworld: true,
@@ -1591,6 +1694,19 @@
   function pickBase() { const k = keyGet(); return k ? vworldBase(k) : projectBase(); }
   let BASE = pickBase();
   let vwStat = { ok: 0, bad: 0 }; // VWorld 위성 타일 성공 · 실패 수 (키 거절 알아내기)
+  // [이름]: VWorld 이름 · 도로 글자 겹 (Hybrid) 켜고 끄기. 점 찍을 때 땅을 가리지 않게 기본은 끔. 이 브라우저에 기억.
+  let NAMES = lsGet('rv_ui:mapNames') === true;
+  function updNames() {
+    const b = $('mNames');
+    b.hidden = !BASE.vworld;
+    setOn(b, NAMES);
+  }
+  $('mNames').addEventListener('click', () => {
+    NAMES = !NAMES;
+    lsSet('rv_ui:mapNames', NAMES);
+    updNames();
+    mapDirty();
+  });
 
   function updAttrib() {
     $('mapNote').classList.toggle('show', !!BASE.blank);
@@ -1610,6 +1726,7 @@
     vwStat = { ok: 0, bad: 0 };
     updAttrib();
     $('keyBtn').classList.toggle('on', !!BASE.vworld);
+    updNames();
     mapDirty();
   }
   function vworldFailed() {
@@ -1713,7 +1830,7 @@
     mx.fillStyle = '#0f131a';
     mx.fillRect(0, 0, w, h);
     mx.imageSmoothingEnabled = true;
-    if (BASE.blank) drawGrid(); else BASE.layers.forEach(drawLayer);
+    if (BASE.blank) drawGrid(); else BASE.layers.forEach((L) => { if (NAMES || !L.names) drawLayer(L); });
     const k = mk(), ox = w / 2 - M.cx * k, oy = h / 2 - M.cy * k;
     mx.lineCap = 'round';
     mx.lineJoin = 'round';
@@ -1922,6 +2039,7 @@
   });
   updAttrib();
   $('keyBtn').classList.toggle('on', !!BASE.vworld);
+  updNames();
 
   // ---------------------------------------------------------------- 점 찍어 맞추기 (조작)
   // ① 사진에서 점 → ② 지도에서 같은 점 → 짝 하나. 짝이 생기거나 지워질 때마다 그 영상 맞춤을 다시 푼다.
@@ -2029,6 +2147,154 @@
     toast('점 모두 지움');
   });
 
+  // ---------------------------------------------------------------- 프로그램 창: [관로 넣기] · [내보내기]
+  const dlgBack = $('dlgBack');
+  function dlgOpen() { return !dlgBack.hidden; }
+  function dlgShow(id) {
+    dlgBack.hidden = false;
+    ['pipeDlg', 'expDlg'].forEach((k) => { $(k).hidden = k !== id; });
+  }
+  function dlgClose() { dlgBack.hidden = true; }
+  dlgBack.addEventListener('click', (e) => { if (e.target === dlgBack) dlgClose(); });
+  dlgBack.querySelectorAll('.dlgX').forEach((b) => b.addEventListener('click', dlgClose));
+
+  // 관로 넣기: 파일 고르기 (pick_pipes) → 항목 고르기 → 넣기 (import_pipes) → data/pipes.js 다시 읽기
+  const PM = { pick: null, busy: false };
+  function pmMsg(t) { $('pmMsg').textContent = t || ''; }
+  function pmBusy(on, text) {
+    PM.busy = on;
+    $('pmPick').disabled = on;
+    $('pmGo').disabled = on || !PM.pick;
+    $('pmGo').textContent = on && text ? text : '넣기';
+    $('pipeDlg').classList.toggle('busy', on);
+  }
+  function pmFill(sel, fields, pick) {
+    sel.textContent = '';
+    const add = (v, t) => { const o = document.createElement('option'); o.value = v; o.textContent = t; sel.appendChild(o); };
+    add('', '(없음)');
+    fields.forEach((f) => add(f, f));
+    sel.value = pick != null && fields.indexOf(String(pick)) >= 0 ? String(pick) : '';
+  }
+  function pmDiaEx() {
+    const p = PM.pick, f = p && (Array.isArray(p.fields) ? p.fields : []).find((q) => q && String(q.name) === $('pmDia').value);
+    const s = f && Array.isArray(f.samples) ? f.samples.filter((v) => v !== null && v !== undefined && String(v).trim() !== '').slice(0, 3) : [];
+    $('pmDiaEx').textContent = s.length ? '예: ' + s.join(', ') : '';
+  }
+  function pmShow(fresh) { // fresh = 새로 고른 파일 → 항목 칸을 다시 채움 (창만 다시 열면 고른 값 그대로)
+    const p = PM.pick, shp = !!p && p.kind === 'shp', dxf = !!p && p.kind === 'dxf';
+    $('pmFile').textContent = p ? String(p.name || p.path) + ' · ' + String(p.kind || '').toUpperCase() : '';
+    $('pmShp').hidden = !shp;
+    $('pmDxf').hidden = !dxf;
+    if (shp && fresh) {
+      const fields = (Array.isArray(p.fields) ? p.fields : []).filter((f) => f && f.name != null).map((f) => String(f.name));
+      pmFill($('pmDia'), fields, p.guess_dia);
+      pmFill($('pmLabel'), fields, null);
+      pmDiaEx();
+    }
+    $('pmNote').textContent = p && p.note ? String(p.note) : '';
+    $('pmGo').disabled = !p || PM.busy;
+  }
+  $('pmDia').addEventListener('change', pmDiaEx);
+  $('hPipes').addEventListener('click', () => {
+    pmMsg('');
+    $('pmDepth').value = String(round(S.cover, 2));
+    pmShow();
+    dlgShow('pipeDlg');
+  });
+  $('pmPick').addEventListener('click', () => {
+    if (PM.busy) return;
+    pmMsg('');
+    pmBusy(true);
+    hostCall('pick_pipes').then((r) => {
+      pmBusy(false);
+      if (!r || !r.path) return; // 취소
+      const ok = r.kind === 'shp' || r.kind === 'dxf';
+      PM.pick = ok ? r : null;
+      pmShow(true);
+      if (!ok) pmMsg('못 읽음 · ' + String(r.name || r.path) + (r.error ? ' · ' + String(r.error).slice(0, 80) : ''));
+    }, (e) => { pmBusy(false); pmMsg(errText(e)); });
+  });
+  $('pmGo').addEventListener('click', () => {
+    const p = PM.pick;
+    if (!p || PM.busy) return;
+    const dv = $('pmDepth').value, depth = isNum(dv) ? clamp(Number(dv), 0, 20) : S.cover;
+    const shp = p.kind === 'shp';
+    const arg = {
+      path: p.path,
+      dia_field: shp ? $('pmDia').value || null : null,
+      label_field: shp ? $('pmLabel').value || null : null,
+      depth: depth,
+      layers: shp ? null : $('pmLayers').value.trim() || null,
+    };
+    pmMsg('');
+    pmBusy(true, '넣는 중');
+    hostCall('import_pipes', arg).then((r) => {
+      if (!r || !r.ok) { pmBusy(false); pmMsg((r && r.msg) || '못 넣음'); return null; }
+      return reloadPipes().then((n) => {
+        pmBusy(false);
+        S.cover = depth;
+        coverEl.value = String(round(S.cover, 2));
+        setPipes(true);
+        dlgClose();
+        toast('관로 ' + (isNum(r.lines) ? Number(r.lines) : n) + '개');
+      });
+    }).catch((e) => { pmBusy(false); pmMsg(errText(e)); });
+  });
+
+  // 내보내기: 웹 주소 (export_web → job 을 0.5 초마다) · 폴더 (export_folder)
+  const EX = { job: null, folder: false };
+  function exState(st, pct, line, url) {
+    $('exProg').hidden = false;
+    $('exBar').style.width = clamp(num(pct, 0), 0, 100) + '%';
+    $('exLine').textContent = line || '';
+    $('exProg').classList.toggle('fail', st === 'fail');
+    $('exProg').classList.toggle('done', st === 'done');
+    $('exWeb').disabled = st === 'run';
+    $('exDone').hidden = st !== 'done' || !url;
+    if (st === 'done' && url) $('exUrl').value = String(url);
+  }
+  function exPoll() {
+    setTimeout(() => {
+      hostCall('job', EX.job).then((r) => {
+        r = r || {};
+        if (r.state === 'done') { EX.job = null; exState('done', 100, r.line || '끝', r.url); }
+        else if (r.state === 'fail') { EX.job = null; exState('fail', r.pct, r.line || '못 올림'); }
+        else { exState('run', r.pct, r.line); exPoll(); }
+      }, (e) => { EX.job = null; exState('fail', 0, errText(e)); });
+    }, 500);
+  }
+  $('hExport').addEventListener('click', () => dlgShow('expDlg'));
+  $('exWeb').addEventListener('click', () => {
+    if (EX.job != null) return;
+    $('exDone').hidden = true;
+    exState('run', 0, '준비');
+    hostCall('export_web').then((r) => {
+      if (!r || r.job == null) { exState('fail', 0, (r && r.msg) || '못 올림'); return; }
+      EX.job = r.job;
+      exPoll();
+    }, (e) => exState('fail', 0, errText(e)));
+  });
+  $('exUrl').addEventListener('focus', () => $('exUrl').select());
+  $('exCopy').addEventListener('click', () => {
+    const u = $('exUrl').value;
+    if (!u) return;
+    hostCall('copy_text', u).then((r) => { if (r && r.ok !== false) toast('주소 복사됨'); else copyText(u); }, () => copyText(u));
+  });
+  $('exFolder').addEventListener('click', () => {
+    if (EX.folder) return;
+    const b = $('exFolder'), done = () => { EX.folder = false; b.disabled = false; b.textContent = '폴더로 내보내기'; };
+    EX.folder = true;
+    b.disabled = true;
+    b.textContent = '내보내는 중';
+    hostCall('export_folder').then((r) => {
+      done();
+      if (!r) return; // 취소
+      const path = String(r.path || '');
+      if (r.ok) toast('내보냄 · ' + path, () => hostCall('copy_text', path).then(() => toast('복사됨'), () => copyText(path)));
+      else toast(String(r.msg || '못 내보냄'));
+    }, (e) => { done(); toast(errText(e)); });
+  });
+
   // ---------------------------------------------------------------- 크기 맞춤
   function resizeAll() {
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -2055,6 +2321,7 @@
   // ---------------------------------------------------------------- 시작
   initGL();
   buildCal();
+  hostShow();
   resizeAll();
   openShot(startIdx);
 })();

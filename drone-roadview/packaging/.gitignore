@@ -2,3 +2,4 @@ build_tmp/
 build/
 dist/
 Output/
+pyinstaller.log

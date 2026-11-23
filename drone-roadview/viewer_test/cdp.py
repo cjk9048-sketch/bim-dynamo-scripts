@@ -9,8 +9,12 @@
         ed.screenshot(path)
         ed.console   # [(종류, 글)]  · ed.exceptions  # [글]
         ed.net(block=['*openstreetmap.org*'])  # 그 뒤 ed.requests = [청한 주소] (막은 주소도 남는다)
+        ed.fake([('*vworld.kr*/Satellite/*', 'image/jpeg', jpg)], catch=['*vworld.kr*'])
+            # 맞는 청은 밖으로 안 나가고 이 내용으로 바로 답 (Fetch) · catch 무늬인데 규칙이 없으면 막음
+        ed.timeline  # [('con', 콘솔 글) | ('req', 청한 주소)] 들어온 차례대로 (MARK 앞뒤로 청을 나눌 때)
 """
 import base64
+import fnmatch
 import json
 import os
 import shutil
@@ -115,6 +119,9 @@ class Edge:
         self.console = []     # (종류, 글)
         self.exceptions = []  # 글
         self.requests = []    # 청한 주소 (net() 뒤)
+        self.timeline = []    # ('con', 글) · ('req', 주소) 차례대로
+        self.faked = []       # fake() 로 답한 주소 · ('fail', 주소) = 규칙 없어 막음
+        self._fake = []
         self._id = 0
 
     def __enter__(self):
@@ -174,11 +181,30 @@ class Edge:
         if meth == 'Runtime.consoleAPICalled':
             text = ' '.join(str(a.get('value', a.get('description', ''))) for a in p.get('args', []))
             self.console.append((p.get('type'), text))
+            self.timeline.append(('con', text))
         elif meth == 'Network.requestWillBeSent':
             self.requests.append(p.get('request', {}).get('url', ''))
+            self.timeline.append(('req', self.requests[-1]))
+        elif meth == 'Fetch.requestPaused':
+            url, rid = p.get('request', {}).get('url', ''), p.get('requestId')
+            for pat, mime, body in self._fake:
+                if fnmatch.fnmatchcase(url, pat):
+                    self._send('Fetch.fulfillRequest', {
+                        'requestId': rid, 'responseCode': 200, 'body': body,
+                        'responseHeaders': [{'name': 'Content-Type', 'value': mime}, {'name': 'Access-Control-Allow-Origin', 'value': '*'}]})
+                    self.faked.append(url)
+                    break
+            else:
+                self._send('Fetch.failRequest', {'requestId': rid, 'errorReason': 'BlockedByClient'})
+                self.faked.append(('fail', url))
         elif meth == 'Runtime.exceptionThrown':
             d = p.get('exceptionDetails', {})
             self.exceptions.append((d.get('exception') or {}).get('description') or d.get('text', ''))
+
+    def _send(self, method, params):
+        """답을 기다리지 않고 보냄 (소식 처리 중에). 답은 call() 이 모르는 번호로 받아 버린다."""
+        self._id += 1
+        self.ws.send({'id': self._id, 'method': method, 'params': params})
 
     def call(self, method, params=None):
         self._id += 1
@@ -201,6 +227,8 @@ class Edge:
         self.console.clear()
         self.exceptions.clear()
         self.requests.clear()
+        self.timeline.clear()
+        self.faked.clear()
         self.call('Page.navigate', {'url': url})
 
     def net(self, block=None):
@@ -208,6 +236,13 @@ class Edge:
         self.call('Network.enable')
         if block:
             self.call('Network.setBlockedURLs', {'urls': list(block)})
+
+    def fake(self, rules, catch=()):
+        """rules = [(fnmatch 무늬, mime, bytes)]: 맞는 청은 밖으로 안 나가고 이 내용으로 바로 답한다.
+        catch = 더 잡을 무늬 (규칙에 안 맞으면 막음). 청 기록(net)은 그대로 남는다."""
+        self._fake = [(pat, mime, base64.b64encode(body).decode('ascii')) for pat, mime, body in rules]
+        pats = [pat for pat, _, _ in rules] + list(catch)
+        self.call('Fetch.enable', {'patterns': [{'urlPattern': pat, 'requestStage': 'Request'} for pat in pats]})
 
     def mouse(self, x, y, kind='mouseMoved'):
         """진짜 마우스 움직임 (hover 시험)."""

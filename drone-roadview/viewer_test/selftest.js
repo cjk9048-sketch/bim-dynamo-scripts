@@ -20,6 +20,7 @@
     }));
   }
   function tap(el, x, y) { ptr(el, 'pointerdown', x, y); ptr(el, 'pointerup', x, y); }
+  const shown = (el) => !!el && el.getClientRects().length > 0; // display:none (자기 · 조상) 이면 false
   const no = () => $('shotNo').textContent;
   const loaded = () => !$('loading').classList.contains('show');
 
@@ -35,12 +36,12 @@
       await until(() => is(want));
       check(k + ' → ' + want, is(want), no());
     };
-    for (let k = 3; k <= N; k++) await key('ArrowRight', k);
+    for (let k = 3; k <= N; k++) await key('PageDown', k);   // 찍은 순서 = PageUp / PageDown (화살표는 보는 방향 기준)
     check('next disabled at end', $('next').disabled === true);
     $('prev').click();
     await until(() => is(N - 1));
     check('prev button → ' + (N - 1), is(N - 1), no());
-    for (let k = N - 2; k >= 1; k--) await key('ArrowLeft', k);
+    for (let k = N - 2; k >= 1; k--) await key('PageUp', k);
     check('prev disabled at start', $('prev').disabled === true);
     $('next').click();
     await until(() => is(2));
@@ -166,7 +167,7 @@
     const seq = shotOf(sid).seq, cur = () => Number(no().split(' ')[0]);
     for (let g = 0; g < 10 && cur() !== seq; g++) {
       const want = cur() + (cur() < seq ? 1 : -1);
-      document.dispatchEvent(new KeyboardEvent('keydown', { key: cur() < seq ? 'ArrowRight' : 'ArrowLeft', bubbles: true }));
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: cur() < seq ? 'PageDown' : 'PageUp', bubbles: true }));
       await until(() => cur() === want && loaded());
     }
     await sleep(80);
@@ -362,6 +363,9 @@
   }
 
   if (T === 'ui') {
+    // 프로그램 (pywebview) 없음 → 프로그램 단추 · 창 숨김
+    check('프로그램 단추 숨김 (pywebview 없음)', !window.pywebview && !shown($('hostTools')) && !shown($('hPipes')) && !shown($('hExport')) && !shown($('hHome')) && !shown($('dlgBack')));
+    check('이름 단추 숨김 (VWorld 아님)', !shown($('mNames')));
     $('mDepth').click();
     check('깊이 on', $('mDepth').classList.contains('on') && !$('mSurf').classList.contains('on'));
     $('mSurf').click();
@@ -440,9 +444,11 @@
     $('keyOk').click();
     check('키 저장 (앞뒤 빈칸 뺌)', localStorage.getItem('rv_vworld_key') === 'TESTKEY-NOT-REAL', localStorage.getItem('rv_vworld_key'));
     check('VWorld 바탕', attr().indexOf('VWorld') >= 0 && $('keyBtn').classList.contains('on') && !$('keyBox').classList.contains('show') && !note(), attr());
+    check('VWorld → 이름 단추 보임 (꺼짐)', shown($('mNames')) && !$('mNames').classList.contains('on'));
     await until(() => $('toast').textContent.indexOf('지도 키 확인') >= 0, 15000);
     check('키 거절 → 기본 바탕 + 알림', $('toast').textContent.indexOf('지도 키 확인') >= 0 && isDefault() && !$('keyBtn').classList.contains('on'),
       $('toast').textContent + ' / ' + attr() + ' / 안내 ' + note());
+    check('기본 바탕 → 이름 단추 숨김', !shown($('mNames')));
     check('키는 남아 있음', localStorage.getItem('rv_vworld_key') === 'TESTKEY-NOT-REAL');
     $('keyBtn').click();
     check('상자에 저장된 키', $('keyIn').value === 'TESTKEY-NOT-REAL', $('keyIn').value);
@@ -462,6 +468,278 @@
     // 화면 없는 Edge 는 찍기 직전에 창 크기를 바꾼다 → 끌 때의 캔버스 폭을 남긴다
     log('DRAGW', r.width);
     check('drag done', true);
+  }
+
+  // ---------------------------------------------------------------- 화살표 = 보는 방향 기준 이동 (make_synth --nav 자료)
+  // 자리: 1 (0,0) · 2 (10,0) · 3 (0,10) · 4 (10,10) · 5 (40,0) · 6 (130,0) · 7 = 영상 0002 적힌 자리 (−12,3) → 맞춘 자리 (0,−12)
+  const seqNow = () => Number(no().split(' ')[0]);
+  const keyDown = (k, opt) => document.dispatchEvent(new KeyboardEvent('keydown', Object.assign({ key: k, bubbles: true, cancelable: true }, opt || {})));
+  async function arrow(k, want, label, opt) {
+    const before = seqNow();
+    $('toast').textContent = '';
+    keyDown(k, opt);
+    if (want === null || want === 'stay') {
+      await sleep(400);
+      const t = $('toast').textContent;
+      if (want === null) check(label + ' → 그대로 · «그쪽 사진 없음»', seqNow() === before && t === '그쪽 사진 없음', no() + ' / ' + t);
+      else check(label + ' → 그대로', seqNow() === before && t === '', no() + ' / ' + t);
+    } else {
+      await until(() => seqNow() === want && loaded(), 8000);
+      check(label + ' → ' + want, seqNow() === want && loaded(), no());
+      await sleep(60);
+    }
+  }
+  if (T === 'arrows') { // 보기 = 북 (yaw 0)
+    await arrow('ArrowUp', 3, '1 에서 ↑ (북 · 찍은 순서 다음은 2)');
+    await arrow('ArrowDown', 1, '3 에서 ↓');
+    await arrow('ArrowDown', 7, '1 에서 ↓ (7 의 맞춘 자리가 남쪽)');
+    await arrow('ArrowUp', 1, '7 에서 ↑');
+    await arrow('ArrowLeft', null, '1 에서 ← (7 의 적힌 자리는 서쪽이지만 맞춘 자리로 봄)');
+    await arrow('ArrowRight', 2, '1 에서 →');
+    await arrow('ArrowRight', 5, '2 에서 → (30 m)');
+    await snap('arrows_at5');
+    await arrow('ArrowRight', null, '5 에서 → (6 은 90 m · 60 m 밖)');
+    await arrow('ArrowLeft', 2, '5 에서 ←');
+    await arrow('PageDown', 3, 'PageDown (찍은 순서)');
+    await arrow('PageUp', 2, 'PageUp');
+    await arrow('PageUp', 1, 'PageUp');
+    await arrow('PageUp', 'stay', '1 에서 PageUp (처음)');
+    await arrow('ArrowLeft', 'stay', 'Alt+← (브라우저 뒤로 몫)', { altKey: true });
+    $('cover').dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true, cancelable: true }));
+    await sleep(300);
+    check('입력 칸 안 ↑ → 그대로', seqNow() === 1, no());
+    // 점 찍어 맞추기 중에도 화살표 · Esc 는 예전대로
+    await enterPick();
+    await arrow('ArrowUp', 3, '점 찍기 중 1 에서 ↑');
+    check('점 찍기 켜진 채', $('ov').classList.contains('pick') && $('alChip').classList.contains('show'));
+    const rc = $('ov').getBoundingClientRect();
+    tap($('ov'), rc.left + rc.width / 2, rc.top + rc.height * 0.75);
+    await sleep(60);
+    check('사진 점 찍음 → ②', $('alStep').textContent === '② 지도에서 같은 점', $('alStep').textContent);
+    await arrow('ArrowDown', 1, '반쯤 만든 짝이 있어도 ↓');
+    esc();
+    await sleep(60);
+    check('Esc → 짝 취소 · 모드 그대로', $('alStep').textContent === '① 사진에서 점' && $('ov').classList.contains('pick'), $('alStep').textContent);
+    esc();
+    await sleep(60);
+    check('Esc → 점 찍기 끝', !$('ov').classList.contains('pick') && !$('alChip').classList.contains('show'));
+  }
+  if (T === 'arrows40') { // 보기 yaw 40°: 3 (북 · 각 40° · 10 m → 25.8) 보다 4 (북동 · 각 5° · 14.1 m → 14.5)
+    await arrow('ArrowUp', 4, '1 에서 ↑ (yaw 40°)');
+    await arrow('ArrowDown', 1, '4 에서 ↓ (남서)');
+  }
+
+  // ---------------------------------------------------------------- 지도 [이름] (VWorld 이름 겹). 타일은 check_interact.py 가 가짜로 답함
+  async function mark(name) { log('MARK', name); await until(() => window.__markAck === name, 30000); }
+  if (T === 'names') {
+    const nb = $('mNames');
+    check('키 없음 → 이름 단추 숨김', !shown(nb));
+    $('keyBtn').click();
+    $('keyIn').value = 'TESTKEY-FAKE-TILES';
+    $('keyOk').click();
+    check('VWorld → 이름 단추 보임 · 기본 꺼짐', shown(nb) && !nb.classList.contains('on') && localStorage.getItem('rv_ui:mapNames') === null);
+    await sleep(2000);
+    check('가짜 타일 받음 (키 거절 아님)', $('keyBtn').classList.contains('on') && $('toast').textContent.indexOf('지도 키 확인') < 0, $('toast').textContent);
+    await mark('off');
+    nb.click();
+    check('이름 켬 · 기억', nb.classList.contains('on') && localStorage.getItem('rv_ui:mapNames') === 'true', localStorage.getItem('rv_ui:mapNames'));
+    await sleep(2000);
+    await mark('on');
+  }
+  if (T === 'names2') { // 같은 브라우저로 다시 열기
+    const nb = $('mNames');
+    check('다시 열어도 VWorld · 이름 켜짐', shown(nb) && nb.classList.contains('on') && $('keyBtn').classList.contains('on'));
+    await sleep(2000);
+    await mark('start');
+    nb.click();
+    check('이름 끔 · 기억', !nb.classList.contains('on') && localStorage.getItem('rv_ui:mapNames') === 'false');
+    $('zOut').click(); // 새 줌 → 새 타일: 위성만 청해야 함
+    await sleep(2000);
+    await mark('off');
+  }
+
+  // ---------------------------------------------------------------- 프로그램 (pywebview) 흉내 = hostmock.js
+  const hcalls = (name) => window.__host.calls.filter((c) => c.name === name);
+  async function drawnTexts() { // 360 겹쳐 그림 캔버스에 쓰는 글자 (다시 그리게 해서 모음)
+    const texts = [];
+    const fill0 = CanvasRenderingContext2D.prototype.fillText;
+    CanvasRenderingContext2D.prototype.fillText = function (t, ...rest) { if (this.canvas && this.canvas.id === 'ov') texts.push(String(t)); return fill0.call(this, t, ...rest); };
+    window.dispatchEvent(new Event('resize'));
+    await sleep(250);
+    CanvasRenderingContext2D.prototype.fillText = fill0;
+    return texts;
+  }
+  function colorCount(id, rgb) { // 캔버스에서 그 색 (±25) 화소 수
+    const c = $(id), d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+    let n = 0;
+    for (let i = 0; i < d.length; i += 4) {
+      if (d[i + 3] > 100 && Math.abs(d[i] - rgb[0]) < 25 && Math.abs(d[i + 1] - rgb[1]) < 25 && Math.abs(d[i + 2] - rgb[2]) < 25) n++;
+    }
+    return n;
+  }
+  if (T === 'host' || T === 'host_late') {
+    if (T === 'host_late') {
+      check('준비 전 (api 없음) → 프로그램 단추 숨김', !!window.pywebview && !window.pywebview.api && !shown($('hostTools')));
+      await until(() => shown($('hostTools')), 6000);
+    }
+    check('프로그램 단추 셋 보임', shown($('hostTools')) && [['hPipes', '관로 넣기'], ['hExport', '내보내기'], ['hHome', '처음']].every(([id, t]) => shown($(id)) && $(id).textContent === t),
+      [...$('hostTools').querySelectorAll('button')].map((b) => b.textContent).join(','));
+  }
+  if (T === 'host_late') { // 늦게 붙은 api 로도 맞춤 자동 저장
+    $('calHead').click();
+    await sleep(50);
+    tap($('calRows').querySelectorAll('button')[1], 0, 0); // 동 +
+    await sleep(1300);
+    check('늦게 붙어도 맞춤 저장 한 번', hcalls('save_calib').length === 1, hcalls('save_calib').length);
+  }
+  if (T === 'host') {
+    const H = window.__host, NEW = [255, 59, 48], OLD = [0, 229, 255];
+    const counts = () => ({ map: [colorCount('map', OLD), colorCount('map', NEW)], ov: [colorCount('ov', OLD), colorCount('ov', NEW)] });
+    // 1) 넣기 전: 옛 관 (청록 · 상수 / 하수)
+    await sleep(300);
+    const t0 = await drawnTexts(), c0 = counts();
+    check('넣기 전: 옛 관 그림', c0.map[0] > 30 && c0.map[1] === 0 && c0.ov[0] > 30 && c0.ov[1] === 0 && t0.some((t) => /상수|하수/.test(t)), JSON.stringify(c0) + ' ' + JSON.stringify(t0));
+    check('처음엔 맞춤 저장 안 부름', hcalls('save_calib').length === 0);
+    await snap('host_pipes_old');
+    // 2) 창 · 고르기 취소
+    $('hPipes').click();
+    check('관로 창 열림 · 넣기 막힘 · 깊이 = 지금 값', shown($('pipeDlg')) && !shown($('expDlg')) && $('pmGo').disabled && $('pmDepth').value === '1' && !shown($('pmShp')) && !shown($('pmDxf')), $('pmDepth').value);
+    H.picks.push(null);
+    $('pmPick').click();
+    await until(() => hcalls('pick_pipes').length === 1 && !$('pmPick').disabled);
+    check('고르기 취소 → 그대로', $('pmFile').textContent === '' && $('pmGo').disabled);
+    H.picks.push({ path: 'C:\\시험\\깨진.shp', kind: '', name: '깨진.shp', fields: [], error: 'dbf 없음' }); // 프로그램이 못 읽은 파일
+    $('pmPick').click();
+    await until(() => hcalls('pick_pipes').length === 2 && !$('pmPick').disabled);
+    check('못 읽은 파일 → 까닭 · 넣기 막힘', $('pmMsg').textContent === '못 읽음 · 깨진.shp · dbf 없음' && $('pmGo').disabled && !shown($('pmShp')) && !shown($('pmDxf')), $('pmMsg').textContent);
+    // 3) SHP → 넣기 → data/pipes.js 다시 읽기
+    H.picks.push({ path: 'C:\\시험\\관로.shp', kind: 'shp', name: '관로.shp', note: '선 2개', guess_dia: 'DIA',
+      fields: [{ name: 'ID', samples: [1, 2, 3] }, { name: 'DIA', samples: [300, 200, 150, 100] }, { name: 'NAME', samples: ['상수', '배수'] }] });
+    $('pmPick').click();
+    await until(() => $('pmFile').textContent.indexOf('관로.shp') >= 0);
+    const opts = (id) => [...$(id).options].map((o) => o.textContent).join(',');
+    check('SHP: 항목 · 관경 추정 · 예시', shown($('pmShp')) && !shown($('pmDxf')) && $('pmFile').textContent === '관로.shp · SHP'
+      && opts('pmDia') === '(없음),ID,DIA,NAME' && $('pmDia').value === 'DIA' && $('pmDiaEx').textContent === '예: 300, 200, 150'
+      && opts('pmLabel') === '(없음),ID,DIA,NAME' && $('pmLabel').value === '' && $('pmNote').textContent === '선 2개' && !$('pmGo').disabled,
+      [$('pmFile').textContent, opts('pmDia'), $('pmDia').value, $('pmDiaEx').textContent, $('pmNote').textContent].join(' / '));
+    $('pmDia').value = 'ID';
+    $('pmDia').dispatchEvent(new Event('change'));
+    check('관경 항목 바꿈 → 예시', $('pmDiaEx').textContent === '예: 1, 2, 3', $('pmDiaEx').textContent);
+    $('pmDia').value = 'DIA';
+    $('pmDia').dispatchEvent(new Event('change'));
+    $('pmLabel').value = 'NAME';
+    $('pmDepth').value = '1.5';
+    await snap('host_pipes_dlg');
+    $('pmGo').click();
+    check('넣는 중 표시', $('pmGo').disabled && $('pmPick').disabled && $('pmGo').textContent === '넣는 중', $('pmGo').textContent);
+    await until(() => !shown($('dlgBack')), 20000);
+    await sleep(300);
+    const imp = hcalls('import_pipes')[0];
+    check('import_pipes 인자', !!imp && JSON.stringify(imp.arg) === JSON.stringify({ path: 'C:\\시험\\관로.shp', dia_field: 'DIA', label_field: 'NAME', depth: 1.5, layers: null }), JSON.stringify(imp && imp.arg));
+    check('넣음 → 창 닫힘 · «관로 2개» · 깊이 1.5', $('toast').textContent === '관로 2개' && $('cover').value === '1.5', $('toast').textContent + ' / ' + $('cover').value);
+    const t1 = await drawnTexts(), c1 = counts();
+    check('새 pipes.js 로 다시 그림 (지도 · 360 · 이름표)', c1.map[0] === 0 && c1.map[1] > 30 && c1.ov[0] === 0 && c1.ov[1] > 30
+      && t1.some((t) => t.indexOf('새관') >= 0) && !t1.some((t) => /상수|하수/.test(t)) && window.RV_PIPES.layers[0].name === '새관', JSON.stringify(c1) + ' ' + JSON.stringify(t1));
+    check('다시 읽은 script 태그 치움', !document.querySelector('script[src*="pipes.js?v="]'));
+    await snap('host_pipes_new');
+    $('mDepth').click();
+    await sleep(300);
+    const cd = counts();
+    check('깊이 방식도 새 관', cd.ov[0] === 0 && cd.ov[1] > 0, JSON.stringify(cd));
+    await snap('host_pipes_depth');
+    $('mSurf').click();
+    // 4) DXF · 못 넣음 · 창 열린 동안 화살표 · Esc
+    H.picks.push({ path: 'C:\\시험\\도면.dxf', kind: 'dxf', name: '도면.dxf', fields: [], guess_dia: null, note: '' });
+    $('hPipes').click();
+    check('창 다시 열기 → 고른 파일 · 항목 그대로 · 깊이 = 지금 값', $('pmFile').textContent === '관로.shp · SHP' && $('pmDia').value === 'DIA' && $('pmLabel').value === 'NAME' && $('pmDepth').value === '1.5',
+      [$('pmFile').textContent, $('pmDia').value, $('pmLabel').value, $('pmDepth').value].join(' / '));
+    $('pmPick').click();
+    await until(() => $('pmFile').textContent.indexOf('도면.dxf') >= 0);
+    check('DXF: 도면층 칸', shown($('pmDxf')) && !shown($('pmShp')) && $('pmLayers').placeholder === '예: W-*' && $('pmFile').textContent === '도면.dxf · DXF');
+    $('pmLayers').value = 'FAIL';
+    $('pmGo').click();
+    await until(() => $('pmMsg').textContent !== '');
+    check('못 넣음 → 창에 까닭 · 관 그대로', $('pmMsg').textContent === '도면층 없음' && shown($('pipeDlg')) && !$('pmGo').disabled && colorCount('map', NEW) > 30
+      && hcalls('import_pipes')[1].arg.layers === 'FAIL' && hcalls('import_pipes')[1].arg.dia_field === null, $('pmMsg').textContent);
+    const s0 = no();
+    keyDown('ArrowUp');
+    keyDown('PageDown');
+    await sleep(300);
+    check('창 열린 동안 화살표 · PgDn 안 먹음', no() === s0 && shown($('pipeDlg')), no());
+    keyDown('Escape');
+    await sleep(50);
+    check('Esc → 창 닫힘', !shown($('dlgBack')));
+    // 5) 맞춤 자동 저장: 바뀐 뒤 0.8 초 모아 한 번 · «파일로 저장» 내려받기와 같은 글
+    $('calHead').click();
+    await sleep(50);
+    const plusYaw = $('calRows').querySelectorAll('button')[7];
+    for (let i = 0; i < 3; i++) { if (i) await sleep(100); tap(plusYaw, 0, 0); }
+    const tLast = performance.now();
+    await sleep(400);
+    check('0.4 초 뒤엔 아직 안 저장', hcalls('save_calib').length === 0, hcalls('save_calib').length);
+    await sleep(900);
+    const sv = hcalls('save_calib');
+    check('마지막으로 바꾼 지 0.8 초 뒤 한 번 저장', sv.length === 1 && sv[0].t - tLast >= 780 && sv[0].t - tLast < 1100, sv.length + ' · ' + (sv[0] ? Math.round(sv[0].t - tLast) + ' ms' : '-'));
+    const pw = window.pywebview;
+    window.pywebview = undefined; // 잠깐 프로그램 없는 척 → «파일로 저장» = 내려받기
+    const dl = await exportCalib();
+    window.pywebview = pw;
+    check('저장한 글 = 내려받는 calib.js 글', !!sv[0] && sv[0].arg === dl && dl.indexOf('window.RV_CALIB = ') === 0 && /"dyaw": 0\.3\b/.test(dl), dl.length + ' 글자');
+    log('CALIB', JSON.stringify(sv[0] ? sv[0].arg : ''));
+    let blobbed = false;
+    const oc = URL.createObjectURL;
+    URL.createObjectURL = function (b) { blobbed = true; return oc.call(URL, b); };
+    $('calSave').click();
+    await sleep(200);
+    URL.createObjectURL = oc;
+    check('프로그램 안 «파일로 저장» → 바로 저장 (내려받기 안 함)', hcalls('save_calib').length === 2 && !blobbed && $('toast').textContent === '맞춤 저장됨', hcalls('save_calib').length + ' / ' + $('toast').textContent);
+    // 점 짝이 바뀌어도 한 번 저장
+    await enterPick();
+    const rc = $('ov').getBoundingClientRect(), mr = $('map').getBoundingClientRect();
+    tap($('ov'), rc.left + rc.width / 2, rc.top + rc.height * 0.6);
+    await sleep(60);
+    tap($('map'), mr.left + mr.width / 2 + 20, mr.top + mr.height / 2 + 10);
+    await until(() => $('alList').querySelectorAll('.alRow').length === 1, 3000);
+    await sleep(1300);
+    const sv3 = hcalls('save_calib');
+    check('점 짝 → 한 번 저장 (짝 포함)', sv3.length === 3 && sv3[2].arg.indexOf('"pairs"') >= 0, sv3.length);
+    $('alClear').click();
+    await sleep(1300);
+    const sv4 = hcalls('save_calib');
+    check('짝 모두 지움 → 한 번 저장 (짝 없음)', sv4.length === 4 && sv4[3].arg.indexOf('"pairs"') < 0, sv4.length);
+    $('alEnd').click();
+    // 6) 내보내기: 웹 주소 (진행 → 주소 → 복사) · 폴더
+    $('hExport').click();
+    check('내보내기 창', shown($('expDlg')) && !shown($('pipeDlg')) && !shown($('exProg')) && !shown($('exDone')));
+    const widths = [];
+    $('exWeb').click();
+    check('올리는 중 → 단추 막힘', $('exWeb').disabled);
+    await until(() => { const w = $('exBar').style.width; if (widths[widths.length - 1] !== w) widths.push(w); return shown($('exDone')); }, 8000);
+    const jobs = hcalls('job'), gaps = jobs.slice(1).map((c, i) => Math.round(c.t - jobs[i].t));
+    check('진행 막대 → 끝 → 주소', ['30%', '60%', '90%'].every((w) => widths.includes(w)) && widths[widths.length - 1] === '100%'
+      && $('exUrl').value === 'https://nas.example.invalid/rv/test/' && $('exUrl').readOnly && !$('exWeb').disabled && hcalls('export_web').length === 1,
+      widths.join(' → ') + ' / ' + $('exUrl').value);
+    check('job 0.5 초마다 · 4 번', jobs.length === 4 && jobs.every((c) => c.arg === 'J1') && gaps.every((g) => g >= 480 && g <= 800), JSON.stringify(gaps));
+    await snap('host_export');
+    $('exCopy').click();
+    await until(() => hcalls('copy_text').length === 1);
+    await sleep(50);
+    check('주소 복사 → copy_text', hcalls('copy_text')[0].arg === 'https://nas.example.invalid/rv/test/' && $('toast').textContent === '주소 복사됨', $('toast').textContent);
+    $('exFolder').click();
+    check('폴더로 내보내는 중', $('exFolder').disabled && $('exFolder').textContent === '내보내는 중');
+    await until(() => $('toast').textContent.indexOf('내보냄') === 0, 5000);
+    check('폴더로 내보내기 → 알림에 경로', hcalls('export_folder').length === 1 && $('toast').textContent === '내보냄 · C:\\시험\\내보내기' && !$('exFolder').disabled, $('toast').textContent);
+    await snap('host_folder');
+    $('expDlg').querySelector('.dlgX').click();
+    check('× → 창 닫힘', !shown($('dlgBack')));
+    // 7) [처음]: 아직 안 쓴 맞춤을 먼저 저장 → go_home (두 번 저장 안 함)
+    const nSave = hcalls('save_calib').length;
+    tap(plusYaw, 0, 0);
+    $('hHome').click();
+    await until(() => hcalls('go_home').length === 1, 3000);
+    const last = H.calls.slice(-2).map((c) => c.name).join(',');
+    await sleep(1200);
+    check('처음 → 맞춤 먼저 저장 → go_home', last === 'save_calib,go_home' && hcalls('save_calib').length === nSave + 1, last + ' / ' + hcalls('save_calib').length);
   }
 
   log('DONE', fails === 0 ? 'ALL-PASS' : fails + ' FAIL');

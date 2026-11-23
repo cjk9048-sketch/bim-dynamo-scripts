@@ -330,6 +330,15 @@ def _selftest(api, w, out_path, project):
             res['proj_pipes'] = w.evaluate_js('(window.RV_PIPES && RV_PIPES.lines.length) || 0')
             res['proj_webgl'] = w.evaluate_js('!!document.querySelector("canvas") && !!document.querySelector("canvas").getContext')
             res['proj_loading_text'] = w.evaluate_js('(document.getElementById("loading")||{}).className || ""')
+            res['proj_buttons'] = w.evaluate_js(
+                '[...document.querySelectorAll("button")].filter(b => b.offsetParent).map(b => b.textContent.trim()).filter(Boolean).join("|")')
+            pipes = os.environ.get('RV_SELFTEST_PIPES')
+            if pipes:
+                res['pick'] = {k: v for k, v in __import__('roadview.pipes_update', fromlist=['x']).fields_of(pipes).items()
+                               if k in ('kind', 'guess_dia', 'lines')}
+                res['import'] = api.import_pipes({'path': pipes, 'dia_field': res['pick'].get('guess_dia'),
+                                                  'label_field': None, 'depth': 1.2})
+                res['save_calib'] = api.save_calib('window.RV_CALIB = {"videos": {}};\n')
     except Exception as ex:
         res['error'] = repr(ex)
     Path(out_path).write_text(json.dumps(res, ensure_ascii=False, indent=1), encoding='utf-8')
