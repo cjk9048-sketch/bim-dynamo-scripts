@@ -31,6 +31,7 @@
       <div id="viewMsg" class="pill"></div>
       <button id="prev" class="nav l" type="button" title="이전 (←)"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button>
       <button id="next" class="nav r" type="button" title="다음 (→)"><svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></button>
+      <div id="alChip"><b id="alStep"></b><span id="alSum2"></span><button id="alEnd" type="button">끝</button></div>
     </section>
     <aside id="side">
       <section id="mapPane" class="pane">
@@ -55,6 +56,10 @@
         <button id="calHead" type="button"><span class="ct">맞춤</span><span id="calVid"></span><svg class="chev" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></button>
         <div id="calBody">
           <div id="calRows"></div>
+          <div id="alBox">
+            <div class="alTop"><button id="alGo" type="button" title="Esc 취소">점 찍어 맞추기</button><span id="alSum"></span></div>
+            <div id="alList"><button id="alClear" type="button">모두 지우기</button></div>
+          </div>
           <div class="calBtns">
             <button id="calReset" type="button">초기화</button>
             <button id="calSave" type="button" class="primary">파일로 저장</button>
@@ -68,6 +73,7 @@
 <script src="data/project.js" onerror="void 0"></script>
 <script src="data/pipes.js" onerror="void 0"></script>
 <script src="data/calib.js" onerror="void 0"></script>
+<script src="data/dem.js" onerror="void 0"></script>
 <script src="viewer/app.js"></script>
 </body>
 </html>

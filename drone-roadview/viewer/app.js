@@ -15,7 +15,8 @@
   const NEAR = 0.05;               // m, 가까운 자르기 면
   const FADE0 = 200, FADE1 = 300;  // m, 관로 흐려짐 시작 · 끝
   const NEIGH_R = 60;              // m, 이웃 사진 표시 반경
-  const MARK_R = 0.45;             // m, 이웃 사진 원판 반지름
+  const MARK_R = 0.135;            // m, 이웃 사진 원판 반지름 (JACK 1123: 땅을 덜 가리게 30 %)
+  const MARK_HOVER = 1 / 0.3;      // 마우스 올린 것만 이만큼 키움 (= 예전 0.45 m)
   const FOV_MIN = 30, FOV_MAX = 120;
   const TILE = 256, MAP_ZMIN = 1, MAP_ZMAX = 22;
   const CACHE_PANOS = 5, CACHE_TILES = 400;
@@ -183,13 +184,168 @@
   }
   // R = Rz(dyaw)·Rx(dpitch)·Ry(droll), 행 우선. dyaw + = 위에서 보아 시계 방향.
   // dpitch 는 격자 동 축, droll 은 격자 북 축 둘레 (사진이 북쪽 정렬이라 기체 방향과 무관).
-  function rotOf(c) {
+  function rot64(c) {
     const a = c.dyaw * D2R, b = c.dpitch * D2R, g = c.droll * D2R;
     const ca = Math.cos(a), sa = Math.sin(a), cb = Math.cos(b), sb = Math.sin(b), cg = Math.cos(g), sg = Math.sin(g);
     const Rz = [ca, sa, 0, -sa, ca, 0, 0, 0, 1];
     const Rx = [1, 0, 0, 0, cb, -sb, 0, sb, cb];
     const Ry = [cg, 0, sg, 0, 1, 0, -sg, 0, cg];
-    return Float32Array.from(mul3(mul3(Rz, Rx), Ry));
+    return mul3(mul3(Rz, Rx), Ry);
+  }
+  function rotOf(c) { return Float32Array.from(rot64(c)); }
+
+  // ---------------------------------------------------------------- 땅 높이 (data/dem.js, 없어도 됨)
+  // RV_DEM = { cell, tile, x0, y0 (원점 기준), tiles: { "ix_iy": base64 Float32 LE } }
+  // 타일 하나 = (tile+1)² 값 · 행 r 은 남→북 (n = y0 + (iy·tile + r)·cell) · 열 c 는 서→동 · NaN = 없음 · 이웃 타일과 한 줄 겹침.
+  const DEM = (function () {
+    const d = window.RV_DEM;
+    if (!d || !(num(d.cell, 0) > 0) || !(num(d.tile, 0) >= 1) || !isNum(d.x0) || !isNum(d.y0) || !d.tiles || typeof d.tiles !== 'object') return null;
+    return { cell: Number(d.cell), tile: Math.round(Number(d.tile)), x0: Number(d.x0), y0: Number(d.y0), tiles: d.tiles, got: new Map() };
+  })();
+  function demTile(ix, iy) {
+    const k = ix + '_' + iy;
+    if (DEM.got.has(k)) return DEM.got.get(k);
+    const s = DEM.tiles[k], n = (DEM.tile + 1) * (DEM.tile + 1);
+    let a = null;
+    if (typeof s === 'string') {
+      try {
+        const bin = atob(s);
+        if (bin.length >= n * 4) {
+          const dv = new DataView(new ArrayBuffer(n * 4));
+          for (let i = 0; i < n * 4; i++) dv.setUint8(i, bin.charCodeAt(i));
+          a = new Float32Array(n);
+          for (let i = 0; i < n; i++) a[i] = dv.getFloat32(i * 4, true);
+        }
+      } catch (e) { a = null; }
+    }
+    DEM.got.set(k, a);
+    return a;
+  }
+  // 격자 (e, n) 의 땅 표고 (타일 안 겹선형). 자료 밖 · 빈 칸이면 NaN.
+  function demAt(e, n) {
+    if (!DEM) return NaN;
+    const T = DEM.tile, fx = (e - DEM.x0) / DEM.cell, fy = (n - DEM.y0) / DEM.cell;
+    if (!(fx >= 0 && fy >= 0)) return NaN;
+    const ix = Math.floor(fx / T), iy = Math.floor(fy / T);
+    const a = demTile(ix, iy);
+    if (!a) return NaN;
+    const c = fx - ix * T, r = fy - iy * T;
+    const c0 = Math.min(Math.floor(c), T - 1), r0 = Math.min(Math.floor(r), T - 1);
+    const tx = c - c0, ty = r - r0, W = T + 1, i = r0 * W + c0;
+    const z = (a[i] * (1 - tx) + a[i + 1] * tx) * (1 - ty) + (a[i + W] * (1 - tx) + a[i + W + 1] * tx) * ty;
+    return Number.isFinite(z) ? z : NaN;
+  }
+
+  // ---------------------------------------------------------------- 점 찍어 맞추기: 점 짝 (영상마다)
+  // 짝 = { shot: 사진 id, p: 사진 속 방향 (맞춤 전, 단위 벡터), e, n: 지도에서 찍은 같은 점 (격자) }
+  // 이 브라우저 (localStorage) 에 있으면 그것, 없으면 calib.js 의 videos[영상].pairs.
+  const PAIR_KEY = 'rv_pairs:' + String(PRJ.title || 'project');
+  const localPairs = (lsGet(PAIR_KEY) || {}).videos || {};
+  const shotById = new Map(shots.map((s) => [s.id, s]));
+  const AL = { on: false, pend: null }; // pend = 사진만 찍은 짝 { vid, shot, p }
+  const alClear = $('alClear'); // 목록 끝에 다시 붙여 쓰는 «모두 지우기»
+  function cleanPairs(a) {
+    return (Array.isArray(a) ? a : [])
+      .filter((q) => q && q.shot != null && Array.isArray(q.p) && q.p.length === 3 && q.p.every(isNum) && isNum(q.e) && isNum(q.n))
+      .map((q) => ({ shot: String(q.shot), p: q.p.map((v) => round(Number(v), 7)), e: round(Number(q.e), 3), n: round(Number(q.n), 3) }));
+  }
+  function pairsOf(vid) {
+    return cleanPairs(Array.isArray(localPairs[vid]) ? localPairs[vid] : (fileCal[vid] || {}).pairs);
+  }
+  function setPairs(vid, list) {
+    localPairs[vid] = list;
+    lsSet(PAIR_KEY, { videos: localPairs });
+  }
+  // 지도 점의 땅 표고: 높이 타일, 없으면 찍은 사진의 groundZ
+  function pairGround(q, s) { const z = demAt(q.e, q.n); return Number.isFinite(z) ? z : s.gz; }
+  // 사진 s 에서 방향 p 가 표고 zg 땅에 닿는 곳 [e, n] (맞춤 c, R = rot64(c)). 땅을 안 보면 null.
+  function rayHit(s, c, R, p, zg) {
+    const wx = R[0] * p[0] + R[1] * p[1] + R[2] * p[2];
+    const wy = R[3] * p[0] + R[4] * p[1] + R[5] * p[2];
+    const wz = R[6] * p[0] + R[7] * p[1] + R[8] * p[2];
+    if (wz > -0.02) return null;
+    const t = (zg - (s.z + c.dz)) / wz;
+    if (!(t > 0)) return null;
+    return [s.e + c.dx + t * wx, s.n + c.dy + t * wy];
+  }
+  // 영상의 짝마다 지금 맞춤으로 사진 점이 닿는 곳 · 지도 점과 어긋남 r (m, 못 쓰면 NaN)
+  function pairRes(vid) {
+    const c = calibFor(vid), R = rot64(c);
+    return pairsOf(vid).map((q) => {
+      const s = shotById.get(q.shot);
+      const zg = s ? pairGround(q, s) : NaN;
+      const h = s && s.video === vid ? rayHit(s, c, R, q.p, zg) : null;
+      return { q: q, s: s, zg: zg, h: h, r: h ? Math.hypot(h[0] - q.e, h[1] - q.n) : NaN };
+    });
+  }
+  function solveLin(A, b) { // 작은 연립방정식 (부분 피벗 가우스 소거)
+    const n = b.length, M = A.map((row, i) => row.concat([b[i]]));
+    for (let i = 0; i < n; i++) {
+      let p = i;
+      for (let k = i + 1; k < n; k++) if (Math.abs(M[k][i]) > Math.abs(M[p][i])) p = k;
+      if (!(Math.abs(M[p][i]) > 1e-300)) return null;
+      [M[i], M[p]] = [M[p], M[i]];
+      for (let k = i + 1; k < n; k++) {
+        const f = M[k][i] / M[i][i];
+        for (let j = i; j <= n; j++) M[k][j] -= f * M[i][j];
+      }
+    }
+    const x = new Array(n);
+    for (let i = n - 1; i >= 0; i--) {
+      let s = M[i][n];
+      for (let j = i + 1; j < n; j++) s -= M[i][j] * x[j];
+      x[i] = s / M[i][i];
+    }
+    return x.every(Number.isFinite) ? x : null;
+  }
+  // 영상 vid 의 짝으로 맞춤 풀기 (Levenberg–Marquardt, 지금 값에서 시작). 1 짝 → 동 · 북, 2 → + 방향, 3 이상 → + 높이.
+  // 남북 · 동서 기울기는 그대로. 결과: 'ok' (적용함) · 'bad' (못 풂 · 값이 터무니없음 → 그대로 둠) · 'none' (짝 없음)
+  function alSolve(vid) {
+    const c0 = calibFor(vid), R0 = rot64(c0), use = [];
+    pairRes(vid).forEach((o) => { if (o.h) use.push(o); });
+    if (!use.length) return pairsOf(vid).length ? 'bad' : 'none';
+    const keys = use.length === 1 ? ['dx', 'dy'] : use.length === 2 ? ['dx', 'dy', 'dyaw'] : ['dx', 'dy', 'dz', 'dyaw'];
+    const calOf = (x) => { const c = Object.assign({}, c0); keys.forEach((k, i) => { c[k] = x[i]; }); return c; };
+    const res = (x) => {
+      const c = calOf(x), R = keys.length > 2 ? rot64(c) : R0, out = [];
+      for (const o of use) {
+        const h = rayHit(o.s, c, R, o.q.p, o.zg);
+        if (!h) return null;
+        out.push(h[0] - o.q.e, h[1] - o.q.n);
+      }
+      return out;
+    };
+    const cost = (r) => r.reduce((a, v) => a + v * v, 0);
+    let x = keys.map((k) => c0[k]), r = res(x), lam = 1e-3;
+    if (!r) return 'bad';
+    let f = cost(r);
+    for (let it = 0; it < 30; it++) {
+      const m = keys.length, J = [];
+      for (let j = 0; j < m; j++) { // 수치 미분 (가운데 차분)
+        const xp = x.slice(), xm = x.slice();
+        xp[j] += 1e-4; xm[j] -= 1e-4;
+        const rp = res(xp), rm = res(xm);
+        if (!rp || !rm) return 'bad';
+        J.push(rp.map((v, i) => (v - rm[i]) / 2e-4));
+      }
+      const A = J.map((a) => J.map((b) => a.reduce((s, v, i) => s + v * b[i], 0)));
+      const g = J.map((a) => -a.reduce((s, v, i) => s + v * r[i], 0));
+      let step = -1;
+      for (let k = 0; k < 10 && step < 0; k++) {
+        const d = solveLin(A.map((row, i) => row.map((v, j) => (i === j ? v * (1 + lam) + 1e-12 : v))), g);
+        const xn = d && x.map((v, i) => v + d[i]), rn = xn && res(xn);
+        if (rn && cost(rn) < f) {
+          step = Math.max(...d.map(Math.abs));
+          x = xn; r = rn; f = cost(rn);
+          lam = Math.max(lam / 10, 1e-9);
+        } else lam *= 10;
+      }
+      if (step < 1e-7) break; // 더 줄지 않음 · 다 옴
+    }
+    const c = calOf(x);
+    if (!x.every(Number.isFinite) || Math.abs(c.dz) > 15 || Math.abs(c.dyaw) > 30) return 'bad';
+    keys.forEach((k) => setCal(vid, k, c[k]));
+    return 'ok';
   }
 
   // ---------------------------------------------------------------- 상태
@@ -894,7 +1050,7 @@
       ov.globalAlpha = 1;
     }
 
-    // ---- 이웃 사진: 땅에 누운 원판 (반지름 MARK_R m, 멀어도 화면 3.5 px 아래로는 줄이지 않음)
+    // ---- 이웃 사진: 땅에 누운 원판 (반지름 MARK_R m, 멀어도 화면 1.8 px 아래로는 줄이지 않음 · 마우스 올린 것만 크게)
     const marks = [];
     for (const s of shots) {
       if (s.i === S.cur) continue;
@@ -904,7 +1060,7 @@
       vc(ge, gn, s.gz, A3);
       if (A3[2] < 1) continue;
       const hov = s.i === S.hover;
-      const rad = Math.max(MARK_R, 3.5 * A3[2] / kx) * (hov ? 1.2 : 1);
+      const rad = hov ? Math.max(MARK_R * MARK_HOVER, 6 * A3[2] / kx) : Math.max(MARK_R, 1.8 * A3[2] / kx);
       const sx = cx + A3[0] / A3[2] * kx, sy = cy - A3[1] / A3[2] * ky;
       const poly = [];
       let ok = true, x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
@@ -924,7 +1080,7 @@
       const ny_ = [cx + B3[0] / B3[2] * kx - sx, cy - B3[1] / B3[2] * ky - sy];
       marks.push({ i: s.i, d: A3[2], poly, sx, sy, ex, ny: ny_, hov, rx: (x1 - x0) / 2, ry: (y1 - y0) / 2 });
     }
-    marks.sort((a, b) => b.d - a.d);
+    marks.sort((a, b) => (a.hov - b.hov) || (b.d - a.d));   // 먼 것부터 · 마우스 올린 것은 맨 위
     const dpr = V.dpr;
     for (const m of marks) {
       const p = m.poly;
@@ -939,8 +1095,8 @@
       ov.save();
       trace();
       ov.shadowColor = 'rgba(0, 0, 0, 0.5)';
-      ov.shadowBlur = clamp(mn * 0.8, 2, 10) * dpr;
-      ov.shadowOffsetY = clamp(mn * 0.3, 1, 4) * dpr;
+      ov.shadowBlur = clamp(mn * 0.8, 1, 10) * dpr;
+      ov.shadowOffsetY = clamp(mn * 0.3, 0.5, 4) * dpr;
       ov.fillStyle = '#c3c9d3';
       ov.fill();
       ov.restore();
@@ -999,6 +1155,74 @@
         ov.fillText(lb.text, bx + 19, by + ph / 2 + 0.5);
       }
     }
+
+    // ---- 점 찍어 맞추기 핀 (맨 위)
+    drawPins(w, h, kx, ky);
+  }
+  // 핀: 찍은 점 = 노란 고리 + 번호 풍선 · 다른 쪽에서 온 같은 점 = 청록 고리 (맞으면 둘이 겹친다)
+  const PIN = '#facc15', PIN2 = '#22d3ee', PIN_DARK = 'rgba(8, 10, 14, 0.9)';
+  function pinMain(c, x, y, no) {
+    c.beginPath();
+    c.arc(x, y, 5, 0, 2 * Math.PI);
+    c.lineWidth = 3.4; c.strokeStyle = PIN_DARK; c.stroke();
+    c.lineWidth = 1.8; c.strokeStyle = PIN; c.stroke();
+    c.beginPath();
+    c.arc(x, y, 1.4, 0, 2 * Math.PI);
+    c.fillStyle = PIN; c.fill();
+    const bx = x + 12, by = y - 16;
+    c.beginPath();
+    c.moveTo(x + 3.6, y - 3.6); c.lineTo(bx - 5, by + 5);
+    c.lineWidth = 3; c.strokeStyle = PIN_DARK; c.stroke();
+    c.lineWidth = 1.4; c.strokeStyle = PIN; c.stroke();
+    c.beginPath();
+    c.arc(bx, by, 9, 0, 2 * Math.PI);
+    c.fillStyle = PIN; c.fill();
+    c.lineWidth = 1.5; c.strokeStyle = PIN_DARK; c.stroke();
+    c.font = '700 11px Malgun Gothic, Segoe UI, sans-serif';
+    c.textAlign = 'center'; c.textBaseline = 'middle';
+    c.fillStyle = '#11141a';
+    c.fillText(String(no), bx, by + 0.5);
+  }
+  function pinOther(c, x, y) {
+    c.beginPath();
+    c.arc(x, y, 8, 0, 2 * Math.PI);
+    c.lineWidth = 3.6; c.strokeStyle = PIN_DARK; c.stroke();
+    c.lineWidth = 2; c.strokeStyle = PIN2; c.stroke();
+  }
+  function pinLink(c, a, b) {
+    if (Math.hypot(a[0] - b[0], a[1] - b[1]) < 6) return;
+    c.beginPath();
+    c.moveTo(a[0], a[1]); c.lineTo(b[0], b[1]);
+    c.setLineDash([4, 4]);
+    c.lineWidth = 1.5; c.strokeStyle = 'rgba(255, 255, 255, 0.85)'; c.stroke();
+    c.setLineDash([]);
+  }
+  // 360°: 사진에서 찍은 점 (이 사진이면 그 방향, 다른 사진이면 그 사진에서 땅에 닿는 곳) · 지도 점 (땅 위 자리)
+  function drawPins(w, h, kx, ky) {
+    const cur = shots[S.cur], vid = cur.video;
+    const items = pairRes(vid).map((o, i) => ({ o: o, no: i + 1 }));
+    const pd = AL.pend && AL.pend.shot === cur.id ? AL.pend : null;
+    if (!items.length && !pd) return;
+    const c = calibFor(vid), R = rot64(c), cx = w / 2, cy = h / 2, f = V.f, r = V.r, u = V.u;
+    const proj = (dx, dy, dz) => {
+      const z = dx * f[0] + dy * f[1] + dz * f[2];
+      if (z < NEAR) return null;
+      const x = cx + (dx * r[0] + dy * r[1]) / z * kx, y = cy - (dx * u[0] + dy * u[1] + dz * u[2]) / z * ky;
+      return x > -50 && x < w + 50 && y > -50 && y < h + 50 ? [x, y] : null;
+    };
+    const dirPos = (p) => proj(R[0] * p[0] + R[1] * p[1] + R[2] * p[2], R[3] * p[0] + R[4] * p[1] + R[5] * p[2], R[6] * p[0] + R[7] * p[1] + R[8] * p[2]);
+    const [Cx, Cy, Cz] = S.cam;
+    ov.save();
+    for (const it of items) {
+      const o = it.o;
+      const a = o.q.shot === cur.id ? dirPos(o.q.p) : o.h ? proj(o.h[0] - Cx, o.h[1] - Cy, o.zg - Cz) : null;
+      const b = Number.isFinite(o.zg) ? proj(o.q.e - Cx, o.q.n - Cy, o.zg - Cz) : null;
+      if (a && b) pinLink(ov, a, b);
+      if (b) pinOther(ov, b[0], b[1]);
+      if (a) pinMain(ov, a[0], a[1], it.no);
+    }
+    if (pd) { const a = dirPos(pd.p); if (a) pinMain(ov, a[0], a[1], items.length + 1); }
+    ov.restore();
   }
   function markAt(x, y) {
     for (let j = S.marks.length - 1; j >= 0; j--) {
@@ -1071,10 +1295,15 @@
     },
     pinchStart: () => { vStart = { yaw: S.yaw, pitch: S.pitch, fov: S.fov }; },
     pinch: (sc) => { if (vStart) { S.fov = clamp(vStart.fov / sc, FOV_MIN, FOV_MAX); dirty(); } },
-    tap: (x, y) => { flushView(); const i = markAt(x, y); if (i >= 0) openShot(i); },
+    tap: (x, y) => {
+      flushView();
+      if (AL.on) { alPhoto(x, y); return; }
+      const i = markAt(x, y);
+      if (i >= 0) openShot(i);
+    },
     hover: (x, y) => {
       flushView();
-      const i = markAt(x, y);
+      const i = AL.on ? -1 : markAt(x, y); // 점 찍는 동안은 원판을 키우지 않음 (십자 표시)
       ovc.classList.toggle('point', i >= 0);
       if (i !== S.hover) { S.hover = i; needView = true; kick(); }
     },
@@ -1093,6 +1322,10 @@
     if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
     if (e.key === 'ArrowLeft') { e.preventDefault(); stepShot(-1); }
     else if (e.key === 'ArrowRight') { e.preventDefault(); stepShot(1); }
+    else if (e.key === 'Escape' && AL.on) { // 반쯤 만든 짝 취소 · 없으면 끝
+      e.preventDefault();
+      if (AL.pend) { AL.pend = null; alUI(); dirty(); } else alMode(false);
+    }
   });
 
   // ---------------------------------------------------------------- 윗줄
@@ -1215,6 +1448,7 @@
     // 파일 값과 다르면 이름을 노랗게
     const vid = curVid(), c = calibFor(vid);
     CAL_F.forEach((k) => calLabels[k].classList.toggle('mod', Math.abs(c[k] - calFileVal(vid, k)) > 1e-9));
+    alUI(); // 점 짝 어긋남도 지금 값으로
   }
   function updCalUI() {
     const vid = curVid(), c = calibFor(vid);
@@ -1230,10 +1464,13 @@
     shots.forEach((s) => ids.add(s.video));
     Object.keys(fileCal).forEach((k) => ids.add(k));
     Object.keys(localCal).forEach((k) => ids.add(k));
+    Object.keys(localPairs).forEach((k) => ids.add(k));
     const out = { videos: {} };
     [...ids].sort().forEach((id) => {
       const c = calibFor(id), o = {};
       CAL_F.forEach((k) => { o[k] = round(c[k], 4); });
+      const pl = pairsOf(id);
+      if (pl.length) o.pairs = pl; // 점 찍어 맞추기 짝 (다른 PC 에서도 이어서 고치게)
       out.videos[id] = o;
     });
     const text = 'window.RV_CALIB = ' + JSON.stringify(out, null, 2) + ';\n';
@@ -1257,7 +1494,7 @@
   const y2lat = (y) => R2D * Math.atan(Math.sinh(Math.PI * (1 - 2 * y)));
 
   shots.forEach((s) => {
-    if (Number.isFinite(s.lat) && Number.isFinite(s.lon)) { s.mx = lon2x(s.lon); s.my = lat2y(s.lat); }
+    if (Number.isFinite(s.lat) && Number.isFinite(s.lon)) { s.mx = lon2x(s.lon); s.my = lat2y(s.lat); s.gx = s.mx; s.gy = s.my; }
   });
   // 격자(e,n) → 지도 방향: 사진 점들로 닮음 변환을 맞춘다 (자오선 수렴각까지 반영).
   const SIM = (function () {
@@ -1280,6 +1517,22 @@
   function en2m(e, n) {
     const ze = e - SIM.me, zn = n - SIM.mn;
     return [SIM.wx + SIM.ar * ze - SIM.ai * zn, -(SIM.wy + SIM.ai * ze + SIM.ar * zn)];
+  }
+  function mer2en(X, Y) { // en2m 의 거꾸로
+    const d2 = SIM.ar * SIM.ar + SIM.ai * SIM.ai, a = X - SIM.wx, b = -Y - SIM.wy;
+    return [SIM.me + (a * SIM.ar + b * SIM.ai) / d2, SIM.mn + (b * SIM.ar - a * SIM.ai) / d2];
+  }
+  // 지도 위 사진 점 = GPS 자리(gx, gy) + 그 영상 맞춤(dx, dy) 만큼 (점 찍어 맞추기 뒤 경로가 도로 위로 옮겨 가게 · JACK 1123)
+  function refreshShotMap() {
+    if (!SIM) return;
+    for (const s of shots) {
+      if (!Number.isFinite(s.gx)) continue;
+      const c = calibFor(s.video);
+      if (c && (c.dx || c.dy)) {
+        const a = en2m(s.e + c.dx, s.n + c.dy), b = en2m(s.e, s.n);
+        s.mx = s.gx + a[0] - b[0]; s.my = s.gy + a[1] - b[1];
+      } else { s.mx = s.gx; s.my = s.gy; }
+    }
   }
   lines.forEach((L) => {
     const cnt = L.pts.length / 3;
@@ -1429,10 +1682,7 @@
     let step = 100;
     if (step * pxm < 8) step = 1000;
     if (step * pxm < 8) return;
-    const m2en = (x, y) => {
-      const [X, Y] = s2m(x, y), a = X - SIM.wx, b = -Y - SIM.wy;
-      return [SIM.me + (a * SIM.ar + b * SIM.ai) / d2, SIM.mn + (b * SIM.ar - a * SIM.ai) / d2];
-    };
+    const m2en = (x, y) => { const [X, Y] = s2m(x, y); return mer2en(X, Y); };
     const cs = [m2en(0, 0), m2en(M.w, 0), m2en(0, M.h), m2en(M.w, M.h)];
     const e0 = Math.min(...cs.map((c) => c[0])), e1 = Math.max(...cs.map((c) => c[0]));
     const n0 = Math.min(...cs.map((c) => c[1])), n1 = Math.max(...cs.map((c) => c[1]));
@@ -1458,6 +1708,7 @@
   function drawMap() {
     const w = M.w, h = M.h;
     if (w < 2 || h < 2) return;
+    refreshShotMap();
     mx.setTransform(M.dpr, 0, 0, M.dpr, 0, 0);
     mx.fillStyle = '#0f131a';
     mx.fillRect(0, 0, w, h);
@@ -1553,6 +1804,20 @@
         mx.fillText(String(c.seq), x + 10, y);
       }
     }
+    if (SIM && S.cur >= 0) drawMapPins();
+  }
+  // 지도: 찍은 점 = 노란 핀 · 사진 점이 지금 맞춤으로 닿는 곳 = 청록 고리
+  function drawMapPins() {
+    const vid = shots[S.cur].video, on = (e, n) => { const m = en2m(e, n); return m2s(m[0], m[1]); };
+    mx.save();
+    pairRes(vid).forEach((o, i) => {
+      const a = on(o.q.e, o.q.n), b = o.h ? on(o.h[0], o.h[1]) : null;
+      if (b) { pinLink(mx, a, b); pinOther(mx, b[0], b[1]); }
+      pinMain(mx, a[0], a[1], i + 1);
+    });
+    const ph = pendHit();
+    if (ph) { const b = on(ph[0], ph[1]); pinOther(mx, b[0], b[1]); }
+    mx.restore();
   }
   function shotAtMap(x, y) {
     const k = mk(), ox = M.w / 2 - M.cx * k, oy = M.h / 2 - M.cy * k;
@@ -1565,6 +1830,7 @@
     return best;
   }
   function fitAll() {
+    refreshShotMap();                       // 맞춤 값만큼 옮긴 자리로 맞춘다 (파일에서 읽은 맞춤도)
     const pts = shots.filter((s) => Number.isFinite(s.mx));
     if (!pts.length || M.w < 2) return;
     let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
@@ -1606,8 +1872,13 @@
       M.cy = mStart.X[1] - (y - M.h / 2) / k;
       mapDirty();
     },
-    tap: (x, y) => { const i = shotAtMap(x, y); if (i >= 0) openShot(i); },
-    hover: (x, y) => { mc.classList.toggle('point', shotAtMap(x, y) >= 0); },
+    tap: (x, y) => {
+      if (AL.on && AL.pend) { alMap(x, y); return; }
+      const i = shotAtMap(x, y);
+      if (i >= 0) openShot(i);
+      else if (AL.on) toast('① 사진에서 먼저');
+    },
+    hover: (x, y) => { mc.classList.toggle('point', !(AL.on && AL.pend) && shotAtMap(x, y) >= 0); },
   });
   mc.addEventListener('wheel', (e) => {
     e.preventDefault();
@@ -1651,6 +1922,112 @@
   });
   updAttrib();
   $('keyBtn').classList.toggle('on', !!BASE.vworld);
+
+  // ---------------------------------------------------------------- 점 찍어 맞추기 (조작)
+  // ① 사진에서 점 → ② 지도에서 같은 점 → 짝 하나. 짝이 생기거나 지워질 때마다 그 영상 맞춤을 다시 푼다.
+  function alMode(on) {
+    if (on && !SIM) { toast('지도 없음'); return; }
+    AL.on = !!on;
+    AL.pend = null;
+    ovc.classList.toggle('pick', AL.on);
+    mc.classList.toggle('pick', AL.on);
+    ovc.classList.remove('point');
+    mc.classList.remove('point');
+    S.hover = -1;
+    alUI();
+    dirty();
+  }
+  // 사진만 찍은 짝이 지금 맞춤으로 땅에 닿는 곳 (지도 표시용)
+  function pendHit() {
+    const pd = AL.pend, s = pd && shotById.get(pd.shot);
+    if (!s) return null;
+    const c = calibFor(pd.vid), R = rot64(c);
+    const h = rayHit(s, c, R, pd.p, s.gz);
+    const z = h ? demAt(h[0], h[1]) : NaN;
+    return Number.isFinite(z) ? rayHit(s, c, R, pd.p, z) || h : h;
+  }
+  function alPhoto(x, y) {
+    if (S.cur < 0) return;
+    const nx = (x - V.w / 2) / (V.w / 2), ny = (V.h / 2 - y) / (V.h / 2);
+    const w = unit3([0, 1, 2].map((i) => V.f[i] + nx * V.tanH * V.r[i] + ny * V.tanV * V.u[i]));
+    if (w[2] > -0.02) { toast('땅을 찍기'); return; }
+    const R = S.R; // 사진 속 방향 p = Rᵀ·w (지금 맞춤)
+    const p = unit3([0, 1, 2].map((i) => R[i] * w[0] + R[3 + i] * w[1] + R[6 + i] * w[2]));
+    const s = shots[S.cur];
+    AL.pend = { vid: s.video, shot: s.id, p: p };
+    const h = pendHit();
+    if (h && M.w > 1) { // 지도에서 안 보이면 그쪽으로 옮김 (줌은 그대로)
+      const m = en2m(h[0], h[1]), q = m2s(m[0], m[1]);
+      if (q[0] < 30 || q[1] < 30 || q[0] > M.w - 30 || q[1] > M.h - 30) { M.cx = m[0]; M.cy = m[1]; }
+    }
+    alUI();
+    dirty();
+  }
+  function alMap(x, y) {
+    const pd = AL.pend;
+    if (!pd) return;
+    const m = s2m(x, y), en = mer2en(m[0], m[1]);
+    const list = pairsOf(pd.vid);
+    list.push({ shot: pd.shot, p: pd.p.map((v) => round(v, 7)), e: round(en[0], 3), n: round(en[1], 3) });
+    setPairs(pd.vid, list);
+    AL.pend = null;
+    alRun(pd.vid);
+  }
+  function alRun(vid) {
+    if (alSolve(vid) === 'bad') toast('점 확인');
+    calChanged();
+    updCalUI();
+  }
+  function alDelete(vid, i) {
+    const list = pairsOf(vid);
+    list.splice(i, 1);
+    setPairs(vid, list);
+    alRun(vid);
+  }
+  function alSummary(vid) {
+    const all = pairRes(vid), ok = all.filter((o) => Number.isFinite(o.r));
+    if (!all.length) return '';
+    if (!ok.length) return '점 확인 · 점 ' + all.length + '개';
+    const rms = Math.sqrt(ok.reduce((a, o) => a + o.r * o.r, 0) / ok.length);
+    return '맞춤 오차 ' + rms.toFixed(2) + ' m · 점 ' + all.length + '개';
+  }
+  function alUI() {
+    const vid = curVid(), res = pairRes(vid), sum = alSummary(vid);
+    $('alChip').classList.toggle('show', AL.on);
+    $('alStep').textContent = AL.pend ? '② 지도에서 같은 점' : '① 사진에서 점';
+    $('alSum2').textContent = sum;
+    $('alSum').textContent = sum;
+    const go = $('alGo');
+    go.textContent = AL.on ? '끝' : '점 찍어 맞추기';
+    go.classList.toggle('on', AL.on);
+    $('viewPane').classList.toggle('pickHere', AL.on && !AL.pend);
+    $('mapPane').classList.toggle('pickHere', AL.on && !!AL.pend);
+    $('alBox').classList.toggle('on', AL.on); // 켠 동안 목록 줄을 비워 둠 → 첫 짝에 지도가 줄어 움직이지 않게
+    const box = $('alList');
+    box.textContent = '';
+    res.forEach((o, i) => {
+      const row = document.createElement('div');
+      row.className = 'alRow' + (Number.isFinite(o.r) ? '' : ' bad');
+      const t = document.createElement('span');
+      t.textContent = (i + 1) + ' · ' + (Number.isFinite(o.r) ? o.r.toFixed(2) + ' m' : '제외');
+      const del = document.createElement('button');
+      del.type = 'button'; del.className = 'alDel'; del.textContent = '×'; del.title = '지우기';
+      del.addEventListener('click', () => alDelete(vid, i));
+      row.append(t, del);
+      box.appendChild(row);
+    });
+    if (res.length) box.appendChild(alClear);
+  }
+  alUI();
+  $('alGo').addEventListener('click', () => alMode(!AL.on));
+  $('alEnd').addEventListener('click', () => alMode(false));
+  alClear.addEventListener('click', () => {
+    setPairs(curVid(), []);
+    AL.pend = null;
+    alUI();
+    dirty();
+    toast('점 모두 지움');
+  });
 
   // ---------------------------------------------------------------- 크기 맞춤
   function resizeAll() {

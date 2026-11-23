@@ -129,6 +129,8 @@ input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; margin
 #map { cursor: grab; }
 #map.grabbing { cursor: grabbing; }
 #map.point { cursor: pointer; }
+#ov.pick:not(.grabbing), #map.pick:not(.grabbing):not(.point) { cursor: crosshair; }
+.pane.pickHere { outline: 2px solid var(--yel); outline-offset: -2px; }
 
 .pill {
   position: absolute; left: 50%; top: 14px; transform: translateX(-50%);
@@ -279,6 +281,73 @@ input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; margin
 .cb:active { background: var(--acc); }
 #calRows input[type=number] { width: 70px; height: 28px; }
 .cu { color: var(--dim); }
+/* 점 찍어 맞추기 */
+#alBox { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
+.alTop { display: flex; align-items: center; gap: 10px; }
+#alGo {
+  flex: none; height: 30px; padding: 0 12px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-s);
+  background: var(--panel-2);
+  font-weight: 600;
+}
+#alGo:hover { background: var(--panel-3); }
+#alGo.on { background: var(--yel); border-color: var(--yel); color: #11141a; }
+#alSum { color: var(--dim); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#alList { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; max-height: 96px; overflow-y: auto; }
+#alList:empty { display: none; }
+#alBox.on #alList { display: flex; min-height: 26px; }
+.alRow {
+  display: flex; align-items: center; gap: 4px;
+  height: 26px; padding: 0 4px 0 9px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.alRow.bad { color: var(--yel); }
+.alDel {
+  width: 20px; height: 20px; padding: 0;
+  border: 0; border-radius: 50%;
+  background: transparent;
+  color: var(--dim);
+  font-size: 14px; line-height: 1;
+}
+.alDel:hover { background: var(--panel-3); color: var(--text); }
+#alClear {
+  height: 26px; padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--dim);
+  font-size: 12px;
+  white-space: nowrap;
+}
+#alClear:hover { color: var(--text); border-color: var(--line-2); }
+#alChip {
+  position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%);
+  display: none; align-items: center; gap: 10px;
+  height: 36px; padding: 0 6px 0 14px; max-width: calc(100% - 24px);
+  background: rgba(15, 18, 25, .85);
+  border: 1px solid rgba(250, 204, 21, .6);
+  border-radius: 999px;
+  backdrop-filter: blur(6px);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+#alChip.show { display: flex; }
+#alStep { color: var(--yel); }
+#alSum2 { color: var(--dim); min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+#alSum2:empty { display: none; }
+#alEnd {
+  height: 26px; padding: 0 12px;
+  border: 0; border-radius: 999px;
+  background: var(--yel); color: #11141a;
+  font-weight: 700;
+}
+#alEnd:hover { filter: brightness(1.1); }
+
 .calBtns { display: flex; gap: 8px; margin-top: 12px; }
 .calBtns button {
   flex: 1; height: 32px;

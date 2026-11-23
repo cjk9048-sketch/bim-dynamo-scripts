@@ -476,9 +476,17 @@ def main(argv=None):
         else:
             zhome = 0.0
 
-        # 원점
+        # 원점 — 같은 폴더를 다시 만들면 예전 원점을 그대로 (점 찍어 맞추기 짝 · 맞춤 값이 원점 기준이라)
         E0 = round(shots[0]['E'] / 100.0) * 100.0
         N0 = round(shots[0]['N'] / 100.0) * 100.0
+        try:
+            old = json.loads(open(os.path.join(out, 'data', 'project.js'), encoding='utf-8').read()
+                             .split('=', 1)[1].strip().rstrip(';'))
+            oE, oN = float(old['origin']['E']), float(old['origin']['N'])
+            if old.get('crs') == a.crs and math.hypot(oE - E0, oN - N0) < 50000:
+                E0, N0 = oE, oN
+        except Exception:
+            pass
 
         # 360 사진 (같은 장면 · 같은 자세 · 같은 설정으로 이미 만든 것은 다시 안 만듦)
         idx_path = os.path.join(out, 'data', 'pano_index.json')

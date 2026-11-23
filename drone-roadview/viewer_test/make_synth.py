@@ -10,6 +10,9 @@
   자홍 = g(지표 표고) 있음, 깊이 = 평균매설깊이(project.depth 1.0) · 주황 = hasZ (관 중심 표고 48.1) + g.
   0004 사진은 agl 을 15.6 으로 적어 groundZ 가 0.6 m 틀리게 한다 → 띠가 g 를 써야 맞는다.
   --legacy-pipes: 옛 형식 (dia · g · hasZ 없음, project 에 depth 없이 cover 만).
+  --align: 점 찍어 맞추기 시험. 비탈 땅 z = 50 + 0.05·n − 0.03·e (data/dem.js, 타일 여럿 · 빈 타일 하나)
+     + 땅에 칠한 네모 5개 (LANDMARKS) + 영상 0001 을 알려진 만큼 틀리게 찍음 (ALIGN_ERR, calib.js 없음 → 바른 맞춤 = 그 값).
+     답은 data/align_truth.js (시험만 읽음).
 지평선 위 6° 에 N/E/S/W 글자를 쓴다.
 """
 import argparse
@@ -59,6 +62,24 @@ CALIB_ERR = {
     '0001': {'dx': 1.5, 'dy': -2.0, 'dz': 0.8, 'dyaw': 7.0, 'dpitch': 2.0, 'droll': -3.0},
     '0002': {'dx': -1.0, 'dy': 1.2, 'dz': -0.5, 'dyaw': -5.0, 'dpitch': -1.5, 'droll': 2.5},
 }
+# --align: 비탈 땅 z = GZ + SLOPE_E·e + SLOPE_N·n · 영상 0001 만 틀리게 찍음 · 땅에 칠한 네모 (반폭 LM_HALF m, 가운데 검은 점)
+SLOPE_E, SLOPE_N = -0.03, 0.05
+ALIGN_ERR = {'0001': {'dx': 2.0, 'dy': -1.5, 'dz': 0.8, 'dyaw': 4.0, 'dpitch': 0.0, 'droll': 0.0}}
+LANDMARKS = [
+    (-3.0, 8.0, (250, 220, 40)),
+    (13.0, 8.0, (230, 40, 40)),
+    (9.0, -5.0, (40, 110, 240)),
+    (-2.0, -7.0, (40, 200, 90)),
+    (6.0, 13.0, (245, 245, 245)),
+]
+LM_HALF = 0.4
+DEM_CELL, DEM_TILE, DEM_X0, DEM_Y0, DEM_N = 2.0, 8, -29.0, -27.0, 4  # 타일 16 m · 4×4 장
+DEM_SKIP = {(3, 3)}         # 빈 타일 (높이 없음)
+DEM_NAN = (0, 3, 2, 5)      # (ix, iy, 행, 열) 부터 2×2 칸 NaN
+
+
+def ground_z(e, n, slope):
+    return GZ + slope[0] * e + slope[1] * n
 
 
 def en2ll(e, n):
@@ -84,8 +105,10 @@ def rot(cal):
     return Rz @ Rx @ Ry
 
 
-def render_pano(cam, W, H, R=None):
-    """cam = 실제 사진 자리. R 이 있으면 사진이 R 만큼 틀어진 것처럼 그린다 (w = R·p)."""
+def render_pano(cam, W, H, R=None, slope=(0.0, 0.0), marks=()):
+    """cam = 실제 사진 자리. R 이 있으면 사진이 R 만큼 틀어진 것처럼 그린다 (w = R·p).
+    slope = (동, 북) 땅 기울기 (z = GZ + se·e + sn·n), marks = 땅에 칠할 네모 [(e, n, 색)]."""
+    se, sn = slope
     out = np.empty((H, W, 3), np.uint8)
     lam = ((np.arange(W) + 0.5) / W * 2.0 - 1.0) * math.pi
     sinl, cosl = np.sin(lam), np.cos(lam)
@@ -104,10 +127,11 @@ def render_pano(cam, W, H, R=None):
         # 하늘
         t = np.sqrt(np.clip(U, 0.0, 1.0))[..., None]
         sky = sky_hor * (1.0 - t) + sky_top * t
-        # 땅
-        ground = U < 0
+        # 땅 (평면 z = GZ + se·e + sn·n — 기울기 0 이면 예전과 같은 식)
+        den = U - se * E - sn * N if (se or sn) else U
+        ground = den < 0
         with np.errstate(divide='ignore', invalid='ignore'):
-            tt = np.where(ground, (GZ - cam[2]) / np.where(ground, U, -1.0), 0.0)
+            tt = np.where(ground, (GZ + se * cam[0] + sn * cam[1] - cam[2]) / np.where(ground, den, -1.0), 0.0)
         ge = cam[0] + tt * E
         gn = cam[1] + tt * N
         g = np.full(E.shape, 120.0)
@@ -123,6 +147,13 @@ def render_pano(cam, W, H, R=None):
                 d = np.minimum(d, seg_dist(ge, gn, a, b))
             cov = np.clip((hw - d) / foot + 0.5, 0.0, 1.0)[..., None]
             gc = gc * (1.0 - cov) + np.array(col, np.float64) * cov
+        for me, mn, col in marks:  # 네모 + 검은 테두리 + 가운데 검은 점 (사람이 찍을 곳)
+            d = np.maximum(np.abs(ge - me), np.abs(gn - mn))
+            for hw, c in ((LM_HALF + 0.05, (12, 12, 16)), (LM_HALF, col)):
+                cov = np.clip((hw - d) / foot + 0.5, 0.0, 1.0)[..., None]
+                gc = gc * (1.0 - cov) + np.array(c, np.float64) * cov
+            cov = np.clip((0.07 - np.hypot(ge - me, gn - mn)) / foot + 0.5, 0.0, 1.0)[..., None]
+            gc = gc * (1.0 - cov) + np.array((12, 12, 16), np.float64) * cov
         haze = (1.0 - np.exp(-tt / 600.0))[..., None]
         gc = gc * (1.0 - haze) + sky_hor * haze
         blk[:] = np.where(ground[..., None], gc, sky)
@@ -161,8 +192,9 @@ def merc_px(lat, lon, z):
     return (lon + 180.0) / 360.0 * k, (0.5 - math.log((1 + s) / (1 - s)) / (4 * math.pi)) * k
 
 
-def make_tiles(out, zooms=range(15, 20), margin=400.0):
-    """data 옆 tiles/{z}/{x}/{y}.png — 바둑판 + 관로(빨강) · 사진 자리(빨강 동그라미)를 정확한 자리에 굽는다."""
+def make_tiles(out, zooms=range(15, 20), margin=400.0, marks=()):
+    """data 옆 tiles/{z}/{x}/{y}.png — 바둑판 + 관로(빨강) · 사진 자리(빨강 동그라미)를 정확한 자리에 굽는다.
+    marks = 땅에 칠한 네모 (실제 자리, --align)."""
     es = [s[0] for s in SHOTS]
     ns = [s[1] for s in SHOTS]
     lat0, lon0 = en2ll(min(es) - margin, min(ns) - margin)
@@ -188,11 +220,37 @@ def make_tiles(out, zooms=range(15, 20), margin=400.0):
                     px, py = merc_px(*en2ll(e, n), z)
                     px, py = px - tx * 256, py - ty * 256
                     dr.ellipse([px - 9, py - 9, px + 9, py + 9], outline=(255, 40, 40), width=2)
+                for me, mn, col in marks:
+                    a = merc_px(*en2ll(me - LM_HALF, mn + LM_HALF), z)
+                    b = merc_px(*en2ll(me + LM_HALF, mn - LM_HALF), z)
+                    box = [a[0] - tx * 256, a[1] - ty * 256, b[0] - tx * 256, b[1] - ty * 256]
+                    dr.rectangle(box, fill=col, outline=(12, 12, 16), width=max(1, int((b[0] - a[0]) / 16)))
+                    cxp, cyp = (box[0] + box[2]) / 2, (box[1] + box[3]) / 2
+                    rr = max(1.0, (b[0] - a[0]) * 0.07 / (2 * LM_HALF))
+                    dr.ellipse([cxp - rr, cyp - rr, cxp + rr, cyp + rr], fill=(12, 12, 16))
                 d = os.path.join(out, 'tiles', str(z), str(tx))
                 os.makedirs(d, exist_ok=True)
                 im.save(os.path.join(d, '%d.png' % ty))
                 count += 1
     return count
+
+
+def dem_dict(slope):
+    """빌더와 같은 RV_DEM 꼴: 타일 (ix,iy) = (tile+1)² Float32 LE, 행 = 남→북, 열 = 서→동, 한 줄 겹침, NaN = 없음."""
+    T, cell = DEM_TILE, DEM_CELL
+    tiles = {}
+    rr = np.arange(T + 1)
+    for iy in range(DEM_N):
+        for ix in range(DEM_N):
+            if (ix, iy) in DEM_SKIP:
+                continue
+            e = DEM_X0 + (ix * T + rr)[None, :] * cell + 0.0 * rr[:, None]
+            n = DEM_Y0 + (iy * T + rr)[:, None] * cell + 0.0 * rr[None, :]
+            z = ground_z(e, n, slope).astype('<f4')
+            if (ix, iy) == DEM_NAN[:2]:
+                z[DEM_NAN[2]:DEM_NAN[2] + 2, DEM_NAN[3]:DEM_NAN[3] + 2] = np.nan
+            tiles['%d_%d' % (ix, iy)] = base64.b64encode(z.tobytes()).decode('ascii')
+    return {'cell': cell, 'tile': T, 'x0': DEM_X0, 'y0': DEM_Y0, 'tiles': tiles, 'source': '시험 비탈 땅'}
 
 
 def main():
@@ -204,6 +262,7 @@ def main():
     ap.add_argument('--xyz', action='store_true', help='바탕 지도를 tiles/{z}/{x}/{y}.png (상대 경로) 로')
     ap.add_argument('--drop', nargs='*', default=[], help='사진 파일을 만들지 않을 사진 번호 (예: 0003)')
     ap.add_argument('--legacy-pipes', action='store_true', help='옛 pipes.js 형식 (dia · g · hasZ 없음) + project 에 depth 없음')
+    ap.add_argument('--align', action='store_true', help='점 찍어 맞추기 시험: 비탈 땅 + dem.js + 칠한 네모 + 영상 0001 을 ALIGN_ERR 만큼 틀리게')
     args = ap.parse_args()
     out = os.path.abspath(args.out)
     W = args.width
@@ -211,18 +270,20 @@ def main():
 
     for sub in ('viewer', 'data', os.path.join('data', 'pano'), os.path.join('data', 'thumb')):
         os.makedirs(os.path.join(out, sub), exist_ok=True)
-    for f in ('calib.js', 'pipes.js'):
+    for f in ('calib.js', 'pipes.js', 'dem.js', 'align_truth.js'):
         p = os.path.join(out, 'data', f)
         if os.path.exists(p):
             os.remove(p)  # 없을 때도 되는지 본다
 
+    slope = (SLOPE_E, SLOPE_N) if args.align else (0.0, 0.0)
     shots = []
     for k, (e, n, yaw, tm, vid) in enumerate(SHOTS, start=1):
         sid = '%04d' % k
-        cal = CALIB_ERR[vid] if args.calib else {}
-        R = rot(cal) if args.calib else None
-        cam = (e + cal.get('dx', 0.0), n + cal.get('dy', 0.0), GZ + HEIGHT + cal.get('dz', 0.0))  # 실제 자리
-        img = render_pano(cam, W, H, R)
+        cal = CALIB_ERR[vid] if args.calib else ALIGN_ERR.get(vid, {}) if args.align else {}
+        R = rot(cal) if cal else None
+        gz = ground_z(e, n, slope)  # 적힌 자리의 땅 표고
+        cam = (e + cal.get('dx', 0.0), n + cal.get('dy', 0.0), gz + HEIGHT + cal.get('dz', 0.0))  # 실제 자리
+        img = render_pano(cam, W, H, R, slope, LANDMARKS if args.align else ())
         uri = 'data:image/jpeg;base64,' + base64.b64encode(jpeg_bytes(img)).decode('ascii')
         pano_js = os.path.join(out, 'data', 'pano', sid + '.js')
         if sid in args.drop:
@@ -234,7 +295,7 @@ def main():
         lat, lon = en2ll(e, n)
         shot = {
             'id': sid, 'seq': k, 'video': vid, 'time': tm, 'lat': lat, 'lon': lon,
-            'e': e, 'n': n, 'z': GZ + HEIGHT, 'groundZ': GZ, 'agl': HEIGHT, 'relAlt': HEIGHT, 'yaw': yaw,
+            'e': e, 'n': n, 'z': gz + HEIGHT, 'groundZ': gz, 'agl': HEIGHT, 'relAlt': HEIGHT, 'yaw': yaw,
             'file': 'data/pano/%s.js' % sid, 'thumb': 'data/thumb/%s.jpg' % sid,
         }
         if vid == '0002':
@@ -246,10 +307,10 @@ def main():
 
     basemap = {'type': 'osm'}
     if args.xyz:
-        print('tiles', make_tiles(out))
+        print('tiles', make_tiles(out, range(15, 21), 60.0, LANDMARKS) if args.align else make_tiles(out))
         basemap = {'type': 'xyz', 'url': 'tiles/{z}/{x}/{y}.png', 'maxZoom': 19}
     project = {
-        'version': 1, 'title': '시험 자료' + (' (맞춤)' if args.calib else ''), 'crs': 'EPSG:5186',
+        'version': 1, 'title': '시험 자료' + (' (맞춤)' if args.calib else '') + (' (점 맞춤)' if args.align else ''), 'crs': 'EPSG:5186',
         'origin': ORIGIN, 'cover': COVER,
         **({} if args.legacy_pipes else {'depth': DEPTH}),
         'basemap': basemap,
@@ -270,7 +331,7 @@ def main():
                 })
                 continue
             ln = {'layer': layer, 'label': LABELS[layer], 'dia': round(hw * 2, 3),
-                  'pts': [[x, y, None] for x, y in verts], 'g': [GZ for _ in verts],
+                  'pts': [[x, y, None] for x, y in verts], 'g': [ground_z(x, y, slope) for x, y in verts],
                   'll': [en2ll(x, y) for x, y in verts]}
             if layer == 1:
                 ln['hasZ'] = True
@@ -279,9 +340,14 @@ def main():
         if not args.legacy_pipes:
             v = FAR_LINE['verts']
             pipes['lines'].append({'layer': FAR_LINE['layer'], 'label': FAR_LINE['label'], 'dia': FAR_LINE['dia'],
-                                   'pts': [[x, y, None] for x, y in v], 'g': [GZ for _ in v], 'll': [en2ll(x, y) for x, y in v]})
+                                   'pts': [[x, y, None] for x, y in v], 'g': [ground_z(x, y, slope) for x, y in v], 'll': [en2ll(x, y) for x, y in v]})
         write_js(os.path.join(out, 'data', 'pipes.js'),
                  'window.RV_PIPES = ' + json.dumps(pipes, ensure_ascii=False, indent=1) + ';\n')
+    if args.align:
+        write_js(os.path.join(out, 'data', 'dem.js'), 'window.RV_DEM = ' + json.dumps(dem_dict(slope), ensure_ascii=False) + ';\n')
+        truth = {'video': '0001', 'err': ALIGN_ERR['0001'], 'gz': GZ, 'slope': list(slope), 'lat0': LAT0, 'lon0': LON0,
+                 'landmarks': [[me, mn] for me, mn, _ in LANDMARKS]}
+        write_js(os.path.join(out, 'data', 'align_truth.js'), 'window.RV_ALIGN_TRUTH = ' + json.dumps(truth) + ';\n')
     if args.calib:
         write_js(os.path.join(out, 'data', 'calib.js'),
                  'window.RV_CALIB = ' + json.dumps({'videos': CALIB_ERR}, indent=1) + ';\n')

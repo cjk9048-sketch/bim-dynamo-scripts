@@ -8,7 +8,7 @@
   2) 깊이: WebGL 관(겹쳐 그림 숨김, 관로 켜고 / 끄고 차이)의 바깥 가장자리 · 가운데 ↔ 원통을 따로 투영한 윤곽선 · 중심선
   3) 고개 0° 화면에서 N / S 글자 무게중심 ↔ 계산 위치
   3b) 노면 최소 폭: 먼 관(관경 0.2 m, 120 m)은 화면에서 2 px 아래로 얇아지지 않는다
-  4) 이웃 사진 원판: 크기 · 자리 ↔ 계산 (반지름 0.45 m 땅 위 원), 마우스 올리면 청록 테두리
+  4) 이웃 사진 원판: 크기 · 자리 ↔ 계산 (평소 반지름 0.135 m · 마우스 올리면 0.45 m + 청록 테두리)
   5) 페이지 JS 오류 (잡히지 않은 오류 · console.error)
 --legacy: 옛 pipes.js (make_synth --legacy-pipes) — 관경 0.2 m 기본값 · 지표 = 사진 groundZ · 깊이 = project.cover
 """
@@ -420,13 +420,15 @@ def marker_case(ed, out_dir, shots_dir, cal):
     cal2 = cal.get(ms.SHOTS[1][4], {})
     ge, gn = ms.SHOTS[1][0] + cal2.get('dx', 0.0), ms.SHOTS[1][1] + cal2.get('dy', 0.0)
     th = np.linspace(0, 2 * math.pi, 361)
-    ring = proj(np.stack([ge + 0.45 * np.cos(th), gn + 0.45 * np.sin(th), np.full_like(th, ms.GZ)], axis=1))
+    R_PLAIN, R_HOVER = 0.135, 0.45          # app.js MARK_R · MARK_R × MARK_HOVER (JACK 1123: 평소 30 %)
+    ring = proj(np.stack([ge + R_PLAIN * np.cos(th), gn + R_PLAIN * np.sin(th), np.full_like(th, ms.GZ)], axis=1))
+    ring_h = proj(np.stack([ge + R_HOVER * np.cos(th), gn + R_HOVER * np.sin(th), np.full_like(th, ms.GZ)], axis=1))
     bx0, bx1, by0, by1 = ring[:, 0].min(), ring[:, 0].max(), ring[:, 1].min(), ring[:, 1].max()
     cx, cy = (bx0 + bx1) / 2, (by0 + by1) / 2
     win = view[int(by0) - 10:int(by1) + 11, int(bx0) - 10:int(bx1) + 11]
     lit = win.min(axis=2) > 140  # 밝은 몸통
     ys, xs = np.nonzero(lit)
-    if not loaded or xs.size < 20:
+    if not loaded or xs.size < 4:
         print('== marker  원판 못 찾음  실패')
         return False
     mx0, mx1 = xs.min() + int(bx0) - 10, xs.max() + 1 + int(bx0) - 10
@@ -446,15 +448,17 @@ def marker_case(ed, out_dir, shots_dir, cal):
     png2 = os.path.join(shots_dir, 'mk_hover.png')
     ed.screenshot(png2)
     b = np.asarray(Image.open(png2).convert('RGB')).astype(int)[y0:y1 + 1, x0:x1 + 1]
-    win2 = b[int(by0) - 14:int(by1) + 15, int(bx0) - 14:int(bx1) + 15]
+    hx0, hx1, hy0, hy1 = ring_h[:, 0].min(), ring_h[:, 0].max(), ring_h[:, 1].min(), ring_h[:, 1].max()
+    win2 = b[int(hy0) - 14:int(hy1) + 15, int(hx0) - 14:int(hx1) + 15]
     ys2, xs2 = np.nonzero(win2.min(axis=2) > 140)
     grow = (xs2.max() - xs2.min() + 1) / max(1, (mx1 - mx0)) if xs2.size else 0
+    want = (hx1 - hx0) / max(1e-6, (bx1 - bx0))           # 계산상 커지는 배수 (≈ 3.3)
     c_hover = cyan(win2)
-    ok = bool(point) and c_plain == 0 and c_hover >= 20 and 1.08 <= grow <= 1.35
+    ok = bool(point) and c_plain == 0 and c_hover >= 20 and 0.75 * want <= grow <= 1.25 * want
     ok_all &= ok
-    print('   마우스 올림: 손가락 모양 %s · 청록 테두리 픽셀 %d → %d · 폭 %.2f 배  %s'
-          % (point, c_plain, c_hover, grow, '통과' if ok else '실패'))
-    box = (int(x0 + bx0) - 30, int(y0 + by0) - 25, int(x0 + bx1) + 30, int(y0 + by1) + 25)
+    print('   마우스 올림: 손가락 모양 %s · 청록 테두리 픽셀 %d → %d · 폭 %.2f 배 (계산 %.2f 배)  %s'
+          % (point, c_plain, c_hover, grow, want, '통과' if ok else '실패'))
+    box = (int(x0 + hx0) - 30, int(y0 + hy0) - 25, int(x0 + hx1) + 30, int(y0 + hy1) + 25)
     crop_zoom(png, box, os.path.join(shots_dir, 'mk_plain_x4.png'))
     crop_zoom(png2, box, os.path.join(shots_dir, 'mk_hover_x4.png'))
     er = errors(ed)
