@@ -19,13 +19,16 @@ import uuid
 from pathlib import Path
 
 APP_NAME = '드론 로드뷰'
-APP_VERSION = '1.0.2'
+APP_VERSION = '1.0.3'
 FROZEN = getattr(sys, 'frozen', False)
 BASE = Path(sys._MEIPASS) if FROZEN else Path(__file__).resolve().parent.parent      # noqa: SLF001
 HOME_HTML = (BASE / 'roadview' / 'app_home' / 'index.html') if not FROZEN else (BASE / 'app_home' / 'index.html')
 CFG_DIR = Path(os.environ.get('APPDATA', str(Path.home()))) / 'DH.Roadview'
 PROJ_LIST = CFG_DIR / 'projects.json'
 NO_WINDOW = 0x08000000 if os.name == 'nt' else 0
+# 파일 창 종류 이름은 글자 · 숫자 · 빈칸만 (pywebview 검사 [\w ]+ — «·» 하나로 창이 안 열렸음 · 1123)
+FILTER_INPUTS = ('DJI 360 영상 사진 (*.osv;*.OSV;*.jpg;*.JPG)', '모든 파일 (*.*)')
+FILTER_PIPES = ('관로 SHP DXF (*.shp;*.SHP;*.dxf;*.DXF)', '모든 파일 (*.*)')
 
 
 def _cli(cmd, args):
@@ -209,9 +212,7 @@ class Api:
     # ------------------------------------------------------------ 새로 만들기
     def pick_inputs(self):
         import webview
-        r = self._window.create_file_dialog(webview.FileDialog.OPEN, allow_multiple=True,
-                                           file_types=('DJI 360 영상 · 사진 (*.osv;*.OSV;*.jpg;*.JPG)',
-                                                       '모든 파일 (*.*)'))
+        r = self._window.create_file_dialog(webview.FileDialog.OPEN, allow_multiple=True, file_types=FILTER_INPUTS)
         if not r:
             return None
         files = list(r)
@@ -260,8 +261,7 @@ class Api:
     # ------------------------------------------------------------ 프로젝트 안 (보기 화면에서 부름)
     def pick_pipes(self):
         import webview
-        r = self._window.create_file_dialog(webview.FileDialog.OPEN,
-                                           file_types=('관로 (*.shp;*.SHP;*.dxf;*.DXF)', '모든 파일 (*.*)'))
+        r = self._window.create_file_dialog(webview.FileDialog.OPEN, file_types=FILTER_PIPES)
         if not r:
             return None
         path = r[0] if isinstance(r, (list, tuple)) else r
@@ -323,6 +323,8 @@ def _selftest(api, w, out_path, project):
     """RV_SELFTEST=결과.json [RV_SELFTEST_PROJECT=폴더] — 화면을 찍지 않고 창 안 내용을 읽어 적는다."""
     res = {}
     try:
+        from webview.util import parse_file_type
+        res['filters_ok'] = all(parse_file_type(f) for f in FILTER_INPUTS + FILTER_PIPES)
         time.sleep(4)
         res['home_title'] = w.evaluate_js('document.title')
         res['home_has_api'] = w.evaluate_js('!!(window.pywebview && window.pywebview.api)')

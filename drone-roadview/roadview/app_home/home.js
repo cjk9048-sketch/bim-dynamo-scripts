@@ -5,13 +5,17 @@
   let api = null, files = [], job = null, timer = 0;
 
   function toast(t) { const e = $('toast'); e.textContent = t; e.classList.add('show'); clearTimeout(e._t); e._t = setTimeout(() => e.classList.remove('show'), 2600); }
+  // 파이썬 쪽에서 오류가 나면 조용히 멈추지 않고 알림으로 (1123: 파일 창이 «아무 반응 없음»이었음)
+  async function call(name, ...args) {
+    try { return await api[name](...args); } catch (e) { toast('오류 · ' + String((e && e.message) || e).slice(0, 120)); return null; }
+  }
   function ready(fn) {
     if (window.pywebview && window.pywebview.api) { fn(); return; }
     window.addEventListener('pywebviewready', fn, { once: true });
   }
 
   async function loadList() {
-    const L = await api.list_projects();
+    const L = (await call('list_projects')) || [];
     const box = $('list');
     box.textContent = '';
     $('empty').classList.toggle('hide', L.length > 0);
@@ -25,10 +29,10 @@
       d.addEventListener('click', async (e) => {
         if (e.target.classList.contains('rm')) return;
         if (!x.exists) { toast('폴더 없음'); return; }
-        const r = await api.open_project(x.path);
+        const r = await call('open_project', x.path);
         if (r && !r.ok) toast(r.msg);
       });
-      d.querySelector('.rm').addEventListener('click', async (e) => { e.stopPropagation(); await api.remove_project(x.path); loadList(); });
+      d.querySelector('.rm').addEventListener('click', async (e) => { e.stopPropagation(); await call('remove_project', x.path); loadList(); });
       box.appendChild(d);
     }
   }
@@ -39,7 +43,7 @@
 
   async function poll() {
     if (!job) return;
-    const j = await api.job(job);
+    const j = (await call('job', job)) || { state: 'fail', line: '작업 상태를 못 읽음' };
     $('bar').style.width = (j.pct || 0) + '%';
     $('status').textContent = j.line || '';
     const log = $('log');
@@ -50,7 +54,7 @@
     setBusy(false);
     if (j.state === 'done') {
       $('status').textContent = '끝 · 여는 중…';
-      const r = await api.open_project(j.out);
+      const r = await call('open_project', j.out);
       if (r && !r.ok) toast(r.msg);
     }
     job = null;
@@ -64,9 +68,9 @@
 
     $('bNew').addEventListener('click', () => $('newPane').classList.remove('hide'));
     $('bNewClose').addEventListener('click', () => { if (!job) $('newPane').classList.add('hide'); });
-    $('bOpen').addEventListener('click', async () => { const r = await api.pick_open(); if (r && !r.ok) toast(r.msg); });
+    $('bOpen').addEventListener('click', async () => { const r = await call('pick_open'); if (r && !r.ok) toast(r.msg); });
     $('bPick').addEventListener('click', async () => {
-      const r = await api.pick_inputs();
+      const r = await call('pick_inputs');
       if (!r) return;
       files = r.files;
       $('pickInfo').textContent = (r.osv ? '영상 ' + r.osv + '개' : '') + (r.osv && r.jpg ? ' · ' : '') + (r.jpg ? '사진 ' + r.jpg + '장' : '') + ' · ' + r.size_gb + ' GB · ' + r.dir;
@@ -74,14 +78,14 @@
       if (!$('title').value) $('title').value = r.dir.split(/[\\/]/).pop();
       $('status').textContent = '간격을 넣고 [만들기]';
     });
-    $('bOut').addEventListener('click', async () => { const d = await api.pick_folder(); if (d) $('out').value = d; });
+    $('bOut').addEventListener('click', async () => { const d = await call('pick_folder'); if (d) $('out').value = d; });
     $('bBuild').addEventListener('click', async () => {
       if (!files.length) { toast('영상을 고르세요'); return; }
-      const r = await api.start_build({ files, out: $('out').value, interval: Number($('gap').value), title: $('title').value,
+      const r = await call('start_build', { files, out: $('out').value, interval: Number($('gap').value), title: $('title').value,
         width: Number($('width').value), dem: $('dem').checked, sat: $('sat').checked });
-      if (!r.ok) { toast(r.msg); return; }
+      if (!r || !r.ok) { if (r) toast(r.msg); return; }
       job = r.job; setBusy(true); $('bar').style.width = '0%'; poll();
     });
-    $('bStop').addEventListener('click', async () => { if (job) await api.stop_job(job); });
+    $('bStop').addEventListener('click', async () => { if (job) await call('stop_job', job); });
   });
 })();
