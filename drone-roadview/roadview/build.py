@@ -35,7 +35,7 @@ VIEWER_DIR = os.path.join(os.path.dirname(HERE), 'viewer')
 # ffmpeg -ss 는 그 시각 «이후» 첫 장면을 준다. 기록 시각 그대로(또는 +0.001) 주면 다음 장면이 나온다
 # (1123 확인). 그래서 장면 간격의 1/4 앞을 준다.
 SEEK_FRACTION = 0.25
-PANO_VERSION = 3     # 360 사진 만드는 법이 바뀌면 올림 → 옛 사진 다시 만듦 (3: 성긴 격자 반 칸 치우침 고침)
+PANO_VERSION = 4     # 360 사진 만드는 법이 바뀌면 올림 → 옛 사진 다시 만듦 (3: 반 칸 치우침 · 4: 약한 선명화)
 TERRAIN_VERSION = 2  # 땅 높이 재는 법이 바뀌면 올림
 
 
@@ -55,6 +55,12 @@ def _low_priority():
             print('우선순위 낮추기 실패 (%d)' % ctypes.get_last_error())
     except Exception as ex:
         print('우선순위 낮추기 실패: %s' % ex)
+
+
+def Rz_heading(deg):
+    """사진 촬영점의 «자세» 자리 채우기 (재사용 표시 지문용)."""
+    c, s_ = math.cos(math.radians(deg)), math.sin(math.radians(deg))
+    return np.array([[c, -s_, 0.0], [s_, c, 0.0], [0.0, 0.0, 1.0]])
 
 
 def log(msg, fp=None):
@@ -184,11 +190,18 @@ def terrain_at(samples, s_query, window=75.0):
 def _pano_job(args):
     osv, ffmpeg, rig_dict, t, R, width, quality, pano_js, thumb_jpg, sid = args
     from PIL import Image
-    from .camera import Rig, stitch
-    rig = Rig(**rig_dict)
-    a, b = extract_pair(ffmpeg, osv, t)
-    pano = stitch(a, b, rig, np.array(R), W=width)
-    im = Image.fromarray(pano)
+    if isinstance(osv, dict):                 # 사진 모드 JPG (카메라가 이미 꿰맴)
+        from .photos import to_grid_north
+        im = Image.fromarray(to_grid_north(osv['path'], osv['heading'], osv['gamma'], width))
+    else:
+        from .camera import Rig, stitch
+        rig = Rig(**rig_dict)
+        a, b = extract_pair(ffmpeg, osv, t)
+        pano = stitch(a, b, rig, np.array(R), W=width)
+        im = Image.fromarray(pano)
+    # 약한 선명화 — 겹선형 다시 뽑기로 무뎌진 가장자리만 살린다 (JACK 1123 화질 · 비교 그림으로 확인)
+    from PIL import ImageFilter
+    im = im.filter(ImageFilter.UnsharpMask(radius=1.2, percent=60, threshold=2))
     buf = io.BytesIO()
     im.save(buf, 'JPEG', quality=quality, optimize=True)
     b64 = base64.b64encode(buf.getvalue()).decode('ascii')
@@ -215,8 +228,8 @@ def main(argv=None):
     ap.add_argument('--crs', default='EPSG:5186', help='도면 좌표계 (기본 EPSG:5186 중부원점)')
     ap.add_argument('--depth', '--cover', dest='depth', type=float, default=1.2, help='평균매설깊이 (땅 → 관 윗면, m)')
     ap.add_argument('--home-z', type=float, help='이륙점 땅 높이 (EL, m). 없으면 관로에서 추정')
-    ap.add_argument('--width', type=int, default=6144, help='360 사진 가로 화소 (기본 6144)')
-    ap.add_argument('--quality', type=int, default=85)
+    ap.add_argument('--width', type=int, default=8192, help='360 사진 가로 화소 (기본 8192 ≈ 원본 렌즈 세밀함)')
+    ap.add_argument('--quality', type=int, default=92)
     ap.add_argument('--vworld-key', help='VWorld 지도 키 (없으면 DH.Grading 키 — 내 키 → 설치 키)')
     ap.add_argument('--no-vworld', action='store_true', help='위성 지도 키를 넣지 않음 (OSM)')
     ap.add_argument('--ffmpeg', help='ffmpeg.exe 경로')
@@ -242,11 +255,13 @@ def main(argv=None):
         _low_priority()
 
     osvs = []
+    jpgs = []
     for p in a.inputs:
         if os.path.isdir(p):
             osvs += sorted(glob.glob(os.path.join(p, '*.OSV')) + glob.glob(os.path.join(p, '*.osv')))
+            jpgs += sorted(glob.glob(os.path.join(p, '*.JPG')) + glob.glob(os.path.join(p, '*.jpg')))
         elif os.path.isfile(p):
-            osvs.append(p)
+            (jpgs if p.lower().endswith(('.jpg', '.jpeg')) else osvs).append(p)
     seen = set()
     uniq = []
     for p in sorted(os.path.abspath(p) for p in osvs):
@@ -254,16 +269,18 @@ def main(argv=None):
         if k not in seen:
             seen.add(k)
             uniq.append(p)
-    osvs = uniq
-    if not osvs:
-        print('OSV 없음 → 영상 파일이나 폴더를 주세요')
+    osvs = [p for p in uniq if not p.lower().endswith(('.jpg', '.jpeg'))]
+    jpgs = sorted({os.path.normcase(os.path.abspath(p)): os.path.abspath(p) for p in jpgs}.values())
+    if not osvs and not jpgs:
+        print('OSV · 360 사진 없음 → 영상 파일이나 폴더를 주세요')
         return 2
 
     out = os.path.abspath(a.out)
     os.makedirs(os.path.join(out, 'data', 'pano'), exist_ok=True)
     os.makedirs(os.path.join(out, 'data', 'thumb'), exist_ok=True)
     fp = open(os.path.join(out, '만들기_기록.txt'), 'a', encoding='utf-8')
-    log('시작 · 영상 %d개 · 간격 %.1f m · 폭 %d' % (len(osvs), a.interval, a.width), fp)
+    log('시작 · 영상 %d개%s · 간격 %.1f m · 폭 %d' % (len(osvs), (' · JPG %d장' % len(jpgs)) if jpgs else '',
+                                                 a.interval, a.width), fp)
 
     ffmpeg = find_ffmpeg(a.ffmpeg)
     geo = Geo(a.crs)
@@ -351,6 +368,32 @@ def main(argv=None):
                                   lat=f.lat, lon=f.lon, E=float(en[i][0]), N=float(en[i][1]), rel=f.rel_alt,
                                   agl=round(agl, 2), T=T, yaw=round(f.raw_extra.get('a3', 0) / 10.0, 1), R=R_list[i]))
 
+        # 사진 모드 JPG — 촬영 시각 순 · 간격 거르기 (카메라가 이미 꿰맨 360 사진)
+        if jpgs:
+            from .photos import read_photo
+            ph = [r for r in (read_photo(p) for p in jpgs) if r]
+            ph.sort(key=lambda r: r['time'])
+            log('360 사진 %d장 중 위치 있는 등장방형 %d장' % (len(jpgs), len(ph)), fp)
+            if ph:
+                vid = 'P'
+                gam = geo.convergence(ph[0]['lat'], ph[0]['lon'])
+                last = None
+                kept = 0
+                for i, r in enumerate(ph):
+                    E, N = geo.ll_to_en(r['lat'], r['lon'])
+                    if last is not None and math.hypot(E - last[0], N - last[1]) < a.interval:
+                        continue
+                    last = (E, N)
+                    kept += 1
+                    shots.append(dict(video=vid, osv={'path': r['path'], 'heading': r['heading'], 'gamma': gam},
+                                      frame=i, time=round(r['time'] - ph[0]['time'], 3), seek=0.0,
+                                      lat=r['lat'], lon=r['lon'], E=E, N=N, rel=r['rel'], agl=round(max(r['rel'], 1.0), 2),
+                                      T=None, yaw=round(r['heading'], 1),
+                                      R=Rz_heading(r['heading'])))
+                videos.append({'id': vid, 'name': '360 사진 (%s)' % os.path.basename(os.path.dirname(ph[0]['path'])),
+                               'key': None, 'terrain': []})
+                log('  사진 촬영점 %d · 방향 출처 %s' % (kept, ph[0]['heading_src']), fp)
+
         # 땅 높이 기록 (이번에 안 돌린 영상 것도 남김)
         names_now = {v['name'] for v in videos}
         merged = [v for v in old_terrain if v.get('name') not in names_now] + videos
@@ -397,15 +440,23 @@ def main(argv=None):
             log('  촬영점 %d / %d 에 표고' % (n_ok, len(shots)), fp)
 
         # 높이 기준 (이륙점 땅 높이 Z_home) — 수치지도 표고가 없는 촬영점에만 쓰임
+        zhome_v = {}                 # 영상마다 이륙한 곳이 다르다 → 이륙점 높이도 영상마다 (1123)
         if dem is not None and any(sh.get('dem') is not None for sh in shots):
             vals = [sh['dem'] - (sh['T'] or 0.0) for sh in shots if sh.get('dem') is not None]
             zhome = float(np.median(vals))
-            log('이륙점 높이 = %.2f (수치지도에서 추정 · %s)' % (zhome, '표고 기준만' if a.terrain_mode == 'datum' else '지형 그대로'), fp)
+            for vid in {sh['video'] for sh in shots}:
+                vv = [sh['dem'] - (sh['T'] or 0.0) for sh in shots if sh['video'] == vid and sh.get('dem') is not None]
+                if vv:
+                    zhome_v[vid] = float(np.median(vv))
+            log('이륙점 높이 (수치지도에서 추정 · %s): %s' % (
+                '표고 기준만' if a.terrain_mode == 'datum' else '지형 그대로',
+                ' · '.join('%s %.1f' % (k, v) for k, v in sorted(zhome_v.items()))), fp)
             if a.terrain_mode == 'datum':
                 # 5 m 등고선 삼각망은 평평한 도로에도 가짜 경사(0.5 m 쯤)를 만든다 (1123 0014 실측) →
                 # 표고 기준(EL)만 수치지도로 맞추고 촬영점 사이 높낮이는 영상으로 잰 값을 쓴다
                 for sh in shots:
-                    sh['dem'] = None
+                    if sh.get('T') is not None:      # 영상으로 땅 위 높이를 잰 촬영점만 (사진은 수치지도 그대로)
+                        sh['dem'] = None
         elif a.home_z is not None:
             zhome = a.home_z
             log('이륙점 높이 = %.2f (지정)' % zhome, fp)
@@ -444,7 +495,8 @@ def main(argv=None):
             pano_js = os.path.join(out, 'data', 'pano', sid + '.js')
             thumb = os.path.join(out, 'data', 'thumb', sid + '.jpg')
             rhash = hashlib.md5(np.round(sh['R'], 6).tobytes()).hexdigest()[:12]
-            sig = [os.path.basename(sh['osv']), sh['frame'], a.width, a.quality, rig_sig, PANO_VERSION, rhash]
+            src = sh['osv']['path'] if isinstance(sh['osv'], dict) else sh['osv']
+            sig = [os.path.basename(src), sh['frame'], a.width, a.quality, rig_sig, PANO_VERSION, rhash]
             new_idx[sid] = sig
             if old_idx.get(sid) == sig and os.path.exists(pano_js) and os.path.exists(thumb):
                 continue
@@ -491,7 +543,7 @@ def main(argv=None):
             g = sh['dem']
             z = g + sh['agl']
         else:
-            z = zhome + sh['rel']
+            z = zhome_v.get(sh['video'], zhome) + sh['rel']
             g = z - sh['agl']
         proj_shots.append(dict(id=sh['id'], seq=k + 1, video=sh['video'], frame=sh['frame'], time=sh['time'],
                                lat=round(sh['lat'], 8), lon=round(sh['lon'], 8),
@@ -506,7 +558,7 @@ def main(argv=None):
     basemap = {'type': 'vworld', 'key': vkey} if vkey else {'type': 'osm'}
     log('바탕 지도: %s' % ('VWorld 위성 (%s)' % vsrc if vkey else 'OSM (VWorld 키 없음)'), fp)
     project = dict(version=1, title=a.title or os.path.basename(out), crs=a.crs, origin=dict(E=E0, N=N0),
-                   depth=a.depth, cover=a.depth, homeZ=zhome, interval=a.interval, basemap=basemap,
+                   depth=a.depth, cover=a.depth, homeZ=zhome, homeZByVideo=zhome_v, interval=a.interval, basemap=basemap,
                    terrain=(dem_note if dem is not None else '영상으로 잰 높이 (표고 아님)'),
                    videos=[{'id': v['id'], 'name': v['name']} for v in videos], shots=proj_shots)
     _write_atomic(os.path.join(out, 'data', 'project.js'),

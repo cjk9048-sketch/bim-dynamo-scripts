@@ -25,7 +25,7 @@ SUB = '#6b7685'
 ACCENT = '#1f6feb'
 
 CRS_LIST = ['EPSG:5186 중부원점', 'EPSG:5187 동부원점', 'EPSG:5185 서부원점', 'EPSG:5188 동해원점', 'EPSG:5179 UTM-K']
-WIDTHS = ['6144 (보통)', '4096 (가볍게)', '8192 (선명하게)']
+WIDTHS = ['8192 (선명하게)', '6144 (보통)', '4096 (가볍게)']
 
 
 def _python_exe():
@@ -93,7 +93,7 @@ class App:
         ttk.Label(r, text='드론 로드뷰 만들기', style='Head.TLabel').pack(anchor='w', padx=16, pady=(14, 8))
 
         # 1. 영상
-        c = self._card(r, '① 영상 (OSV)')
+        c = self._card(r, '① 영상 (OSV) · 360 사진 (JPG)')
         ttk.Button(c, text='영상 고르기', command=self.pick_osv).grid(row=1, column=0, sticky='w')
         self.osv_info = ttk.Label(c, text='고른 영상 없음', style='Sub.TLabel')
         self.osv_info.grid(row=1, column=1, columnspan=3, sticky='w', padx=10)
@@ -162,7 +162,9 @@ class App:
 
     # ------------------------------------------------------------ 고르기
     def pick_osv(self):
-        fs = filedialog.askopenfilenames(title='영상 (OSV) 고르기', filetypes=[('DJI 360 영상', '*.osv *.OSV')])
+        fs = filedialog.askopenfilenames(title='영상 (OSV) · 360 사진 (JPG) 고르기',
+                                         filetypes=[('DJI 360 영상 · 사진', '*.osv *.OSV *.jpg *.JPG'),
+                                                    ('DJI 360 영상', '*.osv *.OSV'), ('360 사진', '*.jpg *.JPG')])
         if not fs:
             return
         self.osvs = list(fs)
