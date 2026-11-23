@@ -19,7 +19,7 @@ import uuid
 from pathlib import Path
 
 APP_NAME = '드론 로드뷰'
-APP_VERSION = '1.0.1'
+APP_VERSION = '1.0.2'
 FROZEN = getattr(sys, 'frozen', False)
 BASE = Path(sys._MEIPASS) if FROZEN else Path(__file__).resolve().parent.parent      # noqa: SLF001
 HOME_HTML = (BASE / 'roadview' / 'app_home' / 'index.html') if not FROZEN else (BASE / 'app_home' / 'index.html')
