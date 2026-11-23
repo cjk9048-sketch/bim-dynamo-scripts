@@ -27,8 +27,23 @@ def _capcut_ffmpegs():
     return out
 
 
+def _bundled_ffmpegs():
+    """설치본에 같이 넣은 ffmpeg · 파이썬 꾸러미(imageio-ffmpeg) 안 ffmpeg."""
+    import sys
+    out = []
+    if getattr(sys, 'frozen', False):
+        here = os.path.dirname(sys.executable)
+        out += [os.path.join(here, 'ffmpeg', 'ffmpeg.exe'), os.path.join(here, '_internal', 'ffmpeg', 'ffmpeg.exe')]
+    try:
+        import imageio_ffmpeg
+        out.append(imageio_ffmpeg.get_ffmpeg_exe())
+    except Exception:
+        pass
+    return out
+
+
 def find_ffmpeg(explicit: str | None = None) -> str:
-    cands = [explicit or ''] + _CANDIDATES + _capcut_ffmpegs()
+    cands = [explicit or ''] + _bundled_ffmpegs() + _CANDIDATES + _capcut_ffmpegs()
     for c in cands:
         if not c or not os.path.isfile(c):
             continue

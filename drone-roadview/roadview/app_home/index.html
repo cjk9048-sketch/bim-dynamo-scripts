@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>드론 로드뷰</title>
+<link rel="stylesheet" href="home.css">
+</head>
+<body>
+<header>
+  <div class="brand"><span class="dot"></span>드론 로드뷰 <small id="ver"></small></div>
+  <div class="acts">
+    <button id="bNew" class="pri">새로 만들기</button>
+    <button id="bOpen">폴더 열기</button>
+  </div>
+</header>
+
+<main>
+  <section id="newPane" class="card hide">
+    <div class="head">새 로드뷰 <button class="x" id="bNewClose" title="닫기">×</button></div>
+    <div class="row">
+      <button id="bPick">영상 · 사진 고르기</button>
+      <span id="pickInfo" class="sub">OSV 영상 또는 360 사진(JPG)</span>
+    </div>
+    <div class="grid">
+      <label>간격 (m)</label><input id="gap" type="number" min="0.5" max="500" step="0.5" value="5">
+      <label>이름</label><input id="title" type="text" placeholder="예: 조치원 1120">
+      <label>결과 폴더</label><div class="pathrow"><input id="out" type="text"><button id="bOut">바꾸기</button></div>
+      <label>사진 크기</label>
+      <select id="width"><option value="8192">8192 · 선명하게</option><option value="6144">6144 · 보통</option><option value="4096">4096 · 가볍게</option></select>
+      <label></label>
+      <div class="checks">
+        <label><input id="dem" type="checkbox" checked> 수치지도 표고 (회사 DB)</label>
+        <label><input id="sat" type="checkbox" checked> 위성 지도</label>
+      </div>
+    </div>
+    <div class="row run">
+      <button id="bBuild" class="pri">만들기</button>
+      <button id="bStop" disabled>멈추기</button>
+      <div class="prog"><div id="bar"></div></div>
+    </div>
+    <div id="status" class="sub">영상을 고르세요</div>
+    <pre id="log" class="hide"></pre>
+  </section>
+
+  <section>
+    <div class="listhead">프로젝트</div>
+    <div id="list" class="list"></div>
+    <div id="empty" class="empty hide">아직 없음 · [새로 만들기]</div>
+  </section>
+</main>
+<div id="toast"></div>
+<script src="home.js"></script>
+</body>
+</html>
