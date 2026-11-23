@@ -231,9 +231,20 @@ internal sealed class SurveyFixWindow : Window
         DhBrand.Dress(this, "측량도 보정", fileName, body, ok, cancel);
         SizeChanged += (_, __) => FitBody(body);
         Loaded += (_, __) => { FitBody(body); _cv.FitAll(); };
-        _debounce.Tick += (_, __) => { _debounce.Stop(); Recalc(); };
-        Recalc();
+        _debounce.Tick += (_, __) => { _debounce.Stop(); RecalcCore(wait: false); };
+        RecalcCore(wait: false);
     }
+
+    protected override void OnClosed(EventArgs e)
+    {
+        _closed = true;
+        _debounce.Stop();
+        _cv.StopTimers();
+        base.OnClosed(e);
+    }
+
+    /// <summary>창 닫을 때 진단 한 줄(그림 · 찾기 · 범위 셈).</summary>
+    internal string PerfSummary => _cv.PerfSummary + (_calcN > 0 ? $" · 범위 셈 {_calcN}번(뒤에서) 최대 {_calcMax:0} ms" : "");
 
     void Finish(bool surveyOnly)
     {
@@ -289,11 +300,22 @@ internal sealed class SurveyFixWindow : Window
     }
 
     /// <summary>시험 · 그림용 — 범위를 바로 다시 셈.</summary>
-    internal void Recalc()
+    internal void Recalc() => RecalcCore(wait: true);
+
+    volatile bool _closed;
+    bool _flying;
+    int _calcGen, _calcN;
+    double _calcMax;
+
+    /// <summary>★[JACK 1123 «측량도 보정 창이 느리고 끊김»] 범위 · 엇갈림 셈은 자료가 크면 1초를 넘긴다(1123 실측 · 측량도 덤프 A 전부 씀 = 1.2~1.7초 · 그동안 창이 멈춤).
+    /// 고를 때(체크 · 그림 누름 · 창 열 때)는 뒤에서 세고 끝나면 이 셈을 다시 부른다 — 그사이 그림 · 목록은 그대로 움직이고 [선택 레이어 사용]은 셀 때까지 꺼져 있음.
+    /// 자료가 작으면(점 3천 개 미만) 전처럼 바로. 셈 결과는 고른 것 · 여유 · 틈 메움 열쇠로 기억(같은 열쇠는 다시 안 셈).
+    /// 뒤 셈은 한 번에 하나 — 도는 동안 또 고르면 끝난 뒤 마지막 고른 것으로 이어서 셈. 세는 동안 개수 글은 바로 · 경고 자리엔 «범위 세는 중…».</summary>
+    void RecalcCore(bool wait)
     {
         var use = Use();
         double m = ParseOr(_margin.Text, double.NaN), g = ParseOr(_gap.Text, double.NaN);
-        bool badNum = double.IsNaN(m) || double.IsNaN(g) || m < 0 || g < 0;
+        bool badNum = !double.IsFinite(m) || !double.IsFinite(g) || m < 0 || g < 0;
         int nc = use.Count(i => i.Kind == SurveyKind.Contour), nb = use.Count(i => i.Kind == SurveyKind.Break), ns = use.Count(i => i.Kind == SurveyKind.Spot);
         bool enough = !badNum && use.Count > 0 && !(nc + nb == 0 && ns < 3);
         // 자리부터(상자만 — 즉시) · 안 겹치면 범위를 세지 않는다
@@ -303,32 +325,51 @@ internal sealed class SurveyFixWindow : Window
             var sb = SurveyFix.BoxOf(use, Math.Max(0.01, m));
             place = SurveyMerge.Classify(sb.X0, sb.Y0, sb.X1, sb.Y1, _base.X0, _base.Y0, _base.X1, _base.Y1);
         }
+        bool now = wait || use.Sum(i => (long)i.Pts.Count) < 3000;
         NetTopologySuite.Geometries.Geometry? region = null;
+        string? needRegion = null;
         if (enough && place.Kind == SurveyMerge.Placement.Overlap)
         {
             var hc = new HashCode();
             foreach (var i in use) hc.Add(i.Id);
             string key = $"{use.Count}|{hc.ToHashCode()}|{m}|{g}";
             if (key == _regionKey) region = _regionCache;
-            else
+            else if (now)
             {
                 try { region = SurveyGeo.RegionOf(use, m, g); } catch { region = null; }
-                _regionKey = key; _regionCache = region;
+                _regionKey = key; _regionCache = region; _calcGen++;
             }
+            else needRegion = key;
         }
-        _cv.Region = region;
-        _cv.InvalidateVisual();
-        _info.Text = use.Count == 0 ? "" : $"등고선 {nc} · 3D 선 {nb} · 표고점 {ns}" + (region != null ? $" · 범위 {region.Area:N0} ㎡" : "");
         // 쓸 선끼리 높이가 다르게 엇갈린 곳(지표면이 한쪽을 버림) — 그림 주황 점
         var lines = use.Where(i => i.Kind != SurveyKind.Spot).ToList();
         var ch = new HashCode();
         foreach (var i in lines) ch.Add(i.Id);
         string ck = $"{lines.Count}|{ch.ToHashCode()}";
+        string? needCross = null;
         if (ck != _crossKey)
         {
-            try { _crossCache = SurveyMerge.Crossings(lines.Select(i => (i.Layer, (IReadOnlyList<Point3>)i.Pts, i.Closed)).ToList()); } catch { _crossCache = null; }
-            _crossKey = ck;
+            if (now)
+            {
+                try { _crossCache = SurveyMerge.Crossings(lines.Select(i => (i.Layer, (IReadOnlyList<Point3>)i.Pts, i.Closed)).ToList()); } catch { _crossCache = null; }
+                _crossKey = ck; _calcGen++;
+            }
+            else needCross = ck;
         }
+        if (needRegion != null || needCross != null)
+        {
+            _info.Text = $"등고선 {nc} · 3D 선 {nb} · 표고점 {ns}";
+            if (needRegion != null) { _cv.Region = null; _cv.InvalidateVisual(); }
+            if (needCross != null) { _cv.Cross = null; _cross.Visibility = Visibility.Collapsed; _cv.InvalidateVisual(); }
+            _onlyBtn.Visibility = Visibility.Collapsed;
+            _warn.Text = "범위 세는 중…";
+            _warn.Visibility = Visibility.Visible;
+            StartCalc(use, lines, m, g, needRegion, needCross);
+            return;
+        }
+        _cv.Region = region;
+        _cv.InvalidateVisual();
+        _info.Text = use.Count == 0 ? "" : $"등고선 {nc} · 3D 선 {nb} · 표고점 {ns}" + (region != null ? $" · 범위 {region.Area:N0} ㎡" : "");
         _cv.Cross = _crossCache;
         string cross = _crossCache is { ZDiff: > 0 } cr
             ? $"엇갈린 선 {cr.ZDiff}곳 — " + string.Join(" · ", cr.Pairs.Take(3).Select(p => p.A == p.B ? $"{p.A} {p.N}" : $"{p.A}×{p.B} {p.N}"))
@@ -351,6 +392,44 @@ internal sealed class SurveyFixWindow : Window
         _warn.Text = warn;
         _warn.Visibility = warn.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
         _ok.IsEnabled = warn.Length == 0;
+    }
+
+    /// <summary>범위 · 엇갈림을 뒤에서 셈(한 번에 하나) → 창 스레드에서 기억에 넣고(그사이 더 새 셈이 기억을 바꾸지 않았을 때만) <see cref="RecalcCore"/>를 다시 부름 —
+    /// 도는 동안 또 골랐으면 그 다시 부름이 마지막 고른 것을 이어서 셈.</summary>
+    void StartCalc(List<SurveyItem> use, List<SurveyItem> lines, double m, double g, string? regionKey, string? crossKey)
+    {
+        _ok.IsEnabled = false;
+        _onlyBtn.IsEnabled = false;
+        if (_flying) return;   // 끝나면 다시 부름
+        int gen = ++_calcGen;
+        _flying = true;
+        var crossIn = crossKey != null ? lines.Select(i => (i.Layer, (IReadOnlyList<Point3>)i.Pts, i.Closed)).ToList() : null;
+        System.Threading.Tasks.Task.Run(() =>
+        {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            NetTopologySuite.Geometries.Geometry? r = null;
+            SurveyMerge.CrossReport? c = null;
+            if (regionKey != null) try { r = SurveyGeo.RegionOf(use, m, g); } catch { r = null; }
+            if (crossIn != null && !_closed) try { c = SurveyMerge.Crossings(crossIn); } catch { c = null; }
+            double ms = sw.Elapsed.TotalMilliseconds;
+            if (_closed) return;
+            try
+            {
+                Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    _flying = false;
+                    if (_closed) return;
+                    _calcN++; _calcMax = Math.Max(_calcMax, ms);
+                    if (gen == _calcGen)
+                    {
+                        if (regionKey != null) { _regionKey = regionKey; _regionCache = r; }
+                        if (crossKey != null) { _crossKey = crossKey; _crossCache = c; }
+                    }
+                    RecalcCore(wait: false);
+                }));
+            }
+            catch { }
+        });
     }
 
     static double ParseOr(string s, double d) => double.TryParse((s ?? "").Trim(), NumberStyles.Float, IC, out double v) ? v : d;
@@ -419,7 +498,17 @@ internal sealed class SurveyFixWindow : Window
     }
 }
 
-/// <summary>측량도 그림 — CAD 모형 공간처럼 검은 바탕 · 도면 색 · OnRender 한 번에 그림 · 확대 · 이동 · 레이어 고르기.</summary>
+/// <summary>측량도 그림 — CAD 모형 공간처럼 검은 바탕 · 도면 색 · 확대 · 이동 · 레이어 고르기.
+/// <para>★[JACK 1123 «측량도 보정 창이 너무 느리고 끊김»] 1123 실측(측량도 덤프 A — 객체 11,548 · 블록 모양 40만 점): 화면에 띄우면 한 장에 1초 가까이 —
+/// 장마다 모든 도형을 새로 만들고(UI 스레드) WPF 그리기 스레드가 블록 모양 · 원지반 선 · 점 수천 개를 다시 그림. 그래서 —</para>
+/// <list type="bullet">
+/// <item>도형은 세계 좌표(원점 = 자료 가운데 — 큰 TM 좌표의 float 떨림 없게)로 한 번 만들어 얼림 · 펜 굵기 · 점 크기는 화면 px ÷ 축척(화면에서 전과 같은 굵기).</item>
+/// <item>원지반 · 블록 모양 · 객체 · 마우스 아래 레이어 · 엇갈림을 다섯 묶음으로 나눠 GPU 그림 캐시에 담음 — 이동은 캐시를 옮기기만,
+/// 레이어 쓰기 · 마우스 아래가 바뀌면 그 묶음만 다시 그림. 휠을 잇달아 굴리는 동안은 캐시를 늘이고 줄여 보이고 멈추면 다시 그림.</item>
+/// <item>원지반 선 · 블록 모양은 칸으로 나눠 화면 둘레만 · 축척 단계마다 화면 0.2 px 안으로 줄인 도형(화면에서 점만 한 블록 모양은 짧은 한 토막).
+/// 객체는 전처럼 하나씩 · 같은 차례(안 씀 → 씀 → 마우스 아래 · 겹친 흐린 선 · 후광 모양 그대로).</item>
+/// <item>마우스 아래 찾기는 세계 좌표 격자 색인으로 커서 둘레 칸의 객체만 본다(결과는 전부 훑기와 같음).</item>
+/// </list></summary>
 internal sealed class SurveyCanvas : FrameworkElement
 {
     static Brush Fz(byte r, byte g, byte b, byte a = 255) { var x = new SolidColorBrush(Color.FromArgb(a, r, g, b)); x.Freeze(); return x; }
@@ -427,10 +516,10 @@ internal sealed class SurveyCanvas : FrameworkElement
     internal static readonly Brush Bg = Fz(0x21, 0x28, 0x30);
     internal static readonly Brush BaseB = Fz(0x4A, 0x55, 0x60), CrossB = Fz(0xFF, 0x9F, 0x1A), CrossDark = Fz(0xC0, 0x6A, 0x00),
                                    RegionB = Fz(0x2F, 0xB8, 0xC0, 0x22), RegionLineB = Fz(0x3F, 0xD0, 0xD8), TagBg = Fz(0x10, 0x14, 0x18, 0xE0), TagInk = Fz(0xE8, 0xEC, 0xEE);
-    static readonly Pen BaseP = Frz(new Pen(BaseB, 0.8)), RegP = Frz(new Pen(RegionLineB, 1.3) { DashStyle = new DashStyle(new double[] { 6, 4 }, 0) }),
-                        ExtP = Frz(new Pen(Fz(0x60, 0x6C, 0x78), 1) { DashStyle = new DashStyle(new double[] { 2, 3 }, 0) }),
-                        CrossP = Frz(new Pen(CrossB, 1.8)), TagP = Frz(new Pen(Fz(0x60, 0x6C, 0x78), 1));
-    static Pen Frz(Pen p) { p.Freeze(); return p; }
+    static readonly Brush ExtB = Fz(0x60, 0x6C, 0x78);
+    static readonly DashStyle RegDash = Frz(new DashStyle(new double[] { 6, 4 }, 0)), ExtDash = Frz(new DashStyle(new double[] { 2, 3 }, 0));
+    static readonly Pen TagP = Frz(new Pen(ExtB, 1)), ExtP = Frz(new Pen(ExtB, 1) { DashStyle = ExtDash });
+    static T Frz<T>(T p) where T : Freezable { p.Freeze(); return p; }
 
     internal static bool IsBlock(SurveyItem i) => i.Kind == SurveyKind.Spot && i.Src.StartsWith("블록", StringComparison.Ordinal);
 
@@ -456,28 +545,17 @@ internal sealed class SurveyCanvas : FrameworkElement
     internal string? Hover;
     internal event Action<string?>? LayerPicked;
 
-    readonly Dictionary<(Brush, int), Pen> _pens = new();
     readonly Dictionary<(Brush, byte), Brush> _fades = new();
     readonly Dictionary<int, Brush> _itemBrush = new();
     Brush ItemBrush(SurveyItem i)
     {
         if (i.Argb == 0) return ColorOf(i.Layer);
-        if (!_itemBrush.TryGetValue(i.Argb, out var b)) _itemBrush[i.Argb] = b = Visible(i.Argb);
-        return b;
+        return ArgbBrush(i.Argb);
     }
-    Pen PenOf(Brush b, int mode)
+    Brush ArgbBrush(int argb)
     {
-        if (_pens.TryGetValue((b, mode), out var p)) return p;
-        p = mode switch
-        {
-            0 => new Pen(b, 1.1),                    // 쓰는 레이어
-            1 => new Pen(Fade(b, 55), 0.8),          // 안 쓰는 레이어
-            2 => new Pen(Fade(b, 90), 7),            // 강조 후광
-            _ => new Pen(b, 2.2),                    // 강조 본선
-        };
-        p.LineJoin = PenLineJoin.Round; p.StartLineCap = p.EndLineCap = PenLineCap.Round;
-        p.Freeze();
-        return _pens[(b, mode)] = p;
+        if (!_itemBrush.TryGetValue(argb, out var b)) _itemBrush[argb] = b = Visible(argb);
+        return b;
     }
     Brush Fade(Brush b, byte a)
     {
@@ -486,6 +564,32 @@ internal sealed class SurveyCanvas : FrameworkElement
         var n = new SolidColorBrush(Color.FromArgb(a, c.R, c.G, c.B)); n.Freeze();
         return _fades[(b, a)] = n;
     }
+    /// <summary>펜(화면 px 굵기) — 0 쓰는 레이어 · 1 안 쓰는 레이어(흐리게) · 2 강조 후광 · 3 강조 본선.</summary>
+    static double PenPx(int mode) => mode switch { 0 => 1.1, 1 => 0.8, 2 => 7, _ => 2.2 };
+    Brush PenBrush(Brush b, int mode) => mode switch { 1 => Fade(b, 55), 2 => Fade(b, 90), _ => b };
+    // 세계 좌표 펜 — 판의 변환이 축척을 곱하므로 굵기 ÷ 축척(화면에서 늘 같은 px). 축척이 바뀌면 새로.
+    readonly Dictionary<(Brush, int), Pen> _wpens = new();
+    double _wpenS = double.NaN;
+    Pen? _wBaseP, _wRegP, _wCrossP;
+    void ScaleCheck()
+    {
+        if (_wpenS == _s) return;
+        _wpens.Clear(); _wBaseP = _wRegP = _wCrossP = null; _wpenS = _s;
+    }
+    /// <summary>선 · 블록 모양 · 블록 네모 펜(모서리 · 끝 둥글게).</summary>
+    Pen WPenOf(Brush b, int mode)
+    {
+        ScaleCheck();
+        if (_wpens.TryGetValue((b, mode), out var p)) return p;
+        p = new Pen(PenBrush(b, mode), PenPx(mode) / _s);
+        p.LineJoin = PenLineJoin.Round; p.StartLineCap = p.EndLineCap = PenLineCap.Round;
+        p.Freeze();
+        return _wpens[(b, mode)] = p;
+    }
+    // 원지반 선 · 범위 테두리 · 엇갈림 원 — 전과 같은 펜(모서리 · 끝 기본값)
+    Pen WBaseP { get { ScaleCheck(); return _wBaseP ??= Frz(new Pen(BaseB, 0.8 / _s)); } }
+    Pen WRegP { get { ScaleCheck(); return _wRegP ??= Frz(new Pen(RegionLineB, 1.3 / _s) { DashStyle = RegDash }); } }
+    Pen WCrossP { get { ScaleCheck(); return _wCrossP ??= Frz(new Pen(CrossB, 1.8 / _s)); } }
 
     double _s = 1, _ox, _oy;
     Point? _panFrom, _down;
@@ -503,6 +607,16 @@ internal sealed class SurveyCanvas : FrameworkElement
     internal SurveyCanvas(List<SurveyItem> items)
     {
         _items = items;
+        _vc = new VisualCollection(this) { _slotB, _slotD, _slotW, _slotH, _slotC, _overV };
+        foreach (var (slot, inner) in new[] { (_slotB, _baseC), (_slotD, _decorC), (_slotW, _worldC), (_slotH, _hovC), (_slotC, _crossC) })
+        {
+            slot.Children.Add(inner);
+            slot.Transform = _viewT;
+            slot.CacheMode = new BitmapCache { RenderAtScale = 1, SnapsToDevicePixels = true, EnableClearType = false };
+            inner.Transform = _wt;
+        }
+        _baseC.Transform = _bt;
+        _hovC.Children.Add(_hovV);
         Focusable = true;
         ClipToBounds = true;
         MinHeight = 240;
@@ -530,109 +644,547 @@ internal sealed class SurveyCanvas : FrameworkElement
     Point S(double x, double y) => new((x - _ox) * _s, (_oy - y) * _s);
     (double X, double Y) W(Point p) => (p.X / _s + _ox, _oy - p.Y / _s);
 
+    // ── 판(자식 그림) ──────────────────────────────────────────────────────────
+    /// <summary>마우스 판정에서 빠지는 판(긴 선 묶음의 펜 테두리 판정은 비쌈 — 고르기는 <see cref="Nearest"/>가 함).</summary>
+    sealed class Sheet : DrawingVisual
+    {
+        protected override HitTestResult? HitTestCore(PointHitTestParameters p) => null;
+        protected override GeometryHitTestResult? HitTestCore(GeometryHitTestParameters p) => null;
+    }
+
+    /// <summary>선 묶음 — 칸으로 나눠 화면 둘레 칸만 그림. 축척 단계(2배)마다 화면 0.2 px 안으로 줄인 도형을 처음 쓸 때 한 번 만들어 얼려 둔다
+    /// (화면 0.5 px보다 작은 모양 = 둥근 끝 펜에선 점과 같아 짧은 한 토막 · 같은 0.25 px 칸에 겹친 그런 점은 하나). 좌표 = 원점 기준(float 떨림 없게).</summary>
+    sealed class Paths
+    {
+        readonly double _ox, _oy;
+        readonly List<Point[]> _pts = new();
+        readonly List<bool> _closed = new();
+        readonly List<Rect> _box = new();
+        List<int>[] _tiles = Array.Empty<List<int>>();
+        Rect[] _tileBox = Array.Empty<Rect>();
+        readonly Dictionary<(int, int), StreamGeometry> _geo = new();
+        long _n;
+        internal Paths(double ox, double oy) { _ox = ox; _oy = oy; }
+        internal void Add(IReadOnlyList<Point3> pts, bool closed)
+        {
+            if (pts.Count < 2) return;   // 선 아닌 한 점(전에도 안 그림)
+            var p = new Point[pts.Count];
+            for (int k = 0; k < p.Length; k++) p[k] = new Point(pts[k].X - _ox, pts[k].Y - _oy);
+            AddCore(p, closed);
+        }
+        internal void Add(IReadOnlyList<(double X, double Y)> pts, bool closed)
+        {
+            if (pts.Count < 2) return;
+            var p = new Point[pts.Count];
+            for (int k = 0; k < p.Length; k++) p[k] = new Point(pts[k].X - _ox, pts[k].Y - _oy);
+            AddCore(p, closed);
+        }
+        void AddCore(Point[] p, bool closed)
+        {
+            double x0 = p[0].X, y0 = p[0].Y, x1 = x0, y1 = y0;
+            foreach (var q in p) { x0 = Math.Min(x0, q.X); y0 = Math.Min(y0, q.Y); x1 = Math.Max(x1, q.X); y1 = Math.Max(y1, q.Y); }
+            _pts.Add(p); _closed.Add(closed); _box.Add(new Rect(x0, y0, x1 - x0, y1 - y0)); _n += p.Length;
+        }
+        internal bool Any => _pts.Count > 0;
+        internal void Seal()
+        {
+            int m = _pts.Count;
+            if (m == 0) return;
+            double cx0 = double.MaxValue, cy0 = double.MaxValue, cx1 = double.MinValue, cy1 = double.MinValue;
+            foreach (var b in _box) { double cx = b.X + b.Width / 2, cy = b.Y + b.Height / 2; cx0 = Math.Min(cx0, cx); cy0 = Math.Min(cy0, cy); cx1 = Math.Max(cx1, cx); cy1 = Math.Max(cy1, cy); }
+            int n = (int)Math.Clamp(Math.Ceiling(Math.Sqrt(_n / 4000.0)), 1, 16);   // 칸 하나에 점 4천 개쯤
+            double tw = Math.Max((cx1 - cx0) / n, 1e-6), th = Math.Max((cy1 - cy0) / n, 1e-6);
+            _tiles = new List<int>[n * n]; _tileBox = new Rect[n * n];
+            for (int t = 0; t < _tiles.Length; t++) { _tiles[t] = new List<int>(); _tileBox[t] = Rect.Empty; }
+            for (int f = 0; f < m; f++)
+            {
+                var b = _box[f];
+                int ix = Math.Clamp((int)((b.X + b.Width / 2 - cx0) / tw), 0, n - 1), iy = Math.Clamp((int)((b.Y + b.Height / 2 - cy0) / th), 0, n - 1);
+                int t = iy * n + ix;
+                _tiles[t].Add(f); _tileBox[t].Union(b);
+            }
+        }
+        /// <summary>축척 단계 ±1 도형만 남김(오래 확대 · 축소해도 안 쌓이게).</summary>
+        internal void Keep(int level)
+        {
+            foreach (var k in _geo.Keys.Where(k => Math.Abs(k.Item2 - level) > 1).ToList()) _geo.Remove(k);
+        }
+        /// <summary>보이는 칸만(view = 세계 좌표).</summary>
+        internal void Draw(DrawingContext dc, Pen pen, Rect view, int level)
+        {
+            var v = new Rect(view.X - _ox, view.Y - _oy, view.Width, view.Height);
+            for (int t = 0; t < _tiles.Length; t++)
+            {
+                if (_tiles[t].Count == 0 || !_tileBox[t].IntersectsWith(v)) continue;
+                dc.DrawGeometry(null, pen, Geo(t, level));
+            }
+        }
+        StreamGeometry Geo(int t, int level)
+        {
+            if (_geo.TryGetValue((t, level), out var g)) return g;
+            double sMax = Math.Pow(2, level + 1);   // 이 단계에서 가장 크게 본 축척 — 그때도 0.2 px 안
+            double tol = 0.2 / sMax, speck = 0.5 / sMax, cell = 0.25 / sMax;
+            var seen = new HashSet<(long, long)>();
+            g = new StreamGeometry();
+            using (var c = g.Open())
+                foreach (int f in _tiles[t])
+                {
+                    var p = _pts[f]; var b = _box[f];
+                    if (Math.Max(b.Width, b.Height) < speck)
+                    {
+                        if (!seen.Add(((long)Math.Floor((b.X + b.Width / 2) / cell), (long)Math.Floor((b.Y + b.Height / 2) / cell)))) continue;
+                        int far = 1; double fd = -1;
+                        for (int k = 1; k < p.Length; k++) { double d = (p[k] - p[0]).LengthSquared; if (d > fd) { fd = d; far = k; } }
+                        c.BeginFigure(p[0], false, false);
+                        c.LineTo(p[far], true, false);
+                        continue;
+                    }
+                    var keep = Simplify(p, tol);
+                    c.BeginFigure(p[0], false, _closed[f]);
+                    for (int k = 1; k < p.Length; k++) if (keep[k]) c.LineTo(p[k], true, false);
+                }
+            g.Freeze();
+            return _geo[(t, level)] = g;
+        }
+        /// <summary>더글러스-포이커 — 남길 꼭짓점(처음 · 끝은 늘).</summary>
+        internal static bool[] Simplify(Point[] p, double tol)
+        {
+            int n = p.Length;
+            var keep = new bool[n];
+            keep[0] = keep[n - 1] = true;
+            if (n <= 2) return keep;
+            double t2 = tol * tol;
+            var st = new Stack<(int, int)>();
+            st.Push((0, n - 1));
+            while (st.Count > 0)
+            {
+                var (a, z) = st.Pop();
+                if (z - a < 2) continue;
+                var pa = p[a]; var ab = p[z] - pa; double L = ab.LengthSquared;
+                int m = -1; double md = t2;
+                for (int k = a + 1; k < z; k++)
+                {
+                    var ap = p[k] - pa;
+                    double d;
+                    if (L < 1e-24) d = ap.LengthSquared;
+                    else { double u = Math.Clamp((ap * ab) / L, 0, 1); d = (ap - ab * u).LengthSquared; }
+                    if (d > md) { md = d; m = k; }
+                }
+                if (m < 0) continue;
+                keep[m] = true;
+                st.Push((a, m)); st.Push((m, z));
+            }
+            return keep;
+        }
+    }
+
+    /// <summary>객체 하나(그림용) — 좌표 = 원점 기준. 선은 축척 단계마다 화면 0.2 px 안으로 줄인 도형(마지막 단계 하나만 기억).
+    /// 객체마다 따로 그린다(전과 같음 — 겹친 흐린 선 · 후광이 겹칠수록 진해지는 모양 그대로).</summary>
+    sealed class Shape
+    {
+        public int Unit;
+        public Brush Col = Brushes.White;
+        /// <summary>0 선 · 1 둥근 점 · 2 블록(속 빈 네모).</summary>
+        public byte Kind;
+        public Point[] P = Array.Empty<Point>();
+        public bool Closed;
+        public Rect Box;
+        public StreamGeometry? G;
+        public int GLevel = int.MinValue;
+    }
+
+    /// <summary>블록 모양 레이어 하나 — 판은 축척 · 보이는 범위 · 쓰기 상태가 바뀔 때만 다시 그림.</summary>
+    sealed class Unit
+    {
+        public string Layer = "";
+        public readonly List<(Brush Col, Paths P)> Lines = new();
+        public readonly Sheet V = new();
+        public int DoneEpoch = -1, DoneState = -1;
+    }
+    /// <summary>자식(아래부터) = 원지반 · 블록 모양 · 객체(범위 포함) · 마우스 아래 레이어 · 엇갈림 · 맨 위 글(화면 좌표).
+    /// <para>앞 다섯 묶음은 GPU 그림 캐시(BitmapCache) — 이동은 캐시를 옮기기만(<see cref="_viewT"/>) · 묶음 안 판이 바뀔 때만 그 캐시를 다시 그림.
+    /// 캐시 넓이 = 화면 + 둘레 여백 · 여백을 넘게 밀거나 축척이 바뀌면 다시 맞춤(<see cref="Rebase"/>).
+    /// 변환은 판이 아니라 묶음에 — WPF가 판 테두리를 다시 재지 않게.</para>
+    /// <para>마우스 아래 레이어는 맨 위 묶음에 강조 모양으로 한 번 더 그린다(아래 제 모양은 굵은 강조 선 · 큰 점에 덮임) — 마우스를 옮길 때 다른 캐시는 그대로.</para></summary>
+    readonly VisualCollection _vc;
+    readonly ContainerVisual _slotB = new(), _slotD = new(), _slotW = new(), _slotH = new(), _slotC = new();
+    readonly ContainerVisual _baseC = new(), _decorC = new(), _worldC = new(), _hovC = new(), _crossC = new();
+    /// <summary>맞춘 화면 → 지금 화면(이동 = 옮김 · 휠을 잇달아 굴리는 동안 = 캐시 그대로 늘이고 줄임 → 멈추면 다시 맞춤).</summary>
+    readonly MatrixTransform _viewT = new();
+    bool _preview;
+    long _lastWheel;
+    DispatcherTimer? _refine;
+    readonly Sheet _hovV = new();
+    string? _hovDone; int _hovEpoch = -1;
+    /// <summary>마지막으로 맞춘 화면(축척 · 원점 · 크기) · 캐시 둘레 여백(px).</summary>
+    double _rbS = double.NaN, _rbOx, _rbOy, _rbW, _rbH, _rbM;
+    protected override int VisualChildrenCount => _vc.Count;
+    protected override Visual GetVisualChild(int index) => _vc[index];
+
+    List<Shape>? _shapes;        // 객체(선 · 점 · 블록) — 객체 차례 그대로
+    readonly List<(string Layer, bool ItemOn, bool HasBlock)> _iu = new();   // 객체 묶음 = 레이어 × 객체 켬
+    int[] _wSt = Array.Empty<int>();
+    int _wEpoch = -1;
+    readonly Sheet _pass0V = new(), _pass1V = new();
+    List<Unit>? _decorUnits;     // 블록 모양 — 레이어
+    IReadOnlyList<SurveyDecor>? _decorFor;
+    readonly Sheet _baseV = new(), _regV = new(), _crossV = new(), _overV = new();
+    SurveyBase? _baseFor; Paths? _basePaths; int _baseEpoch = -1;
+    NetTopologySuite.Geometries.Geometry? _regFor; StreamGeometry? _regGeo; int _regEpoch = -1;
+    SurveyMerge.CrossReport? _crossFor; int _crossEpoch = -1;
+    /// <summary>측량 자료(객체 · 블록 모양 · 범위 · 엇갈림) 도형의 원점 · 원지반 도형의 원점.</summary>
+    double _gx, _gy, _bx, _by;
+    bool _originSet;
+    readonly MatrixTransform _wt = new(), _bt = new();
+    /// <summary>판을 그려 둔 범위(세계) · 축척 — 화면이 그 범위를 벗어나거나 축척이 바뀌면 판을 다시 그림(<see cref="_epoch"/>).</summary>
+    Rect _recView = Rect.Empty;
+    double _recS = double.NaN;
+    int _epoch, _level;
+
+    void SetOrigin()
+    {
+        if (_originSet) return;
+        double x0 = double.MaxValue, y0 = double.MaxValue, x1 = double.MinValue, y1 = double.MinValue;
+        foreach (var i in _items) foreach (var p in i.Pts) { x0 = Math.Min(x0, p.X); y0 = Math.Min(y0, p.Y); x1 = Math.Max(x1, p.X); y1 = Math.Max(y1, p.Y); }
+        if (x1 < x0 && Decor != null) foreach (var d in Decor) foreach (var (x, y) in d.Pts) { x0 = Math.Min(x0, x); y0 = Math.Min(y0, y); x1 = Math.Max(x1, x); y1 = Math.Max(y1, y); }
+        if (x1 >= x0) { _gx = Math.Round((x0 + x1) / 2); _gy = Math.Round((y0 + y1) / 2); }
+        _originSet = true;
+    }
+
+    Point G(double x, double y) => new(x - _gx, y - _gy);
+
+    void BuildItems()
+    {
+        SetOrigin();
+        var unitOf = new Dictionary<(string, bool), int>();
+        _shapes = new List<Shape>(_items.Count);
+        _iu.Clear();
+        foreach (var i in _items)
+        {
+            if (i.Pts.Count == 0) continue;
+            if (!unitOf.TryGetValue((i.Layer, i.On), out int u)) { unitOf[(i.Layer, i.On)] = u = _iu.Count; _iu.Add((i.Layer, i.On, false)); }
+            var sh = new Shape { Unit = u, Col = ItemBrush(i), Closed = i.Closed };
+            if (i.Kind == SurveyKind.Spot)
+            {
+                sh.Kind = IsBlock(i) ? (byte)2 : (byte)1;
+                if (sh.Kind == 2) _iu[u] = (_iu[u].Layer, _iu[u].ItemOn, true);
+                sh.P = new[] { G(i.Pts[0].X, i.Pts[0].Y) };
+            }
+            else
+            {
+                sh.P = new Point[i.Pts.Count];
+                for (int k = 0; k < sh.P.Length; k++) sh.P[k] = G(i.Pts[k].X, i.Pts[k].Y);
+            }
+            double x0 = sh.P[0].X, y0 = sh.P[0].Y, x1 = x0, y1 = y0;
+            foreach (var q in sh.P) { x0 = Math.Min(x0, q.X); y0 = Math.Min(y0, q.Y); x1 = Math.Max(x1, q.X); y1 = Math.Max(y1, q.Y); }
+            sh.Box = new Rect(x0, y0, x1 - x0, y1 - y0);
+            _shapes.Add(sh);
+        }
+    }
+
+    /// <summary>객체 선 도형 — 축척 단계마다 화면 0.2 px 안으로 줄임(화면 0.5 px보다 작으면 짧은 한 토막). 꼭짓점 둘 이하는 단계와 상관없이 한 번.</summary>
+    StreamGeometry LineGeo(Shape sh)
+    {
+        if (sh.G != null && (sh.GLevel == _level || sh.GLevel == int.MaxValue)) return sh.G;
+        var p = sh.P;
+        var g = new StreamGeometry();
+        using (var c = g.Open())
+        {
+            double sMax = Math.Pow(2, _level + 1);
+            if (p.Length > 2 && Math.Max(sh.Box.Width, sh.Box.Height) < 0.5 / sMax)
+            {
+                int far = 1; double fd = -1;
+                for (int k = 1; k < p.Length; k++) { double d = (p[k] - p[0]).LengthSquared; if (d > fd) { fd = d; far = k; } }
+                c.BeginFigure(p[0], false, false);
+                c.LineTo(p[far], true, false);
+            }
+            else
+            {
+                var keep = Paths.Simplify(p, 0.2 / sMax);
+                c.BeginFigure(p[0], false, sh.Closed);
+                for (int k = 1; k < p.Length; k++) if (keep[k]) c.LineTo(p[k], true, false);
+            }
+        }
+        g.Freeze();
+        sh.G = g; sh.GLevel = p.Length <= 2 ? int.MaxValue : _level;
+        return g;
+    }
+
+    void BuildDecor()
+    {
+        _decorFor = Decor;
+        _decorUnits = new();
+        if (Decor == null) return;
+        SetOrigin();
+        var unitOf = new Dictionary<string, Unit>();
+        var setOf = new Dictionary<(Unit, int), Paths>();
+        foreach (var dd in Decor)
+        {
+            if (dd.Pts.Count < 2) continue;
+            if (!unitOf.TryGetValue(dd.Layer, out var u)) { unitOf[dd.Layer] = u = new Unit { Layer = dd.Layer }; _decorUnits.Add(u); }
+            if (!setOf.TryGetValue((u, dd.Argb), out var ps)) { setOf[(u, dd.Argb)] = ps = new Paths(_gx, _gy); u.Lines.Add((dd.Argb == 0 ? Brushes.White : ArgbBrush(dd.Argb), ps)); }
+            ps.Add(dd.Pts, dd.Closed);
+        }
+        foreach (var ps in setOf.Values) ps.Seal();
+    }
+
+    void BuildBase()
+    {
+        _baseFor = Base;
+        _basePaths = null;
+        _baseEpoch = -1;
+        var b = Base;
+        if (b == null || !b.Any) return;
+        _bx = Math.Round((b.X0 + b.X1) / 2); _by = Math.Round((b.Y0 + b.Y1) / 2);
+        var ps = new Paths(_bx, _by);
+        foreach (var l in b.Lines) ps.Add(l, false);
+        ps.Seal();
+        _basePaths = ps;
+    }
+
+    void BuildRegion()
+    {
+        _regFor = Region;
+        _regGeo = null;
+        _regEpoch = -1;
+        if (Region == null) return;
+        SetOrigin();
+        var g = new StreamGeometry { FillRule = FillRule.Nonzero };
+        using (var c = g.Open())
+            foreach (var ring in SurveyMerge.Rings(Region))
+            {
+                c.BeginFigure(G(ring[0].X, ring[0].Y), true, true);
+                for (int k = 1; k < ring.Count; k++) c.LineTo(G(ring[k].X, ring[k].Y), true, false);
+            }
+        g.Freeze();
+        _regGeo = g;
+    }
+
+    /// <summary>객체 한 벌(객체 차례 그대로 · 그린 범위 밖은 뺌) — pass 0 안 씀(흐리게) · 1 씀(도면 색) · 2 마우스 아래 후광 · 3 마우스 아래 본선.
+    /// 점 · 블록 네모는 화면 px 크기 ÷ 축척. <paramref name="unitIn"/> = 이 묶음(레이어 × 객체 켬)을 넣을지.</summary>
+    void DrawItems(DrawingContext dc, int pass, Func<int, bool> unitIn)
+    {
+        double s = _s;
+        bool isHov = pass >= 2, on = pass == 1;
+        var v = new Rect(_recView.X - _gx, _recView.Y - _gy, _recView.Width, _recView.Height);
+        var vd = v; vd.Inflate(12 / s, 12 / s);
+        foreach (var sh in _shapes!)
+        {
+            if (!unitIn(sh.Unit)) continue;
+            var col = sh.Col;
+            if (sh.Kind == 0)
+            {
+                if (!sh.Box.IntersectsWith(vd)) continue;
+                dc.DrawGeometry(null, WPenOf(col, isHov ? pass : on ? 0 : 1), LineGeo(sh));
+                continue;
+            }
+            var c0 = sh.P[0];
+            if (!vd.Contains(c0)) continue;
+            if (sh.Kind == 2)
+            {
+                // ★[JACK 1122 «원래 측량도의 블록들이 전부 점으로 나와 구분이 안 됨»] 블록 = 속 빈 네모(점은 둥근 점)
+                double r = (isHov ? (pass == 2 ? 6 : 4) : on ? 3 : 2.4) / s;
+                var pen = isHov && pass == 2 ? WPenOf(Fade(col, 90), 2) : WPenOf(on || isHov ? col : Fade(col, 55), 0);
+                dc.DrawRectangle(null, pen, new Rect(c0.X - r, c0.Y - r, 2 * r, 2 * r));
+                continue;
+            }
+            if (isHov) { if (pass == 2) dc.DrawEllipse(Fade(col, 90), null, c0, 5.5 / s, 5.5 / s); else dc.DrawEllipse(col, null, c0, 2.8 / s, 2.8 / s); }
+            else if (on) dc.DrawEllipse(col, null, c0, 1.3 / s, 1.3 / s);
+            else dc.DrawEllipse(Fade(col, 55), null, c0, 1.0 / s, 1.0 / s);
+        }
+    }
+
+    /// <summary>블록 모양 — 쓰면 도면 색 · 안 쓰면 흐리게 · 마우스 아래면 굵게.</summary>
+    void DrawDecor(DrawingContext dc, Unit u, int state)
+    {
+        foreach (var (col, ps) in u.Lines) ps.Draw(dc, WPenOf(col, state == 2 ? 3 : state == 1 ? 0 : 1), _recView, _level);
+    }
+
+    // ── 진단(창 닫을 때 한 줄) ──
+    internal int RenderCount, NearCount, MoveFrames, SheetRedraws, Rebases;
+    internal double RenderMsSum, RenderMsMax, NearMsSum, NearMsMax, BuildMs, MoveSec;
+    long _lastMove;
+    static double MsSince(long t0) => (System.Diagnostics.Stopwatch.GetTimestamp() - t0) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+    /// <summary>끌기 · 휠 한 번 — 이 사이에 그린 장 수로 «이동 · 확대 중 초당 그림 수».</summary>
+    void Moved()
+    {
+        long now = System.Diagnostics.Stopwatch.GetTimestamp();
+        double gap = (now - _lastMove) / (double)System.Diagnostics.Stopwatch.Frequency;
+        if (_lastMove != 0 && gap < 0.5) MoveSec += gap;
+        _lastMove = now;
+    }
+    internal string PerfSummary
+    {
+        get
+        {
+            string r = RenderCount > 0 ? $"그림 {RenderCount}번 평균 {RenderMsSum / RenderCount:0.0} 최대 {RenderMsMax:0.0} ms(판 다시 그림 {SheetRedraws} · 캐시 맞춤 {Rebases} · 처음 도형 {BuildMs:0} ms)" : "그림 0번";
+            string n = NearCount > 0 ? $" · 찾기 {NearCount}번 평균 {NearMsSum / NearCount:0.00} 최대 {NearMsMax:0.00} ms" : "";
+            string m = MoveSec > 0.2 ? $" · 이동·확대 중 초당 {MoveFrames / MoveSec:0}장" : "";
+            return r + n + m;
+        }
+    }
+
+    readonly List<Visual> _want = new();
+    Paths? _rbBase;
+
+    /// <summary>묶음 안 판 순서를 <see cref="_want"/>대로(바뀐 판만 옮김).</summary>
+    void Order(VisualCollection vc)
+    {
+        for (int k = 0; k < _want.Count; k++)
+        {
+            if (k < vc.Count && ReferenceEquals(vc[k], _want[k])) continue;
+            int at = -1;
+            for (int q = k + 1; q < vc.Count; q++) if (ReferenceEquals(vc[q], _want[k])) { at = q; break; }
+            if (at >= 0) vc.RemoveAt(at);
+            vc.Insert(k, _want[k]);
+        }
+        while (vc.Count > _want.Count) vc.RemoveAt(vc.Count - 1);
+    }
+
+    /// <summary>묶음 변환을 지금 화면으로 · 캐시 넓이(화면 + 여백) · 판에 넣을 범위. 축척이 바뀌었거나 그려 둔 범위 밖이면 판을 다시 그림(<see cref="_epoch"/>).</summary>
+    void Rebase(double aw, double ah)
+    {
+        _rbS = _s; _rbOx = _ox; _rbOy = _oy; _rbW = aw; _rbH = ah;
+        // 캐시 한 장 실제 화소 4096 안(화면 배율 150 · 200 %면 DIP × 1.5 · 2)
+        var dpi = VisualTreeHelper.GetDpi(this);
+        _rbM = Math.Max(0, Math.Min(0.35 * Math.Max(aw, ah), Math.Min(4096 / dpi.DpiScaleX - aw, 4096 / dpi.DpiScaleY - ah) / 2));
+        _wt.Matrix = new Matrix(_s, 0, 0, -_s, (_gx - _ox) * _s, (_oy - _gy) * _s);
+        _bt.Matrix = new Matrix(_s, 0, 0, -_s, (_bx - _ox) * _s, (_oy - _by) * _s);
+        _viewT.Matrix = Matrix.Identity;
+        var clip = new RectangleGeometry(new Rect(-_rbM, -_rbM, aw + 2 * _rbM, ah + 2 * _rbM));
+        clip.Freeze();
+        _slotB.Clip = _slotD.Clip = _slotW.Clip = _slotH.Clip = _slotC.Clip = clip;
+        var (x0, y1) = W(new Point(-_rbM, -_rbM));
+        var (x1, y0) = W(new Point(aw + _rbM, ah + _rbM));
+        var area = new Rect(new Point(x0, y0), new Point(x1, y1));
+        if (_recS != _s || !_recView.Contains(area))
+        {
+            _recView = area; _recView.Inflate(area.Width * 0.25, area.Height * 0.25);
+            int lv = (int)Math.Floor(Math.Log2(_s));
+            if (lv != _level)
+            {
+                _basePaths?.Keep(lv);
+                if (_decorUnits != null) foreach (var u in _decorUnits) foreach (var (_, ps) in u.Lines) ps.Keep(lv);
+            }
+            _recS = _s; _level = lv; _epoch++;
+        }
+        Rebases++;
+    }
+
     protected override void OnRender(DrawingContext dc)
     {
-        dc.DrawRectangle(Bg, null, new Rect(0, 0, ActualWidth, ActualHeight));
+        long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
+        if (_shapes == null) { BuildItems(); BuildMs += MsSince(t0); }
+        if (_decorUnits == null || !ReferenceEquals(_decorFor, Decor)) { long tb = System.Diagnostics.Stopwatch.GetTimestamp(); BuildDecor(); BuildMs += MsSince(tb); }
+        if (!ReferenceEquals(_baseFor, Base)) BuildBase();
+        if (!ReferenceEquals(_regFor, Region)) BuildRegion();
+        double aw = ActualWidth, ah = ActualHeight;
+        // 바탕 · 원지반 상자(점선 — 화면 좌표) = 이 요소 자체 그림(판들 아래)
+        dc.DrawRectangle(Bg, null, new Rect(0, 0, aw, ah));
         var b = Base;
-        if (b != null && b.Any)
-        {
-            dc.DrawRectangle(null, ExtP, new Rect(S(b.X0, b.Y1), S(b.X1, b.Y0)));
-            var g = new StreamGeometry();
-            using (var c = g.Open())
-                foreach (var l in b.Lines)
-                {
-                    if (l.Count < 2) continue;
-                    c.BeginFigure(S(l[0].X, l[0].Y), false, false);
-                    for (int k = 1; k < l.Count; k++) c.LineTo(S(l[k].X, l[k].Y), true, false);
-                }
-            g.Freeze();
-            dc.DrawGeometry(null, BaseP, g);
-        }
-        // 블록 모양(도면 색 · 그 레이어를 쓰면 진하게)
-        if (Decor != null)
-            foreach (var grp in Decor.GroupBy(x => (x.Argb, IsLayerOn(x.Layer), Hover != null && x.Layer.Equals(Hover, StringComparison.OrdinalIgnoreCase))))
-            {
-                var g = new StreamGeometry();
-                using (var c = g.Open())
-                    foreach (var dd in grp)
-                    {
-                        if (dd.Pts.Count < 2) continue;
-                        c.BeginFigure(S(dd.Pts[0].X, dd.Pts[0].Y), false, dd.Closed);
-                        for (int k = 1; k < dd.Pts.Count; k++) c.LineTo(S(dd.Pts[k].X, dd.Pts[k].Y), true, false);
-                    }
-                g.Freeze();
-                var col = grp.Key.Argb == 0 ? Brushes.White : (_itemBrush.TryGetValue(grp.Key.Argb, out var ib) ? ib : (_itemBrush[grp.Key.Argb] = Visible(grp.Key.Argb)));
-                dc0(g, grp.Key.Item3 ? PenOf(col, 5) : grp.Key.Item2 ? PenOf(col, 0) : PenOf(col, 1));
-            }
-        void dc0(Geometry g, Pen p) => dc.DrawGeometry(null, p, g);
-        if (Region != null)
-        {
-            var g = new StreamGeometry { FillRule = FillRule.Nonzero };
-            using (var c = g.Open())
-                foreach (var ring in SurveyMerge.Rings(Region))
-                {
-                    c.BeginFigure(S(ring[0].X, ring[0].Y), true, true);
-                    for (int k = 1; k < ring.Count; k++) c.LineTo(S(ring[k].X, ring[k].Y), true, false);
-                }
-            g.Freeze();
-            dc.DrawGeometry(RegionB, RegP, g);
-        }
-        // 차례: 안 쓰는 레이어(흐리게) → 쓰는 레이어(도면 색) → 마우스 아래 레이어(후광 + 굵게)
+        if (b != null && b.Any) dc.DrawRectangle(null, ExtP, new Rect(S(b.X0, b.Y1), S(b.X1, b.Y0)));
+
+        if (!ReferenceEquals(_rbBase, _basePaths)) { _rbBase = _basePaths; _rbS = double.NaN; }   // 원지반이 바뀌면 그 원점으로 다시 맞춤
+        // 이동 · 확대: 맞춘 화면 → 지금 화면 = 배율 k · 옮김(S()와 같은 셈). 축척이 바뀌었거나(휠 미리보기 중이 아니면) · 창 크기가 바뀌거나 · 캐시 여백을 넘게 밀면 다시 맞춤
+        double zk = _s / _rbS, pdx = (_rbOx - _ox) * _s, pdy = (_oy - _rbOy) * _s;
+        bool stale = double.IsNaN(zk) || _rbW != aw || _rbH != ah || (zk != 1 && (!_preview || zk > 4 || zk < 0.25))
+                     || pdx > _rbM * 0.8 * zk || pdy > _rbM * 0.8 * zk || aw - (aw + _rbM) * zk - pdx > -0.2 * _rbM * zk || ah - (ah + _rbM) * zk - pdy > -0.2 * _rbM * zk;
+        if (stale) Rebase(aw, ah);
+        else _viewT.Matrix = new Matrix(zk, 0, 0, zk, pdx, pdy);
         string? hov = Hover;
-        for (int pass = 0; pass < 4; pass++)
-            foreach (var i in _items)
-            {
-                bool isHov = hov != null && i.Layer.Equals(hov, StringComparison.OrdinalIgnoreCase);
-                bool on = i.On && IsLayerOn(i.Layer);
-                int want = isHov ? 2 : on ? 1 : 0;
-                if (isHov ? pass < 2 : want != pass) continue;
-                var col = ItemBrush(i);
-                if (IsBlock(i))
-                {
-                    // ★[JACK 1122 «원래 측량도의 블록들이 전부 점으로 나와 구분이 안 됨»] 블록 = 속 빈 네모(점은 둥근 점)
-                    var c0 = S(i.Pts[0].X, i.Pts[0].Y);
-                    double r = isHov ? (pass == 2 ? 6 : 4) : on ? 3 : 2.4;
-                    var pen = isHov && pass == 2 ? PenOf(Fade(col, 90), 2) : PenOf(on || isHov ? col : Fade(col, 55), 0);
-                    dc.DrawRectangle(null, pen, new Rect(c0.X - r, c0.Y - r, 2 * r, 2 * r));
-                    continue;
-                }
-                if (i.Kind == SurveyKind.Spot)
-                {
-                    var c0 = S(i.Pts[0].X, i.Pts[0].Y);
-                    if (isHov) { if (pass == 2) dc.DrawEllipse(Fade(col, 90), null, c0, 5.5, 5.5); else dc.DrawEllipse(col, null, c0, 2.8, 2.8); }
-                    else if (on) dc.DrawEllipse(col, null, c0, 1.3, 1.3);
-                    else dc.DrawEllipse(Fade(col, 55), null, c0, 1.0, 1.0);
-                    continue;
-                }
-                var g = new StreamGeometry();
-                using (var c = g.Open())
-                {
-                    c.BeginFigure(S(i.Pts[0].X, i.Pts[0].Y), false, i.Closed);
-                    for (int k = 1; k < i.Pts.Count; k++) c.LineTo(S(i.Pts[k].X, i.Pts[k].Y), true, false);
-                }
-                g.Freeze();
-                dc.DrawGeometry(null, PenOf(col, isHov ? pass : on ? 0 : 1), g);
-            }
-        if (Cross != null)
-            foreach (var (cxx, cyy) in Cross.At) dc.DrawEllipse(null, CrossP, S(cxx, cyy), 4, 4);
-        // 축척 막대
-        double bar = Nice(120 / _s);
-        double px = bar * _s;
-        var y = ActualHeight - 14;
-        dc.DrawLine(new Pen(TagInk, 2), new Point(12, y), new Point(12 + px, y));
-        dc.DrawText(Text(bar >= 1 ? $"{bar:0.##} m" : $"{bar * 100:0} cm", false), new Point(16 + px, y - 8));
-        // 레이어 이름(왼쪽 위)
-        if (hov != null)
+        bool IsHov(string l) => hov != null && l.Equals(hov, StringComparison.OrdinalIgnoreCase);
+        // 원지반 선
+        if (_basePaths != null)
         {
-            string what = _hoverItem != null && string.Equals(_hoverItem.Layer, hov, StringComparison.OrdinalIgnoreCase)
-                ? "   ·   이 객체: " + (_hoverItem.Kind == SurveyKind.Contour ? "등고선" : _hoverItem.Kind == SurveyKind.Break ? "3D 선" : _hoverItem.Src) + string.Format(IC, " {0:0.00} m", _hoverItem.Z0)
-                : "";
-            var t = Text(Describe(hov) + what, true);
-            var r = new Rect(8, 8, t.Width + 28, t.Height + 8);
-            dc.DrawRoundedRectangle(TagBg, TagP, r, 3, 3);
-            dc.DrawRectangle(ColorOf(hov), null, new Rect(14, 8 + (r.Height - 10) / 2, 10, 10));
-            dc.DrawText(t, new Point(30, 12));
+            if (_baseEpoch != _epoch) { using (var c = _baseV.RenderOpen()) _basePaths.Draw(c, WBaseP, _recView, _level); _baseEpoch = _epoch; SheetRedraws++; }
+            if (_baseC.Children.Count == 0) _baseC.Children.Add(_baseV);
         }
+        else if (_baseC.Children.Count > 0) _baseC.Children.Clear();
+        // 블록 모양(도면 색 · 그 레이어를 쓰면 진하게)
+        _want.Clear();
+        foreach (var u in _decorUnits!)
+        {
+            int st = IsLayerOn(u.Layer) ? 1 : 0;
+            if (u.DoneEpoch != _epoch || u.DoneState != st) { using (var c = u.V.RenderOpen()) DrawDecor(c, u, st); u.DoneEpoch = _epoch; u.DoneState = st; SheetRedraws++; }
+            _want.Add(u.V);
+        }
+        Order(_decorC.Children);
+        // 범위 · 객체 — 차례: 안 쓰는 레이어(흐리게) → 쓰는 레이어(도면 색). 마우스 아래 레이어는 맨 위 묶음에 강조로 한 번 더(제 모양은 덮임) —
+        // 블록이 든 레이어만 여기서 뺌(작은 네모가 큰 강조 네모 안에 비치지 않게 · 전과 같은 모양)
+        _want.Clear();
+        if (_regGeo != null)
+        {
+            if (_regEpoch != _epoch) { using (var c = _regV.RenderOpen()) c.DrawGeometry(RegionB, WRegP, _regGeo); _regEpoch = _epoch; SheetRedraws++; }
+            _want.Add(_regV);
+        }
+        int nu = _iu.Count;
+        var wst = new int[nu];
+        var hu = new bool[nu];
+        for (int k = 0; k < nu; k++)
+        {
+            var (ly, itemOn, hasBlock) = _iu[k];
+            hu[k] = IsHov(ly);
+            wst[k] = hu[k] && hasBlock ? 2 : itemOn && IsLayerOn(ly) ? 1 : 0;
+        }
+        if (_wEpoch != _epoch || !wst.AsSpan().SequenceEqual(_wSt))
+        {
+            using (var c = _pass0V.RenderOpen()) DrawItems(c, 0, u => wst[u] == 0);
+            using (var c = _pass1V.RenderOpen()) DrawItems(c, 1, u => wst[u] == 1);
+            _wSt = wst; _wEpoch = _epoch; SheetRedraws += 2;
+        }
+        _want.Add(_pass0V); _want.Add(_pass1V);
+        Order(_worldC.Children);
+        // 마우스 아래 레이어(그 레이어 블록 모양 굵게 → 후광 전부 → 본선 전부)
+        if (!string.Equals(_hovDone, hov, StringComparison.Ordinal) || _hovEpoch != _epoch)
+        {
+            using (var c = _hovV.RenderOpen())
+                if (hov != null)
+                {
+                    foreach (var u in _decorUnits!) if (IsHov(u.Layer)) DrawDecor(c, u, 2);
+                    DrawItems(c, 2, u => hu[u]);
+                    DrawItems(c, 3, u => hu[u]);
+                }
+            _hovDone = hov; _hovEpoch = _epoch; SheetRedraws++;
+        }
+        // 엇갈림(주황 원)
+        if (Cross != null && Cross.At.Count > 0)
+        {
+            if (!ReferenceEquals(_crossFor, Cross) || _crossEpoch != _epoch)
+            {
+                using (var c = _crossV.RenderOpen())
+                {
+                    double r = 4 / _s;
+                    foreach (var (cxx, cyy) in Cross.At) c.DrawEllipse(null, WCrossP, G(cxx, cyy), r, r);   // 하나씩(겹친 원 가장자리 · 전과 같게)
+                }
+                _crossFor = Cross; _crossEpoch = _epoch; SheetRedraws++;
+            }
+            if (_crossC.Children.Count == 0) _crossC.Children.Add(_crossV);
+        }
+        else if (_crossC.Children.Count > 0) _crossC.Children.Clear();
+        // 축척 막대 · 레이어 이름(화면 좌표 — 맨 위)
+        using (var c = _overV.RenderOpen())
+        {
+            double bar = Nice(120 / _s);
+            double px = bar * _s;
+            var y = ah - 14;
+            c.DrawLine(new Pen(TagInk, 2), new Point(12, y), new Point(12 + px, y));
+            c.DrawText(Text(bar >= 1 ? $"{bar:0.##} m" : $"{bar * 100:0} cm", false), new Point(16 + px, y - 8));
+            if (hov != null)
+            {
+                string what = _hoverItem != null && string.Equals(_hoverItem.Layer, hov, StringComparison.OrdinalIgnoreCase)
+                    ? "   ·   이 객체: " + (_hoverItem.Kind == SurveyKind.Contour ? "등고선" : _hoverItem.Kind == SurveyKind.Break ? "3D 선" : _hoverItem.Src) + string.Format(IC, " {0:0.00} m", _hoverItem.Z0)
+                    : "";
+                var t = Text(Describe(hov) + what, true);
+                var r = new Rect(8, 8, t.Width + 28, t.Height + 8);
+                c.DrawRoundedRectangle(TagBg, TagP, r, 3, 3);
+                c.DrawRectangle(ColorOf(hov), null, new Rect(14, 8 + (r.Height - 10) / 2, 10, 10));
+                c.DrawText(t, new Point(30, 12));
+            }
+        }
+
+        double ms = MsSince(t0);
+        RenderCount++; RenderMsSum += ms; RenderMsMax = Math.Max(RenderMsMax, ms);
+        if (_lastMove != 0 && (System.Diagnostics.Stopwatch.GetTimestamp() - _lastMove) < System.Diagnostics.Stopwatch.Frequency / 4) MoveFrames++;
     }
 
     static FormattedText Text(string s, bool bold) =>
@@ -649,12 +1201,32 @@ internal sealed class SurveyCanvas : FrameworkElement
 
     protected override void OnMouseWheel(MouseWheelEventArgs e)
     {
-        var p = e.GetPosition(this);
-        var (wx, wy) = W(p);
-        _s *= e.Delta > 0 ? 1.25 : 0.8;
-        _ox = wx - p.X / _s; _oy = wy + p.Y / _s;
-        InvalidateVisual();
+        ZoomAt(e.GetPosition(this), e.Delta > 0 ? 1.25 : 0.8);
         e.Handled = true;
+    }
+
+    internal void StopTimers() => _refine?.Stop();
+
+    /// <summary>휠 한 칸 — 따로 굴리면 바로 다시 그림 · 잇달아(0.25초 안) 굴리면 그동안 캐시를 늘이고 줄여 보여 주고 멈춘 뒤(0.12초) 다시 그림.</summary>
+    internal void ZoomAt(Point p, double f)
+    {
+        var (wx, wy) = W(p);
+        _s *= f;
+        _ox = wx - p.X / _s; _oy = wy + p.Y / _s;
+        long now = System.Diagnostics.Stopwatch.GetTimestamp();
+        if (_lastWheel != 0 && now - _lastWheel < System.Diagnostics.Stopwatch.Frequency / 4)
+        {
+            _preview = true;
+            if (_refine == null)
+            {
+                _refine = new DispatcherTimer(DispatcherPriority.Background, Dispatcher) { Interval = TimeSpan.FromMilliseconds(120) };
+                _refine.Tick += (_, __) => { _refine!.Stop(); _preview = false; InvalidateVisual(); };
+            }
+            _refine.Stop(); _refine.Start();
+        }
+        _lastWheel = now;
+        Moved();
+        InvalidateVisual();
     }
 
     protected override void OnMouseDown(MouseButtonEventArgs e)
@@ -675,6 +1247,7 @@ internal sealed class SurveyCanvas : FrameworkElement
         {
             _ox -= (p.X - f.X) / _s; _oy += (p.Y - f.Y) / _s;
             _panFrom = p;
+            Moved();
             InvalidateVisual();
             return;
         }
@@ -683,6 +1256,7 @@ internal sealed class SurveyCanvas : FrameworkElement
             // 왼쪽 끌기도 이동(CAD처럼 손으로 밀기)
             _panFrom = p; _down = null; Cursor = Cursors.SizeAll;
             _ox -= (p.X - d.X) / _s; _oy += (p.Y - d.Y) / _s;
+            Moved();
             InvalidateVisual();
             return;
         }
@@ -717,17 +1291,86 @@ internal sealed class SurveyCanvas : FrameworkElement
         }
     }
 
+    // ── 마우스 아래 찾기 색인(세계 좌표 격자 · 객체 토막마다 그 상자가 걸친 칸 · 한 번만) ──
+    Dictionary<long, List<int>>? _grid;
+    readonly List<int> _gridBig = new();
+    double _gx0, _gy0, _gcell = 1;
+    int[] _stamp = Array.Empty<int>();
+    int _stampN;
+    readonly List<int> _cand = new();
+    static long GKey(long gx, long gy) => (gx << 32) ^ (gy & 0xFFFFFFFFL);
+
+    void BuildGrid()
+    {
+        _grid = new();
+        _gridBig.Clear();
+        double x0 = double.MaxValue, y0 = double.MaxValue, x1 = double.MinValue, y1 = double.MinValue;
+        foreach (var i in _items) foreach (var p in i.Pts) { x0 = Math.Min(x0, p.X); y0 = Math.Min(y0, p.Y); x1 = Math.Max(x1, p.X); y1 = Math.Max(y1, p.Y); }
+        if (x1 < x0) return;
+        _gx0 = x0; _gy0 = y0;
+        _gcell = Math.Max(Math.Max(x1 - x0, y1 - y0) / 256, 0.01);
+        _stamp = new int[_items.Count];
+        void Add(long gx, long gy, int ii)
+        {
+            long k = GKey(gx, gy);
+            if (!_grid.TryGetValue(k, out var l)) _grid[k] = l = new List<int>();
+            if (l.Count == 0 || l[^1] != ii) l.Add(ii);
+        }
+        for (int ii = 0; ii < _items.Count; ii++)
+        {
+            var pts = _items[ii].Pts;
+            if (pts.Count == 0) continue;
+            if (pts.Count == 1) { Add((long)Math.Floor((pts[0].X - x0) / _gcell), (long)Math.Floor((pts[0].Y - y0) / _gcell), ii); continue; }
+            int n = pts.Count + (_items[ii].Closed ? 1 : 0);
+            bool big = false;
+            for (int k = 1; k < n && !big; k++)
+            {
+                var a = pts[k - 1]; var b = pts[k % pts.Count];
+                long ax = (long)Math.Floor((Math.Min(a.X, b.X) - x0) / _gcell), bx = (long)Math.Floor((Math.Max(a.X, b.X) - x0) / _gcell);
+                long ay = (long)Math.Floor((Math.Min(a.Y, b.Y) - y0) / _gcell), by = (long)Math.Floor((Math.Max(a.Y, b.Y) - y0) / _gcell);
+                if ((bx - ax + 1) * (by - ay + 1) > 1024) { big = true; break; }   // 아주 긴 토막 — 늘 봄(드묾)
+                for (long gx = ax; gx <= bx; gx++) for (long gy = ay; gy <= by; gy++) Add(gx, gy, ii);
+            }
+            if (big) _gridBig.Add(ii);
+        }
+    }
+
     /// <summary>마우스 가까운 객체(8 px 안 · 같은 거리면 쓰는 레이어 먼저).</summary>
     SurveyItem? Nearest(Point p)
     {
+        long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
         const double tol = 8;
         SurveyItem? best = null; double bd = tol;
-        foreach (var i in _items)
+        void Try(SurveyItem i)
         {
             // ★[JACK 1122 «선 위에 있는 점은 선 때문에 선택이 안 됨»] 점 · 블록을 먼저(선보다 5 px 가깝게 침)
             double d = Dist(i, p) - (i.Kind == SurveyKind.Spot ? 5 : 0);
             if (d < bd || (d == bd && best != null && !IsLayerOn(best.Layer) && IsLayerOn(i.Layer))) { bd = d; best = i; }
         }
+        if (_grid == null) BuildGrid();
+        // 이길 수 있는 객체 = 화면 13 px(점 가산 5 포함) 안에 토막이 있는 것 — 그 둘레 칸만(차례는 전부 훑기와 같게 번호순)
+        var (wx, wy) = W(p);
+        double rw = (tol + 5 + 1) / _s;
+        double fx0 = Math.Floor((wx - rw - _gx0) / _gcell), fx1 = Math.Floor((wx + rw - _gx0) / _gcell);
+        double fy0 = Math.Floor((wy - rw - _gy0) / _gcell), fy1 = Math.Floor((wy + rw - _gy0) / _gcell);
+        double cells = (fx1 - fx0 + 1) * (fy1 - fy0 + 1);
+        if (_grid!.Count == 0 || !(cells <= 4.0 * _grid.Count + 64))
+            foreach (var i in _items) Try(i);   // 아주 멀리서 본 화면 — 볼 칸이 채운 칸보다 훨씬 많음(전처럼 전부)
+        else
+        {
+            long ax = (long)fx0, bx = (long)fx1, ay = (long)fy0, by = (long)fy1;
+            if (++_stampN == int.MaxValue) { Array.Clear(_stamp); _stampN = 1; }
+            _cand.Clear();
+            for (long gx = ax; gx <= bx; gx++)
+                for (long gy = ay; gy <= by; gy++)
+                    if (_grid.TryGetValue(GKey(gx, gy), out var l))
+                        foreach (int ii in l) if (_stamp[ii] != _stampN) { _stamp[ii] = _stampN; _cand.Add(ii); }
+            foreach (int ii in _gridBig) if (_stamp[ii] != _stampN) { _stamp[ii] = _stampN; _cand.Add(ii); }
+            _cand.Sort();
+            foreach (int ii in _cand) Try(_items[ii]);
+        }
+        double ms = MsSince(t0);
+        NearCount++; NearMsSum += ms; NearMsMax = Math.Max(NearMsMax, ms);
         return best;
     }
 

@@ -60,12 +60,14 @@ public sealed class SurveyFixCommand
             string name = System.IO.Path.GetFileName(path);
             ed.WriteMessage($"\n[측량도 보정] {name} 읽는 중…");
             SurveyFix.Data data;
+            var swRead = System.Diagnostics.Stopwatch.StartNew();
             try { data = SurveyFix.Read(path); }
             catch (System.Exception rex)
             {
                 Refuse(ed, $"측량도를 읽지 못했습니다 — {name}\n\n{rex.Message}\n\n다른 프로그램이 쓰고 있지 않은지, DWG · DXF가 맞는지 확인하세요.");
                 return;
             }
+            double readSec = swRead.Elapsed.TotalSeconds;
             string skipped = data.Skipped();
             if (data.Items.Count == 0)
             {
@@ -105,10 +107,21 @@ public sealed class SurveyFixCommand
             }
             else
             {
+                var swOpen = System.Diagnostics.Stopwatch.StartNew();
                 var w = new SurveyFixWindow(name, data.Items, data.LayersOff, grounds.Select(g => g.Name).ToList(), gi,
                                             k => SurveyFix.BaseForView(db, grounds[Math.Clamp(k, 0, grounds.Count - 1)].Id), _margin, _gap,
                                             skipped.Length > 0 ? $"읽은 객체 {data.Read}개 · {skipped}" : $"읽은 객체 {data.Read}개", LoadLayers(), data.LayerArgb, data.Decor);
-                if (AcadApp.ShowModalWindow(w) != true) { ed.WriteMessage("\n[측량도 보정] 취소"); return; }
+                // ★[JACK 1123 «창이 느리고 끊김»] 창 닫을 때 한 줄 — 읽기 · 객체 · 점 · 창 뜸 · 그림 · 찾기 · 범위 셈
+                double openSec = -1;
+                w.ContentRendered += (_, __) => { if (openSec < 0) openSec = swOpen.Elapsed.TotalSeconds; };
+                bool? shown = AcadApp.ShowModalWindow(w);
+                try
+                {
+                    long pts = data.Items.Sum(i => (long)i.Pts.Count), dpts = data.Decor.Sum(x => (long)x.Pts.Count);
+                    DiagLog.Append($"\n[측량도 창] 읽기 {readSec:0.00}초 · 객체 {data.Items.Count} · 점 {pts} · 블록 모양 점 {dpts} · 창 뜸 {(openSec < 0 ? "-" : openSec.ToString("0.00") + "초")} · {w.PerfSummary}");
+                }
+                catch { }
+                if (shown != true) { ed.WriteMessage("\n[측량도 보정] 취소"); return; }
                 use = w.Chosen; gi = Math.Clamp(w.GroundIndex, 0, grounds.Count - 1);
                 // ★[검토 1122 LOW] 업체마다 따로 기억 — 이 도면에서 쓴 것은 더하고 안 쓴 것만 뺌(다른 업체 레이어명은 남김)
                 var mem = new List<string>(LoadLayers());

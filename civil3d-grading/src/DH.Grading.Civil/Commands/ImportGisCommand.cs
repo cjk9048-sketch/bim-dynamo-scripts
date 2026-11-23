@@ -970,7 +970,7 @@ public sealed class ImportGisCommand
         if (ContourInterval.TryRead(tr, st.Database, out double cmi, out double cma)) { mi = cmi; ma = cma; }
         try { ContourInterval.SetOn(st, mi, ma); } catch { }
 
-        // 표시 항목 정리 — 등고선·경계만 켜고 나머지(삼각망·점·경사 등)는 전부 끈다.
+        // 표시 항목 정리 — 평면은 등고선·경계만, 모형(3D)은 거기에 삼각망을 더한다. 나머지(점·경사 등)는 전부 끈다.
         //   열거값 이름을 일일이 적지 않고 전체를 돌며 처리(버전별 항목 차이에 안전).
         var dt = typeof(Autodesk.Civil.DatabaseServices.Styles.SurfaceDisplayStyleType);
         foreach (Autodesk.Civil.DatabaseServices.Styles.SurfaceDisplayStyleType t in System.Enum.GetValues(dt))
@@ -979,7 +979,10 @@ public sealed class ImportGisCommand
                    || t == Autodesk.Civil.DatabaseServices.Styles.SurfaceDisplayStyleType.MinorContour
                    || t == Autodesk.Civil.DatabaseServices.Styles.SurfaceDisplayStyleType.Boundary;
             try { st.GetDisplayStylePlan(t).Visible = on; } catch { }
-            try { st.GetDisplayStyleModel(t).Visible = on; } catch { }
+            // ★[JACK 1123 «객체뷰어에서 개념으로 해도 선으로만 보여»] Civil은 삼각망 표시가 켜져 있어야 3D 음영에서 면을 칠한다
+            //   → 모형(3D 방향)만 삼각망도 켠다 · 평면은 등고선 그대로(JACK 0731). 이 스타일을 쓰는 옛 원지반도 다음 원지반 짓기 때 같이 바뀜
+            bool onModel = on || t == Autodesk.Civil.DatabaseServices.Styles.SurfaceDisplayStyleType.Triangles;
+            try { st.GetDisplayStyleModel(t).Visible = onModel; } catch { }
         }
 
         // ★★★[JACK 0901 "주등고선은 색상 9, 보조등고선은 색상 8"]

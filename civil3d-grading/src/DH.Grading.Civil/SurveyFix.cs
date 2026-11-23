@@ -56,6 +56,8 @@ internal static class SurveyFix
         public NetTopologySuite.Geometries.Geometry? Region;
         public int BaseLines, BaseCut, BaseGone, BaseSpots, BaseSpotsGone, SurvContours, SurvBreaks, SurvSpots, DupSpots;
         public SurveyMerge.CrossReport? Cross;
+        /// <summary>테두리 진단(옛 고리 표본 · 메움 점 · 도로 안 점 정리 · 자가 확인) — 진단 로그 · 시험용.</summary>
+        public string BorderLog = "";
     }
 
     /// <summary>시험 고리 — 마지막 결과(범위 · 새 원지반).</summary>
@@ -301,9 +303,58 @@ internal static class SurveyFix
         return Build(doc, use, r, bm, region, margin, gap, partWarn, surveyOnly: false);
     }
 
-    /// <summary>옛 원지반 테두리를 새 원지반 바깥 경계로. 못 하면 알림 글(경계 없이 둠).</summary>
-    static string ClipToOld(Database db, ObjectId oldId, ObjectId newId)
+    /// <summary>지표면 바깥 테두리 고리(Model 추출 · 임시 추출물은 지움) — 넓이 큰 순 · 닫음 중복점 뺌.</summary>
+    static List<(List<Point3> Ring, double Area)> Borders(Transaction tr, CivilDb.TinSurface s)
     {
+        var o = new List<(List<Point3>, double)>();
+        foreach (ObjectId bid in s.ExtractBorder(Autodesk.Civil.SurfaceExtractionSettingsType.Model))
+        {
+            var ent = tr.GetObject(bid, OpenMode.ForWrite);
+            var lp = new List<Point3>();
+            if (ent is Polyline3d p3)
+            {
+                foreach (ObjectId vId in p3)
+                    if (tr.GetObject(vId, OpenMode.ForRead) is PolylineVertex3d pv) lp.Add(P3(pv.Position));
+            }
+            else if (ent is Polyline p2)
+                for (int k = 0; k < p2.NumberOfVertices; k++)
+                {
+                    // ★[검토 1123 LOW] 2D 폴리선이면 높이가 하나뿐 — 면에서 다시 읽음(테두리 위라 못 읽으면 폴리선 높이)
+                    var q = p2.GetPoint3dAt(k);
+                    double z = q.Z;
+                    try { z = s.FindElevationAtXY(q.X, q.Y); } catch (Autodesk.Civil.PointNotOnEntityException) { }
+                    lp.Add(new Point3(q.X, q.Y, z));
+                }
+            ent.Erase();   // 재기용 임시 추출물
+            if (lp.Count > 1 && Math.Abs(lp[0].X - lp[^1].X) < 1e-9 && Math.Abs(lp[0].Y - lp[^1].Y) < 1e-9) lp.RemoveAt(lp.Count - 1);
+            if (lp.Count < 3) continue;
+            double a = 0;
+            for (int k = 0; k < lp.Count; k++) { var u = lp[k]; var v = lp[(k + 1) % lp.Count]; a += u.X * v.Y - v.X * u.Y; }
+            o.Add((lp, Math.Abs(a) / 2));
+        }
+        o.Sort((x, y) => y.Item2.CompareTo(x.Item2));
+        return o;
+    }
+
+    static NetTopologySuite.Geometries.LineString RingLine(IReadOnlyList<Point3> ring)
+    {
+        var cs = ring.Select(p => new NetTopologySuite.Geometries.Coordinate(p.X, p.Y)).ToList();
+        cs.Add(cs[0]);
+        return new NetTopologySuite.Geometries.GeometryFactory().CreateLineString(cs.ToArray());
+    }
+
+    /// <summary>옛 고리 표본 간격(m) — 꼭짓점 · 모서리 포함.</summary>
+    const double RingStep = 2.5;
+
+    /// <summary>옛 원지반 테두리를 새 원지반 바깥 경계로. 못 하면 알림 글(경계 없이 둠). <paramref name="ringOut"/> = 쓴 옛 고리(도로 안 점 정리가 테두리 점을 안 지우게).
+    /// <para>★★[JACK 1123 «측량도 보정 · 도로 다듬기 뒤 처음 원지반 경계가 깨짐 — 깔끔한 네모였는데 찌그러져»] 자르기만으로는 모자란다 —
+    /// 바뀐 범위(측량 · 도로)가 옛 테두리에 걸치면 그 자리 옛 재료(등고선 끝 · 테두리 채움 점)가 빠져 새 삼각망이 옛 테두리까지 안 닿을 수 있고,
+    /// 바깥 경계는 자르기만 할 뿐 메우지 못한다. 그래서 옛 고리를 <see cref="RingStep"/> m마다(꼭짓점 포함) 재어 <b>새 삼각망이 안 닿는 자리에만</b>
+    /// 옛 원지반 높이(옛 테두리 변 따라 직선 = 옛 원지반 그 자리 높이) 점을 넣고(지표면 편집 «점 추가» — 재료 아님 · 다음 보정은 이 원지반 테두리에서 다시 잼),
+    /// 그다음 바깥 경계로 자른다. 닿는 자리는 손대지 않는다(바뀐 범위 안 = 새 자료 높이 · 밖 = 옛 원지반 그대로).</para></summary>
+    static string ClipToOld(Database db, ObjectId oldId, ObjectId newId, NetTopologySuite.Geometries.Prepared.IPreparedGeometry? prep, out List<Point3>? ringOut, out string log)
+    {
+        ringOut = null; log = "";
         try
         {
             List<Point3>? ring = null;
@@ -311,39 +362,125 @@ internal static class SurveyFix
             var areas = new List<double>();
             using (var tr = db.TransactionManager.StartTransaction())
             {
-                if (oldId.IsNull || oldId.IsErased || tr.GetObject(oldId, OpenMode.ForRead) is not CivilDb.TinSurface old) { tr.Commit(); return ""; }
-                foreach (ObjectId bid in old.ExtractBorder(Autodesk.Civil.SurfaceExtractionSettingsType.Model))
-                {
-                    var ent = tr.GetObject(bid, OpenMode.ForWrite);
-                    var lp = new List<Point3>();
-                    if (ent is Polyline3d p3)
-                    {
-                        foreach (ObjectId vId in p3)
-                            if (tr.GetObject(vId, OpenMode.ForRead) is PolylineVertex3d pv) lp.Add(P3(pv.Position));
-                    }
-                    else if (ent is Polyline p2)
-                        for (int k = 0; k < p2.NumberOfVertices; k++) lp.Add(P3(p2.GetPoint3dAt(k)));
-                    ent.Erase();   // 재기용 임시 추출물
-                    if (lp.Count < 3) continue;
-                    double a = 0;
-                    for (int k = 0; k < lp.Count; k++) { var u = lp[k]; var v = lp[(k + 1) % lp.Count]; a += u.X * v.Y - v.X * u.Y; }
-                    areas.Add(Math.Abs(a) / 2);
-                    if (Math.Abs(a) / 2 > best) { best = Math.Abs(a) / 2; ring = lp; }
-                }
+                if (oldId.IsNull || oldId.IsErased || tr.GetObject(oldId, OpenMode.ForRead) is not CivilDb.TinSurface old) { tr.Commit(); log = "옛 원지반을 못 읽음(없음 · 지워짐 · TIN 아님) — 경계 자르기 생략"; return ""; }
+                var bs = Borders(tr, old);
+                foreach (var (_, a) in bs) areas.Add(a);
+                if (bs.Count > 0) { ring = bs[0].Ring; best = bs[0].Area; }
                 tr.Commit();
             }
-            if (ring == null) return "⚠옛 원지반 테두리를 못 읽음 — 경계 자르기 생략";
-            using (var tr = db.TransactionManager.StartTransaction())
+            if (ring == null) { log = "옛 원지반 테두리 고리 없음(추출 0개) — 경계 자르기 생략"; return "⚠옛 원지반 테두리를 못 읽음 — 경계 자르기 생략"; }
+            ringOut = ring;   // ★[검토 1123 LOW] 메움 · 자르기가 실패해도 도로 안 점 정리의 테두리 띠 보호 · 자가 확인은 돈다
+            var R = ring;
+            // 옛 고리 표본(꼭짓점 + RingStep 이하 간격) — 높이는 옛 테두리 변 따라 직선 · 안쪽 1 cm 찔러 «닿음» 판정(선 위 반올림으로 «없음»이 나와 점이 생기지 않게)
+            double sgn = 0;
+            for (int k = 0; k < ring.Count; k++) { var u = ring[k]; var v = ring[(k + 1) % ring.Count]; sgn += u.X * v.Y - v.X * u.Y; }
+            sgn = sgn >= 0 ? 1 : -1;   // 반시계면 안쪽 = 진행 방향 왼쪽
+            int n = ring.Count;
+            (double X, double Y) Nrm(int k)
             {
-                var tin = (CivilDb.TinSurface)tr.GetObject(newId, OpenMode.ForWrite);
-                GradingBuilder.AddOuterBoundary(tin, ring, midOrd: 0.01);
+                var a = R[k]; var b = R[(k + 1) % n];
+                double dx = b.X - a.X, dy = b.Y - a.Y, l = Math.Sqrt(dx * dx + dy * dy);
+                return l < 1e-9 ? (0, 0) : (-dy / l * sgn, dx / l * sgn);
+            }
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            var add = new List<Point3d>();
+            int samples = 0, gapIn = 0, gapOut = 0, dup = 0;
+            string fillNote;
+            try
+            {
+                using (var tr = db.TransactionManager.StartTransaction())
+                {
+                    var tin = (CivilDb.TinSurface)tr.GetObject(newId, OpenMode.ForRead);
+                    // ★[검토 1123 LOW] «밖»은 PointNotOnEntityException만 — 다른 예외는 메움 생략(아래 catch)으로
+                    bool Has(double x, double y) { try { tin.FindElevationAtXY(x, y); return true; } catch (Autodesk.Civil.PointNotOnEntityException) { return false; } }
+                    for (int k = 0; k < n; k++)
+                    {
+                        var a = ring[k]; var b = ring[(k + 1) % n];
+                        double dx = b.X - a.X, dy = b.Y - a.Y, len = Math.Sqrt(dx * dx + dy * dy);
+                        if (len < 1e-9) continue;
+                        var nc = Nrm(k); var np = Nrm((k - 1 + n) % n);
+                        int m = Math.Max(1, (int)Math.Ceiling(len / RingStep));
+                        for (int j = 0; j < m; j++)
+                        {
+                            double t = (double)j / m, x = a.X + dx * t, y = a.Y + dy * t, z = a.Z + (b.Z - a.Z) * t;
+                            // 꼭짓점은 두 변 안쪽의 가운데(모서리 대각선 안쪽) · 변 가운데는 그 변 안쪽
+                            double nx = nc.X, ny = nc.Y;
+                            if (j == 0) { double bx = nc.X + np.X, by = nc.Y + np.Y, bl = Math.Sqrt(bx * bx + by * by); if (bl > 1e-6) { nx = bx / bl; ny = by / bl; } }
+                            samples++;
+                            if (Has(x + nx * 0.01, y + ny * 0.01)) continue;
+                            add.Add(new Point3d(x, y, z));
+                            if (prep != null && SurveyMerge.Inside(prep, x, y)) gapIn++; else gapOut++;
+                        }
+                    }
+                    // ★[검토 1123 MEDIUM] 이미 꼭짓점이 있는 자리(5 mm 안 — 모서리에서 1 cm 찌른 곳만 밖인 경우) · 메움 점끼리 겹친 자리는 뺌
+                    if (add.Count > 0 && add.Count < samples)
+                    {
+                        const double G = 0.005;
+                        var have = new HashSet<(long, long)>();
+                        foreach (CivilDb.TinSurfaceVertex v in tin.Vertices) have.Add(((long)Math.Round(v.Location.X / G), (long)Math.Round(v.Location.Y / G)));
+                        bool Taken((long X, long Y) c) { for (long i = -1; i <= 1; i++) for (long j = -1; j <= 1; j++) if (have.Contains((c.X + i, c.Y + j))) return true; return false; }
+                        var keepAdd = new List<Point3d>();
+                        foreach (var p in add)
+                        {
+                            var c = ((long)Math.Round(p.X / G), (long)Math.Round(p.Y / G));
+                            if (Taken(c)) { dup++; continue; }
+                            have.Add(c); keepAdd.Add(p);
+                        }
+                        add = keepAdd;
+                    }
+                    tr.Commit();
+                }
+                if (add.Count > 0 && add.Count + dup >= samples)
+                {
+                    // ★[검토 1123 LOW] 표본이 전부 «안 닿음» = 새 원지반이 옛 자리에 없음(좌표 어긋남 등) — 테두리를 통째로 지어내지 않음
+                    fillNote = $"메움 생략(표본 {samples}개 모두 새 삼각망 밖)";
+                    add.Clear();
+                }
+                else fillNote = add.Count > 0 ? $"옛 높이 점 {add.Count}개 넣음" : "메울 곳 없음";
+                using (var tr = db.TransactionManager.StartTransaction())
+                {
+                    var tin = (CivilDb.TinSurface)tr.GetObject(newId, OpenMode.ForWrite);
+                    if (add.Count > 0) using (var pc = new Point3dCollection(add.ToArray())) tin.AddVertices(pc);
+                    GradingBuilder.AddOuterBoundary(tin, ring, midOrd: 0.01);   // 다시 짓기는 이 안에서 한 번
+                    tr.Commit();
+                }
+            }
+            catch (System.Exception fx)
+            {
+                // ★[검토 1123 MEDIUM] 메움(점 추가 · 다시 짓기)이 실패해 거래가 통째로 취소되면 바깥 경계도 빠진다(1122 «긴 삼각형»이 돌아옴) — 경계만 넣는 옛 길로 한 번 더
+                fillNote = "메움 생략(" + fx.Message + ")";
+                using var tr = db.TransactionManager.StartTransaction();
+                GradingBuilder.AddOuterBoundary((CivilDb.TinSurface)tr.GetObject(newId, OpenMode.ForWrite), ring, midOrd: 0.01);
                 tr.Commit();
             }
+            log = $"옛 테두리 꼭짓점 {n} · 표본 {samples}(간격 {RingStep} m 이하) 중 새 삼각망이 안 닿은 곳 {add.Count + dup}(바뀐 범위 안 {gapIn} · 밖 {gapOut} · 이미 꼭짓점 {dup}) → {fillNote} · {sw.ElapsedMilliseconds} ms";
             // ★[검토 1122 MEDIUM] 옛 원지반이 여러 조각이면 가장 큰 조각 테두리만 씀 — 알림
             int islands = areas.Count(x => x > best * 0.01) - 1;
             return "옛 원지반 테두리 밖은 자름" + (islands > 0 ? $" · ⚠옛 원지반이 여러 조각 — 가장 큰 조각만(작은 조각 {islands}개 자리는 새 원지반에 없음)" : "");
         }
         catch (System.Exception ex) { return "⚠옛 원지반 테두리로 자르지 못함 — " + ex.Message; }
+    }
+
+    /// <summary>자가 확인 — 새 원지반 바깥 테두리가 옛 고리와 같은가: 새 테두리 꼭짓점 중 옛 고리에서 5 cm 넘게 떨어진 수 · 옛 꼭짓점 중 새 테두리에서 5 cm 넘게 떨어진 수 · 최대 · 넓이 비(새/옛).</summary>
+    static (int Off, int Miss, double Max, double Ratio) BorderCheck(Database db, ObjectId sid, List<Point3> ring)
+    {
+        List<Point3>? nr = null; double na = 0;
+        using (var tr = db.TransactionManager.StartTransaction())
+        {
+            var bs = Borders(tr, (CivilDb.TinSurface)tr.GetObject(sid, OpenMode.ForRead));
+            if (bs.Count > 0) { nr = bs[0].Ring; na = bs[0].Area; }
+            tr.Commit();
+        }
+        if (nr == null) return (-1, -1, double.NaN, 0);
+        var gf = new NetTopologySuite.Geometries.GeometryFactory();
+        var dOld = new NetTopologySuite.Operation.Distance.IndexedFacetDistance(RingLine(ring));
+        var dNew = new NetTopologySuite.Operation.Distance.IndexedFacetDistance(RingLine(nr));
+        int off = 0, miss = 0; double mx = 0;
+        foreach (var p in nr) { double d = dOld.Distance(gf.CreatePoint(new NetTopologySuite.Geometries.Coordinate(p.X, p.Y))); if (d > 0.05) off++; mx = Math.Max(mx, d); }
+        foreach (var p in ring) { double d = dNew.Distance(gf.CreatePoint(new NetTopologySuite.Geometries.Coordinate(p.X, p.Y))); if (d > 0.05) miss++; mx = Math.Max(mx, d); }
+        double oa = 0;
+        for (int k = 0; k < ring.Count; k++) { var u = ring[k]; var v = ring[(k + 1) % ring.Count]; oa += u.X * v.Y - v.X * u.Y; }
+        return (off, miss, mx, oa != 0 ? na / (Math.Abs(oa) / 2) : 0);
     }
 
     /// <summary>★★[JACK 1122 «원지반 도로 다듬기»] 다듬은 도로 테두리(3D)로 그 범위만 바꿔 원지반을 새로 짓는다 — 측량도 보정과 같은 한 벌
@@ -371,9 +508,23 @@ internal static class SurveyFix
     }
 
     /// <summary>★[JACK 1122 «다듬기 돌려도 울퉁불퉁»] Civil «평탄부 최소화»는 등고선 단계에서(도로 선 넣기 전) 빈 도로 자리의 평평한 삼각형에 등고선 사이 높이 점을 끼워 넣는다
-    /// (1122 실측: 도로 한가운데 81.25 = 80 · 82.5 가운데) — 도로 범위 안에서 다듬은 선 위(0.6 m 안)가 아닌 점은 지운다(지표면 편집 «점 삭제»).</summary>
-    static int DropStrayInRoad(Database db, ObjectId sid, NetTopologySuite.Geometries.Geometry region, IReadOnlyList<List<Point3>> lines)
+    /// (1122 실측: 도로 한가운데 81.25 = 80 · 82.5 가운데) — 도로 범위 안에서 다듬은 선 위(0.6 m 안)가 아닌 점은 지운다(지표면 편집 «점 삭제»).
+    /// <para>★★[JACK 1123 «도로 다듬기 뒤 원지반 경계가 찌그러짐»] 옛 테두리(<paramref name="ring"/>) 10 cm 안 점은 안 지운다 — 바깥 경계가 테두리에 찍은 점 · 테두리 메움 점을 지우면
+    /// 그 자리 테두리가 안쪽으로 V자로 파인다(현장 덤프 A: 872개 지움 → 테두리 꼭짓점 334개가 옛 고리를 벗어남 · 최대 33.1 m 안쪽). <paramref name="kept"/> = 그래서 남긴 수.</para></summary>
+    static int DropStrayInRoad(Database db, ObjectId sid, NetTopologySuite.Geometries.Geometry region, IReadOnlyList<List<Point3>> lines, IReadOnlyList<Point3>? ring, out int kept)
     {
+        kept = 0;
+        var band = ring == null ? null : NetTopologySuite.Geometries.Prepared.PreparedGeometryFactory.Prepare(RingLine(ring).Buffer(0.1));
+        // ★[검토 1123 LOW] 옛 고리 안 점만 지움(밖은 바깥 경계가 이미 버린 자리)
+        NetTopologySuite.Geometries.Prepared.IPreparedGeometry? inRing = null;
+        if (ring != null)
+            try
+            {
+                var lr = RingLine(ring);
+                var poly = lr.Factory.CreatePolygon(lr.Coordinates);
+                inRing = NetTopologySuite.Geometries.Prepared.PreparedGeometryFactory.Prepare(poly.IsValid ? poly : poly.Buffer(0));
+            }
+            catch { inRing = null; }
         const double C = 0.5;
         var keep = new HashSet<(long, long)>();
         foreach (var l in lines) foreach (var q in l) keep.Add(((long)Math.Floor(q.X / C), (long)Math.Floor(q.Y / C)));
@@ -395,7 +546,11 @@ internal static class SurveyFix
         {
             var p = v.Location;
             if (!env.Contains(p.X, p.Y) || Near(p.X, p.Y)) continue;
-            if (prep.Contains(gf.CreatePoint(new NetTopologySuite.Geometries.Coordinate(p.X, p.Y)))) del.Add(v);
+            var pt = gf.CreatePoint(new NetTopologySuite.Geometries.Coordinate(p.X, p.Y));
+            if (!prep.Contains(pt)) continue;
+            if (band != null && band.Contains(pt)) { kept++; continue; }
+            if (inRing != null && !inRing.Contains(pt)) continue;
+            del.Add(v);
         }
         if (del.Count > 0) tin.DeleteVertices(del);
         tr.Commit();
@@ -496,19 +651,43 @@ internal static class SurveyFix
             // ★[JACK 1122 스샷 «처음 부른 원지반보다 측량도가 넘어가도 처음 원지반을 넘어 작성되지 않게»]
             //   새 원지반 바깥 경계 = 옛 원지반 테두리(가장 큰 고리) — 측량이 밖으로 뻗어도 긴 삼각형으로 늘어나지 않음
             string clip = "";
+            List<Point3>? oldRing = null;
+            var bLog = new List<string>();
             if (!surveyOnly)
             {
                 var evPrev = EventViewerMute.Begin();   // ★[검토 1122 MEDIUM] 자르며 다시 짓기도 이벤트 뷰어 창 없이
-                try { clip = ClipToOld(db, groundId, r.NewId); } finally { EventViewerMute.End(evPrev); }
+                try { clip = ClipToOld(db, groundId, r.NewId, prep, out oldRing, out string cl); if (cl.Length > 0) bLog.Add(cl); } finally { EventViewerMute.End(evPrev); }
             }
             if (clip.Length > 0) done += "\n  " + clip;
             if (roadLines != null && region != null)
             {
                 var evPrev2 = EventViewerMute.Begin();
-                try { int nd = DropStrayInRoad(db, r.NewId, region, roadLines); if (nd > 0) done += $"\n  도로 안 끼어든 점 {nd}개 지움(평탄부 최소화 점)"; }
+                try
+                {
+                    int nd = DropStrayInRoad(db, r.NewId, region, roadLines, oldRing, out int nk);
+                    if (nd > 0) done += $"\n  도로 안 끼어든 점 {nd}개 지움(평탄부 최소화 점)";
+                    bLog.Add($"도로 안 점 정리: 지움 {nd} · 옛 테두리 10 cm 안이라 남김 {nk}");
+                }
                 catch (System.Exception dex) { done += "\n  ⚠도로 안 점 정리 못 함 — " + dex.Message; }
                 finally { EventViewerMute.End(evPrev2); }
             }
+            // ★[JACK 1123] 자가 확인 — 새 원지반 바깥 테두리 = 옛 테두리(어긋나면 알림 한 줄 · 자세한 수는 진단 로그)
+            if (oldRing != null)
+                try
+                {
+                    var bc = BorderCheck(db, r.NewId, oldRing);
+                    // ★[검토 1123 MEDIUM] 새 테두리를 못 읽음(-1) = 로그만(알림에 «-1곳 · NaN m»을 띄우지 않음)
+                    if (bc.Off < 0) bLog.Add("테두리 확인: 새 원지반 테두리를 못 읽음");
+                    else
+                    {
+                        bLog.Add(string.Format(System.Globalization.CultureInfo.InvariantCulture,
+                            "테두리 확인: 새 꼭짓점 중 옛 고리 5 cm 밖 {0} · 옛 꼭짓점 중 새 테두리 5 cm 밖 {1} · 최대 {2:0.000} m · 넓이 새/옛 {3:0.000000}", bc.Off, bc.Miss, bc.Max, bc.Ratio));
+                        if (bc.Off > 0 || bc.Miss > 0) done += $"\n  ⚠원지반 테두리 {Math.Max(bc.Off, bc.Miss)}곳 어긋남(최대 {bc.Max:0.00} m) → 결과 확인 뒤 다시 하기";
+                    }
+                }
+                catch (System.Exception bex) { bLog.Add("테두리 확인 못 함 — " + bex.Message); }
+            r.BorderLog = string.Join("\n", bLog);
+            if (r.BorderLog.Length > 0) try { DiagLog.Append($"\n■ DHSURVEYFIX 테두리 — {r.BorderLog.Replace("\n", " · ")}\n"); } catch { }
             // ── 옛 원지반은 숨김(지우지 않음 — 그것을 쓰는 결과가 있을 수 있음 · [원지반 삭제]로 지울 수 있음) ──
             if (r.DupSpots > 0) done += $"\n  같은 자리 표고점 {r.DupSpots}개는 하나만 씀";
             if (roadNote == null && r.Cross is { ZDiff: > 0 } cx)
