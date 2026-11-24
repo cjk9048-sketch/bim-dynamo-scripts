@@ -215,11 +215,13 @@ public sealed class StrataModel
         _useThickness = new bool[defs.Length];
         for (int i = 0; i < defs.Length; i++)
             _useThickness[i] = defs[i].Mode == InterpMode.Thickness || _layerLogs[i] < Strata.MinAreaLogs;
-        // ★★★[JACK 0908] <b>잇는 것은 언제나 표고다</b> — 원지반 경향을 무시하고 측점들을 잇는다.
-        //   <b>공이 모자랄 때만</b> 원지반에서 평균 심도로 내린다(표고로 이을 수가 없으므로).
-        //   그때 무엇을 평균 내는지는 <b>친 값의 뜻</b>이 정한다(<see cref="WaterInput"/>).
+        // ★★★[JACK 1124 «지하수위만 원지반과 붙음 — 보링공 없는 부분에서 원지반에 붙어 횡단이 이상함» → «심도로 잇기» 확정]
+        //   <b>지하수위는 늘 심도로 잇는다</b> — 공마다 심도(GL − 수위 표고)를 거리 가중 평균해 원지반에서 내린다.
+        //   종전(0908 «잇는 것은 언제나 표고»)은 공 수위 <b>표고</b>를 이어, 고저차 큰 땅에서 공이 먼 낮은 비탈은 평균 수위가 땅 위로 솟아
+        //   지표에 붙었다(실측: 공 6 · 심도 전부 5 m · 지반 43~88 m → 왼쪽 비탈 수위 = 지표). 잰 값은 심도이고 손으로 그리는 선도 지형과 나란하다.
+        //   지층이 아니므로 층 순서 제약은 안 받는다(아래 At ③). 친 값의 뜻(표고 · 심도)은 공마다 심도로 바꿀 때만 쓴다(<see cref="WaterInput"/>).
         _waterInput = waterInput;
-        _waterByDepth = _waterLogs > 0 && _waterLogs < Strata.MinAreaLogs;
+        _waterByDepth = _waterLogs > 0;
 
         var sb = new System.Text.StringBuilder();
         int fell = 0;
@@ -229,13 +231,11 @@ public sealed class StrataModel
                 fell++;
                 sb.Append($" · {defs[i].Name}: 표고로 이으려 했으나 <b>표고를 낼 수 있는</b> 공 {_layerLogs[i]}개뿐 → 두께로 원지반 오프셋");
             }
-        bool wFew = _waterLogs > 0 && _waterLogs < Strata.MinAreaLogs;
-        bool wFell = _waterByDepth;
-        if (wFell)
-            sb.Append($" · 지하수위: 공 {_waterLogs}개뿐이라 표고로 못 잇는다 → 평균 심도로 원지반 오프셋");
-        else if (_waterLogs > 0)
-            sb.Append($" · 지하수위: 공 {_waterLogs}개를 <b>표고로</b> 이었다"
-                    + $"(친 값은 {(waterInput == WaterInput.Elevation ? "표고" : "심도")})");
+        // ★[JACK 1124] 지하수위는 늘 심도로 — «물러선 것»이 아니라 정한 방식이다(사용자 알림 «오프셋» 문구에 안 걸리게)
+        bool wFell = false;
+        if (_waterLogs > 0)
+            sb.Append($" · 지하수위: 공 {_waterLogs}개의 <b>심도</b>를 이어 원지반에서 내림"
+                    + $"(친 값은 {(waterInput == WaterInput.Elevation ? "표고 → 공마다 심도로" : "심도")})");
         // ★[검토 0907 · A-4] 안내(ⓘ)는 <b>물러선 것이 아니어도</b> 실어야 한다 —
         //   종전엔 물러선 건이 0이면 <c>sb</c>를 통째로 버려서 안내가 사라졌다.
         int fellAll = fell + (wFell ? 1 : 0);
@@ -389,7 +389,10 @@ public sealed class StrataModel
 
     /// <summary>지하수위 표고를 잰다.
     ///
-    /// <para><b>둘 중 하나로 잇는다</b>(<see cref="_waterByDepth"/>가 정한다):</para>
+    /// <para>★★★[JACK 1124] <b>지금은 늘 심도로 잇는다</b>(<see cref="_waterByDepth"/> = 공이 하나라도 있으면 참) —
+    /// 아래 «둘 중 하나» 설명과 0907 · 0908 기록은 그 전 규칙의 이력이다(표고로 이으면 비탈에서 수위가 지표에 붙음).</para>
+    ///
+    /// <para>(이력) <b>둘 중 하나로 잇는다</b>(<see cref="_waterByDepth"/>가 정한다):</para>
     /// <list type="number">
     /// <item><b>표고로</b> — 물은 수평을 찾는다. 두께처럼 지형을 따라가게 하면
     ///   언덕 위 물이 언덕만큼 올라간다.</item>
