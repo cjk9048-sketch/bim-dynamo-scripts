@@ -26,6 +26,7 @@ internal static class SiteSheetsRefresh
         try { ErasedSource.Sweep(doc, who); } catch { }
         ErasedSource.NoSweep.Clear();
         string nori = NoriCommand.AutoDraw(doc);
+        try { WallRoadCutPlan.ResyncSiteViews(doc, who); } catch { }   // ★[JACK 1124 · 검토 GAP] 진입도로를 다시 지어 옹벽 자리가 바뀌었는데 부지 종단을 안 다시 그렸으면(부지 종단 최신)
         if (nori.Length > 0) { try { DiagLog.Append($"\n■ 노리선 저절로 — {who} 뒤 · {nori}\n"); } catch { } }
     }
 
@@ -229,7 +230,7 @@ internal static class SiteSheetsRefresh
     }
 
     /// <summary>부지 선형(<c>DH선형…</c>) 수 — 노선 하나에 하나(<see cref="PureWithWallsBuilder.CountStale"/>와 같은 이름 규칙).</summary>
-    static int SiteAlignCount(Autodesk.AutoCAD.DatabaseServices.Database db)
+    internal static int SiteAlignCount(Autodesk.AutoCAD.DatabaseServices.Database db)
     {
         int n = 0;
         try

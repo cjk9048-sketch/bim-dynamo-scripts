@@ -107,6 +107,10 @@ internal static class UDitchPaletteHost
             using (var tr = _doc.Database.TransactionManager.StartTransaction())
             {
                 UDitchStore.Save(_doc.Database, tr, _view.Rec);
+                // ★[검토 1124 #1] 창에서 규격 · 바닥고를 고치면 집수정 크기 · 자리가 바뀜 → 평면 블록도 같은 목록으로(창이 이미 Link · 같으면 손 안 댐)
+                var log = new System.Text.StringBuilder();
+                UDitchStore.SyncBasins(_doc.Database, _view.Rec, _view.S, log);
+                if (log.Length > 0) try { DiagLog.Append("\n■ U형 측구 창 값 저장\n" + log); } catch { }
                 tr.Commit();
             }
             _dirty = false;   // ★[검토 1122 MEDIUM] 저장이 된 뒤에만

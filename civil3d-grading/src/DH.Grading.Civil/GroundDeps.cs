@@ -360,7 +360,12 @@ internal static class GroundDeps
             {
                 try { string fn = FinalSurfaceBuilder.Build(doc); if (fn.Length > 0) notes.Add("최종지표면: " + fn); } catch (System.Exception ex) { notes.Add("최종지표면을 다시 못 지음 — " + ex.Message); }
             }
-            if (p.RoadsGo.Count > 0 && p.PadPresent) { try { NoriCommand.AutoDraw(doc); } catch { } }
+            if (p.RoadsGo.Count > 0 && p.PadPresent)
+            {
+                try { NoriCommand.AutoDraw(doc); } catch { }
+                // ★[JACK 1124 · 검토 낮음 7] 도로를 걷었으면 부지 옹벽선을 온전히(노리선 저절로가 미뤄졌거나 꺼져 있어도 — 두 번 불러도 같은 결과)
+                try { WallRoadCutPlan.Refresh(doc.Database); } catch { }
+            }
         });
 
         // 되읽기 — 지운다고 한 것이 정말 없나(도중에 멈췄어도 한다)

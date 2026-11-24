@@ -1972,7 +1972,7 @@ internal sealed class RoadSession
                 Design = d;
                 // ★[v110.3] 실제 선 — 사면선 · 소단선 · 노리선 · 옹벽선(이 도로 것만 지우고 새로 — 검토 M7)
                 string lineNote;
-                try { lineNote = DrawRoadLines(db, lineR ?? r, lines); } catch (System.Exception exL) { lineNote = "⚠선을 못 그림 — " + exL.Message; }
+                try { lineNote = DrawRoadLines(db, lineR ?? r, lines, tris); } catch (System.Exception exL) { lineNote = "⚠선을 못 그림 — " + exL.Message; }
                 // ★[설치 전 검토 낮음 6] 면 끝이 땅에 안 닿은 자리 · 옹벽 자리(가운데 높이)를 알림 · 수량은 이 면의 칸 기준
                 //   ★[v116 · 고리 엔진 §2 M5e] 고리 면(첫 토막 r)은 부딪히면 낮은 쪽(절토) 사면을 넣는다 · 길 이름은 토막 길 기록(고리 면이 들면 «고리 면 + 선 면» 꼴) · 칸 0.25 m도 보이게(0.## — 0.5 · 1은 그대로)
                 var paths = (_pendingPath ?? "").Split('|');
@@ -2001,17 +2001,19 @@ internal sealed class RoadSession
     }
 
     internal const string LaySlope = "DH도로-사면선", LayBench = "DH도로-소단선", LayNori = "DH도로-노리선", LayWall = "DH도로-옹벽선";
+    /// <summary>★[JACK 1124 «진입도로는 지표면 외곽 경계도 · 순수 도로 부분의 경계도 없음»] 도로경계 = 포장(차도 + 길어깨) 좌 · 우 끝선 · 지표면경계 = 도로 지표면 바깥 테두리(사면 끝 포함) — 둘 다 3D 폴리선(부지 «DH-정지경계»처럼).</summary>
+    internal const string LayEdge = "DH도로-도로경계", LayOutline = "DH도로-지표면경계";
     internal const string LineApp = "DH_ROADLINE";
     internal const string SurfStyleName = "DH-진입도로 경계";
 
     /// <summary>★★[v110.3 · 계획 4 · 검토 M7] [도로 면 만들기]의 실제 선 — 사면선(윗선) · 소단선(아랫선) · 옹벽선(굵게) · 노리선(짧은 · 긴) · 3D(설계 높이).
     /// 이 도로(노선 핸들 XData)의 것만 먼저 지움 — 한 도면에 도로가 둘이어도 남의 선은 그대로. 못 지우면 안 그림(겹쳐 두 벌이 되지 않게).</summary>
-    string DrawRoadLines(Database db, RoadGrade.Result r, List<RoadGrade.TierLine> lines)
+    string DrawRoadLines(Database db, RoadGrade.Result r, List<RoadGrade.TierLine> lines, IReadOnlyList<WallDaylight.Tri>? surfTris = null)
     {
         // ★[v111.3 · JACK 1030] 노리선은 여기서 안 그림 — [노리선] 단추(부지 + 모든 도로 한꺼번에 · DrawRoadTicks). 이 도로의 옛 노리선은 아래에서 함께 지움
         string me = AlignId.Handle.ToString();
-        var lays = new[] { LaySlope, LayBench, LayNori, LayWall, RoadDitchLines.Layer };
-        int erased = 0, failErase = 0, nLine = 0, nWall = 0, nDitch = 0;
+        var lays = new[] { LaySlope, LayBench, LayNori, LayWall, RoadDitchLines.Layer, LayEdge, LayOutline };
+        int erased = 0, failErase = 0, nLine = 0, nWall = 0, nDitch = 0, nEdge = 0, nOut = 0;
         using var tr = db.TransactionManager.StartTransaction();
         GradingBuilder.EnsureRegApp(db, tr, LineApp);
         var ms = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForWrite);
@@ -2047,6 +2049,54 @@ internal sealed class RoadSession
             using (var tg = Tag()) pl.XData = tg;
             if (wall) nWall++; else nLine++;
         }
+        // ★[JACK 1124 «진입도로는 지표면 외곽 경계도 · 순수 도로 부분의 경계도 없음»] 도로경계(포장 좌 · 우 끝 · 높이 = 설계 도로 면) · 지표면경계(도로 지표면 바깥 테두리 · 세모 꼭짓점 높이)
+        //   — 3D 폴리선 · 이 도로 표식(위에서 옛것을 같이 지움 · 초기화 · 도로 지우기는 «DH도로-» 레이어 + 표식으로 지움) · [U형 측구 경계 따라]가 바로 잡음
+        try
+        {
+            ObjectId lE = Commands.SectionCommand.EnsureLayer(db, tr, LayEdge, 7), lO = Commands.SectionCommand.EnsureLayer(db, tr, LayOutline, 3);
+            void Put(List<Point3d> pts, bool closed, ObjectId layer, string what)
+            {
+                var sp = Simplify(pts, 0.01);
+                if (closed && sp.Count > 1 && sp[0].DistanceTo(sp[^1]) < 1e-6) sp.RemoveAt(sp.Count - 1);
+                if (sp.Count < (closed ? 3 : 2)) return;
+                var pc = new Point3dCollection(); foreach (var p in sp) pc.Add(p);
+                var pl = new Polyline3d(Poly3dType.SimplePoly, pc, closed) { LayerId = layer };
+                ms.AppendEntity(pl); tr.AddNewlyCreatedDBObject(pl, true);
+                using (var tg = new ResultBuffer(new TypedValue((int)DxfCode.ExtendedDataRegAppName, LineApp), new TypedValue((int)DxfCode.ExtendedDataAsciiString, me),
+                                                new TypedValue((int)DxfCode.ExtendedDataAsciiString, what))) pl.XData = tg;
+            }
+            // 포장 끝 — 토막이 여럿이면(빈 구간 도로) 토막마다 · 하나면 이 결과
+            var rs = Pieces.Count > 1 ? Pieces.Select(p => p.R).Where(q => q != null && q.Error.Length == 0 && q.EdgeL.Count >= 2).ToList() : new List<RoadGrade.Result?> { r };
+            foreach (var q in rs)
+                foreach (var (e, side) in new[] { (q!.EdgeL, "도로경계 좌"), (q.EdgeR, "도로경계 우") })
+                {
+                    var pts = e.Where(t => double.IsFinite(t.X) && double.IsFinite(t.Y) && double.IsFinite(t.Z)).Select(t => new Point3d(t.X, t.Y, t.Z)).ToList();
+                    if (pts.Count >= 2) { Put(pts, false, lE, side); nEdge++; }
+                }
+            // 지표면 바깥 테두리 — 한 번만 쓰인 세모 변 고리(바깥 · 섬 구멍) · 높이 = 그 꼭짓점
+            if (surfTris != null && surfTris.Count > 0 && RoadFootprint.FromTris(surfTris) is NetTopologySuite.Geometries.Geometry fp)
+            {
+                var zOf = new Dictionary<(double, double), double>();
+                foreach (var t in surfTris) { zOf[(t.A.X, t.A.Y)] = t.A.Z; zOf[(t.B.X, t.B.Y)] = t.B.Z; zOf[(t.C.X, t.C.Y)] = t.C.Z; }
+                for (int g = 0; g < fp.NumGeometries; g++)
+                    if (fp.GetGeometryN(g) is NetTopologySuite.Geometries.Polygon pg)
+                        foreach (var ring in new[] { pg.ExteriorRing }.Concat(pg.InteriorRings))
+                        {
+                            double zl = double.NaN;
+                            var pts = new List<Point3d>();
+                            foreach (var c in ring.Coordinates)
+                            {
+                                double z = zOf.TryGetValue((c.X, c.Y), out double zz) ? zz : zl;
+                                if (!double.IsFinite(z)) z = 0;
+                                zl = z;
+                                pts.Add(new Point3d(c.X, c.Y, z));
+                            }
+                            Put(pts, true, lO, "지표면경계");
+                            nOut++;
+                        }
+            }
+        }
+        catch (System.Exception exB) { try { DiagLog.Append($"\n[진입도로] {Name} — ⚠도로경계 · 지표면경계 못 그림 — {exB.Message}"); } catch { } }
         // ★★[도로 마무리 ② · 계획 6.4] 측구 가운데 선(«DH도로-측구선» · 하늘) — 형식은 선의 기록(XData)
         try
         {
@@ -2067,7 +2117,7 @@ internal sealed class RoadSession
         }
         catch (System.Exception exD) { try { DiagLog.Append($"\n[진입도로] {Name} — ⚠측구선 못 그림 — {exD.Message}"); } catch { } }
         tr.Commit();
-        return $"사면선 · 소단선 {nLine} · 옹벽선 {nWall}" + (nDitch > 0 ? $" · 측구선 {nDitch}" : "") + (erased > 0 ? $"(옛 선 {erased} 지움)" : "");
+        return $"사면선 · 소단선 {nLine} · 옹벽선 {nWall}" + (nDitch > 0 ? $" · 측구선 {nDitch}" : "") + $" · 도로경계 {nEdge} · 지표면경계 {nOut}" + (erased > 0 ? $"(옛 선 {erased} 지움)" : "");
     }
 
     internal const string SiteNoriLayer = "DH-노리선";

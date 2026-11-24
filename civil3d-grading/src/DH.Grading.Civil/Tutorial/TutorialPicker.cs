@@ -5,12 +5,11 @@ using Chapter = DH.Grading.Civil.Tutorial.TutorialFlow.Chapter;
 
 namespace DH.Grading.Civil.Tutorial;
 
-/// <summary>★[튜토리얼 · JACK 1117 «단원 고르기»] [튜토리얼]을 누르면 뜨는 창 — 단원마다 ✓(끝냄) · [시작] / [기본 자료로] · [내 것으로 이어서].
-/// <para>«기본 자료» = 설치된 튜토리얼 도면 · «내 것» = 앞 단원을 끝낸 내 도면. 자료가 없으면 단추가 꺼지고 «자료 없음».</para></summary>
+/// <summary>★[튜토리얼 · JACK 1117 «단원 고르기»] [튜토리얼]을 누르면 뜨는 창 — 단원마다 ✓(끝냄) · [시작].
+/// <para>★[JACK 1124 «내 것으로 이어서 없애 — 무조건 기본 자료로»] [시작] = 늘 설치된 튜토리얼 도면(1단원은 새 도면). 자료가 없으면 단추가 꺼지고 «자료 없음».</para></summary>
 internal sealed class TutorialPicker : Window
 {
     internal Chapter? Chosen;
-    internal bool Mine;
 
     internal TutorialPicker()
     {
@@ -31,16 +30,10 @@ internal sealed class TutorialPicker : Window
             DockPanel.SetDock(btns, Dock.Right);
             row.Children.Add(btns);
             bool hasBase = c == Chapter.Ground || TutorialData.StartDwg(c) != null;
-            string? mine = TutorialData.MineFor(c);
-            if (c == Chapter.Ground) btns.Children.Add(Btn("시작", true, () => Pick(c, false)));
-            else
-            {
-                btns.Children.Add(Btn("기본 자료로", hasBase, () => Pick(c, false)));
-                if (mine != null) btns.Children.Add(Btn("내 것으로 이어서", true, () => Pick(c, true)));
-            }
+            btns.Children.Add(Btn("시작", hasBase, () => Pick(c)));
             var name = new TextBlock
             {
-                Text = (done.Contains((int)c) ? "✓ " : "　 ") + $"{System.Array.IndexOf(TutorialFlow.Active, c) + 1}. {TutorialFlow.ChapterName(c)}"   // ★[5단원] 번호 = 여는 차례(종횡단도 4는 쉼)
+                Text = (done.Contains((int)c) ? "✓ " : "　 ") + $"{(int)c}. {TutorialFlow.ChapterName(c)}"
                      + (hasBase ? "" : "  · 자료 없음"),
                 FontSize = 14, VerticalAlignment = VerticalAlignment.Center,
                 Foreground = done.Contains((int)c) ? DhBrand.Ok : DhBrand.Ink,
@@ -56,7 +49,7 @@ internal sealed class TutorialPicker : Window
         Content = root;
     }
 
-    void Pick(Chapter c, bool mine) { Chosen = c; Mine = mine; DialogResult = true; }
+    void Pick(Chapter c) { Chosen = c; DialogResult = true; }
 
     static Button Btn(string text, bool on, System.Action act)
     {

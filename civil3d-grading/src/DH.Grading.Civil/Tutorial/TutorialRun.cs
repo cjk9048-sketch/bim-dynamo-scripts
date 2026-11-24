@@ -19,31 +19,31 @@ using Chapter = DH.Grading.Civil.Tutorial.TutorialFlow.Chapter;
 namespace DH.Grading.Civil.Tutorial;
 
 /// <summary>★★[튜토리얼 · JACK 1117] 리본 [튜토리얼] — 단원 고르기 → 단원마다 따라 하기.
-/// <para>1 원지반 가져오기(새 빈 도면 · 중부원점 — 서버 지표면 맛보기 + 수치지도 DXF) · 2 계획부지 생성 · 3 터파기 생성(기본 자료 사본 또는 앞 단원 내 결과 사본).
+/// <para>1 원지반 가져오기(새 빈 도면 · 중부원점 — 서버 지표면 맛보기 + 수치지도 DXF) · 2 계획부지 생성(터파기 · 종단 · 횡단 포함) · 3 진입도로 생성 · 4 도면화(기본 자료 사본).
 /// 지금 도면은 안 건드린다(늘 새 도면 · 사본).</para></summary>
 public sealed class TutorialCommand
 {
     /// <summary>[다음 단원] · [다시 시작]이 고르기 창 없이 바로 열 단원.</summary>
-    internal static (Chapter Ch, bool Mine)? Preset;
+    internal static Chapter? Preset;
 
     [CommandMethod("DHTUTORIAL", CommandFlags.Session)]
     public static void Run()
     {
         try { Tut.Current?.End("다시 시작"); } catch { }
-        Chapter ch; bool mine;
-        if (Preset is { } p) { Preset = null; ch = p.Ch; mine = p.Mine; }
+        Chapter ch;
+        if (Preset is Chapter p) { Preset = null; ch = p; }
         else
         {
             var w = new TutorialPicker();
             bool? ok = null;
             try { ok = AcadApp.ShowModalWindow(w); } catch (System.Exception ex) { Log("고르기 창 실패 — " + ex.Message); }
             if (ok != true || w.Chosen == null) return;
-            ch = w.Chosen.Value; mine = w.Mine;
+            ch = w.Chosen.Value;
         }
-        Start(ch, mine);
+        Start(ch);
     }
 
-    static void Start(Chapter ch, bool mine)
+    static void Start(Chapter ch)
     {
         var dm = AcadApp.DocumentManager;
         Document? doc = null;
@@ -72,7 +72,7 @@ public sealed class TutorialCommand
         }
         else
         {
-            string? src = mine ? TutorialData.MineFor(ch) : TutorialData.StartDwg(ch);
+            string? src = TutorialData.StartDwg(ch);   // ★[JACK 1124] 늘 기본 자료(«내 것으로 이어서» 없앰)
             if (src == null) { Say(dm, $"튜토리얼 자료 없음 — {TutorialFlow.ChapterName(ch)}"); return; }
             var w = TutorialData.CopyToWork(src, ch, out string why);
             if (w == null) { Say(dm, "자료 사본을 못 만듦 — " + why); return; }
@@ -80,10 +80,10 @@ public sealed class TutorialCommand
             try { doc = dm.Open(work, false); } catch (System.Exception ex) { Say(dm, "자료 도면을 못 엶 — " + ex.Message); return; }
             if (doc == null) return;
             try { if (!ReferenceEquals(dm.MdiActiveDocument, doc)) dm.MdiActiveDocument = doc; } catch { }
-            how = (mine ? "내 결과 " : "기본 자료 ") + System.IO.Path.GetFileName(src);
+            how = "기본 자료 " + System.IO.Path.GetFileName(src);
         }
         Log($"시작 — {(int)ch}. {TutorialFlow.ChapterName(ch)} · {how}");
-        Tut.Current = new Tut(doc, ch, mine, work);
+        Tut.Current = new Tut(doc, ch);
         Tut.Current.Begin();
     }
 
@@ -143,8 +143,6 @@ internal sealed class Tut
     readonly Document _doc;
     readonly Database _db;
     readonly Chapter _ch;
-    readonly bool _mine;
-    string _work;
     Dispatcher? _disp;
     Step _step;
     bool _ended, _docGone;
@@ -176,10 +174,26 @@ internal sealed class Tut
     readonly List<ObjectId> _hidden = new();
     bool _hintWanted, _hintEraseWanted;
     // ── 2단원: 구배 · 옹벽
-    (string Cut, string Fill)? _slopeBase;
     string? _wallBase;
     bool _wallRan;
     bool _fWall;
+    // ── ★[JACK 1124] 2단원 가이드 — 그려 둔 두 선 숨김 · 구배 칸 가이드 값만 · 탭 · [옹벽 추가] 점선
+    bool _baseHideWanted;
+    readonly List<ObjectId> _baseHidden = new();
+    System.Windows.Controls.TextBox? _cutBox, _fillBox;
+    string _cutOk = "", _fillOk = "";
+    bool _fSlopeOk, _fFixTab, _fWallAdd, _wallAddRan, _wallAddEnded, _elevOff;
+    int _wallAddBase = -1;
+    List<Point2d>? _wallPts;
+    string? _wallGuideWhy;
+    object? _osOld;
+    bool _exStarted;
+    // ── ★[JACK 1124] 2단원 지적도 · 위성지도 · 종단 · 횡단 · 4단원 도면화 — 그 단계에서 누른 명령이 정상으로 끝나고 도면 객체가 늘었나(<see cref="TutorialFlow.CmdFact"/>)
+    string? _cmdRun;
+    int _cmdAdds;
+    readonly HashSet<string> _done = new();
+    string? _cmdNote;
+    bool _netFailed, _ran3d;
     // ── 5단원 진입도로 — 명령 기록(시작 때 지난 기록 · 그때 단계) · 끝낸 일 비트 · 포장 단계 기준 · 노선 따라 그릴 선
     TutorialFlow.RoadSnap _rdLast;
     int _rdDone;
@@ -201,10 +215,10 @@ internal sealed class Tut
     bool _idleQueued;
     Step? _announced;
 
-    internal Tut(Document doc, Chapter ch, bool mine, string work)
+    internal Tut(Document doc, Chapter ch)
     {
-        _doc = doc; _db = doc.Database; _ch = ch; _mine = mine; _work = work;
-        _step = ch switch { Chapter.Ground => Step.Ground, Chapter.Excav => Step.ExDraw, Chapter.Road => Step.RdOpen, _ => Step.Draw };
+        _doc = doc; _db = doc.Database; _ch = ch;
+        _step = ch switch { Chapter.Ground => Step.Ground, Chapter.Road => Step.RdOpen, Chapter.Sheet => Step.Book, _ => Step.Draw };
     }
 
     internal void Begin()
@@ -213,7 +227,7 @@ internal sealed class Tut
         try
         {
             _doc.CommandWillStart += OnCmdStart;
-            _doc.CommandEnded += OnCmdEnd;
+            _doc.CommandEnded += OnCmdOk;
             _doc.CommandCancelled += OnCmdEnd;
             _doc.CommandFailed += OnCmdEnd;
             _db.ObjectAppended += OnAppended;
@@ -238,7 +252,7 @@ internal sealed class Tut
 
     static bool IsDraw(Step s) => TutorialFlow.IsDraw(s);
     /// <summary>노란 점선을 띄우는 단계 — 따라 그리기 · 원지형 자르기(두 모서리 자리) · 진입도로 노선.</summary>
-    static bool HasHint(Step s) => IsDraw(s) || s == Step.Crop || s == Step.RdDraw;
+    static bool HasHint(Step s) => IsDraw(s) || s == Step.Crop || s == Step.RdDraw || s == Step.WallAdd;
 
     // ── 사건 ──────────────────────────────────────────────────────────────
     static bool IsImport(string n) => n is "DHCONTOURBOX" or "DHNGII" or "DHGNDCONTOUR";
@@ -251,23 +265,46 @@ internal sealed class Tut
         if (n == "DHNGII" && _ch == Chapter.Ground && _part2 && TutorialData.DxfFile is string dxf) NgiiCommand.PresetFile = dxf;
         // ★[5단원] 진입도로 명령 — 시작 앞 기록(지난 한가할 때 읽은 것) · 그때 단계를 적어 둠 → 끝난 뒤 한가할 때 견줌(ReadRoad)
         if (_ch == Chapter.Road && n.StartsWith("DHROAD", StringComparison.Ordinal)) _rdRuns.Add((n, _rdLast, _step));
+        // ★[JACK 1124] 리본 · 창 명령 끝 판정 — 그 단계에서 누른 것만 · 도는 동안 생긴 객체 수
+        if (_cmdRun == null && TutorialFlow.CmdFact(n) != null && TutorialFlow.CmdCounts(n, _step)) { _cmdRun = n; _cmdAdds = 0; }
         Kick();
+    }
+
+    /// <summary>명령이 정상으로 끝남(Esc · 실패는 <see cref="OnCmdEnd"/>만) — 센 명령이면 사실 켬 · 안 바뀌었으면 알림.</summary>
+    void OnCmdOk(object? s, CommandEventArgs e)
+    {
+        string n = (e.GlobalCommandName ?? "").ToUpperInvariant();
+        if (_cmdRun == n && TutorialFlow.CmdFact(n) is { } cf)
+        {
+            if (n == "DH3D") _ran3d = true;   // 3D 창이 뜨면 끝(한가할 때 봄)
+            else if (!cf.NeedAdd || _cmdAdds > 0) { _done.Add(cf.Fact); _netFailed = false; Log($"{n} → {cf.Fact} 끝 (객체 {_cmdAdds})"); }
+            else
+            {
+                _cmdNote = TutorialFlow.CmdFailNote(n);
+                if (n is "DHPARCEL" or "DHMAP") _netFailed = true;
+                Log($"{n} → 객체 안 늘어남 ({cf.Fact})");
+            }
+        }
+        OnCmdEnd(s, e);
     }
 
     void OnCmdEnd(object? s, CommandEventArgs e)
     {
         string n = (e.GlobalCommandName ?? "").ToUpperInvariant();
+        if (_cmdRun == n) _cmdRun = null;
         if (IsImport(n)) { _importing = false; _importEnded = true; }
         else if (n == "DHCONTOUR") _contourEnded = true;
         else if (n == PickCommands.CmdBuild) _buildEnded = true;
         else if (n == PickCommands.CmdExcavBuild) _exBuildEnded = true;
         else if (n == "DHWALL") { _wallRan = true; _wallEnded = true; }
+        else if (n == "DHWALLADD" && _step == Step.WallAdd) { _wallAddRan = true; _wallAddEnded = true; }
         else if (n == "DHCROP") _cropEnded = true;
         Kick();
     }
 
     void OnAppended(object? s, ObjectEventArgs e)
     {
+        if (_cmdRun != null && e.DBObject is Entity) _cmdAdds++;
         try { if (IsDraw(_step) && e.DBObject is Polyline && !_hints.Contains(e.DBObject.ObjectId)) { _cands.Add(e.DBObject.ObjectId); Kick(); } } catch { }
     }
 
@@ -371,14 +408,14 @@ internal sealed class Tut
                     break;
                 case "restart":
                     End("다시 시작");
-                    TutorialCommand.Preset = (_ch, _mine);
+                    TutorialCommand.Preset = _ch;
                     AcadApp.DocumentManager.MdiActiveDocument?.SendStringToExecute("\u0003\u0003" + "DHTUTORIAL ", true, false, true);
                     break;
                 case "next":
                     if (TutorialFlow.Next(_ch) is Chapter nx)
                     {
                         End("다음 단원");
-                        TutorialCommand.Preset = (nx, _saved && TutorialData.MineFor(nx) != null);
+                        TutorialCommand.Preset = nx;
                         AcadApp.DocumentManager.MdiActiveDocument?.SendStringToExecute("\u0003\u0003" + "DHTUTORIAL ", true, false, true);
                     }
                     break;
@@ -390,9 +427,21 @@ internal sealed class Tut
                 case "dxf": ToPart2("서버 지표면 건너뜀"); Kick(); break;
                 case "useline":
                     // ★[JACK 1117 «그려 둔 선 쓰기»] 따라 그리기 대신 도면에 있던 선을 그대로 — 점선을 걷고 원래 선을 보인다
-                    if (_step == Step.Draw && !_planGuide.IsNull) { _boundary = _planGuide; Log("그려 둔 계획부지선 씀"); }
-                    else if (_step == Step.ExDraw && !_exGuide.IsNull) { _exLine = _exGuide; Log("그려 둔 터파기선 씀"); }
+                    if (_step == Step.ExDraw && !_exGuide.IsNull)
+                    {
+                        _exLine = _exGuide;
+                        if (_baseHidden.Remove(_exGuide)) _hidden.Add(_exGuide);   // ★[JACK 1124] 2단원에 숨겨 둔 선 → 점선 걷을 때 다시 보이게
+                        Log("그려 둔 터파기선 씀");
+                    }
                     _hintEraseWanted = true;
+                    Kick();
+                    break;
+                case "skipnet":
+                    // ★[JACK 1124] 지적도 · 위성지도가 안 들어올 때(인터넷 · VWorld)만 — 넣기 · 지우기 둘 다 건너뜀
+                    if (_step is Step.CadIn or Step.CadOut) { _done.Add("ParcelIn"); _done.Add("ParcelOut"); }
+                    else if (_step is Step.MapIn or Step.MapOut) { _done.Add("MapIn"); _done.Add("MapOut"); }
+                    _netFailed = false; _cmdNote = null;
+                    Log("지적도/위성지도 건너뜀 — " + _step);
                     Kick();
                     break;
                 case "back": AcadApp.DocumentManager.MdiActiveDocument = _doc; break;
@@ -431,20 +480,28 @@ internal sealed class Tut
             }
             var panel = GradingPalette.OpenPanel;
             var exPanel = ExcavPalette.OpenPanel;
-            if (panel != null && _slopeBase == null) _slopeBase = (panel.SlopeCutBox.Text, panel.SlopeFillBox.Text);
-            bool slopeChanged = panel != null && _slopeBase is { } sb && (panel.SlopeCutBox.Text != sb.Cut || panel.SlopeFillBox.Text != sb.Fill);
-            if (slopeChanged) _slopeSeen = true;
+            // ★[JACK 1124 «꼭 가이드의 숫자대로만 구배»] 구배 칸 지키기(다른 값 → 되돌림 · 알림) · 둘 다 가이드 값이면 구배 단계 끝 · 탭 = 사용자가 누른 탭
+            if (_ch == Chapter.Site) HookSlope(panel);
+            if (panel != null && _ch == Chapter.Site)
+            {
+                if (TutorialFlow.IsGuide(panel.SlopeCutBox.Text, TutorialFlow.GuideCut) && TutorialFlow.IsGuide(panel.SlopeFillBox.Text, TutorialFlow.GuideFill)) _fSlopeOk = true;
+                _fFixTab = panel.FixTabOn;
+            }
+            if (_ran3d && Commands.Web3DPalette.IsOpen && _done.Add("View3D")) Log("3D 창 뜸 → View3D 끝");
             var f = new TutorialFlow.Facts(
                 Ground: _fGround, Importing: _importing, MapOpen: mapOpen, PageSub: _pageSub, Dxf: _part2,
                 Boundary: _fBoundary, Elev: _fElev, PanelOpen: panel != null,
                 PlanPicked: PickSession.Peek(_doc, PickSession.KeyPlan) != null,
                 GroundPicked: PickSession.Peek(_doc, PickSession.KeyGround) != null,
-                Grade: _fGrade, Fits: _fFits, Ch: _ch, SlopeChanged: _slopeSeen, Wall: _fWall,
+                Grade: _fGrade, Fits: _fFits, Ch: _ch, SlopeOk: _fSlopeOk, Wall: _fWall,
                 ExBoundary: _fExBoundary, ExElev: _fExElev, ExPanelOpen: exPanel != null,
                 ExPicked: PickSession.Peek(_doc, PickSession.KeyExcav) != null,
                 Shore: exPanel?.WallCheck.IsChecked == true, ExSurf: _fExSurf, Cropped: _fCropped,
                 RdPanel: RoadPalette.OpenPanel != null, RdSecOpen: SectionPalette.RoadOpenPanel != null,
-                RdRoad: _rdLast.Road && _rdLast.Surf, RdDone: _rdDone);
+                RdRoad: _rdLast.Road && _rdLast.Surf, RdDone: _rdDone, FixTab: _fFixTab, WallAdd: _fWallAdd,
+                SecOpen: SectionPalette.SiteOpenPanel != null, Prof: _done.Contains("Prof"), Xsec: _done.Contains("Xsec"), QtyFile: _done.Contains("QtyFile"),
+                ParcelIn: _done.Contains("ParcelIn"), ParcelOut: _done.Contains("ParcelOut"), MapIn: _done.Contains("MapIn"), MapOut: _done.Contains("MapOut"),
+                Book: _done.Contains("Book"), View3D: _done.Contains("View3D"));
             _facts = f;
             var s = TutorialFlow.Derive(f);
             // 1단원: 서버 지표면이 됐으면 2부(수치지도 DXF)로 — DXF가 없으면 그대로 끝
@@ -460,8 +517,10 @@ internal sealed class Tut
             if (_buildEnded && quiet) { _buildEnded = false; if (!_fGrade) evNote = TutorialFlow.NoteGradeFail; }
             if (_exBuildEnded && quiet) { _exBuildEnded = false; if (!_fExSurf) evNote = TutorialFlow.NoteExFail; }
             if (_wallEnded && quiet) { _wallEnded = false; if (!_fWall) evNote = TutorialFlow.NoteWallFail; }
+            if (_wallAddEnded && quiet) { _wallAddEnded = false; if (!_fWallAdd) evNote = TutorialFlow.NoteWallAddFail; }
             if (_cropEnded && quiet) { _cropEnded = false; if (s == Step.Crop) evNote = TutorialFlow.NoteCropFail; }
             if (_rdNote != null && quiet) { evNote = _rdNote; _rdNote = null; }
+            if (_cmdNote != null && quiet) { evNote = _cmdNote; _cmdNote = null; }
 
             if (s != _step)
             {
@@ -476,22 +535,64 @@ internal sealed class Tut
                 else if (TutorialFlow.IsRdSec(old) && s == Step.RdSec) _note = TutorialFlow.NoteRdSecClosed;
                 if (s == Step.RdPave) _paveBase = _rdLast.Pave;   // ★[5단원] 포장 단계가 된 때의 종류 — 바꾸면 끝
                 if (_balloon != null) _balloon.Dragged = false;
-                if (HasHint(old) && !HasHint(s)) { _hintWanted = false; _hintEraseWanted = true; }
-                if (HasHint(s)) { _hintWanted = true; _hintEraseWanted = false; }
+                // 점선 단계 → 다른 점선 단계(옹벽 추가 → 터파기선)도 앞 점선을 걷고 새로 그림
+                if (HasHint(old)) { _hintWanted = false; _hintEraseWanted = true; }
+                if (HasHint(s)) _hintWanted = true;
+                if (s is Step.CadIn or Step.MapIn) _netFailed = false;
                 if (s == Step.Done && _ch == Chapter.Ground && _part2 && TutorialData.DxfFile == null) _note = TutorialFlow.NoteNoDxf;
                 Log($"{old} → {s}");
             }
             if (evNote != null) _note = evNote;
-            if (quiet) { Hints(); if (_step == Step.Done && !_saved) SaveResult(); }
+            if (quiet) { Hints(); if (_step == Step.Done && !_saved) Finish(); }
             Render(panel, exPanel);
         }
         catch (System.Exception ex) { Log("갱신 실패 — " + ex.Message); }
     }
-    bool _slopeSeen;
+
+    /// <summary>★[JACK 1124] 구배 칸 지키기 — 칸을 떠날 때 · Enter 때 가이드 값(또는 지난 받은 값 그대로)이 아니면 되돌리고 «가이드 값 n 입력».
+    /// 버튼을 누르면 칸이 먼저 포커스를 잃으므로 [계획부지생성하기]도 되돌린 값으로 돈다.</summary>
+    void HookSlope(GradingPanel? panel)
+    {
+        var cut = panel?.SlopeCutBox; var fill = panel?.SlopeFillBox;
+        if (ReferenceEquals(cut, _cutBox) && ReferenceEquals(fill, _fillBox)) return;
+        UnhookSlope();
+        if (cut == null || fill == null) return;
+        _cutBox = cut; _fillBox = fill;
+        _cutOk = cut.Text; _fillOk = fill.Text;
+        foreach (var tb in new[] { cut, fill })
+        {
+            tb.LostKeyboardFocus += OnSlopeLeave;
+            tb.PreviewKeyDown += OnSlopeKey;
+        }
+    }
+
+    void UnhookSlope()
+    {
+        foreach (var tb in new[] { _cutBox, _fillBox })
+            if (tb != null) { try { tb.LostKeyboardFocus -= OnSlopeLeave; tb.PreviewKeyDown -= OnSlopeKey; } catch { } }
+        _cutBox = _fillBox = null;
+    }
+
+    void OnSlopeLeave(object? s, KeyboardFocusChangedEventArgs e) { if (s is System.Windows.Controls.TextBox tb) SlopeCommit(tb); }
+    void OnSlopeKey(object? s, KeyEventArgs e) { if (e.Key == Key.Enter && s is System.Windows.Controls.TextBox tb) SlopeCommit(tb); }
+
+    void SlopeCommit(System.Windows.Controls.TextBox tb)
+    {
+        if (_ended) return;
+        bool cut = ReferenceEquals(tb, _cutBox);
+        double guide = cut ? TutorialFlow.GuideCut : TutorialFlow.GuideFill;
+        string ok = cut ? _cutOk : _fillOk;
+        if (TutorialFlow.SlopeAccept(tb.Text, ok, guide)) { if (cut) _cutOk = tb.Text; else _fillOk = tb.Text; return; }
+        Log($"구배 거절 — {(cut ? "절토" : "성토")} «{tb.Text}» → «{ok}» (가이드 {guide:0.0})");
+        tb.Text = ok;
+        _note = TutorialFlow.NoteGuideValue(guide);
+        Kick();
+    }
 
     void ReadDb()
     {
         if (_ch == Chapter.Road) { ReadRoad(); return; }
+        if (_ch == Chapter.Sheet) return;   // 4단원 = 명령 끝 판정만(OnCmdOk)
         using var tr = _db.TransactionManager.StartTransaction();
         var gid = GradingBuilder.FindSurfaceByBaseName(tr, ImportGisCommand.GroundSurfaceName);
         if (_ch == Chapter.Ground)
@@ -508,8 +609,16 @@ internal sealed class Tut
         _fExSurf = !GradingBuilder.FindSurfaceByBaseName(tr, Commands.ExcavCommand.SurfName).IsNull;
         if (!_linesFound) FindLines(tr);
         var surf = gid.IsNull ? null : tr.GetObject(gid, OpenMode.ForRead) as Autodesk.Civil.DatabaseServices.Surface;
-        if (_ch == Chapter.Site) ReadSite(tr, surf);
-        else if (_ch == Chapter.Excav) ReadExcav(tr);
+        if (_ch == Chapter.Site)
+        {
+            ReadSite(tr, surf);
+            // ★[JACK 1124] 터파기는 옹벽 변환 · 옹벽 추가 뒤부터 — 그때 후보를 비움(앞서 거절된 경계 후보를 터파기선으로 안 받게)
+            if (_fGrade && _fWall && _fWallAdd)
+            {
+                if (!_exStarted) { _exStarted = true; _cands.Clear(); }
+                ReadExcav(tr);
+            }
+        }
         tr.Commit();
     }
 
@@ -583,28 +692,16 @@ internal sealed class Tut
     void FindLines(Transaction tr)
     {
         _linesFound = true;
-        var all = new List<(ObjectId Id, string Layer, double Area, Point2d C)>();
-        var perLayer = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-        foreach (ObjectId id in (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(_db), OpenMode.ForRead))
-        {
-            if (tr.GetObject(id, OpenMode.ForRead) is not Polyline pl || !pl.Closed || pl.NumberOfVertices < 3) continue;
-            perLayer[pl.Layer] = perLayer.TryGetValue(pl.Layer, out int c) ? c + 1 : 1;
-            if (pl.Layer.StartsWith("DH", StringComparison.OrdinalIgnoreCase) || pl.Area < 50) continue;
-            var e = pl.GeometricExtents;
-            all.Add((id, pl.Layer, pl.Area, new Point2d((e.MinPoint.X + e.MaxPoint.X) / 2, (e.MinPoint.Y + e.MaxPoint.Y) / 2)));
-        }
-        all.RemoveAll(a => perLayer[a.Layer] >= 20);
-        all.Sort((a, b) => b.Area.CompareTo(a.Area));
-        if (all.Count == 0) { Log("그려 둔 선 없음"); return; }
-        _planGuide = all[0].Id;
+        (_planGuide, _exGuide) = TutSite.FindLines(_db, tr);
+        if (_planGuide.IsNull) { Log("그려 둔 선 없음"); return; }
         var plan = (Polyline)tr.GetObject(_planGuide, OpenMode.ForRead);
         _planPoly = Pts(plan);
         _planZ = Math.Abs(plan.Elevation) > 1e-6 ? plan.Elevation : null;
-        foreach (var a in all)
-            if (a.Area < all[0].Area * 0.9 && Inside(_planPoly, a.C.X, a.C.Y)) { _exGuide = a.Id; break; }
+        // ★[JACK 1124 «처음 부르면 네모 두 개가 있는데 안 보이게»] 2단원 = 그려 둔 두 선(계획부지선 · 터파기선)을 단원 내내 숨김(끝나면 되돌림 · 지우지 않음)
+        if (_ch == Chapter.Site) _baseHideWanted = true;
         Log($"그려 둔 선 — 계획부지선 {plan.Handle} (고도 {plan.Elevation:0.0}) · 터파기선 {(_exGuide.IsNull ? "없음" : _exGuide.Handle.ToString())}");
-        if (_ch == Chapter.Excav && !_exGuide.IsNull) { var ex = (Polyline)tr.GetObject(_exGuide, OpenMode.ForRead); if (Math.Abs(ex.Elevation) > 1e-6) _exRecZ = Math.Round(ex.Elevation, 1); }
-        if (_ch == Chapter.Excav && _exRecZ == null && _planZ is double pz) _exRecZ = Math.Round(pz - 3.0, 1);
+        if (_ch == Chapter.Site && !_exGuide.IsNull) { var ex = (Polyline)tr.GetObject(_exGuide, OpenMode.ForRead); if (Math.Abs(ex.Elevation) > 1e-6) _exRecZ = Math.Round(ex.Elevation, 1); }
+        if (_ch == Chapter.Site && _exRecZ == null && _planZ is double pz) _exRecZ = Math.Round(pz - 3.0, 1);
         if (_ch == Chapter.Site && _planZ is double pz2) _recZ = Math.Round(pz2, 1);
     }
 
@@ -624,6 +721,12 @@ internal sealed class Tut
                 bool inside = true;
                 foreach (var p in pts) { try { surf.FindElevationAtXY(p.X, p.Y); } catch { inside = false; break; } }
                 if (!inside) { _drawNote ??= TutorialFlow.NoteOutside; continue; }
+                // ★[JACK 1124 «가이드 네모 따라 그리게»] 점선(그려 둔 계획부지선)과 같아야 받음 — 꼭짓점이 점선 변 위 · 점선 모서리마다 꼭짓점(허용 = 크기 1 %)
+                if (_planPoly != null && !TutorialFlow.MatchesGuide(Xy(pts), Xy(_planPoly), TutorialFlow.GuideTol(Xy(_planPoly))))
+                {
+                    if (_drawNote == null) Log($"경계 거절 — 점선과 다름(꼭짓점 {pts.Count} · 허용 {TutorialFlow.GuideTol(Xy(_planPoly)):0.0} m)");
+                    _drawNote ??= TutorialFlow.NoteGuideOff; continue;
+                }
                 // ★[JACK 1117] 추천 고도로 정지해도 사면이 원지반 안에 드나 — 아니면 안 받는다(«사면이 원지반 경계를 벗어남» 막기)
                 var rz = _recZ ?? MeanZ(surf, pts);
                 var (fit, reach) = rz is double rzv ? TutorialFlow.Check(Xy(pts), rzv, Gz(surf), NEff()) : (false, double.NaN);
@@ -639,6 +742,9 @@ internal sealed class Tut
         if (bl != null && _recZ == null && surf != null) _recZ = MeanZ(surf, Pts(bl));
         _fBoundary = bl != null;
         _fElev = bl != null && Math.Abs(bl.Elevation) > 1e-6;
+        // ★[JACK 1124 «고도값 입력하는 것까지 안내»] 고도 = 가이드 값(0.05 m 안)만 받음 — 다른 값이면 고도 단계에 머묾 · «가이드 값 n 입력»
+        _elevOff = _fElev && _recZ is double gz0 && Math.Abs(bl!.Elevation - gz0) > 0.05;
+        if (_elevOff) _fElev = false;
         _curZ = bl?.Elevation;
         // ★[JACK 1117] 넣은 고도로 다시 잰다(바뀔 때만) — 사면이 원지반 밖이면 고도 단계에 머문다
         _fFits = true;
@@ -663,6 +769,17 @@ internal sealed class Tut
             string ws = WallSig(tr);
             if (_wallBase == null) _wallBase = ws;
             _fWall = _wallRan && ws != _wallBase;
+            // ★[JACK 1124 «옹벽 추가도»] 선 옹벽 수 — 정지면 뒤 첫 값이 기준 · [옹벽 추가] 단계에서 명령이 돈 뒤 늘었으면 끝
+            int lw = TutSite.LineWalls(_db, tr);
+            if (_wallAddBase < 0 && lw >= 0) _wallAddBase = lw;
+            _fWallAdd = _wallAddRan && _wallAddBase >= 0 && lw > _wallAddBase;
+            // [옹벽 추가] 점선 — 그 단계가 되면 지금 경계로 셈(옹벽 변환이 경계를 바꾼 뒤)
+            if (_step == Step.WallAdd && _wallPts == null && _wallGuideWhy == null)
+            {
+                try { _wallPts = TutSite.WallAddGuide(_db, tr, out string why); if (_wallPts == null) _wallGuideWhy = why; }
+                catch (System.Exception ex) { _wallGuideWhy = ex.Message; }
+                Log(_wallPts != null ? $"옹벽 추가 점선 — 점 {_wallPts.Count}: " + string.Join(" ; ", _wallPts.ConvertAll(q => $"{q.X:F2},{q.Y:F2}")) : "옹벽 추가 점선 못 셈 — " + _wallGuideWhy);
+            }
         }
     }
 
@@ -694,7 +811,7 @@ internal sealed class Tut
             for (int i = _cands.Count - 1; i >= 0; i--)
             {
                 var id = _cands[i];
-                if (id.IsNull || id.IsErased || !id.IsValid || _hints.Contains(id)) continue;
+                if (id.IsNull || id.IsErased || !id.IsValid || _hints.Contains(id) || id == _boundary) continue;
                 if (tr.GetObject(id, OpenMode.ForRead) is not Polyline pl) continue;
                 if (!pl.Closed || pl.NumberOfVertices < 3) { _drawNote ??= TutorialFlow.NoteOpenLine; continue; }
                 var pts = Pts(pl);
@@ -790,10 +907,50 @@ internal sealed class Tut
     {
         try
         {
+            if (_baseHideWanted) HideBase();
             if (_hintEraseWanted) { EraseHints(); _hintEraseWanted = false; }
             if (_hintWanted && _hints.Count == 0 && HasHint(_step)) DrawHints();
+            Snap();
         }
         catch (System.Exception ex) { Log("점선 표시 실패 — " + ex.Message); _hintWanted = false; }
+    }
+
+    /// <summary>★[JACK 1124] 2단원 — 그려 둔 계획부지선 · 터파기선 숨김(단원 내내 · 끝날 때 되돌림).</summary>
+    void HideBase()
+    {
+        _baseHideWanted = false;
+        using var lk = _doc.LockDocument();
+        using var tr = _db.TransactionManager.StartTransaction();
+        foreach (var id in new[] { _planGuide, _exGuide })
+            if (!id.IsNull && !_baseHidden.Contains(id) && tr.GetObject(id, OpenMode.ForWrite) is Entity en && en.Visible) { en.Visible = false; _baseHidden.Add(id); }
+        tr.Commit();
+        Log($"그려 둔 선 숨김 {_baseHidden.Count}개");
+    }
+
+    /// <summary>★[JACK 1124 «따라 그리게 — 스냅»] 점선 따라 찍는 단계(경계 그리기 · 옹벽 추가) 동안 끝점 스냅 켬(OSMODE 끝점 + 스냅 켬) — 단계를 벗어나거나 끝나면 원래 값.</summary>
+    void Snap()
+    {
+        bool want = !_ended && _ch == Chapter.Site && (_step is Step.Draw or Step.WallAdd or Step.ExDraw);
+        try
+        {
+            if (want && _osOld == null)
+            {
+                _osOld = AcadApp.GetSystemVariable("OSMODE");
+                int v = Convert.ToInt32(_osOld);
+                int nv = (v & ~16384) | 1;
+                if (nv != v) AcadApp.SetSystemVariable("OSMODE", nv);
+                Log($"스냅 OSMODE {v} → {nv}");
+            }
+            else if (!want && _osOld != null) { RestoreSnap(); }
+        }
+        catch (System.Exception ex) { Log("스냅 실패 — " + ex.Message); }
+    }
+
+    void RestoreSnap()
+    {
+        if (_osOld == null) return;
+        try { if (!Equals(AcadApp.GetSystemVariable("OSMODE"), _osOld)) AcadApp.SetSystemVariable("OSMODE", _osOld); } catch { }
+        _osOld = null;
     }
 
     void DrawHints()
@@ -818,13 +975,19 @@ internal sealed class Tut
         }
         catch { }
         var ms = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(_db), OpenMode.ForWrite);
-        var guide = _step == Step.ExDraw ? _exGuide : _step == Step.Crop ? ObjectId.Null : _step == Step.RdDraw ? _rdGuide : _planGuide;
+        var guide = _step == Step.ExDraw ? _exGuide : _step is Step.Crop or Step.WallAdd ? ObjectId.Null : _step == Step.RdDraw ? _rdGuide : _planGuide;
         Polyline? shape = null;
         if (!guide.IsNull && tr.GetObject(guide, OpenMode.ForWrite) is Polyline g)
         {
             shape = (Polyline)g.Clone();
-            g.Visible = false;   // 원래 선은 잠깐 숨김 — 점선만 보이게(끝나면 되돌림)
-            _hidden.Add(guide);
+            if (!_baseHidden.Contains(guide)) { g.Visible = false; _hidden.Add(guide); }   // 원래 선은 잠깐 숨김 — 점선만 보이게(끝나면 되돌림 · 2단원은 단원 내내 숨김)
+        }
+        else if (_step == Step.WallAdd)
+        {
+            // ★[JACK 1124 «옹벽 추가도 가이드 선»] 경계 밖 → 사면 띠 가운데 → 경계 밖(셈 못 하면 다음 갱신에 다시 · 까닭이 있으면 그만)
+            if (_wallPts == null || _wallPts.Count < 2) { if (_wallGuideWhy == null) _hintWanted = true; tr.Commit(); return; }
+            shape = new Polyline();
+            for (int k = 0; k < _wallPts.Count; k++) shape.AddVertexAt(k, _wallPts[k], 0, 0, 0);
         }
         else if (_step == Step.RdDraw)
         {
@@ -843,15 +1006,38 @@ internal sealed class Tut
             shape.AddVertexAt(2, new Point2d(cx + hx, cy + hy), 0, 0, 0); shape.AddVertexAt(3, new Point2d(cx - hx, cy + hy), 0, 0, 0);
             shape.Closed = true;
         }
-        shape.Layer = LayerHint; shape.ColorIndex = 2;
+        shape.Layer = LayerHint; shape.ColorIndex = 2; shape.Visible = true;   // 숨긴 선의 사본이어도 보이게
         double size = 50;
         try { var e = shape.GeometricExtents; size = Math.Max(e.MaxPoint.X - e.MinPoint.X, e.MaxPoint.Y - e.MinPoint.Y); } catch { }
         if (dashed) { try { shape.Linetype = "DASHED"; shape.LinetypeScale = Math.Max(0.05, size / 400.0); } catch { } }
         try { shape.ConstantWidth = Math.Max(0.1, size / 300.0); } catch { }
         _hints.Add(ms.AppendEntity(shape));
         tr.AddNewlyCreatedDBObject(shape, true);
+        // ★[JACK 1124] 2단원 점선 이름표(노랑) — 무엇을 따라 하나
+        if (_ch == Chapter.Site && _step is Step.Draw or Step.WallAdd or Step.ExDraw)
+            Label(ms, tr, shape, size, _step == Step.Draw ? "계획부지 — 점선 따라 그리기" : _step == Step.ExDraw ? "터파기 — 점선 따라 그리기" : "옹벽 추가 — 점선 점 차례로 클릭");
         tr.Commit();
         Log($"점선 — {(guide.IsNull ? "네모" : "그려 둔 선 덧그림")} · 크기 {size:F0} m");
+    }
+
+    /// <summary>점선 이름표 — 점선 위 왼쪽(네모) · 첫 점 옆(선) · 노랑 MText(맑은 고딕 — 한글 글꼴 없는 도면에서도 보이게) · 레이어 DH-튜토리얼(점선과 함께 걷힘).</summary>
+    void Label(BlockTableRecord ms, Transaction tr, Polyline shape, double size, string text)
+    {
+        try
+        {
+            double h = Math.Max(1.0, size / 28.0);
+            var e = shape.GeometricExtents;
+            var at = shape.Closed ? new Point3d(e.MinPoint.X, e.MaxPoint.Y + h * 1.8, 0) : new Point3d(shape.GetPoint2dAt(0).X, shape.GetPoint2dAt(0).Y + h * 1.8, 0);
+            var mt = new MText
+            {
+                Location = at, TextHeight = h, Attachment = AttachmentPoint.BottomLeft,
+                Contents = "{\\fMalgun Gothic|b1|i0|c129|p34;" + text + "}",
+                Layer = LayerHint, ColorIndex = 2,
+            };
+            _hints.Add(ms.AppendEntity(mt));
+            tr.AddNewlyCreatedDBObject(mt, true);
+        }
+        catch (System.Exception ex) { Log("점선 이름표 실패 — " + ex.Message); }
     }
 
     /// <summary>그려 둔 선이 없을 때 점선 네모(가운데 x · y · 반폭 x · y). 못 정하면 null.</summary>
@@ -897,31 +1083,14 @@ internal sealed class Tut
         _hidden.Clear();
     }
 
-    // ── 단원 끝 — 내 결과 저장(다음 단원 «내 것으로 이어서») ─────────────
-    void SaveResult()
+    // ── 단원 끝 — ✓ 표시만(★[JACK 1124] «내 것으로 이어서» 없앰 → 결과 도면은 안 남김) ─────────────
+    void Finish()
     {
-        _saved = true;   // 한 번만(실패해도 다시 안 함 — 알림만)
-        try
-        {
-            EraseHints();
-            if (string.IsNullOrEmpty(_work)) _work = TutorialData.NewWorkPath(_ch);
-            using (_doc.LockDocument())
-                _db.SaveAs(_work, true, DwgVersion.Current, _db.SecurityParameters);
-            System.IO.Directory.CreateDirectory(TutorialData.Home);
-            System.IO.File.Copy(_work, TutorialData.DonePath(_ch), true);
-            TutorialData.MarkDone(_ch);
-            Log($"결과 저장 — {TutorialData.DonePath(_ch)}");
-        }
-        catch (System.Exception ex)
-        {
-            _saved = false;
-            _note = TutorialFlow.NoteSaveFail;
-            _saveFailed = true;
-            TutorialData.MarkDone(_ch);
-            Log("결과 저장 실패 — " + ex.Message);
-        }
+        _saved = true;
+        try { EraseHints(); } catch (System.Exception ex) { Log("점선 걷기 실패 — " + ex.Message); }
+        TutorialData.MarkDone(_ch);
+        Log($"{(int)_ch}단원 끝 표시");
     }
-    bool _saveFailed;
 
     // ── 그리기 ────────────────────────────────────────────────────────────
     static readonly (string, string)[] BtnBase = { ("다시 시작", "restart"), ("그만두기", "quit") };
@@ -930,22 +1099,22 @@ internal sealed class Tut
     {
         if (_balloon == null || _glow == null) return;
         var s = _step;
-        int n = _ch == Chapter.Road ? TutorialFlow.RoadNum(s, _facts) : TutorialFlow.Num(s, dxf: _part2, graded: _fGrade);
+        int n = _ch == Chapter.Road ? TutorialFlow.RoadNum(s, _facts) : TutorialFlow.Num(s, _facts);
         int total = TutorialFlow.Total(_ch);
-        // ★[5단원] 단원 번호 = 여는 차례(종횡단도 4는 쉼 — 진입도로는 4번째)
-        string head = $"{Array.IndexOf(TutorialFlow.Active, _ch) + 1}. {TutorialFlow.ChapterName(_ch)} · ";
+        string head = $"{(int)_ch}. {TutorialFlow.ChapterName(_ch)} · ";
         string num = s == Step.Done ? head + "완료" : head + $"{n} / {total}";
         bool guide = s == Step.ExDraw ? !_exGuide.IsNull : s == Step.RdDraw ? !_rdGuide.IsNull || _rdPts != null : !_planGuide.IsNull;
         string text = s == Step.Done ? TutorialFlow.DoneText(_ch) : TutorialFlow.Text(s, _part2, guide);
         string? extra = null;
-        if (s == Step.Elev && _recZ is double z) extra = $"추천 고도: {z:0.0}";
-        if (s is Step.Elev or Step.Build && _fElev && _recZ is double rz && _curZ is double cz && Math.Abs(cz - rz) > 3) extra = $"추천 고도: {rz:0.0} (지금 {cz:0.0})";
+        if (s == Step.Elev && _recZ is double z) extra = $"가이드 값: {z:0.0}";   // ★[JACK 1124] 입력할 값 그대로
         if (s == Step.ExElev && _exRecZ is double ez) extra = $"추천 고도: {ez:0.0}" + (_planZ is double pz ? $" (부지 {pz:0.0} − {pz - ez:0.0} m)" : "");
         if (s == Step.Dxf && TutorialData.DxfFile is string dxf) extra = "파일: " + System.IO.Path.GetFileName(dxf);
         string? note = _note;
         if (IsDraw(s) && _drawNote != null) note = _drawNote;
         else if (IsDraw(s) && _hintNote != null && note == null) note = _hintNote;
         if (s == Step.Elev && _fElev && !_fFits) note = TutorialFlow.NoteEdge;
+        if (s == Step.Elev && _elevOff && _recZ is double gv) note = TutorialFlow.NoteGuideValue(gv);
+        if (s == Step.WallAdd && _wallGuideWhy != null) note ??= TutorialFlow.NoteNoWallGuide;
         if (s == Step.ExElev && _exHigh) note = TutorialFlow.NoteExHigh;
         if (s == Step.ExPick && PickSession.ExcavNoZ(_doc)) note = TutorialFlow.NoteNoZ;
         if (s == Step.Dxf && TutorialData.DxfFile == null) note = TutorialFlow.NoteNoDxf;
@@ -957,8 +1126,8 @@ internal sealed class Tut
             else if (_netChecking && note == null) note = TutorialFlow.NoteNetChecking;
         }
         if (TutorialFlow.IsMap(s) && _pageDead) note = TutorialFlow.NoteMapDead;
-        if (s == Step.Draw && !_planGuide.IsNull) btns.Add(("그려 둔 선 쓰기", "useline"));
         if (s == Step.ExDraw && !_exGuide.IsNull) btns.Add(("그려 둔 선 쓰기", "useline"));
+        if (s is Step.CadIn or Step.CadOut or Step.MapIn or Step.MapOut && _netFailed) btns.Add(("건너뛰기", "skipnet"));   // 인터넷 · VWorld로 못 넣었을 때만
         if (s == Step.Done)
         {
             if (TutorialFlow.Next(_ch) is Chapter nx) btns.Add(($"다음: {TutorialFlow.ChapterName(nx)}", "next"));
@@ -983,17 +1152,20 @@ internal sealed class Tut
         if (TutorialFlow.IsPanel(s) && panel != null)
         {
             root = panel.SpotRoot;
-            if (s == Step.Wall) panel.ShowFixTab(); else panel.ShowMakeTab();
+            // ★[JACK 1124 «임의로 탭 바꿔서 바로 옹벽 변환 가지 말 것»] «계획부지 수정» 탭은 사용자가 누름(탭 단계가 머리를 비춤) — 생성 탭 단계만 생성 탭으로 돌림
+            if (!TutorialFlow.IsFixStep(s) && s != Step.FixTab) panel.ShowMakeTab();
             targets = s switch
             {
                 Step.PickPlan => new() { panel.PickPlanButton },
                 Step.PickGround => new() { panel.PickGroundButton },
                 Step.Slope => new() { Cell(panel.SlopeCutBox), Cell(panel.SlopeFillBox) },
+                Step.FixTab => panel.FixTabHead is FrameworkElement th ? new() { th } : null,
                 Step.Wall => new() { panel.ToWallButton },
+                Step.WallAdd => new() { panel.AddWallButton },
                 _ => new() { panel.BuildButton },
             };
             // 구배 칸이 접힌 칸 안이면(안 보임) 덮지 않는다 — 덮으면 펼칠 머리도 못 누른다
-            if (s == Step.Slope && !targets.Exists(t => t.IsVisible)) { targets = null; note ??= TutorialFlow.NoteOpenSlope; }
+            if (s == Step.Slope && targets != null && !targets.Exists(t => t.IsVisible)) { targets = null; note ??= TutorialFlow.NoteOpenSlope; }
         }
         else if (TutorialFlow.IsExPanel(s) && exPanel != null)
         {
@@ -1053,10 +1225,15 @@ internal sealed class Tut
             Step.Ground or Step.Dxf => "원지반\n가져오기",
             Step.Crop => "원지형\n자르기",
             Step.Panel or Step.ExPanel => "계획부지\n생성",
+            Step.CadIn or Step.CadOut => "지적도",            // ★[JACK 1124] 리본 단추를 사용자가 누름(스플릿 ▼ 안 [지적도 삭제] · [지도끄기])
+            Step.MapIn or Step.MapOut => "위성지도\n삽입",
+            Step.Book => "도면생성",
+            Step.Qty => "수량\n산출서",
+            Step.View3D => "3D\n보기",
             _ => null,
         };
-        // ★[5단원] 진입도로 리본 단추 — «종횡단도»는 부지 · 진입도로 둘이라 명령으로 찾음
-        string? ribCmd = s switch { Step.RdOpen => "DHROADNEW ", Step.RdSec => "DHROADSECPANEL ", _ => null };
+        // ★진입도로 · 부지 «종횡단도»는 글자가 같아 명령으로 찾음
+        string? ribCmd = s switch { Step.RdOpen => "DHROADNEW ", Step.RdSec => "DHROADSECPANEL ", Step.SecPanel => "DHSECPANEL ", _ => null };
         if (ribText != null || ribCmd != null)
         {
             if (_tabStep != s) { _tabStep = s; TutRibbon.ActivateTab(); }
@@ -1153,7 +1330,7 @@ internal sealed class Tut
         try
         {
             _doc.CommandWillStart -= OnCmdStart;
-            _doc.CommandEnded -= OnCmdEnd;
+            _doc.CommandEnded -= OnCmdOk;
             _doc.CommandCancelled -= OnCmdEnd;
             _doc.CommandFailed -= OnCmdEnd;
         }
@@ -1163,6 +1340,9 @@ internal sealed class Tut
         try { PickSession.Changed -= Kick; } catch { }
         try { MapPalette.TutMessage -= OnPage; } catch { }
         try { NgiiCommand.PresetFile = null; } catch { }
+        RestoreSnap();
+        UnhookSlope();
+        _hidden.AddRange(_baseHidden); _baseHidden.Clear();   // ★[JACK 1124] 2단원에 숨긴 두 선도 되돌림
         RemoveSpot();
         try { _glow?.Close(); } catch { }
         try { _balloon?.Close(); } catch { }
@@ -1184,7 +1364,7 @@ internal sealed class Tut
             }
             try { AcadApp.Idle += Retry; } catch { }
         }
-        Log("끝 — " + why + $" · {(int)_ch}단원 마지막 단계 {_step}" + (_saveFailed ? " · 결과 저장 실패" : ""));
+        Log("끝 — " + why + $" · {(int)_ch}단원 마지막 단계 {_step}");
     }
 
     // ── 자리 ──────────────────────────────────────────────────────────────

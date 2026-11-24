@@ -45,7 +45,7 @@ public static partial class UDitch
     }
 
     /// <summary>프로젝트 기준값(§9 «기본값을 보편 기준처럼 고정하지 않는다» → 번들 «UDitch.settings.json»으로 고침).</summary>
-    public sealed class Settings
+    public sealed partial class Settings
     {
         public double ManningN { get; set; } = 0.013;
         /// <summary>허용 수심 = 안높이 × 이 값(여유고 = 나머지).</summary>
@@ -156,6 +156,7 @@ public static partial class UDitch
         if (!double.IsFinite(s.LoopFlat) || s.LoopFlat < 0 || s.LoopFlat > 5) { bad.Add("LoopFlat"); s.LoopFlat = 0.05; }
         if (!Pos(s.JoinTol) || s.JoinTol > 5) { bad.Add("JoinTol"); s.JoinTol = 0.5; }
         if (!double.IsFinite(s.BasinMargin) || s.BasinMargin < 0 || s.BasinMargin > 2) { bad.Add("BasinMargin"); s.BasinMargin = 0.15; }
+        CatchFix(s, bad);   // ★[JACK 1124 집수] 토지 이용 C · 셈 범위
         var ps = (s.PipeSizes ?? new List<double>()).Where(v => Pos(v) && v <= 5).Distinct().OrderBy(v => v).ToList();
         if (ps.Count == 0) { bad.Add("PipeSizes"); ps = new Settings().PipeSizes; }
         s.PipeSizes = ps;
@@ -208,7 +209,7 @@ public static partial class UDitch
     }
 
     /// <summary>M04 · M05 — 측구 하나. <see cref="Pts"/> = [x, y, 지표면 z(NaN = 못 읽음)] 상류 → 하류(호는 나눈 점).</summary>
-    public sealed class Ditch
+    public sealed partial class Ditch
     {
         public string Id { get; set; } = "D-001";
         public string LineHandle { get; set; } = "";
@@ -249,9 +250,15 @@ public static partial class UDitch
         public Rain Rain { get; set; } = new();
         public List<Ditch> Ditches { get; set; } = new();
         public string Updated { get; set; } = "";
+        /// <summary>★[JACK 1124 «U 모양의 스케일을 조정할 수 있게»] 측구 선의 «U» 표시 크기(배 · 기본 1 = 종이 2.5 mm) — 선종류 축척 = 배 / LTSCALE(배치 탭 뷰포트도 같은 배).
+        /// 옛 애드인은 이 칸을 모름(무시 — 보이기만이라 판을 안 올림).</summary>
+        public double UScale { get; set; } = 1.0;
         /// <summary>★[JACK 1123] 합류 · 교차 · 출구 집수정 — <see cref="Link"/>가 채움(기록엔 안 적음).</summary>
         [JsonIgnore] public List<Junction> Junctions { get; set; } = new();
     }
+
+    /// <summary>U 표시 크기 범위(배) — 0.1 ~ 10 · 숫자가 아니면 1.</summary>
+    public static double UScaleOk(double k) => double.IsFinite(k) && k > 0 ? Math.Clamp(k, 0.1, 10) : 1.0;
 
     public static string ToJson(Record r)
     {
@@ -309,6 +316,7 @@ public static partial class UDitch
             if (x == null) { why = "기록이 비었음"; return false; }
             if (x.Version > RecordVersion) { why = $"새 판 기록(판 {x.Version}) — 이 애드인은 판 {RecordVersion}까지"; return false; }
             x.Site ??= new(); x.Rain ??= new(); x.Ditches ??= new();
+            x.UScale = UScaleOk(x.UScale);
             foreach (var d in x.Ditches)
             {
                 d.Pts ??= new(); d.Solids ??= new(); d.Size ??= DefaultSizes()[0]; d.Id ??= ""; d.LineHandle ??= ""; d.Surface ??= ""; d.LoopNote ??= "";
@@ -784,6 +792,7 @@ public static partial class UDitch
             rows.Add(("경사", Math.Abs(hi - lo) < 0.0005 ? F(lo, "0.###") + " %" : F(lo, "0.###") + "~" + F(hi, "0.###") + " %"));
         }
         rows.Add(("바닥고", F(d.StartInvert, "0.000") + " → " + F(d.EndInvert, "0.000") + " m"));
+        rows.Add(("집수", CatchText(d)));   // ★[JACK 1124] 자동 · 입력
         if (h.Verdict == Verdict.NoRain || h.Verdict == Verdict.NoArea || h.Verdict == Verdict.NoLine)
             rows.Add(("판정", h.Status));
         else
@@ -881,6 +890,7 @@ public static partial class UDitch
             }
             if (pr.Error.Length > 0) sb.AppendLine("  ⚠ " + pr.Error);
             foreach (var w in pr.Warn) sb.AppendLine("  ⚠ " + w);
+            sb.AppendLine("  집수: " + CatchText(d) + (d.Auto != null ? $" — 자동 {d.Auto.Src} · {d.Auto.When}" : ""));   // ★[JACK 1124]
             sb.AppendLine("  수리(모델과 따로):");
             if (h.Verdict == Verdict.NoRain || h.Verdict == Verdict.NoArea || h.Verdict == Verdict.NoLine) sb.AppendLine("    " + h.Status + " — " + string.Join(" · ", h.Notes));
             else
@@ -901,9 +911,12 @@ public static partial class UDitch
                     double y = d.Size.H * s.DepthRatio, A = d.Size.B * y, P = d.Size.B + 2 * y;
                     sb.AppendLine(string.Format(Ic, "    Qcap = (1/n)·A·R^(2/3)·S^(1/2) — y = {0:0.000} m · A = {1:0.0000} ㎡ · P = {2:0.000} m · R = {3:0.0000} m · S = 구간 최소 경사", y, A, P, A / P));
                     foreach (var c in h.Segs)
-                        sb.AppendLine(string.Format(Ic, "    구간 {0}: S {1:0.00000}~{2:0.00000} · Qcap {3} m³/s · 수심 {4} % · 유속 {5}~{6} m/s · {7}{8}",
+                    {
+                        var rf = ReachFlow(d, r, c.Seg.S1, lay.Length);   // ★[JACK 1124] 구간 누가 유입 · 유량
+                        sb.AppendLine(string.Format(Ic, "    구간 {0}: S {1:0.00000}~{2:0.00000} · 유입 {9} ha · Q {10} m³/s · Qcap {3} m³/s · 수심 {4} % · 유속 {5}~{6} m/s · {7}{8}",
                                       c.No, c.Seg.SMinPct / 100, c.Seg.SMaxPct / 100, F(c.Qcap, "0.0000"), F(c.YRatio * 100, "0"), F(c.VelMin, "0.00"), F(c.VelMax, "0.00"), c.Status,
-                                      c.Notes.Count > 0 ? " — " + string.Join(" · ", c.Notes) : ""));
+                                      c.Notes.Count > 0 ? " — " + string.Join(" · ", c.Notes) : "", F(rf.Aha, "0.0000"), F(rf.Q, "0.0000")));
+                    }
                     foreach (var c in h.Pipes)
                         sb.AppendLine(string.Format(Ic, "    관로 {0}: 가득 흐름 Qfull = (1/n)·(πD²/4)·(D/4)^(2/3)·S^(1/2) — D {1:0.000} m · 가장 완만한 다리 S {2} → {3} m³/s · 가장 급한 흐름 다리 S {4} 유속 {5} m/s · 낙하 다리 {6} · {7}{8}{9}",
                                       c.No, c.Pipe.D, F(c.SFlat, "0.00000"), F(c.Qfull, "0.0000"), F(c.SSteep, "0.00000"), F(c.VelMax, "0.00"), c.FallLegs, c.Status,
@@ -927,7 +940,8 @@ public static partial class UDitch
             tb += q.BodyVol; tf += q.FootVol; tl += q.Length; tx += ex.Concrete; tpipe += ex.PipeLen; tgr += ex.GrateLen; tbas += ex.Basins; tdrop += ex.Drops;
         }
         JunctionReport(sb, rec, s);   // ★[JACK 1123]
-        tx += rec.Junctions.Sum(j => j.Volume); tbas += rec.Junctions.Count(j => j.Ok);
+        BasinQtyReport(sb, rec, s);   // ★[JACK 1124] 집수정 규격별 수량
+        tx += rec.Junctions.Sum(j => j.Volume); tbas += rec.Junctions.Count;   // ★[JACK 1124] 깊이 미정도 개소에 듦(평면 블록 · 수량과 같게)
         sb.AppendLine();
         sb.AppendLine(string.Format(Ic, "■ 합계: 측구 {0}개 · 길이 {1:0.00} m · 콘크리트 본체 {2:0.000} ㎥ · 기초 {3:0.000} ㎥", rec.Ditches.Count, tl, tb, tf)
                       + (tx > 0 ? string.Format(Ic, " · 낙차벽 · 집수정 {0:0.000} ㎥", tx) : "") + string.Format(Ic, " · 합 {0:0.000} ㎥", tb + tf + tx)

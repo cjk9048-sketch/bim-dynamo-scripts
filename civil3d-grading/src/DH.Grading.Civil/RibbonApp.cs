@@ -986,13 +986,11 @@ public sealed class RibbonApp : IExtensionApplication
             tab.Panels.Add(new RibbonPanel { Source = pMisc });
             pMisc.Items.Add(Spacer());
             // ★[튜토리얼 · JACK 1117 «게임처럼 따라 하기 · 리본 단추로만 시작»] 새 빈 도면 → 원지반 가져오기 → 계획부지 생성
-            var btnTut = MakeButton("튜토리얼", "DHTUTORIAL ", "단원 고르기 → 원지반 가져오기 · 계획부지 생성 · 터파기 생성 따라 하기", "튜토리얼");   // ★[JACK 1123] 펼친 책 + ▶([계획부지 생성]과 겹치지 않게)
+            var btnTut = MakeButton("튜토리얼", "DHTUTORIAL ", "단원 고르기 → 원지반 가져오기 · 계획부지 생성 · 진입도로 생성 · 도면화 따라 하기", "튜토리얼");   // ★[JACK 1123] 펼친 책 + ▶([계획부지 생성]과 겹치지 않게)
             btnTut.ToolTip = MakeTip("튜토리얼 (DHTUTORIAL)",
-                "**단원 고르기** → 1 원지반 가져오기 · 2 계획부지 생성 · 3 터파기 생성\n" +
+                "**단원 고르기** → 1 원지반 가져오기 · 2 계획부지 생성 · 3 진입도로 생성 · 4 도면화\n" +
                 "늘 새 도면 · 자료 사본에서 — 지금 도면은 그대로\n" +
                 "· 누를 곳만 밝게 · 하면 다음 단계로 · [그만두기]로 끝", null);
-            pMisc.Items.Add(btnTut);
-            pMisc.Items.Add(Spacer());
             pMisc.Items.Add(btnCrop);
             pMisc.Items.Add(Spacer());
             pMisc.Items.Add(splitParcel);
@@ -1011,6 +1009,9 @@ public sealed class RibbonApp : IExtensionApplication
                 "배포 위치가 정해지면 Civil 3D를 켤 때 하루 한 번 저절로 확인합니다.", null);
             MarkUpdate(UpdateUi.RibbonNewer);
             pMisc.Items.Add(_btnInfo);
+            pMisc.Items.Add(Spacer());
+            // ★[JACK 1124 «튜토리얼 단추를 정보 오른쪽 — 가장 마지막»]
+            pMisc.Items.Add(btnTut);
             pMisc.Items.Add(Spacer());
             try { ToneRibbon(tab); } catch { }   // ★[v117.12 · JACK 1112] 칸마다 색 계열 하나(모양 그대로)
         }

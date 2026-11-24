@@ -65,7 +65,7 @@ internal static class WallExcavBuilder
     }
 
     /// <summary>도장 머리 — 설정(켬/끔 · 여유 · 경사 · 소단 · 버림 · 형식 둘) · ★[v104 2판 · 검토 중간 3] 두 형식 표의 지문 · 정지면_DH 핸들 · 합성 번호 · 원지반 핸들(재검토 중간 5 · 6: InvariantCulture "R").</summary>
-    static string HeadOf(WallExcav.Settings s, string tablesPrint, string planHandle, string nonce, string groundHandle) => $"{s.Head}|{tablesPrint}|{planHandle}|{nonce}|{groundHandle}";
+    static string HeadOf(WallExcav.Settings s, string tablesPrint, string planHandle, string nonce, string groundHandle, string roadPrint = "") => $"{s.Head}|{tablesPrint}|{planHandle}|{nonce}|{groundHandle}" + (roadPrint.Length > 0 ? "|R" + roadPrint : "");   // ★[JACK 1124 · 검토 중간 1] 진입도로 자리가 옹벽을 자르면 그 지문(WallRoadCutPlan.Print — 안 자르면 빈 값 · 옛 도장 그대로)
     internal static string StampHead(string stamp) => string.IsNullOrEmpty(stamp) ? "" : stamp.Split('#')[0];
 
     /// <summary>도면의 절토 · 성토 형식 표(못 읽으면 첫 표 + 까닭을 <paramref name="notes"/>에).</summary>
@@ -84,11 +84,12 @@ internal static class WallExcavBuilder
         s = WallListStore.ExcavOf(db, out _);
         var (tc, tf) = TablesOf(db, s, null);
         string tp = WallExcav.TablesPrint(tc, tf);
-        string ph = "", nonce = "";
+        string ph = "", nonce = "", rp = "";
         try
         {
             var civ = Autodesk.Civil.ApplicationServices.CivilApplication.ActiveDocument;
             using var tr = db.TransactionManager.StartTransaction();
+            rp = WallRoadCutPlan.Print(db, tr);
             var (ids, _) = Commands.WallCompositeCommand.Candidates(civ, tr, Commands.WallCompositeCommand.PlanName, groundId);
             if (ids.Count == 1)
             {
@@ -98,7 +99,7 @@ internal static class WallExcavBuilder
             tr.Commit();
         }
         catch { }
-        return HeadOf(s, tp, ph, nonce, groundId.IsNull ? "" : groundId.Handle.ToString());
+        return HeadOf(s, tp, ph, nonce, groundId.IsNull ? "" : groundId.Handle.ToString(), rp);
     }
 
     /// <summary>★[v105 · 계획 검토 중간 3] 지금 설정 · 표 · 정지면과 같은 도장 머리의 터파기면이 도면에 있나(종단이 지어 둔 것 — 수량 단면 = 지금 단면) · 모르면 null(원지반 없음 · 못 읽음 — ⚠를 띄우지 않는다).</summary>
@@ -460,7 +461,7 @@ internal static class WallExcavBuilder
     internal static (System.Collections.Generic.List<WallExcav.Bottom> Bottoms, System.Collections.Generic.Dictionary<WallExcav.Bottom, double> BenchBelow, int Faces,
                      System.Collections.Generic.List<GradingBundle>? Bundles)
         CollectBottoms(Database db, Transaction tr, System.Collections.Generic.IEnumerable<PureWithWallsBuilder.ReflWall>? walls, System.Func<double, double, double?> mAt,
-                       System.Collections.Generic.List<string> notes, WallExcav.MeasureNote mn, StringBuilder fp, System.Collections.Generic.List<string> stepLog)
+                       System.Collections.Generic.List<string> notes, WallExcav.MeasureNote mn, StringBuilder fp, System.Collections.Generic.List<string> stepLog, WallRoadCut.Note? roadNote = null)
     {
         var bottoms = new System.Collections.Generic.List<WallExcav.Bottom>();
         var benchBelow = new System.Collections.Generic.Dictionary<WallExcav.Bottom, double>();
@@ -581,6 +582,36 @@ internal static class WallExcavBuilder
             int top = g.Max(x => x.Step);
             foreach (var bb in g) if (bb.Step == top) bb.Top = true;
         }
+        // ★★[JACK 1124 «진입도로로 인해 옹벽부가 깎일 경우 옹벽 객체도 수정» · 답 «도로 자리만 잘라냄»] 진입도로 자리(최종면 합치기의 도로 발자국) 안 벽은 뺀다 —
+        //   바닥 줄을 경계에서 끊어(수직 끝) 3D · 터파기 · 단면 기록 · 몸통 수량이 함께 따라간다. 옹벽 기록은 그대로(도로를 지우면 온전히 돌아옴).
+        if (bottoms.Count > 0)
+        {
+            RoadFootprint.Cutter? rc = null;
+            try { rc = FinalSurfaceBuilder.RoadCut(db, tr, out _, out string rcNote); if (rcNote.Length > 0) notes.Add("진입도로 자리 — " + rcNote); }
+            catch (System.Exception rx) { notes.Add("⚠진입도로 자리를 못 읽어 옹벽을 안 자름 — " + rx.Message); }
+            if (rc != null)
+            {
+                var rn = roadNote ?? new WallRoadCut.Note();
+                var cutB = WallRoadCut.Bottoms(bottoms, rc, rn);
+                if (rn.Cut > 0)
+                {
+                    var nb = new System.Collections.Generic.List<WallExcav.Bottom>(cutB.Count);
+                    var nbb = new System.Collections.Generic.Dictionary<WallExcav.Bottom, double>();
+                    foreach (var (p, src) in cutB)
+                    {
+                        nb.Add(p);
+                        if (benchBelow.TryGetValue(src, out double bw)) nbb[p] = bw;
+                        if (!ReferenceEquals(p, src))   // 터파기 지문 — 잘린 조각 끝(도로가 바뀌어 자리가 달라지면 옛 터파기면을 되쓰지 않게)
+                            fp.Append("|RC").Append(p.Pts[0].X.ToString("R", System.Globalization.CultureInfo.InvariantCulture)).Append(',').Append(p.Pts[0].Y.ToString("R", System.Globalization.CultureInfo.InvariantCulture))
+                              .Append(',').Append(p.Pts[^1].X.ToString("R", System.Globalization.CultureInfo.InvariantCulture)).Append(',').Append(p.Pts[^1].Y.ToString("R", System.Globalization.CultureInfo.InvariantCulture));
+                    }
+                    fp.Append("|RCL").Append(rn.Removed.ToString("R", System.Globalization.CultureInfo.InvariantCulture));
+                    bottoms = nb; benchBelow = nbb;
+                    stepLog.Add(rn.Text);
+                }
+                else if (rn.Skipped > 0) notes.Add(rn.Text);   // ★[검토 낮음 5] 안 자른 줄뿐이어도 «점마다 값이 어긋나 못 자름» ⚠는 남긴다
+            }
+        }
         return (bottoms, benchBelow, nFaces, bundles);
     }
 
@@ -659,7 +690,7 @@ internal static class WallExcavBuilder
                 return null;
             }
             var sTin = (TinSurface)tr.GetObject(planIds[0], OpenMode.ForRead);
-            head = HeadOf(st, WallExcav.TablesPrint(tCut, tFill), planIds[0].Handle.ToString(), Commands.WallCompositeCommand.CompositeNonce(tr, sTin), groundId.IsNull ? "" : groundId.Handle.ToString());
+            head = HeadOf(st, WallExcav.TablesPrint(tCut, tFill), planIds[0].Handle.ToString(), Commands.WallCompositeCommand.CompositeNonce(tr, sTin), groundId.IsNull ? "" : groundId.Handle.ToString(), WallRoadCutPlan.Print(db, tr));
             var sC = new CachedGroundSurface(sTin);
             System.Func<double, double, double?> mAt = (x, y) => sC.TryGetElevation(x, y, out double z) ? z : (double?)null;
             var mn = new WallExcav.MeasureNote();
@@ -720,7 +751,7 @@ internal static class WallExcavBuilder
             if (groundId.IsNull || groundId.IsErased || tr.GetObject(groundId, OpenMode.ForRead) is not TinSurface gTin) return Fail("원지반이 없다");
             var sTin = (TinSurface)tr.GetObject(planIds[0], OpenMode.ForRead);
             string nonce = Commands.WallCompositeCommand.CompositeNonce(tr, sTin);
-            string head = HeadOf(st, tp, planIds[0].Handle.ToString(), nonce, groundId.Handle.ToString());
+            string head = HeadOf(st, tp, planIds[0].Handle.ToString(), nonce, groundId.Handle.ToString(), WallRoadCutPlan.Print(db, tr));
             R.Stamp = head + "#";   // 아래에서 못 지어도 머리는 맞게(횡단이 «바뀜»을 헛되게 말하지 않게)
             var sC = new CachedGroundSurface(sTin);
             var gC = new CachedGroundSurface(gTin);
@@ -734,7 +765,8 @@ internal static class WallExcavBuilder
             var fp = new StringBuilder();       // 앞면 지문
             var stepLog = new System.Collections.Generic.List<string>();
             // ★[v105 · 계획 4.1] 3D 내보내기(WallSolidDwg)와 같은 함수 — 터파기와 3D가 같은 바닥 줄 · 같은 단면
-            var (bottoms, benchBelow, nFaces, bundles) = CollectBottoms(db, tr, pure?.Walls, mAt, notes, mn, fp, stepLog);
+            var rcNote = new WallRoadCut.Note();
+            var (bottoms, benchBelow, nFaces, bundles) = CollectBottoms(db, tr, pure?.Walls, mAt, notes, mn, fp, stepLog, rcNote);
             long tFaces = sw.ElapsedMilliseconds - t0;
             if (mn.Warn) notes.Add("앞면 재기 — " + mn.Text);
             R.Faces = nFaces;
@@ -747,7 +779,9 @@ internal static class WallExcavBuilder
             string facesTxt = $"앞면 선 {nFaces}줄({string.Join(" · ", stepLog)}{(bundles != null ? $" · 번들 구역 {bundles.Count}" : "")}) · {mn.Text} · 바닥 줄 {bottoms.Count}";
             if (bottoms.Count == 0)
             {
-                R.State = State.Failed; R.Why = nFaces == 0 ? "종단 정지면에 옹벽이 없다" : "옹벽 앞면에서 벽을 못 찾았다(벽 높이 0.1m 미만)";
+                R.State = State.Failed; R.Why = nFaces == 0 ? "종단 정지면에 옹벽이 없다"
+                    : rcNote.Lines > 0 && rcNote.Dropped == rcNote.Lines ? $"옹벽이 모두 진입도로 자리 안이라 뺐다(바닥 줄 {rcNote.Lines}개 · {rcNote.LenBefore:F1} m)"   // ★[검토 낮음 5]
+                    : "옹벽 앞면에서 벽을 못 찾았다(벽 높이 0.1m 미만)";
                 if (notes.Count > 0) R.Why += " · " + string.Join(" · ", notes);
                 log.AppendLine($"  옹벽 터파기 — {R.StatusText} · {facesTxt}");
                 tr.Commit(); return R;

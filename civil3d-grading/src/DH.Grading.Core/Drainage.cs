@@ -41,6 +41,10 @@ public static class Drainage
         /// <summary>★[JACK 1124 «측구가 있으면 빗물 모드에서 측구가 반영된 빗물 모델»] U형 측구 물길 — 줄 수 · 칸 수 · 그중 물길(흐름이 보이는) 칸 · 측구 칸 가장 큰 모인 넓이(㎡).</summary>
         public int ChannelLines, ChannelCells, ChannelStreamCells;
         public double ChannelAccMax;
+        /// <summary>★[JACK 1124 «집수면적 자동»] 칸마다 물 받는 칸(-1 = 없음 · 늘 채운 높이가 낮은 쪽 — 고리 없음).</summary>
+        public int[] To = Array.Empty<int>();
+        /// <summary>★[JACK 1124] 측구 물길 칸 차례 — 측구 번호(<c>channels</c> 차례) · 칸 · 측점(그 측구 점 목록을 따라 잰 평면 거리 · 칸 안 가장 작은 값).</summary>
+        public readonly List<(int Ch, int[] Cells, double[] Sta)> ChanPaths = new();
         public string Text => $"칸 {Cell:0.##} m · {W}×{H}(땅 {Valid:N0}) · 고임 {Ponds.Count}곳 {Ponds.Sum(p => p.Area):N0} ㎡(가장 깊은 {(Ponds.Count > 0 ? Ponds.Max(p => p.Depth) : 0):F2} m) · 평지 {FlatArea:N0} ㎡ · 물길 {Streams.Count}줄"
                               + (ChannelLines > 0 ? $" · 측구 {ChannelLines}줄 {ChannelCells}칸(물길 {ChannelStreamCells}칸 · 모인 넓이 최대 {ChannelAccMax:N0} ㎡)" : "") + $" · {Ms / 1000.0:F1}초";
     }
@@ -97,11 +101,13 @@ public static class Drainage
         var paths = new List<int[]>();
         // 측구 칸의 물길 그림 점 = 그 칸 가운데에 가장 가까운 측구 선 위 점(칸 가운데로 그리면 계단처럼 측구 밖으로 비뚤어짐)
         Dictionary<int, (double X, double Y, double D)>? chXY = channels != null ? new() : null;
+        int chIx = -1;   // ★[JACK 1124 집수] 측구 번호(channels 차례)
         if (channels != null)
             foreach (var ch in channels)
             {
+                chIx++;
                 if (ch == null || ch.Count < 2) continue;
-                var cells = new List<int>(); var zs = new List<double>();
+                var cells = new List<int>(); var zs = new List<double>(); var ss = new List<double>();
                 void Flush()
                 {
                     if (cells.Count >= 2)
@@ -109,33 +115,36 @@ public static class Drainage
                         double run = double.PositiveInfinity;
                         for (int q = 0; q < cells.Count; q++) { run = Math.Min(run, zs[q]); z[cells[q]] = Math.Min(z[cells[q]], run); }
                         paths.Add(cells.ToArray());
+                        r.ChanPaths.Add((chIx, cells.ToArray(), ss.ToArray()));
                     }
-                    cells = new List<int>(); zs = new List<double>();
+                    cells = new List<int>(); zs = new List<double>(); ss = new List<double>();
                 }
-                void Put(int i, int j, double zz, double x, double y)
+                void Put(int i, int j, double zz, double x, double y, double st)
                 {
                     int k = j * W + i;
                     if (i < 0 || j < 0 || i >= W || j >= H || !Ok(k)) { Flush(); return; }
                     double dc = Math.Abs(x - (minX + (i + 0.5) * cell)) + Math.Abs(y - (minY + (j + 0.5) * cell));
                     if (!chXY!.TryGetValue(k, out var q) || dc < q.D) chXY[k] = (x, y, dc);
-                    if (cells.Count > 0 && cells[^1] == k) { zs[^1] = Math.Min(zs[^1], zz); return; }
-                    cells.Add(k); zs.Add(zz);
+                    if (cells.Count > 0 && cells[^1] == k) { zs[^1] = Math.Min(zs[^1], zz); ss[^1] = Math.Min(ss[^1], st); return; }
+                    cells.Add(k); zs.Add(zz); ss.Add(st);
                 }
                 int pi = int.MinValue, pj = int.MinValue;
+                double cum = 0;
                 for (int q = 0; q + 1 < ch.Count; q++)
                 {
                     var a = ch[q]; var b = ch[q + 1];
-                    if (!double.IsFinite(a.X + a.Y + a.Z + b.X + b.Y + b.Z)) { Flush(); pi = pj = int.MinValue; continue; }
                     double len = Math.Sqrt((b.X - a.X) * (b.X - a.X) + (b.Y - a.Y) * (b.Y - a.Y));
+                    if (!double.IsFinite(a.X + a.Y + a.Z + b.X + b.Y + b.Z)) { Flush(); pi = pj = int.MinValue; if (double.IsFinite(len)) cum += len; continue; }
                     int n = Math.Max(1, (int)Math.Ceiling(len / (cell * 0.25)));
                     for (int t = 0; t <= n; t++)
                     {
-                        double f = (double)t / n, x = a.X + (b.X - a.X) * f, y = a.Y + (b.Y - a.Y) * f, zz = a.Z + (b.Z - a.Z) * f;
+                        double f = (double)t / n, x = a.X + (b.X - a.X) * f, y = a.Y + (b.Y - a.Y) * f, zz = a.Z + (b.Z - a.Z) * f, st = cum + len * f;
                         int i = (int)Math.Floor((x - minX) / cell), j = (int)Math.Floor((y - minY) / cell);
-                        if (pi != int.MinValue && i != pi && j != pj) Put(i, pj, zz, x, y);
-                        Put(i, j, zz, x, y);
+                        if (pi != int.MinValue && i != pi && j != pj) Put(i, pj, zz, x, y, st);
+                        Put(i, j, zz, x, y, st);
                         pi = i; pj = j;
                     }
+                    cum += len;
                 }
                 Flush();
                 r.ChannelLines++;
@@ -313,6 +322,7 @@ public static class Drainage
         }
 
         r.Z = z.Select(v => (float)v).ToArray(); r.Fill = fill.Select(v => (float)v).ToArray(); r.AccArea = acc.Select(v => (float)v).ToArray(); r.Flat = flat;
+        r.To = to;   // ★[JACK 1124 집수]
         r.Ms = sw.ElapsedMilliseconds;
         return r;
     }

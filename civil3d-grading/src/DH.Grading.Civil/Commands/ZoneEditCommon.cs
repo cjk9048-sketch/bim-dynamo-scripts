@@ -1916,7 +1916,10 @@ internal static class ZoneEditCommon
                 try
                 {
                     if (tr.GetObject(id, OpenMode.ForRead) is not Entity e) continue;
-                    if (!string.Equals(e.Layer, "DH-옹벽선", System.StringComparison.OrdinalIgnoreCase)) continue;
+                    // ★[JACK 1124 · 검토 중간 2] 원선이 진짜 — 진입도로 자리로 숨긴 원선(숨김 레이어)은 읽고, 자리 밖 조각은 건너뜀(되돌릴 때 원선 + 조각이 두 벌로 그려지지 않게 · 끝에서 다시 자름)
+                    if (string.Equals(e.Layer, WallRoadCutPlan.HidLayer, System.StringComparison.Ordinal))
+                    { if (!string.Equals(WallRoadCutPlan.HiddenSource(e), "DH-옹벽선", System.StringComparison.OrdinalIgnoreCase)) continue; }
+                    else if (!string.Equals(e.Layer, "DH-옹벽선", System.StringComparison.OrdinalIgnoreCase) || WallRoadCutPlan.IsPiece(e)) continue;
                     if (e is not Polyline3d p3) continue;
                     var pts = new System.Collections.Generic.List<Point3>();
                     foreach (ObjectId vId in p3)
@@ -1953,6 +1956,9 @@ internal static class ZoneEditCommon
             _restoreLines = null;
         }
         catch { }
+        // ★[JACK 1124 · 검토 중간 2] 끝 · Esc · «한 방향 잃음» 되돌리기 모두 — 다시 그린 온전한 옹벽선을 지금 진입도로 자리에 다시 맞춤
+        try { string wc = WallRoadCutPlan.Refresh(db); if (wc.Length > 0) DiagLog.Append("\n■ 옹벽/사면 변환 끝 " + wc + "\n"); }
+        catch (System.Exception exW) { try { DiagLog.Append("\n■ 옹벽/사면 변환 끝 ⚠옹벽선 도로 자리 맞춤 못 함 — " + exW.Message + "\n"); } catch { } }
     }
 
     /// <summary>★[v117.14.1 · JACK 1112 «옹벽 삭제 단추는 지울 게 있을 때만 활성화»] [옹벽 삭제]가 고를 옹벽 수 — <see cref="RunWallRevert"/>와 같은 거름

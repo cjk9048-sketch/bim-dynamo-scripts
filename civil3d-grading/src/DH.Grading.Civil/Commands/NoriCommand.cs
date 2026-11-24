@@ -44,7 +44,13 @@ public sealed class NoriCommand
         if (doc == null || AutoHold > 0) return "";
         try
         {
-            if (!NoriSetting.IsOn(doc.Database)) return "";
+            if (!NoriSetting.IsOn(doc.Database))
+            {
+                // ★[JACK 1124 · 검토 낮음 7] 노리선을 안 그려도 부지 옹벽선은 지금 진입도로 자리에 맞춤(도로를 걷거나 바꾼 길)
+                string wc = WallRoadCutPlan.Refresh(doc.Database);
+                if (wc.Length > 0) DiagLog.Append("\n■ 노리선 끔 · " + wc + "\n");
+                return "";
+            }
             string res = Draw(doc, quiet: true, out _);
             RoadSession.Of(doc)?.NoteTicksDrawn();
             return res;
@@ -59,6 +65,15 @@ public sealed class NoriCommand
     /// <summary>★[v111.1 · 계획_v111_1.md 2.3 · 2.4] 노리선 그리기 몸통 — [노리선] 단추와 [도로 면 만들기] 뒤 저절로(<paramref name="quiet"/> = 팝업 없음) 공용.
     /// 진입도로 면이 있으면 그 자리(발자국) 안의 부지 선은 빼고 경계에서 끊는다(JACK 1030 «합쳐진 노리선»). 돌려줌 = 한 줄 요약.</summary>
     internal static string Draw(Document doc, bool quiet, out int drawn)
+    {
+        string res = DrawCore(doc, quiet, out drawn);
+        // ★★[JACK 1124] 번들 · 선 옹벽 옹벽선을 다시 그렸으므로(선 옹벽은 도로 자리를 안 뺌) 부지 옹벽선을 지금 진입도로 자리에 다시 맞춤
+        try { string wc = WallRoadCutPlan.Refresh(doc.Database); if (wc.Length > 0) DiagLog.Append("\n■ 노리선 뒤 " + wc + "\n"); }
+        catch (System.Exception exW) { try { DiagLog.Append("\n■ 노리선 뒤 ⚠옹벽선 도로 자리 맞춤 못 함 — " + exW.Message + "\n"); } catch { } }
+        return res;
+    }
+
+    static string DrawCore(Document doc, bool quiet, out int drawn)
     {
         drawn = 0;
         int rcLine0 = 0, rcLine1 = 0;          // 진입도로 면 자리로 자른 선 수(전 → 후)

@@ -11,6 +11,8 @@ namespace DH.Grading.Civil;
 internal static class UDitchStore
 {
     internal const string Layer = "DH-U형측구", LineLayer = "DH-U형측구-선", App = "DH_UDITCH";
+    /// <summary>★[JACK 1124 «U 선이어도 교차 · 합류 구간엔 집수정을 블록으로»] 평면 집수정 블록 · 레이어(XData [앱, 임자, 부분, 이어진 측구, 이름] — [측구 생성]마다 새로 · 초기화 · 측구 지우기에 같이 지움).</summary>
+    internal const string BasinLayer = "DH-U형측구-집수정", BasinBlock = "DH_집수정";
     /// <summary>★[JACK 1124 «모형 뷰에서는 -----U-----u----- 이런 식으로 선형만»] 측구 선 선종류 — «—— U —— U ——»(m · 글 «U» 높이 1 m · DH-한글).</summary>
     internal const string Ltype = "DH_U측구";
     const string DictName = "DH_GRADING", RecName = "UDITCH";
@@ -319,37 +321,44 @@ internal static class UDitchStore
 
     // ══════════════════════════════ M06 솔리드 ══════════════════════════════
 
-    /// <summary>우리가 지은 것(레이어 + XData) 지움 — <paramref name="id"/>가 빈 글이면 모두.</summary>
-    internal static int Erase(Database db, Transaction tr, string id)
+    /// <summary>우리가 지은 것(레이어 + XData) 지움 — <paramref name="id"/>가 빈 글이면 모두. 돌려줌 = 레이어 <see cref="Layer"/>에서 지운 수(옛 솔리드 · 대신 그린 선) ·
+    /// <paramref name="countBlocks"/>면 집수정 블록도 셈(초기화 로그 — [검토 1124 #8]).</summary>
+    internal static int Erase(Database db, Transaction tr, string id, bool countBlocks = false)
     {
         int n = 0;
-        bool locked = SetLocked(db, tr, false);   // ★[설치 전 검토 3] 잠긴 레이어면 풀고 지운 뒤 되돌림(못 지운 채 새로 지어 겹치지 않게)
+        // ★[검토 1124 #6] [지표면 맞춤]이 D-007을 D-007-1 · -2(닫힌 선 갈래)로 나누면 옛 블록 임자는 «D-007» — 갈래 밑 이름이 같으면 같은 측구로 봄
+        bool Same(string o) => o == id || UDitch.LoopBase(id) == o || UDitch.LoopBase(o) == id;
+        bool locked = SetLocked(db, tr, Layer, false), lockedB = SetLocked(db, tr, BasinLayer, false);   // ★[설치 전 검토 3] 잠긴 레이어면 풀고 지운 뒤 되돌림(못 지운 채 새로 지어 겹치지 않게)
         var ms = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForRead);
         foreach (ObjectId eid in ms)
         {
             try
             {
-                if (eid.IsErased || tr.GetObject(eid, OpenMode.ForRead) is not Entity e || e.Layer != Layer) continue;
+                if (eid.IsErased || tr.GetObject(eid, OpenMode.ForRead) is not Entity e || (e.Layer != Layer && e.Layer != BasinLayer)) continue;
                 using var rb = e.GetXDataForApplication(App);
                 var v = rb?.AsArray();
                 if (v == null || v.Length < 2) continue;
                 // ★[JACK 1123] 합류 · 교차 · 출구 집수정(이름 J1 · 넷째 칸 = 이어진 측구 «D-001,D-002»)도 그 측구를 지우면 같이
-                if (id.Length > 0 && (v[1].Value as string) != id
-                    && !(v.Length > 3 && (v[2].Value as string ?? "").StartsWith("합류 집수정", System.StringComparison.Ordinal) && ((v[3].Value as string) ?? "").Split(',').Contains(id))) continue;
-                e.UpgradeOpen(); e.Erase(); n++;
+                if (id.Length > 0 && !Same(v[1].Value as string ?? "")
+                    && !(v.Length > 3 && (v[2].Value as string ?? "").StartsWith("합류 집수정", System.StringComparison.Ordinal) && ((v[3].Value as string) ?? "").Split(',').Any(Same))) continue;
+                bool old = e.Layer == Layer;   // 집수정 블록은 [측구 생성]마다 새로 넣으므로 «옛 모델» 수에서 뺌
+                e.UpgradeOpen(); e.Erase();
+                if (old || countBlocks) n++;
             }
             catch { }
         }
-        if (locked) SetLocked(db, tr, true);
+        if (locked) SetLocked(db, tr, Layer, true);
+        if (lockedB) SetLocked(db, tr, BasinLayer, true);
+        try { UDitchCatchStore.EraseZones(db, tr, id); } catch { }   // ★[JACK 1124 집수] 평면 집수 구역도(수에는 안 셈)
         return n;
     }
 
     /// <summary>측구 레이어 잠금을 바꿈 — 돌려줌 = 바꾸기 전 잠겨 있었나(레이어 없음 = 거짓).</summary>
-    static bool SetLocked(Database db, Transaction tr, bool locked)
+    static bool SetLocked(Database db, Transaction tr, string name, bool locked)
     {
         var lt = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
-        if (!lt.Has(Layer)) return false;
-        var l = (LayerTableRecord)tr.GetObject(lt[Layer], OpenMode.ForRead);
+        if (!lt.Has(name)) return false;
+        var l = (LayerTableRecord)tr.GetObject(lt[name], OpenMode.ForRead);
         bool was = l.IsLocked;
         if (was != locked) { l.UpgradeOpen(); l.IsLocked = locked; }
         return was;
@@ -367,6 +376,10 @@ internal static class UDitchStore
         public int Junctions, JunctionWarn;
         /// <summary>★[JACK 1124] 선종류 U를 입힌 선 수(원 선 · 대신 그린 선) · 그중 대신 그린 선.</summary>
         public int Lines, StandIn;
+        /// <summary>★[JACK 1124] 평면 집수정 블록 수(<see cref="BasinBlock"/> — 실제 넣은 수) · 넣을 수(목록 · [검토 1124 #5]).</summary>
+        public int BasinBlocks, BasinPlan;
+        /// <summary>★[JACK 1124 «수량으로»] 집수정 규격별 한 줄(<see cref="UDitch.BasinSummary"/> — 블록과 같은 목록).</summary>
+        public string BasinText = "";
     }
 
     /// <summary>★[JACK 1124 «측구는 모형 뷰에서는 선형만 · 3D 뷰에서는 실제 모양으로 지표면엔 영향을 주지 않게»] 모든 측구를 다시 셈 —
@@ -392,8 +405,8 @@ internal static class UDitchStore
                 // 도면 = 원 선에 선종류 U(닫힌 선 두 갈래는 선 하나) · 원 선이 없으면 점으로 대신 그림(레이어 DH-U형측구 · 다음 셈에 지움)
                 if (d.LineHandle.Length == 0 || !marked.Contains(d.LineHandle))
                 {
-                    if (MarkLine(db, tr, d.LineHandle, lt)) { marked.Add(d.LineHandle); st.Lines++; }
-                    else if (DrawStandIn(db, tr, d, lt, h.Verdict)) { st.Lines++; st.StandIn++; }
+                    if (MarkLine(db, tr, d.LineHandle, lt, rec.UScale)) { marked.Add(d.LineHandle); st.Lines++; }
+                    else if (DrawStandIn(db, tr, d, lt, h.Verdict, rec.UScale)) { st.Lines++; st.StandIn++; }
                 }
                 var q = UDitch.Qty(d, s);
                 var xq = UDitch.Extras(d, s);   // ★[v117.16 · JACK 1112] 낙차 · 집수정 · 관로 · 그레이팅
@@ -424,7 +437,7 @@ internal static class UDitchStore
             try
             {
                 var sols = UDitch.JunctionSolids(j, s);
-                if (sols.Count == 0) { log.AppendLine($"  {j.Label}: 못 지음 — 바닥고 모름"); continue; }
+                if (sols.Count == 0) { st.JunctionWarn += j.Warn.Count; log.AppendLine($"  {j.Label}: 깊이 미정(바닥고 · 지표 모름) — 평면 블록 · 개소만 · 3D · 콘크리트 없음"); continue; }
                 st.Basins++; st.Junctions++; st.ExtraVol += j.Volume; st.JunctionWarn += j.Warn.Count;
                 log.AppendLine(string.Format(System.Globalization.CultureInfo.InvariantCulture, "  {0}: 안 {1:0.00} · 바깥 {2:0.00} m · 깊이 {3:0.00} m · 콘크리트 {4:F3} ㎥",
                                              j.Label, j.B.Inner, j.B.Outer, j.B.Depth, j.Volume));
@@ -435,10 +448,190 @@ internal static class UDitchStore
                 log.AppendLine($"  {j.Label}: 못 지음 — {ex.Message}");
             }
         }
+        // ★[JACK 1124 «U로 생성되어도 교차 · 합류 구간엔 집수정이 블록으로 · 그게 수량으로 나와야»] 평면 = 집수정마다 블록 하나(바깥치수 · 측구 방향) —
+        //   목록 = 수량(보고서 · 수량산출서 · 창)과 같은 UDitch.BasinList(블록 수 = 수량 개소)
+        try
+        {
+            var plan = UDitch.BasinList(rec, s);
+            st.BasinPlan = plan.Count;
+            st.BasinBlocks = InsertBasins(db, tr, plan, out string bfail);
+            st.BasinText = UDitch.BasinSummary(plan, false);
+            int nj = plan.Count(p => p.Junction);
+            if (plan.Count > 0) log.AppendLine($"  평면 집수정 블록 {st.BasinBlocks}(합류 · 교차 · 출구 {nj} · 단차 {plan.Count - nj}) · 레이어 {BasinLayer} · 수량 {UDitch.BasinSummary(plan)}"
+                                               + (st.BasinBlocks < plan.Count ? $" · ⚠블록 못 넣음 {plan.Count - st.BasinBlocks}{(bfail.Length > 0 ? "(첫: " + bfail + ")" : "(자리 · 크기 모름)")}" : ""));
+        }
+        catch (System.Exception ex) { log.AppendLine($"  ⚠평면 집수정 블록 못 넣음 — {ex.Message}"); }
         rec.Updated = System.DateTime.Now.ToString("yyyy-MM-dd HH:mm");
         Save(db, tr, rec);
         tr.Commit();
         return st;
+    }
+
+    /// <summary>★[검토 1124 #2] 우리 정의 표식(블록 설명 앞머리) — 같은 이름이 남의 정의 · 옛 판(표식 없음 · 다른 판)이면 속을 다시 그림.</summary>
+    const string BasinTag = "[DH_UDITCH 집수정 v2]";
+
+    /// <summary>★[JACK 1124] 평면 집수정 블록 정의 «DH_집수정»(없으면 만듦 · 우리 이 판이면 그대로 · 남의 것 · 옛 판이면 속을 다시 그림 — 넣은 참조는 새 모양을 따름) —
+    /// 가운데 원점 · 바깥 네모 1 × 1(넣을 때 바깥치수로 키움) · 안 네모(기본 안치수 ÷ 바깥치수 = 0.6 ÷ 0.9 — 크기마다 따로 안 그림) · 그레이팅 살 둘(블록 X = 측구 방향).
+    /// 개체는 레이어 0 · 색 · 선종류 · 선가중치 ByBlock(★[검토 1124 #4] 지금 CECOLOR · CELTYPE 말고 넣은 참조 = 레이어를 따름).</summary>
+    internal static ObjectId EnsureBasinBlock(Database db, Transaction tr)
+    {
+        var bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
+        BlockTableRecord btr;
+        ObjectId id;
+        if (bt.Has(BasinBlock))
+        {
+            id = bt[BasinBlock];
+            btr = (BlockTableRecord)tr.GetObject(id, OpenMode.ForRead);
+            if ((btr.Comments ?? "").StartsWith(BasinTag, System.StringComparison.Ordinal) || btr.IsFromExternalReference || btr.IsDependent || btr.IsLayout) return id;
+            btr.UpgradeOpen();
+            foreach (var e in btr.Cast<ObjectId>().ToList()) tr.GetObject(e, OpenMode.ForWrite).Erase();
+            btr.Origin = Point3d.Origin;
+        }
+        else
+        {
+            bt.UpgradeOpen();
+            btr = new BlockTableRecord { Name = BasinBlock, Origin = Point3d.Origin, Units = UnitsValue.Undefined };
+            id = bt.Add(btr);
+            tr.AddNewlyCreatedDBObject(btr, true);
+        }
+        btr.Comments = BasinTag + " U형 측구 집수정(바깥 네모 1 × 1 · 안 네모 · 그레이팅)";
+        var d = new UDitch.Settings();
+        double o = 0.5, r = 0.5 * d.BasinInner / (d.BasinInner + 2 * d.BasinWall);
+        var byBlock = SymbolUtilityServices.GetLinetypeByBlockId(db);
+        void Add(Entity e)
+        {
+            e.SetDatabaseDefaults(db); e.Layer = "0";
+            e.ColorIndex = 0; e.LinetypeId = byBlock; e.LineWeight = LineWeight.ByBlock;
+            btr.AppendEntity(e); tr.AddNewlyCreatedDBObject(e, true);
+        }
+        Polyline Sq(double h)
+        {
+            var p = new Polyline();
+            p.AddVertexAt(0, new Point2d(-h, -h), 0, 0, 0); p.AddVertexAt(1, new Point2d(h, -h), 0, 0, 0);
+            p.AddVertexAt(2, new Point2d(h, h), 0, 0, 0); p.AddVertexAt(3, new Point2d(-h, h), 0, 0, 0);
+            p.Closed = true;
+            return p;
+        }
+        Add(Sq(o)); Add(Sq(r));
+        foreach (double y in new[] { -r / 3, r / 3 }) Add(new Line(new Point3d(-r, y, 0), new Point3d(r, y, 0)));
+        return id;
+    }
+
+    /// <summary>★[검토 1124 #1] 도면의 평면 집수정 블록 수(레이어 <see cref="BasinLayer"/> · XData) — 수량산출서가 수량 개소와 견줌.</summary>
+    internal static int CountBasinBlocks(Database db, Transaction tr)
+    {
+        int n = 0;
+        var brClass = Autodesk.AutoCAD.Runtime.RXObject.GetClass(typeof(BlockReference));
+        foreach (ObjectId eid in (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForRead))
+        {
+            if (eid.IsErased || !eid.ObjectClass.IsDerivedFrom(brClass) || tr.GetObject(eid, OpenMode.ForRead) is not BlockReference br || br.Layer != BasinLayer) continue;
+            using var rb = br.GetXDataForApplication(App);
+            if (rb != null) n++;
+        }
+        return n;
+    }
+
+    /// <summary>자리 · 크기를 아는 집수정(블록으로 넣을 수 있음).</summary>
+    internal static bool Placeable(UDitch.BasinItem p) => double.IsFinite(p.B.X) && double.IsFinite(p.B.Y) && p.B.Outer > 1e-6 && double.IsFinite(p.B.Outer);
+
+    /// <summary>★[JACK 1124] 평면 집수정 블록 넣기 — 가운데(Z 0) · 축척 = 바깥치수(정사각) · 돌림 = 측구 방향 · 레이어 <see cref="BasinLayer"/> · 색 · 선종류 · 선가중치 ByLayer ·
+    /// XData [앱, 임자(단차 = 측구 Id · 합류 = J1), 부분(«집수정» · «합류 집수정»), 이어진 측구 «D-001,D-002», 이름](<see cref="Erase"/>가 지움).
+    /// 돌려줌 = 실제 넣은 수(★[검토 1124 #5] 하나가 실패해도 나머지는 넣고 첫 까닭은 <paramref name="fail"/> · 잠금은 꼭 되돌림).</summary>
+    static int InsertBasins(Database db, Transaction tr, List<UDitch.BasinItem> plan, out string fail)
+    {
+        fail = "";
+        var ok = plan.Where(Placeable).ToList();
+        if (ok.Count == 0) return 0;
+        var blk = EnsureBasinBlock(db, tr);
+        var lay = GradingBuilder.EnsureLayer(db, tr, BasinLayer, 4);
+        var byLayer = SymbolUtilityServices.GetLinetypeByLayerId(db);
+        GradingBuilder.EnsureRegApp(db, tr, App);
+        bool locked = SetLocked(db, tr, BasinLayer, false);
+        int n = 0;
+        try
+        {
+            var ms = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForWrite);
+            foreach (var it in ok)
+            {
+                var b = it.B;
+                var br = new BlockReference(new Point3d(b.X, b.Y, 0), blk);
+                try
+                {
+                    br.SetDatabaseDefaults(db);
+                    br.LayerId = lay;
+                    br.ColorIndex = 256; br.LinetypeId = byLayer; br.LineWeight = LineWeight.ByLayer;
+                    br.ScaleFactors = new Scale3d(b.Outer);
+                    br.Rotation = System.Math.Atan2(b.Ey, b.Ex);
+                    ms.AppendEntity(br); tr.AddNewlyCreatedDBObject(br, true);
+                    using (var xd = new ResultBuffer(new TypedValue((int)DxfCode.ExtendedDataRegAppName, App), new TypedValue((int)DxfCode.ExtendedDataAsciiString, it.Owner),
+                                                     new TypedValue((int)DxfCode.ExtendedDataAsciiString, it.Junction ? "합류 집수정" : "집수정"), new TypedValue((int)DxfCode.ExtendedDataAsciiString, it.Members),
+                                                     new TypedValue((int)DxfCode.ExtendedDataAsciiString, it.Label)))
+                        br.XData = xd;
+                    n++;
+                }
+                catch (System.Exception ex)
+                {
+                    if (fail.Length == 0) fail = $"{it.Label}: {ex.Message}";
+                    try { if (br.ObjectId.IsNull) br.Dispose(); else br.Erase(); } catch { }   // 표식 없는 반쪽 블록을 남기지 않음
+                }
+            }
+        }
+        finally { if (locked) SetLocked(db, tr, BasinLayer, true); }
+        return n;
+    }
+
+    /// <summary>★[검토 1124 #1] 기록을 고친 뒤([지표면 맞춤] · 창 규격 · 바닥고 · [선 고르기] · 지우기 · 부분 초기화) 평면 집수정 블록을 같은 목록(<see cref="UDitch.BasinList"/>)으로 맞춤 —
+    /// [측구 생성]을 한 기록만(<c>rec.Updated</c> — 아직 안 했으면 블록도 없음) · 블록이 목록과 같으면(이름 · 자리 · 크기 · 돌림) 손대지 않음 · 다르면 모두 지우고 다시 넣음.
+    /// <paramref name="link"/> = 먼저 <see cref="UDitch.Link"/>(기록에서 측구를 빼거나 규격을 바꾼 뒤). 안쪽 트랜잭션 — 실패하면 블록만 되돌리고(기록 저장은 그대로) 로그에 까닭.
+    /// 돌려줌 = 넣은 수(-1 = 손 안 댐 · -2 = 실패).</summary>
+    internal static int SyncBasins(Database db, UDitch.Record rec, UDitch.Settings s, System.Text.StringBuilder? log, bool link = false)
+    {
+        if (rec.Updated.Length == 0) return -1;
+        try
+        {
+            if (link) UDitch.Link(rec, s);
+            var plan = UDitch.BasinList(rec, s);
+            var want = plan.Where(Placeable).ToList();
+            using var tr = db.TransactionManager.StartTransaction();
+            var have = new List<(BlockReference B, string Label)>();
+            var brClass = Autodesk.AutoCAD.Runtime.RXObject.GetClass(typeof(BlockReference));
+            var ms = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForRead);
+            foreach (ObjectId eid in ms)
+            {
+                if (eid.IsErased || !eid.ObjectClass.IsDerivedFrom(brClass)) continue;   // 블록 참조만 엶(큰 도면에서도 가볍게)
+                if (tr.GetObject(eid, OpenMode.ForRead) is not BlockReference br || br.Layer != BasinLayer) continue;
+                using var rb = br.GetXDataForApplication(App);
+                var v = rb?.AsArray();
+                if (v == null || v.Length < 2) continue;
+                have.Add((br, v.Length > 4 ? v[4].Value as string ?? "" : ""));
+            }
+            static double Wrap(double a) { a %= 2 * System.Math.PI; return a < 0 ? a + 2 * System.Math.PI : a; }
+            bool Same(BlockReference br, UDitch.BasinItem p)
+            {
+                double dr = System.Math.Abs(Wrap(br.Rotation) - Wrap(System.Math.Atan2(p.B.Ey, p.B.Ex)));
+                return System.Math.Abs(br.Position.X - p.B.X) < 1e-6 && System.Math.Abs(br.Position.Y - p.B.Y) < 1e-6
+                    && System.Math.Abs(br.ScaleFactors.X - p.B.Outer) < 1e-9 && System.Math.Abs(br.ScaleFactors.Y - p.B.Outer) < 1e-9
+                    && (dr < 1e-9 || System.Math.Abs(dr - 2 * System.Math.PI) < 1e-9);
+            }
+            if (have.Count == want.Count && want.All(p => have.Any(h => h.Label == p.Label && Same(h.B, p))))
+            {
+                if (have.Count > 0) EnsureBasinBlock(db, tr);   // 옛 판 정의면 속만 새로
+                tr.Commit();
+                return -1;
+            }
+            bool locked = SetLocked(db, tr, BasinLayer, false);
+            try { foreach (var h in have) { h.B.UpgradeOpen(); h.B.Erase(); } }
+            finally { if (locked) SetLocked(db, tr, BasinLayer, true); }
+            int n = InsertBasins(db, tr, plan, out string fail);
+            tr.Commit();
+            log?.AppendLine($"  평면 집수정 블록 맞춤 — 지움 {have.Count} · 넣음 {n}/{plan.Count}" + (fail.Length > 0 ? " · ⚠" + fail : ""));
+            return n;
+        }
+        catch (System.Exception ex)
+        {
+            log?.AppendLine($"  ⚠평면 집수정 블록 맞춤 실패 — {ex.GetType().Name}: {ex.Message} → [측구 생성]");
+            return -2;
+        }
     }
 
     /// <summary>★[JACK 1124] 측구 선종류 «—— U —— U ——» — <b>종이 mm 기준</b>(줄 6 · 틈 1.6 + 1.6 가운데 글 «U» 높이 2.5 · 글꼴 DH-한글 · 없으면 지금 글꼴).
@@ -481,15 +674,17 @@ internal static class UDitchStore
         return id;
     }
 
-    static double LtScale(Database db)
+    /// <summary>선종류 축척 = <paramref name="k"/>(U 표시 크기 배 · ★[JACK 1124]) / LTSCALE.</summary>
+    internal static double LtScale(Database db, double k = 1.0)
     {
         double g = 1.0;
         try { g = db.Ltscale; } catch { }
-        return g > 1e-9 && double.IsFinite(g) ? 1.0 / g : 1.0;
+        k = UDitch.UScaleOk(k);
+        return g > 1e-9 && double.IsFinite(g) ? k / g : k;
     }
 
     /// <summary>★[JACK 1124] 원 선(핸들)에 선종류 U — 돌려줌 = 원 선이 있음(잠긴 레이어면 못 바꿔도 참). 선 · 지표면 모양은 안 바꿈.</summary>
-    internal static bool MarkLine(Database db, Transaction tr, string handle, ObjectId lt)
+    internal static bool MarkLine(Database db, Transaction tr, string handle, ObjectId lt, double k = 1.0)
     {
         if (handle.Length == 0 || lt.IsNull) return false;
         try
@@ -497,7 +692,7 @@ internal static class UDitchStore
             if (!db.TryGetObjectId(new Handle(System.Convert.ToInt64(handle, 16)), out var id) || id.IsErased) return false;
             if (tr.GetObject(id, OpenMode.ForRead) is not Curve e) return false;
             if (tr.GetObject(e.LayerId, OpenMode.ForRead) is LayerTableRecord lr && lr.IsLocked) return true;
-            double lts = LtScale(db);
+            double lts = LtScale(db, k);
             bool plg = e is Polyline p0 && !p0.Plinegen;
             if (e.LinetypeId == lt && System.Math.Abs(e.LinetypeScale - lts) < 1e-9 && !plg) return true;
             e.UpgradeOpen();
@@ -528,7 +723,7 @@ internal static class UDitchStore
     }
 
     /// <summary>원 선이 없을 때(지워짐) — 기록 점으로 선을 대신 그림(레이어 DH-U형측구 · 선종류 U · XData [앱, 이름, «선», 상태] — 다음 셈 · 지우기에 지움).</summary>
-    static bool DrawStandIn(Database db, Transaction tr, UDitch.Ditch d, ObjectId lt, UDitch.Verdict v)
+    static bool DrawStandIn(Database db, Transaction tr, UDitch.Ditch d, ObjectId lt, UDitch.Verdict v, double k = 1.0)
     {
         var pts = UDitch.CleanPts(d.Pts);
         if (pts.Count < 2) return false;
@@ -536,7 +731,7 @@ internal static class UDitchStore
         for (int i = 0; i < pts.Count; i++) pl.AddVertexAt(i, new Point2d(pts[i][0], pts[i][1]), 0, 0, 0);
         pl.LayerId = GradingBuilder.EnsureLayer(db, tr, Layer, 253);
         GradingBuilder.EnsureRegApp(db, tr, App);
-        if (!lt.IsNull) { pl.LinetypeId = lt; pl.LinetypeScale = LtScale(db); }
+        if (!lt.IsNull) { pl.LinetypeId = lt; pl.LinetypeScale = LtScale(db, k); }
         pl.Plinegen = true;
         pl.ColorIndex = v == UDitch.Verdict.Short ? 1 : v == UDitch.Verdict.Caution ? 2 : 256;
         var ms = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForWrite);
@@ -576,7 +771,7 @@ internal static class UDitchStore
 
     /// <summary>★[JACK 1124 «전체 초기화 시 측구가 안 지워져»] 초기화가 고른 측구를 지움 — 기록에서 빼고(닫힌 선 갈래는 짝도) ·
     /// 표식 붙은 것(옛 솔리드 · 메시 · 대신 그린 선 · 합류 집수정) 지움 · 원 선은 우리가 그린 선(레이어 DH-U형측구-선)이면 지우고 남의 선이면 선종류 U만 뺌.
-    /// 남은 측구가 없으면 표식 붙은 것 모두 · 강우는 남김(입력값 — 측구도 강우도 없으면 기록 자리째 지움). 기록을 못 읽으면 아무것도 안 함. 돌려줌 = (측구 수, 원 선 수, 표식 개체 수).</summary>
+    /// 남은 측구가 없으면 표식 붙은 것 모두 · 강우는 남김(입력값 — 측구도 강우도 없으면 기록 자리째 지움). 기록을 못 읽으면 아무것도 안 함. 돌려줌 = (측구 수, 원 선 수, 표식 개체 수 — 집수정 블록 포함).</summary>
     internal static (int Ditches, int Lines, int Ents) EraseForReset(Database db, Transaction tr, System.Func<UDitch.Ditch, bool> pick, System.Text.StringBuilder log)
     {
         if (!TryLoad(db, tr, out var rec, out string why)) { log.AppendLine("U형 측구: 기록 못 읽음 — " + why + " → 그대로"); return (0, 0, 0); }
@@ -584,10 +779,12 @@ internal static class UDitchStore
         var handles = hit.Select(d => d.LineHandle).Where(h => h.Length > 0).ToHashSet();
         var gone = rec.Ditches.Where(d => hit.Contains(d) || (d.LineHandle.Length > 0 && handles.Contains(d.LineHandle))).ToList();
         int ents = 0, lines = 0;
-        foreach (var d in gone) { ents += Erase(db, tr, d.Id); rec.Ditches.Remove(d); }
+        foreach (var d in gone) { ents += Erase(db, tr, d.Id, countBlocks: true); rec.Ditches.Remove(d); }
         foreach (var h in handles) if (!rec.Ditches.Any(x => x.LineHandle == h) && DropLine(db, tr, h)) lines++;
-        if (rec.Ditches.Count == 0) ents += Erase(db, tr, "");
+        if (rec.Ditches.Count == 0) ents += Erase(db, tr, "", countBlocks: true);
         if (gone.Count > 0 || ents > 0) Save(db, tr, rec);
+        // ★[검토 1124 #1] 남은 측구의 합류 · 출구가 바뀌었으면 평면 집수정 블록도 같은 목록으로
+        if (gone.Count > 0 && rec.Ditches.Count > 0) SyncBasins(db, rec, LoadSettings(out _, out _), log, link: true);
         if (gone.Count > 0 || ents > 0) log.AppendLine($"U형 측구: {gone.Count}개 지움({string.Join(" · ", gone.Select(d => d.Id))}) · 원 선 {lines} · 표식 개체 {ents} · 남은 측구 {rec.Ditches.Count}");
         return (gone.Count, lines, ents);
     }

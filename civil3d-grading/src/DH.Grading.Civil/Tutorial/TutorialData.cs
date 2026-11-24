@@ -6,10 +6,10 @@ using Chapter = DH.Grading.Civil.Tutorial.TutorialFlow.Chapter;
 namespace DH.Grading.Civil.Tutorial;
 
 /// <summary>★[튜토리얼 · JACK 1117 «단원 · 한 지표면에서 이어서 · 중간 단원은 저장된 자료로»] 튜토리얼 자료 자리.
-/// <para>기본 자료(설치 번들 <c>Contents\Tutorial\</c> — 공개 저장소에는 없음 · .gitignore): <c>tut_base.dwg</c>(원지반 + 계획부지선 + 터파기선) · <c>tut_ch3.dwg</c>(2단원을 끝낸 꼴) · <c>tut_ch5.dwg</c>(진입도로 시작 — 2단원 끝 + 노선 선) · <c>tut_ch1.dxf</c>(수치지도).
+/// <para>기본 자료(설치 번들 <c>Contents\Tutorial\</c> — 공개 저장소에는 없음 · .gitignore): <c>tut_base.dwg</c>(원지반 + 계획부지선 + 터파기선) · <c>tut_ch3.dwg</c>(정지 끝낸 꼴 — 도면화 시작) · <c>tut_ch5.dwg</c>(진입도로 시작 — 정지 끝 + 노선 선) · <c>tut_ch1.dxf</c>(수치지도).
 /// 같은 이름이 <c>%LOCALAPPDATA%\DHGrading\tutorial\data\</c>에 있으면 그쪽이 먼저(설치 전 시험용).</para>
-/// <para>내 결과: 단원을 끝내면 <c>%LOCALAPPDATA%\DHGrading\tutorial\chN_done.dwg</c> · 끝낸 단원 표시 <c>progress.txt</c>.
-/// 단원은 늘 <b>사본</b>(<c>work\</c>)을 연다 — 기본 자료 · 내 결과 파일은 그대로.</para>
+/// <para>끝낸 단원 표시 <c>%LOCALAPPDATA%\DHGrading\tutorial\progress4.txt</c>(✓). ★[JACK 1124 «내 것으로 이어서 없애»] 단원 결과 도면은 안 남김.
+/// 단원은 늘 기본 자료의 <b>사본</b>(<c>work\</c>)을 연다 — 기본 자료는 그대로.</para>
 /// <para>Autodesk 형을 안 쓴다(화면 없이 시험 가능).</para></summary>
 internal static class TutorialData
 {
@@ -29,25 +29,19 @@ internal static class TutorialData
         return null;
     }
 
-    /// <summary>단원 시작 기본 자료 — 2 = <c>tut_base.dwg</c>(원지반 + 계획부지선 + 터파기선) · 3 = <c>tut_ch3.dwg</c>(2단원을 끝낸 꼴) · 4 = <c>tut_ch4.dwg</c> ·
-    /// 5 = <c>tut_ch5.dwg</c>(2단원을 끝낸 꼴 + 노선 따라 그릴 선 «TUT-노선»).</summary>
+    /// <summary>★[JACK 1124 단원 4개] 단원 시작 기본 자료 — 2 계획부지 = <c>tut_base.dwg</c>(원지반 + 계획부지선 + 터파기선) ·
+    /// 3 진입도로 = <c>tut_ch5.dwg</c>(정지 끝낸 꼴 + 노선 따라 그릴 선 «TUT-노선») · 4 도면화 = <c>tut_ch4.dwg</c>(있으면) 아니면 <c>tut_ch3.dwg</c>(정지 끝낸 꼴).</summary>
     internal static string? StartDwg(Chapter c) => c switch
     {
         Chapter.Ground => null,
         Chapter.Site => DataFile("tut_base.dwg"),
-        _ => DataFile($"tut_ch{(int)c}.dwg"),
+        Chapter.Road => DataFile("tut_ch5.dwg"),
+        _ => DataFile("tut_ch4.dwg") ?? DataFile("tut_ch3.dwg"),
     };
     internal static string? DxfFile => DataFile("tut_ch1.dxf");
 
-    /// <summary>내 결과(단원 N을 끝낸 도면) — 없으면 null.</summary>
-    internal static string DonePath(Chapter c) => Path.Combine(Home, $"ch{(int)c}_done.dwg");
-    internal static string? MyDone(Chapter c) { string p = DonePath(c); return File.Exists(p) ? p : null; }
-
-    /// <summary>단원 c를 «내 것으로 이어서» 시작할 때 여는 파일 — 앞 단원(여는 단원 차례 · 5 진입도로 = 3 터파기) 결과.</summary>
-    internal static string? MineFor(Chapter c) => TutorialFlow.Prev(c) is Chapter p ? MyDone(p) : null;
-
-    // ── 끝낸 단원 ──
-    static string ProgressFile => Path.Combine(Home, "progress.txt");
+    // ── 끝낸 단원 — ★[JACK 1124] 단원이 4개로 바뀜 → 새 파일(옛 번호 3 · 5와 섞이지 않게) ──
+    static string ProgressFile => Path.Combine(Home, "progress4.txt");
 
     internal static HashSet<int> DoneSet()
     {
@@ -90,14 +84,6 @@ internal static class TutorialData
             return dst;
         }
         catch (Exception ex) { why = ex.Message; return null; }
-    }
-
-    /// <summary>새 도면(1단원) 저장 자리.</summary>
-    internal static string NewWorkPath(Chapter c)
-    {
-        string dir = Path.Combine(Home, "work");
-        try { Directory.CreateDirectory(dir); } catch { }
-        return Path.Combine(dir, $"ch{(int)c}_{DateTime.Now:yyyyMMdd_HHmmss}.dwg");
     }
 
     /// <summary>work 폴더 정리 — 7일 넘은 사본(열려 있으면 못 지움 → 그대로).</summary>

@@ -366,6 +366,44 @@ internal static class FinalSurfaceBuilder
     /// <para>★[Step 0 측정 1103] 정지면_DH를 꺼도 어느 면도 구식이 안 됨 → 숨긴 뒤 재작성은 뺐다(3장 규칙). 그래서 숨김은 짓는 트랜잭션 안에서 함께(실패하면 함께 물림).</para></summary>
     internal static string Build(Document doc)
     {
+        string msg = BuildCore(doc);
+        // ★★[JACK 1124 «진입도로로 인해 옹벽부가 깎일 경우 옹벽 객체도 수정»] 짓기 · 건너뜀 · 실패 모두 뒤 — 부지 평면 옹벽선을 지금 도로 자리에 맞춤(도로 없으면 온전히 되돌림)
+        try { string wc = WallRoadCutPlan.Refresh(doc.Database); if (wc.Length > 0) DiagLog.Append("\n[최종지표면] " + wc); }
+        catch (Exception exW) { try { DiagLog.Append("\n[최종지표면] ⚠옹벽선 도로 자리 맞춤 못 함 — " + exW.Message); } catch { } }
+        return msg;
+    }
+
+    /// <summary>★★[JACK 1124] 부지 옹벽을 뺄 진입도로 자리 — 합치기(<see cref="FinalSurface.Compose"/>)가 도로에 준 발자국 F(도로마다 <see cref="RoadFootprint.FromTris(IReadOnlyList{Tri})"/> · 같은 입력 <see cref="Gather"/> · 같은 세모 읽기)의 합.
+    /// 도로 없음 · 못 읽음 = null. 지문(도로 핸들 · 면 지문 — 싸다)이 같으면 지난 자리를 되씀(종단 · 3D · 평면이 여러 번 부름).</summary>
+    internal static RoadFootprint.Cutter? RoadCut(Database db, Transaction tr, out string print, out string note)
+    {
+        note = "";
+        var I = Gather(db, tr);
+        print = string.Join("|", I.Roads.Select(r => $"{r.Aid.Handle}:{r.SurfId.Handle} {r.P}"));
+        if (I.Roads.Count == 0) return null;
+        lock (_cut)
+            if (_cut.TryGetValue(db.UnmanagedObject, out var c) && c.Print == print) { note = c.Note; return c.Cut; }
+        var feet = new List<Geometry>();
+        foreach (var r in I.Roads)
+        {
+            try
+            {
+                var ts = (CivilDb.TinSurface)tr.GetObject(r.SurfId, OpenMode.ForRead);
+                var f = RoadFootprint.FromTris(ReadAll(ts, ts.Name), out string fn);
+                if (f != null && !f.IsEmpty) feet.Add(f);
+                else note += (note.Length > 0 ? " · " : "") + $"«{r.Name}» 발자국 없음{(fn.Length > 0 ? " — " + fn : "")}";
+            }
+            catch (Exception ex) { note += (note.Length > 0 ? " · " : "") + $"«{r.Name}» 못 읽음 — {ex.Message}"; }
+        }
+        var area = feet.Count == 0 ? null : feet.Count == 1 ? feet[0] : NetTopologySuite.Operation.Union.CascadedPolygonUnion.Union(feet);
+        var cut = area == null || area.IsEmpty ? null : new RoadFootprint.Cutter(area);
+        lock (_cut) _cut[db.UnmanagedObject] = (print, cut, note);
+        return cut;
+    }
+    static readonly Dictionary<IntPtr, (string Print, RoadFootprint.Cutter? Cut, string Note)> _cut = new();
+
+    static string BuildCore(Document doc)
+    {
         var db = doc.Database;
         var all = System.Diagnostics.Stopwatch.StartNew();
         var sw = System.Diagnostics.Stopwatch.StartNew();

@@ -213,7 +213,13 @@ public sealed class QtyXlsxCommand
                     if (g == null) m.Ditches.Add(g = new QtyDitch { Label = sz.Label, B = sz.B, H = sz.H, Tw = sz.Tw, Tb = sz.Tb, Tf = sz.Tf, Pf = sz.Pf });
                     g.Length += len; g.Count++;
                 }
-                (m.BasinCount, m.BasinVol) = UDitch.BasinTotals(rec, s);   // ★[JACK 1123 · 검토 M3] 집수정 — 보고서 합계와 같은 값
+                // ★[JACK 1123 · 검토 M3 · JACK 1124] 집수정 — 보고서 · 평면 블록과 같은 목록(규격별)
+                var bl = UDitch.BasinList(rec, s);
+                m.BasinCount = bl.Count; m.BasinVol = bl.Sum(b => b.Volume);
+                m.Basins = UDitch.BasinGroups(bl).Select(g => new QtyBasin { Label = g.Label, Kinds = g.Kinds, Count = g.Count, Volume = g.Volume, DepthKnown = g.DepthKnown }).ToList();
+                // ★[검토 1124 #1] 평면 블록은 [측구 생성] · 기록 고침마다 맞춤 — 그래도 다르면(손으로 지움 · 맞춤 실패) 알림
+                if (rec.Updated.Length > 0 && UDitchStore.CountBasinBlocks(db, tr) is int nb && nb != bl.Count(UDitchStore.Placeable))
+                    m.Notes.Add($"집수정 블록 갱신 필요(평면 블록 {nb} · 수량 {bl.Count}개소) → [측구 생성]");
             }
             tr.Commit();
         }

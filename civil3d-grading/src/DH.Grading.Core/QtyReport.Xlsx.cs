@@ -273,7 +273,7 @@ public static class QtyReportXlsx
         for (int c = ColN("AX"); c <= ColN("BM"); c++) ws.Column(c).Width = 1.9;
         if (m.Ditches.Count == 0)
         {
-            ws.Cell("A1").Value = "수로관산근"; ws.Cell("A3").Value = "U형 측구 없음 — [측구] 먼저(수량 없음)";
+            ws.Cell("A1").Value = "수로관산근"; ws.Cell("A3").Value = m.BasinCount > 0 ? "U형 측구 길이 없음(집수정보다 짧음) — 집수정만" : "U형 측구 없음 — [측구] 먼저(수량 없음)";
         }
         int k = 0;
         foreach (var d in m.Ditches)
@@ -334,16 +334,26 @@ public static class QtyReportXlsx
         // ★[JACK 1123 · 검토 M3] 집수정(단차 + 합류 · 교차 · 출구) — 개수 · 콘크리트(U형 측구 보고서 합계와 같은 값)
         if (m.BasinCount > 0)
         {
-            int o = k * Stride;
+            int o = m.Ditches.Count == 0 ? 3 : k * Stride;   // ★[검토 1124 #7] 측구 줄이 없으면 A1 제목 · A3 알림 아래(4행)부터 — 덮어쓰지 않게
             ws.Cell($"A{o + 1}").Value = "공   종"; ws.Cell($"C{o + 1}").Value = "산          출          근          거"; ws.Cell($"AV{o + 1}").Value = "수  량";
             ws.Range($"A{o + 1}:AV{o + 1}").Style.Font.Bold = true;
             ws.Cell($"A{o + 2}").Value = "집수정";
-            ws.Cell($"C{o + 2}").Value = "U형 측구 집수정(단차 + 합류 · 교차 · 출구) — U형 측구 보고서 합계 기준";
+            ws.Cell($"C{o + 2}").Value = "U형 측구 집수정(단차 + 합류 · 교차 · 출구) — U형 측구 보고서 · 평면 블록 «DH_집수정»과 같은 자료";
             ws.Cell($"AV{o + 2}").Value = m.BasinCount; ws.Cell($"AV{o + 2}").Style.NumberFormat.Format = "0\" 개소\"";
-            ws.Cell($"A{o + 3}").Value = "콘크리트";
-            ws.Cell($"C{o + 3}").Value = "바깥 상자 − 안 빈 곳(벽 · 바닥)";
-            ws.Cell($"AV{o + 3}").Value = Math.Round(m.BasinVol, 3); ws.Cell($"AV{o + 3}").Style.NumberFormat.Format = "0.000\" ㎥\"";
-            ws.Range($"A{o + 1}:AV{o + 3}").Style.Border.OutsideBorder = XLBorderStyleValues.Thin;
+            // ★[JACK 1124 «집수정이 수량으로»] 규격별 개소 · 콘크리트(UDitch.BasinGroups)
+            int r = o + 3;
+            foreach (var b in m.Basins)
+            {
+                ws.Cell($"A{r}").Value = "  규격";
+                ws.Cell($"C{r}").Value = $"{b.Label} — {b.Kinds} · " + (b.DepthKnown ? $"콘크리트 {Math.Round(b.Volume, 3).ToString("0.000", System.Globalization.CultureInfo.InvariantCulture)} ㎥" : "콘크리트 미정(바닥고 · 지표 모름 → 측구 확인)");
+                if (!b.DepthKnown) ws.Cell($"C{r}").Style.Font.FontColor = XLColor.Red;
+                ws.Cell($"AV{r}").Value = b.Count; ws.Cell($"AV{r}").Style.NumberFormat.Format = "0\" 개소\"";
+                r++;
+            }
+            ws.Cell($"A{r}").Value = "콘크리트";
+            ws.Cell($"C{r}").Value = "바깥 상자 − 안 빈 곳(벽 · 바닥)";
+            ws.Cell($"AV{r}").Value = Math.Round(m.BasinVol, 3); ws.Cell($"AV{r}").Style.NumberFormat.Format = "0.000\" ㎥\"";
+            ws.Range($"A{o + 1}:AV{r}").Style.Border.OutsideBorder = XLBorderStyleValues.Thin;
         }
         var ps = ws.PageSetup;
         ps.PageOrientation = XLPageOrientation.Landscape; ps.PaperSize = XLPaperSize.A4Paper; ps.Scale = 60;

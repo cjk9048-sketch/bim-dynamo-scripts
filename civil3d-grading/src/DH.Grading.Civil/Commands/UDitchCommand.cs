@@ -13,7 +13,7 @@ namespace DH.Grading.Civil.Commands;
 /// <summary>★★[배수지 U형 측구 1단계 MVP · 명세서 «배수지_U형측구_애드인_모듈별개발명세서.md» §7] DHUDITCH(창) · -DHUDITCH(명령줄 — 키트 · FILEDIA 0 · 화면 없는 Civil).
 /// <para>흐름: 부지 대표점(M01) → 강우(M02 수동 · CSV) → 측구 선(M04 고르기 · 그리기) → 규격 · 바닥고 · 집수(M05) → [측구 생성](모든 측구 다시 · ★[JACK 1124] 도면 = 원 선에 선종류 U만 · 솔리드 없음 · 지표면 안 바꿈 · 3D 보기 = 실제 모양) → 보고서(M08 txt · json).
 /// 기록 = 도면 NOD «DH_GRADING/UDITCH»(다시 열면 그대로 · 고침). 셈 = Core <see cref="UDitch"/>.</para></summary>
-public sealed class UDitchCommand
+public sealed partial class UDitchCommand
 {
     /// <summary>도면마다(세션) — 고른 측구 · 불러온 CSV · 지난 일 알림(도킹창이 한 번 보이고 비움).</summary>
     internal sealed class Memo
@@ -142,6 +142,36 @@ public sealed class UDitchCommand
     public void PalEdge() => PalRun("경계 따라", (c, m) =>
         UDitchEdge.Draw(c.Doc, out var id, out string note) && AddDitch(c, id, out int i, out string msg) ? Picked(m, i, msg + " · " + note) : ("", ""));
 
+    /// <summary>★[JACK 1124 «U 모양의 스케일을 조정할 수 있게»] U 표시 크기(배) — 기록에 적고 모든 측구 선(원 선 · 대신 그린 선)의 선종류 축척 = 배 / LTSCALE(배치 탭 뷰포트도 같은 배).</summary>
+    [CommandMethod("DHUDITCHUSCALE")]
+    public void PalUScale() => PalRun("U 표시 크기", (c, m) =>
+    {
+        var o = new PromptDoubleOptions(string.Format(Ic, "\n[U형 측구] U 표시 크기(배 · 0.1~10) <{0:0.##}>: ", c.Rec.UScale)) { AllowNone = true, AllowNegative = false, AllowZero = false, DefaultValue = c.Rec.UScale, UseDefaultValue = true };
+        var r = c.Ed.GetDouble(o);
+        if (r.Status != PromptStatus.OK) return ("", "");
+        double k = UDitch.UScaleOk(r.Value);
+        c.Rec.UScale = k;
+        int n = 0;
+        using (var tr = c.Db.TransactionManager.StartTransaction())
+        {
+            var lt = UDitchStore.EnsureLinetype(c.Db, tr);
+            foreach (var h in c.Rec.Ditches.Select(d => d.LineHandle).Where(h => h.Length > 0).Distinct())
+                if (UDitchStore.MarkLine(c.Db, tr, h, lt, k)) n++;
+            double lts = UDitchStore.LtScale(c.Db, k);
+            var ms = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(c.Db), OpenMode.ForRead);
+            foreach (ObjectId eid in ms)   // 대신 그린 선(원 선이 지워진 측구 — 레이어 DH-U형측구 · 선종류 U)
+            {
+                if (!eid.ObjectClass.IsDerivedFrom(RXObject.GetClass(typeof(Polyline)))) continue;
+                if (tr.GetObject(eid, OpenMode.ForRead) is not Polyline pl || pl.Layer != UDitchStore.Layer || pl.LinetypeId != lt || System.Math.Abs(pl.LinetypeScale - lts) < 1e-9) continue;
+                pl.UpgradeOpen(); pl.LinetypeScale = lts; n++;
+            }
+            UDitchStore.Save(c.Db, tr, c.Rec);
+            tr.Commit();
+        }
+        c.Log.AppendLine(string.Format(Ic, "  U 표시 ×{0:0.##} — 측구 선 {1}개 · 선종류 축척 {2:0.####}", k, n, UDitchStore.LtScale(c.Db, k)));
+        return (string.Format(Ic, "U 표시 ×{0:0.##} — 측구 선 {1}개", k, n), "");
+    });
+
     [CommandMethod("DHUDITCHDEL")]
     public void PalDelete() => PalRun("지우기", (c, m) =>
     {
@@ -155,6 +185,7 @@ public sealed class UDitchCommand
             foreach (var x in gone) { n += UDitchStore.Erase(c.Db, tr, x.Id); c.Rec.Ditches.Remove(x); }
             if (!c.Rec.Ditches.Any(x => x.LineHandle == d0.LineHandle)) UDitchStore.UnmarkLine(c.Db, tr, d0.LineHandle);   // ★[JACK 1124] 원 선의 선종류 U 되돌림
             UDitchStore.Save(c.Db, tr, c.Rec);
+            UDitchStore.SyncBasins(c.Db, c.Rec, c.S, c.Log, link: true);   // ★[검토 1124 #1] 남은 측구의 합류 · 출구 집수정
             tr.Commit();
         }
         m.Sel = System.Math.Min(m.Sel, c.Rec.Ditches.Count - 1);
@@ -179,6 +210,7 @@ public sealed class UDitchCommand
             foreach (var x in c.Rec.Ditches.Where(x => ReferenceEquals(x, d) || (h.Length > 0 && x.LineHandle == h))) UDitch.ApplyAuto(x, c.S);
             UDitch.Link(c.Rec, c.S);
             UDitchStore.Save(c.Db, tr, c.Rec);
+            UDitchStore.SyncBasins(c.Db, c.Rec, c.S, c.Log);   // ★[검토 1124 #1] 단차 · 합류 집수정이 바뀌면 평면 블록도
             tr.Commit();
         }
         if (note.Length > 0) c.Log.AppendLine("  " + note);
@@ -206,6 +238,7 @@ public sealed class UDitchCommand
         var (sum, used, open) = AreaOf(c.Db, r.Value.GetObjectIds());
         if (used == 0) return ("", open > 0 ? $"닫힌 것이 없음(열린 선 {open}개) — 닫힌 폴리선 · 원 · 영역 · 해치를 고르세요" : "넓이를 셀 것이 없음");
         d.AreaHa = sum / 10000.0;
+        d.AreaAuto = false;   // ★[JACK 1124 집수] 고른 넓이 = 입력(자동이 안 덮음)
         UDitch.SyncLoop(c.Rec, d, c.S);   // ★[JACK 1123] 닫힌 선 갈래 — 짝도 같은 면적(선 전체 · 안전 쪽)
         using (var tr = c.Db.TransactionManager.StartTransaction()) { UDitchStore.Save(c.Db, tr, c.Rec); tr.Commit(); }
         string unit = "";
@@ -334,6 +367,8 @@ public sealed class UDitchCommand
             if (System.Math.Abs(a - d.StartInvert) > 1e-9 || System.Math.Abs(b - d.EndInvert) > 1e-9 || !double.IsFinite(d.StartInvert)) { d.StartInvert = a; d.EndInvert = b; d.InvertAuto = false; }
             if (Dbl(ed, "집수면적(ha)", d.AreaHa, false) is not double ar) return;
             if (Dbl(ed, "유출계수 C", d.C, false) is not double cc) return;
+            if (System.Math.Abs(ar - d.AreaHa) > 1e-9) d.AreaAuto = false;   // ★[JACK 1124 집수] 친 값 = 입력(Enter = 그대로)
+            if (System.Math.Abs(cc - d.C) > 1e-9) { d.CUser = true; d.CAuto = false; }
             d.AreaHa = System.Math.Max(0, ar); d.C = System.Math.Clamp(cc, 0, 1);
             UDitch.SyncLoop(c.Rec, d, c.S);   // ★[JACK 1123] 닫힌 선 갈래 — 규격 · 덮개 · 집수 같게
             SaveRec(c);
@@ -471,7 +506,8 @@ public sealed class UDitchCommand
             UDitch.Link(c.Rec, c.S);
             if (c.Rec.Site.Source.Contains("없음")) c.Rec.Site = UDitchStore.SiteOf(c.Db, GradingSettings.ExportEpsg, c.Rec.Ditches);
             UDitchStore.Save(c.Db, tr, c.Rec);
-            UDitchStore.MarkLine(c.Db, tr, h, UDitchStore.EnsureLinetype(c.Db, tr));   // ★[JACK 1124] 측구 선 = 선종류 U
+            UDitchStore.MarkLine(c.Db, tr, h, UDitchStore.EnsureLinetype(c.Db, tr), c.Rec.UScale);   // ★[JACK 1124] 측구 선 = 선종류 U
+            UDitchStore.SyncBasins(c.Db, c.Rec, c.S, c.Log);   // ★[검토 1124 #1] 새 출구 · 합류 집수정
             tr.Commit();
             index = c.Rec.Ditches.FindIndex(d => d.LineHandle == h);
             var grp = c.Rec.Ditches.Where(d => d.LineHandle == h).ToList();
@@ -493,7 +529,8 @@ public sealed class UDitchCommand
         UDitch.Link(c.Rec, c.S);   // ★[JACK 1123] 합류 · 교차 집수정
         if (c.Rec.Site.Source.Contains("없음")) c.Rec.Site = UDitchStore.SiteOf(c.Db, GradingSettings.ExportEpsg, c.Rec.Ditches);
         UDitchStore.Save(c.Db, tr, c.Rec);
-        UDitchStore.MarkLine(c.Db, tr, h, UDitchStore.EnsureLinetype(c.Db, tr));   // ★[JACK 1124] 측구 선 = 선종류 U
+        UDitchStore.MarkLine(c.Db, tr, h, UDitchStore.EnsureLinetype(c.Db, tr), c.Rec.UScale);   // ★[JACK 1124] 측구 선 = 선종류 U
+        UDitchStore.SyncBasins(c.Db, c.Rec, c.S, c.Log);   // ★[검토 1124 #1] 새 단차 · 합류 · 교차 집수정
         tr.Commit();
         index = k;
         var lay = UDitch.LayoutOf(d, c.S);
@@ -515,15 +552,18 @@ public sealed class UDitchCommand
         UDitchStore.BuildStats st;
         try { st = UDitchStore.Build(c.Db, c.Rec, c.S, c.Log); }
         catch (System.Exception ex) { msg = "모델을 못 지음 — " + ex.Message; Done(c, "⚠" + msg + "\n" + ex); return false; }
+        string catchNote = CatchAfterBuild(c);   // ★[JACK 1124 «집수면적을 프로그램이 기본으로 제시»] 집수 구역 다시 · 비었거나 자동인 넓이 · C 채움
         string rep = UDitchStore.WriteReport(c.Db, c.Doc.Name ?? "", c.Rec, c.S, out string rwhy);
         int shortN = c.Rec.Ditches.Count(d => UDitch.Check(d, c.Rec.Rain, c.S).Verdict == UDitch.Verdict.Short);
         // ★[JACK 1124] 도면 = 선종류 U 선만(솔리드 없음) · 옛 솔리드는 지움
         msg = string.Format(Ic, "측구 {0}개(U 선 {1}{2}) · 길이 {3:0.00} m · 콘크리트 {4:0.00} ㎥", c.Rec.Ditches.Count - st.Skipped, st.Lines, st.Erased > 0 ? $" · 옛 솔리드 {st.Erased} 지움" : "", st.Length, st.BodyVol + st.FootVol + st.ExtraVol)
-              + (st.Drops > 0 ? $" · 낙차 {st.Drops}" : "") + (st.Basins - st.Junctions > 0 ? string.Format(Ic, " · 집수정 {0} · 관 {1:0.0} m", st.Basins - st.Junctions, st.PipeLen) : "")   // ★[v117.16]
-              + (st.Junctions > 0 ? $" · 합류 · 교차 · 출구 집수정 {st.Junctions}" + (st.JunctionWarn > 0 ? $"(⚠{st.JunctionWarn} — 보고서 확인)" : "") : "")   // ★[JACK 1123]
+              + (st.Drops > 0 ? $" · 낙차 {st.Drops}" : "") + (st.PipeLen > 0 ? string.Format(Ic, " · 관 {0:0.0} m", st.PipeLen) : "")   // ★[v117.16]
+              + (st.BasinText.Length > 0 ? " · " + st.BasinText + (st.JunctionWarn > 0 ? $"(⚠{st.JunctionWarn} — 보고서 확인)" : "") : "")   // ★[JACK 1124] 집수정 규격별 = 평면 블록과 같은 목록
+              + (st.BasinBlocks < st.BasinPlan ? $" · ⚠집수정 블록 {st.BasinBlocks}/{st.BasinPlan}(로그 확인)" : "")   // ★[검토 1124 #5] 실제 넣은 수
               + (st.GrateLen > 0 ? string.Format(Ic, " · 그레이팅 {0:0.0} m", st.GrateLen) : "")
               + (!c.Rec.Rain.Has ? " · 강우자료 없음" : shortN > 0 ? $" · ⚠수리 부족 {shortN}" : "")
               + (st.Skipped > 0 ? $" · ⚠못 지음 {st.Skipped}({st.FirstFail})" : st.FirstFail.Length > 0 ? " · ⚠" + st.FirstFail : "")
+              + (catchNote.Length > 0 ? " · " + catchNote : "")
               + (rep.Length > 0 ? " · 보고서 " + Path.GetFileName(rep) : " · ⚠" + rwhy);
         c.Log.AppendLine($"  → {msg} · 지운 옛 모델 {st.Erased} · 대신 그린 선 {st.StandIn}" + (rep.Length > 0 ? " · " + rep : ""));
         Done(c, msg);

@@ -421,7 +421,7 @@ public sealed partial class StructCommand
             {
                 try
                 {
-                    if (tr.GetObject(id, OpenMode.ForRead) is not Curve c || c.IsErased) continue;
+                    if (tr.GetObject(id, OpenMode.ForRead) is not Curve c || c.IsErased || !c.Visible) continue;   // ★[JACK 1124] 숨긴 선(진입도로 자리로 숨긴 부지 옹벽선 원선 — WallRoadCutPlan)은 안 냄
                     string? k = KindOf(c.Layer ?? ""); if (k == null) continue;
                     Extents3d ex; try { ex = c.GeometricExtents; } catch { continue; }
                     if (!Near(ex)) continue;

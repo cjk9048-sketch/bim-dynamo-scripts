@@ -249,4 +249,69 @@ public class UDitchJunctionTests
         Assert.Equal("D-002", UDitch.NextId(back.Ditches));
         Assert.Equal("D-007-2", UDitch.LoopId("D-007-1", 2));
     }
+
+    [Fact]
+    public void Basin_list_is_one_source_for_count_groups_and_report()
+    {
+        // ★[JACK 1124 «집수정 블록 · 수량»] 합류 하나(D-002 → D-001) + 단차 측구(D-003 — 3 m 단) → 목록 = 합계 = 규격별 합 = 보고서
+        Func<double, double, double> gr = (x, y) => 100 - 0.01 * x + 0.02 * y;
+        var d1 = Make("D-001", gr, (0, 0), (40, 0));
+        var d2 = Make("D-002", gr, (20, 20), (20, 0.3));
+        Func<double, double, double> step = (x, y) => x < 30 ? 143.1 - 0.1 * x / 29 : 140.1 - 0.1 * (x - 30) / 30;
+        var d3 = Make("D-003", step, (0, -50), (29, -50), (30, -50), (60, -50));
+        var rec = new UDitch.Record { Ditches = { d1, d2, d3 } };
+        UDitch.Link(rec, S);
+        var l = UDitch.BasinList(rec, S);
+        int steps = UDitch.LayoutOf(d3, S).Basins.Count;
+        Assert.True(steps > 0);
+        Assert.Equal(1 + steps, l.Count);
+        Assert.Equal(1, l.Count(b => b.Junction && b.Kind == "합류" && b.Owner == "J1" && b.Members == "D-001,D-002"));
+        Assert.All(l.Where(b => !b.Junction), b => { Assert.Equal("단차", b.Kind); Assert.Equal("D-003", b.Owner); });
+        var (n, v) = UDitch.BasinTotals(rec, S);
+        Assert.Equal(l.Count, n);
+        Assert.Equal(l.Sum(b => b.Volume), v, 9);
+        var g = UDitch.BasinGroups(l);
+        Assert.Equal(l.Count, g.Sum(x => x.Count));
+        Assert.Equal(v, g.Sum(x => x.Volume), 9);
+        Assert.Contains($"집수정 {l.Count}개소(", UDitch.BasinSummary(l));
+        Assert.Contains($"■ 집수정 수량 — {l.Count}개소", UDitch.Report(rec, S, "t.dwg", "t"));
+        // 규격 = 안치수 × 깊이(0.1 m 올림)
+        Assert.All(g, x => Assert.True(x.DepthKnown));
+        Assert.Equal(0.9, UDitch.DepthClass(0.857), 9); Assert.Equal(0.9, UDitch.DepthClass(0.9), 9); Assert.Equal(1.0, UDitch.DepthClass(0.9001), 9);
+        Assert.Equal(l.Count(b => Math.Round(b.B.Inner, 2) == 0.6 && UDitch.DepthClass(b.Depth) == g[0].Depth), g[0].Count);
+    }
+
+    [Fact]
+    public void Junction_without_ditch_segments_estimates_floor_or_counts_depth_unknown()
+    {
+        // ★[JACK 1124 «못 지음으로 빼지 말 것»] 두 측구가 집수정보다 짧아 구간이 없음 → 시작 · 끝 바닥고 보간으로 안바닥 추정(3D · 콘크리트 셈)
+        Func<double, double, double> gr = (x, y) => 100 - 0.01 * x;
+        var a = Make("D-001", gr, (0, 0), (0.3, 0));
+        var b = Make("D-002", gr, (0.3, 0), (0.3, 0.3));
+        var rec = new UDitch.Record { Ditches = { a, b } };
+        UDitch.Link(rec, S);
+        var j = Assert.Single(rec.Junctions);
+        Assert.True(UDitch.LayoutOf(a, S).Error.Length > 0);
+        Assert.True(j.Ok);
+        Assert.Contains(j.Notes, n => n.Contains("바닥고 추정"));
+        double est = Math.Min(Math.Min(a.StartInvert, a.EndInvert), Math.Min(b.StartInvert, b.EndInvert));
+        Assert.Equal(est - S.BasinSump, j.B.Floor, 6);
+        var it = Assert.Single(UDitch.BasinList(rec, S));
+        Assert.True(it.DepthKnown); Assert.True(it.Volume > 0);
+        Assert.Single(UDitch.JunctionParts(rec, S, 0, 0));
+        // 바닥고 · 지표 모두 없음 → «깊이 미정»으로 개소에 듦(빠뜨리지 않음) · 콘크리트 0 · 3D 없음
+        UDitch.Ditch Bare(string id, params (double X, double Y)[] p) => new() { Id = id, Follow = true, InvertAuto = false, Pts = p.Select(q => new[] { q.X, q.Y, double.NaN }).ToList() };
+        var rec2 = new UDitch.Record { Ditches = { Bare("D-001", (0, 0), (0.3, 0)), Bare("D-002", (0.3, 0), (0.3, 0.3)) } };
+        UDitch.Link(rec2, S);
+        var j2 = Assert.Single(rec2.Junctions);
+        Assert.False(j2.Ok);
+        var it2 = Assert.Single(UDitch.BasinList(rec2, S));
+        Assert.False(it2.DepthKnown); Assert.Equal(0, it2.Volume);
+        Assert.Equal((1, 0.0), UDitch.BasinTotals(rec2, S));
+        var g2 = Assert.Single(UDitch.BasinGroups(rec2, S));
+        Assert.False(g2.DepthKnown); Assert.Contains("깊이 미정", g2.Label);
+        Assert.Contains("깊이 미정 1", UDitch.BasinSummary(UDitch.BasinList(rec2, S)));
+        Assert.Empty(UDitch.JunctionParts(rec2, S, 0, 0));
+        Assert.Contains("콘크리트 미정", UDitch.Report(rec2, S, "t.dwg", "t"));
+    }
 }

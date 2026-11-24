@@ -19,6 +19,8 @@ internal static class UDitchEdge
 {
     /// <summary>이 세션 마지막 거리(첫 값 0.5 m — 측구 중심을 경계에서 띄우는 흔한 값 · U 300 반폭 + 여유).</summary>
     static double _dist = 0.5;
+    /// <summary>마지막 평행 이동 다듬기(로그 · 시험) — 빈 글 = 안 바뀜.</summary>
+    internal static string LastClean = "";
     static readonly System.Globalization.CultureInfo Ic = System.Globalization.CultureInfo.InvariantCulture;
 
     /// <summary>대화 — 경계 · 시점 · 종점 · 거리 → 도면에 새 폴리선(<paramref name="id"/>). 거짓 = 취소 · 못 함(명령줄에 까닭).</summary>
@@ -31,7 +33,7 @@ internal static class UDitchEdge
         Polyline? bd = null; string what = "";
         while (bd == null)
         {
-            var o = new PromptEntityOptions("\n[U형 측구] 경계 선택 — 사면 끝선 · 옹벽선 · 도로 경계 · 부지 경계: ");
+            var o = new PromptEntityOptions("\n[U형 측구] 경계 선택 — 사면 끝선 · 옹벽선 · 도로 경계 · 지표면 끝 · 부지 경계: ");
             var per = ed.GetEntity(o);
             if (per.Status != PromptStatus.OK) return false;
             var pk = per.PickedPoint.TransformBy(ucs);
@@ -43,8 +45,17 @@ internal static class UDitchEdge
                 if (Lineish(e)) try { bd = Flat(tr, (Curve)e); } catch (System.Exception ex) { fail = ex.Message; }
                 if (bd == null)
                 {
-                    var nid = Nearest(db, tr, pk, per.ObjectId);
-                    if (!nid.IsNull && tr.GetObject(nid, OpenMode.ForRead) is Curve nc)
+                    var nid = Nearest(db, tr, pk, per.ObjectId, out double nd);
+                    // ★[JACK 1124 «도로 경계를 못 읽음 — TinSurface»] 지표면을 누르면 그 면의 끝(지표면 끝) · 진입도로 면이면 포장 끝(도로 경계)도 — 누른 자리에서 가장 가까운 것(가까운 선보다 가까울 때)
+                    if (e is Autodesk.Civil.DatabaseServices.TinSurface)
+                        try
+                        {
+                            var se = SurfaceEdge(doc, db, per.ObjectId, pk, out string took, out double sd);
+                            if (se != null && (nid.IsNull || sd <= nd)) { bd = se; what += " → " + took; nid = ObjectId.Null; ed.WriteMessage("\n  고른 경계: " + took.Split(" —")[0]); }
+                            else se?.Dispose();
+                        }
+                        catch (System.Exception ex) { fail = ex.Message; }
+                    if (bd == null && !nid.IsNull && tr.GetObject(nid, OpenMode.ForRead) is Curve nc)
                     {
                         what += $" → 가까운 선 {nc.GetType().Name} {nid.Handle} «{nc.Layer}»";
                         try { bd = Flat(tr, nc); } catch (System.Exception ex) { fail = ex.Message; }
@@ -183,8 +194,9 @@ internal static class UDitchEdge
                     note = "경계 따라 " + dist.ToString("0.###", Ic) + " m" + (why.Length > 0 ? " · ⚠" + why : "") + (cross > 0 ? $" · ⚠꼬임 {cross}" : "");
                     try
                     {
-                        DiagLog.Append(string.Format(Ic, "\n[U형 측구 경계 따라] 경계 {0} · 닫힘 {1} · 시점 {2:F3} 종점 → 구간 {3:F3} m{4} · 거리 {5:0.###}({6}) · 쪽 {7} · 결과 {8:F3} m · 점 {9}{10}{11}",
-                            what, closed, a.D, sp.Length, flip ? " · 반대쪽" : "", dist, how, side > 0 ? "왼쪽" : "오른쪽", off.Length, off.NumberOfVertices, why.Length > 0 ? " · " + why : "", cross > 0 ? $" · 꼬임 {cross}" : ""));
+                        DiagLog.Append(string.Format(Ic, "\n[U형 측구 경계 따라] 경계 {0} · 닫힘 {1} · 시점 {2:F3} 종점 → 구간 {3:F3} m{4} · 거리 {5:0.###}({6}) · 쪽 {7} · 결과 {8:F3} m · 점 {9}{10}{11}{12}",
+                            what, closed, a.D, sp.Length, flip ? " · 반대쪽" : "", dist, how, side > 0 ? "왼쪽" : "오른쪽", off.Length, off.NumberOfVertices, why.Length > 0 ? " · " + why : "", cross > 0 ? $" · 꼬임 {cross}" : "",
+                            LastClean.Length > 0 ? " · " + LastClean : ""));
                     }
                     catch { }
                     return true;
@@ -207,9 +219,10 @@ internal static class UDitchEdge
     static readonly RXClass CurveCls = RXObject.GetClass(typeof(Curve)), SurfCls = RXObject.GetClass(typeof(Autodesk.Civil.DatabaseServices.Surface));
 
     /// <summary>누른 자리(WCS)에서 평면 거리가 가장 가까운 선(<see cref="Lineish"/>) — 픽박스 2배(화면 없으면 0.5 m) 안 · 없으면 Null.</summary>
-    static ObjectId Nearest(Database db, Transaction tr, Point3d pk, ObjectId skip)
+    static ObjectId Nearest(Database db, Transaction tr, Point3d pk, ObjectId skip, out double dist)
     {
         double tol = 0.5;
+        dist = double.MaxValue;
         try
         {
             if (!SelfCheckLog.Headless)
@@ -236,8 +249,163 @@ internal static class UDitchEdge
             }
             catch { }
         }
+        if (!best.IsNull) dist = bestD;
         return best;
     }
+
+    /// <summary>★[JACK 1124 «경계 따라 — 도로 경계를 못 읽음(TinSurface «DH도로-지표면»)»] 지표면에서 경계 후보 — ① 지표면 끝(세모 둘레 · 바깥 · 안쪽 구멍 고리) ·
+    /// ② 진입도로 면이면 포장 끝(도로 경계 좌 · 우 — 열린 진입도로 세션의 설계 가장자리 · 진입도로 [옹벽 추가]의 도로선평행과 같은 자료).
+    /// 누른 자리(<paramref name="pk"/>)에서 평면 거리가 가장 가까운 것을 평면 폴리선(<see cref="Flat"/>처럼 다듬음)으로. <paramref name="took"/> = 고른 것 · 거리 · 다른 후보(로그). 도면은 안 바꿈(읽기만).</summary>
+    internal static Polyline? SurfaceEdge(Document? doc, Database db, ObjectId sid, Point3d pk, out string took, out double dist)
+    {
+        took = ""; dist = double.MaxValue;
+        var cands = new List<(string Name, List<Point2d> P, bool Closed)>();
+        bool road = false;
+        using (var tr = db.TransactionManager.StartTransaction())
+        {
+            if (tr.GetObject(sid, OpenMode.ForRead) is Autodesk.Civil.DatabaseServices.TinSurface ts)
+                road = string.Equals(ts.Layer, RoadBuilder.LaySurf, System.StringComparison.OrdinalIgnoreCase) || (ts.Description ?? "").StartsWith("DH 진입도로 지표면", System.StringComparison.Ordinal);
+            tr.Commit();
+        }
+        // ① 지표면 끝 — 한 번만 쓰인 세모 변을 고리로(RoadFootprint — 덮인 자리 · 구멍 포함)
+        var tris = EarthworkVolume.Tris(db, sid).Select(t => new DH.Grading.Core.WallDaylight.Tri(t.A, t.B, t.C)).ToList();
+        if (DH.Grading.Core.RoadFootprint.FromTris(tris) is NetTopologySuite.Geometries.Geometry fp)
+            for (int g = 0; g < fp.NumGeometries; g++)
+                if (fp.GetGeometryN(g) is NetTopologySuite.Geometries.Polygon pg)
+                    foreach (var ring in new[] { pg.ExteriorRing }.Concat(pg.InteriorRings))
+                    {
+                        var pts = ring.Coordinates.Select(c => new Point2d(c.X, c.Y)).ToList();
+                        if (pts.Count > 1 && pts[0].GetDistanceTo(pts[^1]) < 1e-9) pts.RemoveAt(pts.Count - 1);
+                        if (pts.Count >= 3) cands.Add(("지표면 끝", pts, true));
+                    }
+        // ② 도로 경계(포장 끝) — 진입도로 세션이 열려 있을 때(토막마다 좌 · 우)
+        if (road && doc != null && RoadSession.Of(doc) is RoadSession s)
+        {
+            var rs = s.Pieces.Select(p => p.R).Append(s.Last).Where(r => r != null && r.Error.Length == 0).Distinct().ToList();
+            foreach (var r in rs)
+                foreach (var (e, side) in new[] { (r!.EdgeL, "왼쪽"), (r.EdgeR, "오른쪽") })
+                {
+                    var pts = e.Where(q => double.IsFinite(q.X) && double.IsFinite(q.Y)).Select(q => new Point2d(q.X, q.Y)).ToList();
+                    if (pts.Count >= 2) cands.Add(($"도로 경계({side})", pts, false));
+                }
+        }
+        if (cands.Count == 0) { took = "지표면에서 경계 후보 없음" + (road ? "(진입도로 세션 없음 — 지표면 끝도 못 읽음)" : ""); return null; }
+        var q0 = new Point2d(pk.X, pk.Y);
+        static double SegD(Point2d p, Point2d a, Point2d b)
+        {
+            var ab = b - a; double L2 = ab.DotProduct(ab);
+            double t = L2 < 1e-24 ? 0 : System.Math.Clamp((p - a).DotProduct(ab) / L2, 0, 1);
+            return p.GetDistanceTo(a + ab * t);
+        }
+        double D((string Name, List<Point2d> P, bool Closed) c)
+        {
+            double m = double.MaxValue; int n = c.P.Count;
+            for (int i = 0; i + 1 < n; i++) m = System.Math.Min(m, SegD(q0, c.P[i], c.P[i + 1]));
+            if (c.Closed) m = System.Math.Min(m, SegD(q0, c.P[n - 1], c.P[0]));
+            return m;
+        }
+        var ranked = cands.Select(c => (C: c, D: D(c))).OrderBy(x => x.D).ToList();
+        var best = ranked[0];
+        dist = best.D;
+        took = string.Format(Ic, "{0} {1:0.00} m · 점 {2}{3} — 후보 {4}", best.C.Name, best.D, best.C.P.Count, road && RoadSession.Of(doc) == null ? " · 진입도로 세션 없음(도로 경계 후보 없음)" : "",
+                             string.Join(" · ", ranked.Skip(1).Take(4).Select(x => string.Format(Ic, "{0} {1:0.00} m", x.C.Name, x.D))));
+        var v = best.C.P.Select(p => (p, 0.0)).ToList();
+        v = Clean(v, best.C.Closed, out _, out _);
+        if (v.Count < 2) return null;
+        var pl = Make(v);
+        pl.Closed = best.C.Closed && v.Count >= 3;
+        return pl;
+    }
+
+    /// <summary>★[JACK 1124 «경계 따라 → 꺾임 142° — 측구로 못 지음»] 점열 다듬기 — TIN에서 나온 경계(3D 폴리선 · 지표면 끝)의 잔 톱니가 평행 이동 뒤 뾰족한 꺾임이 되지 않게.
+    /// ① 1 cm 안 겹친 점 ② 뾰족한 점(90° 넘게 꺾이고 한쪽 변 <see cref="SpikeSeg"/> m 미만) ③ 곧은 줄 더글라스-포이커 <see cref="DpTol"/> m.
+    /// 양옆 변이 다 곧은 점만 뺌(호 · 호 끝점 · 열린 선 양끝 그대로) — 긴 두 변의 진짜 모서리는 남음. <paramref name="spikes"/> = ② 뺀 수 · <paramref name="thin"/> = ① + ③ 뺀 수.</summary>
+    internal static List<(Point2d P, double B)> Clean(List<(Point2d P, double B)> v0, bool closed, out int spikes, out int thin)
+    {
+        spikes = 0; thin = 0;
+        var v = new List<(Point2d P, double B)>(v0);
+        int Min() => closed ? 3 : 2;
+        bool Straight(int j)
+        {
+            int n = v.Count;
+            if (!closed && (j <= 0 || j >= n - 1)) return false;
+            int a = (j - 1 + n) % n;
+            return System.Math.Abs(v[a].B) < 1e-12 && System.Math.Abs(v[j].B) < 1e-12;
+        }
+        void Drop(int j) => v.RemoveAt(j);   // 양옆이 곧은 점 — 앞 점의 볼록값(0)이 새 변(앞 → 뒤)
+        // ① 겹친 점
+        for (int j = v.Count - 1; j >= 0 && v.Count > Min(); j--)
+        {
+            if (j >= v.Count || !Straight(j)) continue;
+            int n = v.Count;
+            if (v[j].P.GetDistanceTo(v[(j - 1 + n) % n].P) < DupTol || v[j].P.GetDistanceTo(v[(j + 1) % n].P) < DupTol) { Drop(j); thin++; }
+        }
+        // ② 뾰족한 점(되풀이 — 빼면 이웃이 새로 뾰족해질 수 있음)
+        for (bool any = true; any && v.Count > Min();)
+        {
+            any = false;
+            for (int j = 0; j < v.Count && v.Count > Min(); j++)
+            {
+                if (!Straight(j)) continue;
+                int n = v.Count;
+                var a = v[(j - 1 + n) % n].P; var b = v[j].P; var c = v[(j + 1) % n].P;
+                var u = b - a; var w = c - b;
+                double lu = u.Length, lw = w.Length;
+                if (lu < 1e-12 || lw < 1e-12) { Drop(j); thin++; any = true; j--; continue; }
+                double defl = System.Math.Acos(System.Math.Clamp(u.DotProduct(w) / (lu * lw), -1, 1)) * 180 / System.Math.PI;
+                if (defl > SpikeDeg && System.Math.Min(lu, lw) < SpikeSeg) { Drop(j); spikes++; any = true; j--; }
+            }
+        }
+        // ③ 곧은 줄 더글라스-포이커 — 붙박이 점(열린 선 양끝 · 호에 닿은 점 · 닫힌 선은 0번과 가장 먼 점) 사이마다
+        {
+            int n = v.Count;
+            if (n > Min())
+            {
+                var keep = new bool[n];
+                for (int j = 0; j < n; j++) keep[j] = !Straight(j);
+                if (closed)
+                {
+                    keep[0] = true;
+                    int far = 0; double fd = -1;
+                    for (int j = 1; j < n; j++) { double d = v[j].P.GetDistanceTo(v[0].P); if (d > fd) { fd = d; far = j; } }
+                    keep[far] = true;
+                }
+                var anchors = Enumerable.Range(0, n).Where(j => keep[j]).ToList();
+                int na = anchors.Count;
+                for (int k = 0; k < (closed ? na : na - 1); k++)
+                {
+                    int s = anchors[k], e = closed ? anchors[(k + 1) % na] : anchors[k + 1];
+                    int len = (e - s + n) % n; if (len == 0) len = n;
+                    if (len < 2) continue;
+                    var idx = Enumerable.Range(0, len + 1).Select(t => (s + t) % n).ToList();
+                    Dp(idx, 0, idx.Count - 1, keep);
+                }
+                void Dp(List<int> idx, int i0, int i1, bool[] kp)
+                {
+                    if (i1 - i0 < 2) return;
+                    var a = v[idx[i0]].P; var b = v[idx[i1]].P;
+                    int im = -1; double dm = -1;
+                    for (int t = i0 + 1; t < i1; t++)
+                    {
+                        var p = v[idx[t]].P; var ab = b - a; double L2 = ab.DotProduct(ab);
+                        double tt = L2 < 1e-24 ? 0 : System.Math.Clamp((p - a).DotProduct(ab) / L2, 0, 1);
+                        double d = p.GetDistanceTo(a + ab * tt);
+                        if (d > dm) { dm = d; im = t; }
+                    }
+                    if (dm <= DpTol) return;
+                    kp[idx[im]] = true;
+                    Dp(idx, i0, im, kp); Dp(idx, im, i1, kp);
+                }
+                var o = new List<(Point2d P, double B)>();
+                for (int j = 0; j < n; j++) if (keep[j]) o.Add(v[j]); else thin++;
+                if (o.Count >= Min()) v = o; else thin -= n - o.Count;
+            }
+        }
+        return v;
+    }
+
+    /// <summary>다듬기 값 — 겹침 1 cm · 뾰족 = 90° 넘게 꺾이고 한쪽 변 1 m 미만 · 곧은 줄 5 cm.</summary>
+    internal const double DupTol = 0.01, SpikeDeg = 90.5, SpikeSeg = 1.0, DpTol = 0.05;
 
     /// <summary>곡선 → 평면 폴리선(z = 0 · 호 = 볼록값 그대로 · 겹친 점 뺌 · 끝 = 처음이면 닫힘). 3D 폴리선 = 꼭짓점 · 그 밖의 곡선 = 0.5 m마다. null = 못 읽음.</summary>
     internal static Polyline? Flat(Transaction tr, Curve cv)
@@ -307,6 +475,7 @@ internal static class UDitchEdge
             o.Add(q);
         }
         if (o.Count >= 3 && o[0].P.GetDistanceTo(o[^1].P) < 1e-3) { o.RemoveAt(o.Count - 1); closed = true; }
+        o = Clean(o, closed, out _, out _);   // ★[JACK 1124 «꺾임 142°»] TIN 경계의 잔 톱니 · 뾰족한 점(평행 이동 뒤 측구 못 지음)
         if (o.Count < 2 || (closed && o.Count < 3 && o.All(q => System.Math.Abs(q.B) < 1e-12))) return null;
         if (!closed) o[^1] = (o[^1].P, 0);
         var r = Make(o);
@@ -450,6 +619,16 @@ internal static class UDitchEdge
             if (Through(sub, mid).Side != side) { best.Dispose(); continue; }
             if (best.StartPoint.DistanceTo(sub.StartPoint) > best.EndPoint.DistanceTo(sub.StartPoint)) best.ReverseCurve();
             if (pieces > 1) why = $"평행선 조각 {pieces}개 — 가장 긴 것";
+            // ★[JACK 1124 «꺾임 142° — 120° 넘게 꺾인 점은 측구로 못 지음»] 평행 이동이 남긴 뾰족한 점 · 잔 점 다듬기(미리보기 · 결과 같음)
+            var bv = new List<(Point2d P, double B)>();
+            for (int i = 0; i < best.NumberOfVertices; i++) bv.Add((best.GetPoint2dAt(i), best.GetBulgeAt(i)));
+            var cv = Clean(bv, best.Closed, out int sp, out int th);
+            LastClean = sp + th > 0 ? $"다듬음 점 {bv.Count} → {cv.Count}(뾰족 {sp})" : "";
+            if (sp + th > 0 && cv.Count >= 2)
+            {
+                var nb = Make(cv); nb.Closed = best.Closed && cv.Count >= 3;
+                best.Dispose(); best = nb;
+            }
             return best;
         }
         why = "평행선을 못 만듦(거리가 굽은 반지름보다 큼?)";

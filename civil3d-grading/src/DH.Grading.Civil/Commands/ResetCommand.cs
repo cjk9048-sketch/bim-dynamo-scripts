@@ -202,6 +202,8 @@ public sealed class ResetCommand
             var rep = Wipe(doc, scope, includeImported: false, keepGround: true);
             // ★[v117.13 · 설치 전 검토 MED] 진입도로를 지우면 부지 노리선까지 지운다(도로 자리를 빼고 그려졌으므로) — [노리선] 단추가 없어졌으니 바로 다시 그림(설정 «노리선 그리기»를 따름)
             if (scope == Scope.Road && rep.Ticks > 0) { try { NoriCommand.AutoDraw(doc); } catch { } }
+            // ★★[JACK 1124] 진입도로를 지우면 부지 옹벽선이 온전히 돌아온다(도로 자리로 숨긴 선 풂 · 조각 지움)
+            if (scope == Scope.Road) { try { string wc = WallRoadCutPlan.Refresh(db); try { WallRoadCutPlan.ResyncSiteViews(doc, "진입도로 초기화"); } catch { } if (wc.Length > 0) DiagLog.Append("\n■ 진입도로 초기화 뒤 " + wc + "\n"); } catch { } }
             try { ed.Regen(); } catch { }
             string left = Survivors(doc, scope);
             string ourLeft = scope == Scope.Site ? OurLeft(db) : "";

@@ -125,6 +125,7 @@ public sealed class ProfileCommand
         ObjectId g = ObjectId.Null;
         try { foreach (var sp in SectionCommand.FindSurfaces(db, CivilApp.CivilApplication.ActiveDocument)) if (sp.Label == "원지반") { g = sp.SurfId; break; } } catch { }
         var r = WallExcavBuilder.Ensure(db, g, wf, log);
+        WallRoadCutPlan.ClearChanged(db);   // ★[JACK 1124 · 검토 GAP] 지금 진입도로 자리로 옹벽 터파기 · 단면 기록을 세웠다 — 밀린 부지 종단 다시 그리기 없음
         try { DiagLog.Append($"\n■ 종단 — 옹벽 터파기({who})\n{log}"); } catch { }
         if (r.State != WallExcavBuilder.State.Off)
         {

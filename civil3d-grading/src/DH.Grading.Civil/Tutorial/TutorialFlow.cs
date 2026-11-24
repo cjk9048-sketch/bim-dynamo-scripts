@@ -5,19 +5,18 @@ namespace DH.Grading.Civil.Tutorial;
 /// 사실이 같으면 같은 단계에 머물고, 사실이 앞서면(예: 원지반이 이미 있음) 그 단계로 건너간다.</para></summary>
 internal static class TutorialFlow
 {
-    /// <summary>★[JACK 1117 «단원으로 — 한 지표면에서 이어서»] 단원 — 1 원지반 가져오기(서버 지표면 맛보기 + 수치지도 DXF) · 2 계획부지 생성 · 3 터파기 생성 · 4 종횡단도 생성 · 5 진입도로.</summary>
-    internal enum Chapter { Ground = 1, Site = 2, Excav = 3, Section = 4, Road = 5 }
-    internal const int ChapterCount = 5;
-    /// <summary>★[JACK 1117 «터파기 가시설까지만»] 지금 여는 단원 — 종횡단도(4)는 틀만 두고 뺌 · ★[JACK 1117 «진입도로 튜토리얼도 기능을 한번씩 다 써보는걸로»] 5 진입도로.</summary>
-    internal static readonly Chapter[] Active = { Chapter.Ground, Chapter.Site, Chapter.Excav, Chapter.Road };
+    /// <summary>★★[JACK 1124 «단원 4개»] 단원 — 1 원지반 가져오기(서버 지표면 맛보기 + 수치지도 DXF) · 2 계획부지 생성(지적도 · 위성지도 · 옹벽 · 터파기 · 종단 · 횡단) ·
+    /// 3 진입도로 생성(종단 · 횡단 포함) · 4 도면화(도면생성 · 수량산출서 · 3D 보기).</summary>
+    internal enum Chapter { Ground = 1, Site = 2, Road = 3, Sheet = 4 }
+    internal const int ChapterCount = 4;
+    internal static readonly Chapter[] Active = { Chapter.Ground, Chapter.Site, Chapter.Road, Chapter.Sheet };
 
     internal static string ChapterName(Chapter c) => c switch
     {
         Chapter.Ground => "원지반 가져오기",
         Chapter.Site => "계획부지 생성",
-        Chapter.Excav => "터파기 생성",
-        Chapter.Road => "진입도로",
-        _ => "종횡단도 생성",
+        Chapter.Road => "진입도로 생성",
+        _ => "도면화",
     };
 
     internal static Chapter? Next(Chapter c)
@@ -26,22 +25,18 @@ internal static class TutorialFlow
         return i >= 0 && i + 1 < Active.Length ? Active[i + 1] : null;
     }
 
-    /// <summary>바로 앞 단원(여는 단원 차례) — «내 것으로 이어서»가 여는 결과. 첫 단원이면 null.</summary>
-    internal static Chapter? Prev(Chapter c)
-    {
-        int i = Array.IndexOf(Active, c);
-        return i > 0 ? Active[i - 1] : null;
-    }
-
     internal enum Step
     {
         Ground, Search, Pick, Send, Importing, Dxf, Crop,                   // 1 원지반 가져오기
-        Draw, Elev, Panel, PickPlan, PickGround, Slope, Build, Wall,       // 2 계획부지 생성
-        ExDraw, ExElev, ExPanel, ExPick, ExShore, ExBuild,                 // 3 터파기 생성
-        SecPanel, Prof, Xsec, Qty,                                         // 4 종횡단도 생성(틀만)
-        RdOpen, RdDraw, RdWall, RdSlope, RdWallAdd, RdWallDel,             // 5 진입도로: 진입도로 창
+        Draw, Elev, Panel, PickPlan, PickGround, Slope, Build,              // 2 계획부지 생성: 정지면
+        CadIn, CadOut, MapIn, MapOut,                                       //   지적도 · 위성지도 넣기 → 지우기(리본)
+        FixTab, Wall, WallAdd,                                              //   계획부지 수정 탭 → 옹벽 변환 → 옹벽 추가
+        ExDraw, ExElev, ExPanel, ExPick, ExShore, ExBuild,                 //   터파기
+        SecPanel, Prof, Xsec,                                               //   종단 · 횡단
+        RdOpen, RdDraw, RdWall, RdSlope, RdWallAdd, RdWallDel,             // 3 진입도로 생성: 진입도로 창
         RdSec, RdProf, RdPviAdd, RdPviDel, RdPviDraw, RdRedraft, RdRev, RdXsec,   //   진입도로 종횡단도 창
         RdPave, RdUpdate, RdReset,                                         //   포장 → 업데이트 → 초기화(맨 끝)
+        Book, Qty, View3D,                                                  // 4 도면화: 도면생성 · 수량산출서 · 3D 보기
         Done,
     }
 
@@ -50,23 +45,36 @@ internal static class TutorialFlow
     /// <param name="Dxf">1단원 둘째 부분(수치지도 DXF) — 서버 지표면이 됐거나 건너뜀.</param>
     /// <param name="PageSub">지도 페이지의 작은 단계 — 1 검색 · 2 두 점 · 3 가져오기 단추 · 0 보내는 중.</param>
     /// <param name="Fits">★[JACK 1117 «너무 작게 가져와서 에러»] 경계 + 사면 닿는 거리가 원지반 안에 드나 — 아니면 고도 단계에 머문다.</param>
-    /// <param name="SlopeChanged">2단원: 절토 · 성토 구배 칸 하나를 바꿨나.</param>
+    /// <param name="SlopeOk">★[JACK 1124] 2단원: 절토 · 성토 구배 칸이 둘 다 가이드 값(<see cref="GuideCut"/> · <see cref="GuideFill"/>)인가.</param>
     /// <param name="Wall">2단원: [옹벽 변환]으로 옹벽 구간이 늘었나.</param>
-    /// <param name="Shore">3단원: 터파기 창 [가시설] 체크.</param>
+    /// <param name="FixTab">★[JACK 1124] 2단원: 계획부지 창이 «계획부지 수정» 탭인가(사용자가 누름 — 튜토리얼은 안 바꿈).</param>
+    /// <param name="WallAdd">★[JACK 1124] 2단원: [옹벽 추가]로 선 옹벽이 늘었나.</param>
+    /// <param name="Shore">2단원 터파기: 터파기 창 [가시설] 체크.</param>
+    /// <param name="SecOpen">2단원: 계획지표면 종횡단도 창이 떠 있나.</param>
+    /// <param name="Prof">2단원: [종단도 생성]이 끝나고 도면에 객체가 늘었나.</param>
+    /// <param name="Xsec">2단원: [횡단도 생성]이 끝나고 도면에 객체가 늘었나.</param>
+    /// <param name="QtyFile">4단원: 수량산출서 [만들기](DHQTYXLSXMAKE)가 끝났나.</param>
     /// <param name="Cropped">★[JACK 1117] 1단원 2부: [원지형 자르기]가 잘라 남겼나(도면 자르기 기록).</param>
-    /// <param name="RdPanel">5단원: 진입도로 창이 떠 있나.</param>
-    /// <param name="RdSecOpen">5단원: 진입도로 종횡단도 창이 떠 있나.</param>
-    /// <param name="RdRoad">5단원: 열린 진입도로 + 그 지표면이 있나(도면 기록).</param>
-    /// <param name="RdDone">5단원: 끝낸 일(<see cref="RdBit"/> 비트) — 명령 기록이 바뀐 것을 보고 켬(<see cref="RoadDid"/>).</param>
+    /// <param name="RdPanel">3단원: 진입도로 창이 떠 있나.</param>
+    /// <param name="RdSecOpen">3단원: 진입도로 종횡단도 창이 떠 있나.</param>
+    /// <param name="RdRoad">3단원: 열린 진입도로 + 그 지표면이 있나(도면 기록).</param>
+    /// <param name="ParcelIn">★[JACK 1124] 2단원: [지적도] 넣기가 됐나(명령이 끝나고 도면에 객체가 늘었나 · 또는 건너뜀).</param>
+    /// <param name="ParcelOut">2단원: [지적도 삭제]가 됐나.</param>
+    /// <param name="MapIn">2단원: [위성지도 추가]가 됐나.</param>
+    /// <param name="MapOut">2단원: [지도끄기]가 됐나.</param>
+    /// <param name="Book">4단원: [작성하기](DHSHEETMAKE)로 배치탭이 늘었나.</param>
+    /// <param name="View3D">4단원: [3D 보기] 창이 떴나.</param>
+    /// <param name="RdDone">3단원: 끝낸 일(<see cref="RdBit"/> 비트) — 명령 기록이 바뀐 것을 보고 켬(<see cref="RoadDid"/>).</param>
     internal readonly record struct Facts(
         bool Ground, bool Importing, bool MapOpen, int PageSub, bool Dxf,
         bool Boundary, bool Elev, bool PanelOpen, bool PlanPicked, bool GroundPicked, bool Grade, bool Fits = true,
-        Chapter Ch = Chapter.Site, bool SlopeChanged = true, bool Wall = false,
+        Chapter Ch = Chapter.Site, bool SlopeOk = true, bool Wall = false,
         bool ExBoundary = false, bool ExElev = false, bool ExPanelOpen = false, bool ExPicked = false, bool Shore = false, bool ExSurf = false,
         bool SecOpen = false, bool Prof = false, bool Xsec = false, bool QtyFile = false, bool Cropped = false,
-        bool RdPanel = false, bool RdSecOpen = false, bool RdRoad = false, int RdDone = 0);
+        bool RdPanel = false, bool RdSecOpen = false, bool RdRoad = false, int RdDone = 0, bool FixTab = false, bool WallAdd = false,
+        bool ParcelIn = false, bool ParcelOut = false, bool MapIn = false, bool MapOut = false, bool Book = false, bool View3D = false);
 
-    internal static int Total(Chapter c) => c switch { Chapter.Ground => 6, Chapter.Site => 7, Chapter.Excav => 4, Chapter.Road => RoadAll.Length, _ => 4 };
+    internal static int Total(Chapter c) => c switch { Chapter.Ground => 6, Chapter.Site => 20, Chapter.Road => RoadAll.Length, _ => 3 };
 
     internal static Step Derive(Facts f)
     {
@@ -78,51 +86,71 @@ internal static class TutorialFlow
                 if (f.Dxf) return Step.Dxf;
                 if (!f.MapOpen) return Step.Ground;
                 return f.PageSub switch { 0 => Step.Importing, 2 => Step.Pick, 3 => Step.Send, _ => Step.Search };
-            case Chapter.Excav:
-                if (f.ExSurf) return Step.Done;
-                if (!f.ExBoundary) return Step.ExDraw;
-                if (!f.ExElev) return Step.ExElev;
-                if (!f.ExPanelOpen) return Step.ExPanel;
-                if (!f.ExPicked) return Step.ExPick;
-                if (!f.Shore) return Step.ExShore;
-                return Step.ExBuild;
             case Chapter.Road:
                 if ((f.RdDone & RdBit(Step.RdReset)) != 0) return Step.Done;
                 if (!f.RdRoad) return f.RdPanel ? Step.RdDraw : Step.RdOpen;
                 var next = RoadNext(f.RdDone);
                 if (IsRdSec(next)) return f.RdSecOpen ? next : Step.RdSec;
                 return f.RdPanel ? next : Step.RdOpen;
-            case Chapter.Section:
-                if (f.QtyFile) return Step.Done;
+            case Chapter.Sheet:
+                // ★[JACK 1124 4단원 도면화] 도면생성 → 수량산출서 → 3D 보기
+                if (!f.Book) return Step.Book;
+                if (!f.QtyFile) return Step.Qty;
+                if (!f.View3D) return Step.View3D;
+                return Step.Done;
+            default:
+                if (!f.Grade)
+                {
+                    if (!f.Boundary) return Step.Draw;
+                    if (!f.Elev || !f.Fits) return Step.Elev;
+                    if (!f.PanelOpen) return Step.Panel;
+                    if (!f.PlanPicked) return Step.PickPlan;
+                    if (!f.GroundPicked) return Step.PickGround;
+                    if (!f.SlopeOk) return Step.Slope;
+                    return Step.Build;
+                }
+                // ★[JACK 1124 «원지형 · 첫 부지 뒤 = 지적도 넣기 → 지우기 · 위성지도 넣기 → 지우기(리본 단추)»]
+                if (!f.ParcelIn) return Step.CadIn;
+                if (!f.ParcelOut) return Step.CadOut;
+                if (!f.MapIn) return Step.MapIn;
+                if (!f.MapOut) return Step.MapOut;
+                // ★[JACK 1124 «계획부지 수정 탭 누르는 것도 — 임의로 탭 바꾸지 말 것»] 탭 누르기 → 옹벽 변환 → 옹벽 추가(탭을 벗어나면 탭 단계로)
+                if (!(f.Wall && f.WallAdd)) return !f.PanelOpen ? Step.Panel : !f.FixTab ? Step.FixTab : f.Wall ? Step.WallAdd : Step.Wall;
+                // 터파기(가시설) → 종단 → 횡단
+                if (!f.ExSurf)
+                {
+                    if (!f.ExBoundary) return Step.ExDraw;
+                    if (!f.ExElev) return Step.ExElev;
+                    if (!f.ExPanelOpen) return Step.ExPanel;
+                    if (!f.ExPicked) return Step.ExPick;
+                    if (!f.Shore) return Step.ExShore;
+                    return Step.ExBuild;
+                }
                 if (!f.Prof) return f.SecOpen ? Step.Prof : Step.SecPanel;
                 if (!f.Xsec) return f.SecOpen ? Step.Xsec : Step.SecPanel;
-                return Step.Qty;
-            default:
-                if (f.Wall) return Step.Done;
-                if (f.Grade) return f.PanelOpen ? Step.Wall : Step.Panel;
-                if (!f.Boundary) return Step.Draw;
-                if (!f.Elev || !f.Fits) return Step.Elev;
-                if (!f.PanelOpen) return Step.Panel;
-                if (!f.PlanPicked) return Step.PickPlan;
-                if (!f.GroundPicked) return Step.PickGround;
-                if (!f.SlopeChanged) return Step.Slope;
-                return Step.Build;
+                return Step.Done;
         }
     }
 
-    /// <summary>단원 안 번호(1부터). 1단원 «만드는 중»은 DXF 부분이면 5 · 2단원 창 열기는 정지면이 있으면 7.</summary>
-    internal static int Num(Step s, bool dxf = false, bool graded = false) => s switch
+    /// <summary>단원 안 번호(1부터). 1단원 «만드는 중»은 DXF 부분이면 5 · 2단원 창 다시 열기는 정지면 뒤면 탭(11) · 옹벽 변환 뒤면 옹벽 추가(13) ·
+    /// 종횡단도 창 다시 열기는 종단도 뒤면 횡단(20).</summary>
+    internal static int Num(Step s, Facts f = default) => s switch
     {
-        Step.Ground => 1, Step.Search => 2, Step.Pick => 3, Step.Send => 4, Step.Importing => dxf ? 5 : 4, Step.Dxf => 5, Step.Crop => 6,
-        Step.Draw => 1, Step.Elev => 2, Step.Panel => graded ? 7 : 3, Step.PickPlan => 3, Step.PickGround => 4, Step.Slope => 5, Step.Build => 6, Step.Wall => 7,
-        Step.ExDraw => 1, Step.ExElev => 1, Step.ExPanel => 2, Step.ExPick => 2, Step.ExShore => 3, Step.ExBuild => 4,
-        Step.SecPanel => 1, Step.Prof => 2, Step.Xsec => 3, Step.Qty => 4,
+        Step.Ground => 1, Step.Search => 2, Step.Pick => 3, Step.Send => 4, Step.Importing => f.Dxf ? 5 : 4, Step.Dxf => 5, Step.Crop => 6,
+        Step.Draw => 1, Step.Elev => 2, Step.Panel => !f.Grade ? 3 : f.Wall ? 13 : 11, Step.PickPlan => 3, Step.PickGround => 4, Step.Slope => 5, Step.Build => 6,
+        Step.CadIn => 7, Step.CadOut => 8, Step.MapIn => 9, Step.MapOut => 10,
+        Step.FixTab => 11, Step.Wall => 12, Step.WallAdd => 13,
+        Step.ExDraw => 14, Step.ExElev => 14, Step.ExPanel => 15, Step.ExPick => 15, Step.ExShore => 16, Step.ExBuild => 17,
+        Step.SecPanel => f.Prof ? 20 : 18, Step.Prof => 19, Step.Xsec => 20,
+        Step.Book => 1, Step.Qty => 2, Step.View3D => 3,
         _ when IsRoad(s) => Array.IndexOf(RoadAll, s) + 1,
         _ => 0,
     };
 
     internal static bool IsMap(Step s) => s is Step.Search or Step.Pick or Step.Send;
-    internal static bool IsPanel(Step s) => s is Step.PickPlan or Step.PickGround or Step.Slope or Step.Build or Step.Wall;
+    internal static bool IsPanel(Step s) => s is Step.PickPlan or Step.PickGround or Step.Slope or Step.Build or Step.FixTab or Step.Wall or Step.WallAdd;
+    /// <summary>★[JACK 1124] «계획부지 수정» 탭에서 하는 단계(튜토리얼은 탭을 안 바꾼다).</summary>
+    internal static bool IsFixStep(Step s) => s is Step.Wall or Step.WallAdd;
     internal static bool IsExPanel(Step s) => s is Step.ExPick or Step.ExShore or Step.ExBuild;
     internal static bool IsDraw(Step s) => s is Step.Draw or Step.ExDraw;
 
@@ -137,14 +165,20 @@ internal static class TutorialFlow
         Step.Importing => "원지반 만드는 중 → 잠시 기다리기",
         Step.Dxf => "[원지반 가져오기] → 창의 [수치지도 DXF 가져오기] → tut_ch1.dxf [열기] → 원지반 만들기",
         Step.Crop => "[기타] → [원지형 자르기] → 노란 점선 모서리 두 곳 클릭 → 쓸 땅만 남기기",
-        Step.Draw => (guide ? "노란 점선 따라" : "노란 점선 안에") + " 닫힌 폴리선(PLINE → 마지막 C) → 계획 경계",
-        Step.Elev => "선 클릭 → Ctrl+1 → «고도» 칸 입력 → 계획 높이",
+        Step.Draw => guide ? "노란 점선 꼭짓점 차례로 클릭(PLINE → 마지막 C) → 계획 경계" : "노란 점선 안에 닫힌 폴리선(PLINE → 마지막 C) → 계획 경계",
+        Step.Elev => "선 클릭 → Ctrl+1 → «고도» 칸에 가이드 값 → Enter → 계획고",
         Step.Panel => "[계획부지 생성] → 계획부지 창 열기",
         Step.PickPlan => "[계획 경계 선택] → 그린 폴리선 클릭 → 정지할 땅",
         Step.PickGround => "[원지반 선택] → 원지반 클릭 → 기준 땅",
-        Step.Slope => "절토 · 성토 «구배 1:» 칸 하나 바꾸기(예: 1.5 → 1.0) → 사면 기울기",
+        Step.Slope => $"절토 «구배 1:» {GuideCut:0.0} · 성토 «구배 1:» {GuideFill:0.0} 입력 → 사면 기울기",
         Step.Build => "[계획부지생성하기] → 정지면 만들기",
-        Step.Wall => "[계획부지 수정] 탭 → [옹벽 변환] → 소단선 클릭 → Enter → 옹벽",
+        Step.CadIn => "리본 [지적도] → 두 점 클릭 → 필지 경계 넣기",
+        Step.CadOut => "리본 [지적도] ▼ → [지적도 삭제] → 지적도 지우기",
+        Step.MapIn => "리본 [위성지도 삽입] → 두 점 클릭 → 위성사진 깔기",
+        Step.MapOut => "리본 [위성지도 삽입] ▼ → [지도끄기] → 위성사진 지우기",
+        Step.FixTab => "[계획부지 수정] 탭 클릭 → 옹벽 단추 보이기",
+        Step.Wall => "[옹벽 변환] → 소단선 클릭 → Enter → 옹벽",
+        Step.WallAdd => "[옹벽 추가] → 노란 점선 점 차례로 클릭(경계 밖 끝점에서 멈춤) → Enter → 선 따라 옹벽",
         Step.ExDraw => (guide ? "노란 점선 따라" : "노란 점선 안에") + " 닫힌 폴리선(PLINE → 마지막 C) → 구조물 바닥",
         Step.ExElev => "선 클릭 → Ctrl+1 → «고도» 칸 입력 → 구조물 바닥 높이",
         Step.ExPanel => "[계획부지 생성] ▼ → [구조물 터파기] → 터파기 창 열기",
@@ -152,9 +186,11 @@ internal static class TutorialFlow
         Step.ExShore => "[가시설] 체크 → 둘레 수직(흙막이)",
         Step.ExBuild => "[터파기 지표면 생성] → 터파기 면 만들기",
         Step.SecPanel => "[종횡단도] → 종횡단도 창 열기",
-        Step.Prof => "[종단도 생성] → 노란 점선 따라 점 클릭 → Enter → 종단도",
+        Step.Prof => "[종단도 생성] → 부지 가로질러 점 클릭 → Enter → 빈 자리 클릭 → 종단도",
         Step.Xsec => "[횡단도 생성] → 놓을 자리 클릭 → 측점마다 횡단도",
-        Step.Qty => "[수량 산출서] → 창 [만들기] → 토공 수량 엑셀",
+        Step.Book => "[도면생성] → 창 [작성하기] → 배치탭 도면",
+        Step.Qty => "[수량 산출서] → 창 [만들기] → 저장 → 토공 수량 엑셀",
+        Step.View3D => "[3D 보기] → 3D 창 → 지형 · 옹벽 · 사면 보기",
         Step.RdOpen => "[진입도로 생성] → 진입도로 창 열기",
         Step.RdDraw => "창 [진입도로 생성](경로 그리기) → " + (guide ? "노란 점선 따라" : "부지 끝에서 바깥 땅으로") + " 점 클릭 → Enter → 도로 · 지표면",
         Step.RdWall => "[진입도로 수정] 탭 → [옹벽 변환] → 2단 소단선 클릭 → Enter → 옹벽",
@@ -179,10 +215,51 @@ internal static class TutorialFlow
     internal static string DoneText(Chapter c) => c switch
     {
         Chapter.Ground => "완료 → 원지반 가져오기 끝",
-        Chapter.Site => "완료 → 정지면 · 옹벽 · 계획부지 생성 끝",
-        Chapter.Excav => "완료 → 가시설 터파기 끝",
-        Chapter.Road => "완료 → 진입도로 기능 모두 · 튜토리얼 끝",
-        _ => "완료 → 종단도 · 횡단도 · 수량 산출서 끝",
+        Chapter.Site => "완료 → 정지면 · 옹벽 · 터파기 · 종단 · 횡단 끝",
+        Chapter.Road => "완료 → 진입도로 · 종단 · 횡단 끝",
+        _ => "완료 → 도면 · 수량산출서 · 3D 보기 · 튜토리얼 끝",
+    };
+
+    // ── ★[JACK 1124] 2단원 지적도 · 위성지도 · 종단 · 횡단 · 4단원 도면화 — 명령이 끝나고(Esc · 실패 아님) 도면 객체가 늘었나로 끝 판정 ──
+    /// <summary>이 명령이 끝내는 사실 이름(없으면 null) — «Add» = 모형 공간 객체가 늘어야 끝 · 아니면 정상 끝만.</summary>
+    internal static (string Fact, bool NeedAdd)? CmdFact(string cmd) => cmd switch
+    {
+        "DHPARCEL" => ("ParcelIn", true),
+        "DHPARCELOFF" => ("ParcelOut", false),
+        "DHMAP" => ("MapIn", true),
+        "DHMAPOFF" => ("MapOut", false),
+        "DHPROFILE" => ("Prof", true),
+        "DHXVIEW" => ("Xsec", true),
+        "DHSHEETMAKE" => ("Book", true),
+        "DHQTYXLSXMAKE" => ("QtyFile", false),
+        "DH3D" => ("View3D", false),
+        _ => null,
+    };
+
+    /// <summary>그 명령을 셀 단계(그 단계에서 누른 명령만 셈 — 차례 밖은 안 셈).</summary>
+    internal static bool CmdCounts(string cmd, Step at) => (cmd, at) switch
+    {
+        ("DHPARCEL", Step.CadIn) or ("DHPARCELOFF", Step.CadOut) or ("DHMAP", Step.MapIn) or ("DHMAPOFF", Step.MapOut) => true,
+        ("DHPROFILE", Step.Prof or Step.SecPanel) or ("DHXVIEW", Step.Xsec or Step.SecPanel) => true,
+        ("DHSHEETMAKE", Step.Book) or ("DHQTYXLSXMAKE", Step.Qty) or ("DH3D", Step.View3D) => true,
+        _ => false,
+    };
+
+    internal const string NoteParcelFail = "지적도 안 들어옴 → 인터넷 확인 → 두 점 다시";
+    internal const string NoteMapFail = "위성지도 안 들어옴 → 인터넷 확인 → 두 점 다시";
+    internal const string NoteProfFail = "종단도 안 생김 → 점 2개 이상 → Enter → 빈 자리 클릭";
+    internal const string NoteXsecFail = "횡단도 안 생김 → 명령창 글 확인 → 빈 자리 클릭";
+    internal const string NoteBookFail = "배치탭 안 생김 → 명령창 글 확인 → [작성하기] 다시";
+    internal const string Note3dFail = "3D 창 안 뜸 → 명령창 글 확인 → [3D 보기] 다시";
+    internal static string? CmdFailNote(string cmd) => cmd switch
+    {
+        "DHPARCEL" => NoteParcelFail,
+        "DHMAP" => NoteMapFail,
+        "DHPROFILE" => NoteProfFail,
+        "DHXVIEW" => NoteXsecFail,
+        "DHSHEETMAKE" => NoteBookFail,
+        "DH3D" => Note3dFail,
+        _ => null,
     };
 
     // ══ ★★[JACK 1117 «진입도로 튜토리얼도 기능을 한번씩 다 써보는걸로»] 5단원 진입도로 — 측구는 다시 설계 중이라 뺌 ══
@@ -392,6 +469,107 @@ internal static class TutorialFlow
         return true;
     }
 
+    // ══ ★★[JACK 1124 «계획부지 생성 — 가이드대로만»] 2단원 가이드 — 경계는 점선과 같게 · 고도 · 구배는 가이드 값만 ══
+    //   구배를 못 박아 정지면 모양이 늘 같다 → [옹벽 추가] 점선도 늘 같은 자리(경우의 수 줄이기).
+
+    /// <summary>가이드 절토 구배(1:n) — 기본 1.5보다 가파르게(사면 띠가 원지반 안에 넉넉히).</summary>
+    internal const double GuideCut = 1.0;
+    /// <summary>가이드 성토 구배(1:n).</summary>
+    internal const double GuideFill = 1.5;
+
+    internal const string NoteGuideOff = "점선과 다름 → 점선 꼭짓점 따라 다시";
+    internal const string NoteWallAddFail = "옹벽 안 생김 → 노란 점선 점 따라 다시";
+    internal const string NoteNoWallGuide = "점선 못 셈 → 사면 띠 안에서 경계 → 경계";
+    internal static string NoteGuideValue(double v) => $"가이드 값 {v:0.0} 입력";
+
+    /// <summary>그린 경계가 가이드(점선 네모)와 같나 — 그린 꼭짓점은 모두 가이드 변에서 <paramref name="tol"/> 안 · 가이드 꼭짓점은 모두 그린 꼭짓점에서 tol 안.
+    /// (변 위에 더 찍은 점은 받음 · 모서리를 빼먹거나 비껴 그리면 거절.)</summary>
+    internal static bool MatchesGuide(IReadOnlyList<(double X, double Y)> drawn, IReadOnlyList<(double X, double Y)> guide, double tol)
+    {
+        if (drawn.Count < 3 || guide.Count < 3) return false;
+        foreach (var p in drawn) if (EdgeDist(guide, p) > tol) return false;
+        foreach (var g in guide)
+        {
+            bool hit = false;
+            foreach (var p in drawn) if (Math.Sqrt((p.X - g.X) * (p.X - g.X) + (p.Y - g.Y) * (p.Y - g.Y)) <= tol) { hit = true; break; }
+            if (!hit) return false;
+        }
+        return true;
+    }
+
+    /// <summary>가이드 맞춤 허용 — 가이드 크기의 1 %(0.5 m 아래로는 안 줄임 · 끝점 스냅으로 찍으면 0에 가까움).</summary>
+    internal static double GuideTol(IReadOnlyList<(double X, double Y)> guide)
+    {
+        double x0 = double.MaxValue, y0 = double.MaxValue, x1 = double.MinValue, y1 = double.MinValue;
+        foreach (var p in guide) { x0 = Math.Min(x0, p.X); y0 = Math.Min(y0, p.Y); x1 = Math.Max(x1, p.X); y1 = Math.Max(y1, p.Y); }
+        return Math.Max(0.5, Math.Max(x1 - x0, y1 - y0) * 0.01);
+    }
+
+    static double EdgeDist(IReadOnlyList<(double X, double Y)> poly, (double X, double Y) p)
+    {
+        double best = double.MaxValue;
+        for (int i = 0; i < poly.Count; i++)
+        {
+            var a = poly[i]; var b = poly[(i + 1) % poly.Count];
+            double dx = b.X - a.X, dy = b.Y - a.Y, l2 = dx * dx + dy * dy;
+            double t = l2 > 1e-12 ? Math.Clamp(((p.X - a.X) * dx + (p.Y - a.Y) * dy) / l2, 0, 1) : 0;
+            double ex = a.X + dx * t - p.X, ey = a.Y + dy * t - p.Y;
+            best = Math.Min(best, Math.Sqrt(ex * ex + ey * ey));
+        }
+        return best;
+    }
+
+    /// <summary>구배 칸 값 판정 — 가이드 값이면 받음 · 지난 받은 값 그대로(안 바꿈)면 받음 · 그 밖은 거절(칸을 되돌림).</summary>
+    internal static bool SlopeAccept(string text, string lastOk, double guide)
+    {
+        string t = (text ?? "").Trim();
+        if (t == (lastOk ?? "").Trim()) return true;
+        return double.TryParse(t.Replace(',', '.'), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double v)
+            && Math.Abs(v - guide) < 1e-9;
+    }
+
+    /// <summary>구배 칸이 가이드 값인가.</summary>
+    internal static bool IsGuide(string text, double guide) =>
+        double.TryParse((text ?? "").Trim().Replace(',', '.'), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double v) && Math.Abs(v - guide) < 1e-9;
+
+    /// <summary>★[JACK 1124 «옹벽 추가도 가이드 선»] [옹벽 추가] 따라 찍을 점 넷 — 사면 띠가 가장 넓은 계획선 변(30 m 이상) 가운데 둘레:
+    /// 경계 밖 2 m(변 25 %) → 띠 가운데(35 %) → 띠 가운데(65 %) → 경계 밖 2 m(75 %). 띠 폭 = 변 위 점에서 바깥 법선으로 경계(<paramref name="bd"/>)를 나가는 거리.
+    /// 못 찾으면(띠 6 m 아래 · 경계 못 나감) null.</summary>
+    internal static (double X, double Y)[]? WallAddPath(IReadOnlyList<(double X, double Y)> plan, IReadOnlyList<(double X, double Y)> bd)
+    {
+        int n = plan.Count;
+        if (n < 3 || bd.Count < 3) return null;
+        double area2 = 0;
+        for (int i = 0; i < n; i++) { var a = plan[i]; var b = plan[(i + 1) % n]; area2 += a.X * b.Y - b.X * a.Y; }
+        double sgn = area2 >= 0 ? 1 : -1;
+        (double X, double Y)[]? best = null; double bestW = 6;
+        for (int i = 0; i < n; i++)
+        {
+            var a = plan[i]; var b = plan[(i + 1) % n];
+            double dx = b.X - a.X, dy = b.Y - a.Y, len = Math.Sqrt(dx * dx + dy * dy);
+            if (len < 30) continue;
+            double nx = sgn * dy / len, ny = -sgn * dx / len;
+            double? Width(double f)
+            {
+                double x = a.X + dx * f, y = a.Y + dy * f;
+                if (!InPoly(bd, x + nx * 0.5, y + ny * 0.5)) return null;
+                for (double t = 0.5; t <= 400; t += 0.25) if (!InPoly(bd, x + nx * t, y + ny * t)) return t;
+                return null;
+            }
+            var fs = new[] { 0.25, 0.35, 0.5, 0.65, 0.75 };
+            var w = new double[fs.Length];
+            bool ok = true;
+            for (int k = 0; k < fs.Length; k++) { if (Width(fs[k]) is double v) w[k] = v; else { ok = false; break; } }
+            if (!ok) continue;
+            double minW = w.Min();
+            if (minW <= bestW) continue;
+            (double, double) At(double f, double off) => (a.X + dx * f + nx * off, a.Y + dy * f + ny * off);
+            best = new[] { At(0.25, w[0] + 2), At(0.35, w[1] * 0.5), At(0.65, w[3] * 0.5), At(0.75, w[4] + 2) };
+            bestW = minW;
+        }
+        return best;
+    }
+
     internal const string NoteOpenSlope = "[사면 설정] 펼치기 → 구배 칸 보이기";
     internal const string NoteNoZ = "고도값 누락됨 → 선 고도 넣고 다시 선택";
     internal const string NoteWallFail = "옹벽 안 바뀜 → 소단선 클릭 → Enter";
@@ -420,7 +598,6 @@ internal static class TutorialFlow
     internal const string NoteExPanelClosed = "터파기 창 닫힘 → 다시 열기";
     internal const string NoteSecClosed = "종횡단도 창 닫힘 → 다시 [종횡단도]";
     internal const string NoteExFail = "터파기 못 만듦 → 명령창 글 확인 → 다시";
-    internal const string NoteSaveFail = "결과 저장 못 함 → 다음 단원은 기본 자료로";
 
     // ══ ★★[JACK 1117 «너무 작게 가져와서 '사면이 원지반 경계를 벗어남' 에러 → 가져오는 단계에서 넉넉히»] 사면 여유 셈 ══
     //   사면 닿는 거리(수평) ≈ 경계 위 |원지반 − 계획고| 최대 × 실효 구배 + 여유 10 m.

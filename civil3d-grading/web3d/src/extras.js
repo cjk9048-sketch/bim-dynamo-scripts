@@ -2,6 +2,7 @@
 import * as THREE from 'three';
 import { fatLines, polySeg, textSprite, nearLabels, screenDash } from './lines.js';
 import { facadeMaterial, roofMaterial, bldgStyle, FLOOR_H } from './facade.js';
+import { catchMesh } from './catchzone.js';
 
 // 물길 굵기 칸 — [모인 넓이 하한 ㎡, 굵기 CSS px]
 const STREAM_W = [[0, 1.8], [1000, 2.8], [3000, 4.0], [10000, 5.5]];
@@ -153,6 +154,22 @@ export function buildDrain(view, head, L) {
     mesh.userData = { layer: 'drain', kind: 'flat' };
     grp.add(mesh);
   }
+  // ★[JACK 1124 «3D 뷰에서 빗물 기능을 이용해서 측구 설계»] 측구마다 집수 구역 — 땅 + 12 cm 반투명 측구 색 · 누르면 집수면적 · C
+  const zones = (D.catch && D.catch.zones) || [];
+  if (zones.length) {
+    const cm = catchMesh(zones);
+    if (cm.idx.length) {
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(cm.pos), 3));
+      g.setAttribute('color', new THREE.BufferAttribute(new Float32Array(cm.col), 3));
+      g.setIndex(cm.idx);
+      const m = new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.36, depthWrite: false, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
+      const mesh = new THREE.Mesh(g, m);
+      mesh.renderOrder = 1;
+      mesh.userData = { layer: 'drain', kind: 'catch', faceOf: cm.faceOf };
+      grp.add(mesh);
+    }
+  }
   grp.visible = false;
   view.scene.add(grp);
   // 움직임 — 층이 보일 때만(안 보이면 다시 그리지 않음) · replay() = 고임을 바닥부터 다시 채움
@@ -168,9 +185,9 @@ export function buildDrain(view, head, L) {
   });
   const nS = (D.streams || []).length;
   L.drain = {
-    obj: grp, label: '빗물', on: false, ponds, flatArea: D.flatArea || 0, nStreams: nS,
+    obj: grp, label: '빗물', on: false, ponds, zones, flatArea: D.flatArea || 0, nStreams: nS,
     pickSeg: new Float32Array(pickSeg), pickAcc,
-    summary: `물길 ${nS}줄 · 고임 ${ponds.length}곳 · 평지 ${Math.round(D.flatArea || 0).toLocaleString('ko-KR')} ㎡`,
+    summary: `물길 ${nS}줄 · 고임 ${ponds.length}곳 · 평지 ${Math.round(D.flatArea || 0).toLocaleString('ko-KR')} ㎡` + (zones.length ? ` · 측구 집수 ${zones.length}` : ''),
     replay: () => { t0 = -1; water.uFill.value = 0; view.request(); },
   };
 }

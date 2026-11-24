@@ -1149,6 +1149,7 @@ internal sealed class GradingPanel : UserControl
         }
         Paint();
         _showMake = Paint;
+        _fixTabHead = tabs[1];   // ★[튜토리얼 · JACK 1124] «계획부지 수정» 탭 머리 — 튜토리얼이 비추고 사용자가 누름
         return grid;
     }
     private bool _tabFix;
@@ -1165,6 +1166,10 @@ internal sealed class GradingPanel : UserControl
     internal TextBox SlopeCutBox => _cutS;
     internal TextBox SlopeFillBox => _fillS;
     internal Button ToWallButton => _toWall;
+    internal Button AddWallButton => _addWall;
+    private FrameworkElement? _fixTabHead;
+    internal FrameworkElement? FixTabHead => _fixTabHead;
+    internal bool FixTabOn => _tabFix;
 
     // ── ★[JACK 1112] 맨 위 설명 칸 ──────────────────────────────────────
     /// <summary>맨 위 칸에 하나만 보인다 — "demo" · "cut" · "fill" · "excav".</summary>

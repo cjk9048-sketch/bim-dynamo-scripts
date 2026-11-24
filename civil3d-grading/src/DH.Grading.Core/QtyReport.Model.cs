@@ -30,6 +30,16 @@ public sealed class QtyDitch
     public int Count;
 }
 
+/// <summary>★[JACK 1124 «집수정이 수량으로»] U형 측구 집수정 규격 하나 — 규격 글(안 · 바깥치수) · 종류별 개소 글 · 개소 · 콘크리트(㎥).</summary>
+public sealed class QtyBasin
+{
+    public string Label = "", Kinds = "";
+    public int Count;
+    public double Volume;
+    /// <summary>거짓 = 깊이 미정(바닥고 · 지표 모름 — 개소만 · 콘크리트 빠짐).</summary>
+    public bool DepthKnown = true;
+}
+
 /// <summary>임목폐기물 입력 — 기본값 = 템플릿(밀도 18주/100㎡ · 흉고 0.22 · 근원 0.25 · K 1.3 · f 0.5 · W0 0.8 · P 0.5 · 할증 1.3).</summary>
 public sealed class QtyForest
 {
@@ -63,6 +73,8 @@ public sealed class QtyReportModel
     /// <summary>★[JACK 1123 · 검토 M3] U형 측구 집수정(단차 + 합류 · 교차 · 출구) — 개수 · 콘크리트(㎥) · U형 측구 보고서 합계와 같은 값(UDitch.BasinTotals).</summary>
     public int BasinCount;
     public double BasinVol;
+    /// <summary>★[JACK 1124] 집수정 규격별(UDitch.BasinGroups — 평면 블록 «DH_집수정»과 같은 목록) · 합 = <see cref="BasinCount"/> · <see cref="BasinVol"/>.</summary>
+    public List<QtyBasin> Basins = new();
     public QtyForest Forest = new();
     /// <summary>토공집계표 밑에 적을 줄 — 못 잰 까닭 · 가정.</summary>
     public List<string> Notes = new();

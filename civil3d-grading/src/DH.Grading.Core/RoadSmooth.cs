@@ -108,7 +108,7 @@ public static class RoadSmooth
         pz.Add(noded);
         var faces = pz.GetPolygons().Cast<Polygon>().Where(p => p.Area >= o.MinArea).ToList();
         r.Faces = faces.Count;
-        var cenAll = cenLs.Count > 0 ? UnaryUnionOp.Union(cenLs.Cast<Geometry>().ToList()) : null;
+        var cenAll = cenLs.Count > 0 ? LineUnion(cenLs.Cast<Geometry>().ToList()) : null;
         var cenPrep = cenAll != null ? PreparedGeometryFactory.Prepare(cenAll) : null;
         var cenBuf = cenAll?.Buffer(o.CenterHalfWidth, 4);
         // ★[JACK 1123 «수치지도 도로선이 VWorld보다 덜 펴짐» · 계수기 실측] 경계선이 어딘가 안 닫히면(끊긴 끝 · 막다른 길) 도로 면이 옆 땅과 한 면이 되어
@@ -124,11 +124,11 @@ public static class RoadSmooth
         foreach (var f in faces)
         {
             double width = 2 * f.Area / Math.Max(1e-9, f.Length);
-            bool hasCenter = cenPrep != null && cenPrep.Intersects(f) && f.Intersection(cenAll!).Length > 5;
+            bool hasCenter = cenPrep != null && cenPrep.Intersects(f) && Inter(f, cenAll!).Length > 5;
             if (hasCenter)
             {
                 // 면 중 중심선 곁 몫만(블록 · 산과 한 면이어도)
-                Geometry part = f.Intersection(cenBuf!);
+                Geometry part = Inter(f, cenBuf!);
                 if (cenCorr != null)
                     try
                     {
@@ -270,7 +270,7 @@ public static class RoadSmooth
         // ④ 바꿀 범위 = 도로 면(+여유) − 제외
         Geometry road = CascadedUnion(r.Roads);
         Geometry region = o.Margin > 0 ? road.Buffer(o.Margin, 4) : road;
-        if (!exclAll.IsEmpty) region = region.Difference(exclAll);
+        if (!exclAll.IsEmpty) region = Diff(region, exclAll);
         region = Clean(region);
         if (region.IsEmpty || region.Area < o.MinArea) { r.Log.Add("제외하고 남은 도로가 없음"); return r; }
         r.Region = region;
@@ -436,7 +436,7 @@ public static class RoadSmooth
 
         // ④ 바꿀 범위
         Geometry region = o.Margin > 0 ? roadU.Buffer(o.Margin, 4) : roadU;
-        if (!exclAll.IsEmpty) region = region.Difference(exclAll);
+        if (!exclAll.IsEmpty) region = Diff(region, exclAll);
         region = Clean(region);
         if (region.IsEmpty || region.Area < o.MinArea) { r.Log.Add("제외하고 남은 도로가 없음"); return r; }
         r.Region = region;
@@ -502,7 +502,7 @@ public static class RoadSmooth
     public static (List<Point3> Spots, List<List<Point3>> Rings, double MaxShift) FlattenGrid(Geometry road, Geometry? excl, Func<double, double, double> ground, double radius, double cell, double keepDiff)
     {
         var spots = new List<Point3>(); var rings = new List<List<Point3>>(); double maxShift = 0;
-        Geometry area = excl != null && !excl.IsEmpty ? road.Difference(excl) : road;
+        Geometry area = excl != null && !excl.IsEmpty ? Diff(road, excl) : road;
         area = Clean(area);
         if (area.IsEmpty) return (spots, rings, 0);
         var env = area.EnvelopeInternal;
@@ -703,11 +703,46 @@ public static class RoadSmooth
 
     static Coordinate[] Pad(this Coordinate[] c) => c.Length >= 2 ? c : new[] { c[0], new Coordinate(c[0].X + 0.01, c[0].Y) };
 
+    // ★[검토 1124 #9] 선 합치기(노딩)도 옛 셈이 거의 겹친 선에서 TopologyException — 던질 때만 튼튼한 셈(OverlayNG)으로(면 합치기와 같은 방식)
+    static Geometry LineUnion(IList<Geometry> g)
+    {
+        try { return UnaryUnionOp.Union(g); }
+        catch (TopologyException) { return NetTopologySuite.Operation.OverlayNG.OverlayNGRobust.Union(Gf.BuildGeometry(g)); }
+    }
+
     static Geometry CascadedUnion(IList<Geometry> g)
     {
         if (g.Count == 0) return Gf.CreateGeometryCollection();
-        if (g.All(x => x is LineString)) return UnaryUnionOp.Union(g);
-        return CascadedPolygonUnion.Union(g.SelectMany(Polys).Cast<Geometry>().ToList()) ?? Gf.CreatePolygon();
+        if (g.All(x => x is LineString)) return LineUnion(g);
+        var ps = g.SelectMany(Polys).Cast<Geometry>().ToList();
+        try { return CascadedPolygonUnion.Union(ps) ?? Gf.CreatePolygon(); }
+        catch (TopologyException) { return ps.Count == 0 ? Gf.CreatePolygon() : NetTopologySuite.Operation.OverlayNG.OverlayNGRobust.Union(NetTopologySuite.Geometries.Utilities.GeometryFixer.Fix(Gf.BuildGeometry(ps))); }
+    }
+
+    // ★[JACK 1124 스샷 «도로 다듬기 중 오류: side location conflict»] 옛 겹침 셈(OverlayV1)이 거의 맞닿은 VWorld 도로 면에서 TopologyException —
+    //   되던 자리는 결과 그대로 두고, 던질 때만 튼튼한 겹침 셈(OverlayNG · 정밀도 낮춰 다시 시도)으로 다시 셈.
+    static Geometry Diff(Geometry a, Geometry b)
+    {
+        try { return a.Difference(b); }
+        catch (TopologyException) { return Robust(a, b, NetTopologySuite.Operation.Overlay.SpatialFunction.Difference); }
+    }
+
+    static Geometry Inter(Geometry a, Geometry b)
+    {
+        try { return a.Intersection(b); }
+        catch (TopologyException) { return Robust(a, b, NetTopologySuite.Operation.Overlay.SpatialFunction.Intersection); }
+    }
+
+    /// <summary>OverlayNG(정밀도 낮춰 다시 시도까지) — 그래도 던지면(무효 면) 두 면을 고쳐(GeometryFixer) 한 번 더.</summary>
+    public static Geometry Robust(Geometry a, Geometry b, NetTopologySuite.Operation.Overlay.SpatialFunction op)
+    {
+        try { return NetTopologySuite.Operation.OverlayNG.OverlayNGRobust.Overlay(a, b, op); }
+        catch (TopologyException)
+        {
+            var fa = NetTopologySuite.Geometries.Utilities.GeometryFixer.Fix(a);
+            var fb = NetTopologySuite.Geometries.Utilities.GeometryFixer.Fix(b);
+            return NetTopologySuite.Operation.OverlayNG.OverlayNGRobust.Overlay(fa, fb, op);
+        }
     }
 
     static IEnumerable<Polygon> Polys(Geometry g)
@@ -732,7 +767,7 @@ public static class RoadSmooth
     static IEnumerable<LineString> OutsideParts(LineString l, Geometry ex, IPreparedGeometry exP)
     {
         if (ex.IsEmpty || !exP.Intersects(l)) { yield return l; yield break; }
-        var d = l.Difference(ex);
+        var d = Diff(l, ex);
         for (int i = 0; i < d.NumGeometries; i++) if (d.GetGeometryN(i) is LineString s && s.Length > 0.5) yield return s;
     }
 

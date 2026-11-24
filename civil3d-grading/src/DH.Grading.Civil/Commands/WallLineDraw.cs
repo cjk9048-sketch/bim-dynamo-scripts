@@ -348,10 +348,18 @@ internal static class WallLineDraw
                     try { var nb = BoundaryDraw.Nearest(geo, w.X, w.Y); DiagLog.AppendCarry($"\n  [{tag}] 점 거절 — ({w.X:F3}, {w.Y:F3}) · 경계까지 {nb.D:F3} m · 붙임 {snap:F2} m · 점 {pts.Count}개 · {stp.Why}"); } catch { }
                     continue;
                 }
+                // ★[1124 튜토리얼 도우미 실측 «같은 점 넷 입력 → accoreconsole 죽음»] 앞 점과 같은 자리(1 cm 안)는 받지 않음 — 길이 0 토막이 뒤 셈(늘이기 · 판정 · 면)으로 가지 않게
+                if (pts.Count > 0 && System.Math.Abs(pts[^1].X - stp.X) < 0.01 && System.Math.Abs(pts[^1].Y - stp.Y) < 0.01)
+                {
+                    ed.WriteMessage("\n  앞 점과 같은 자리 → 다른 점 클릭");
+                    try { DiagLog.AppendCarry($"\n  [{tag}] 점 거절 — 앞 점과 같은 자리 ({stp.X:F3}, {stp.Y:F3})"); } catch { }
+                    continue;
+                }
                 pts.Add(new Point3d(stp.X, stp.Y, 0));
                 if (stp.Kind == BoundaryDraw.Kind.End) break;
             }
             if (pts.Count < 2) { ed.WriteMessage($"\n[{tag}] 점 부족 — 안 바뀜"); return null; }
+            if (drawnMode && pts.Zip(pts.Skip(1), (a, b) => a.DistanceTo(b)).Sum() < 0.1) { ed.WriteMessage($"\n[{tag}] 선 길이 부족 — 안 바뀜"); return null; }
             // 찍어 그린 선은 첫 · 끝 토막을 경계 밖으로 1 m 늘여 판정(Classify는 양 끝이 경계 밖이어야 — 경계 위 두 점이 그대로 교점)
             // ★[v117.2 · JACK 1111 13:5x «끝 점이 경계 안»] 늘인 점이 경계 안(뾰족한 V 자리)이거나 늘인 토막이 경계에 또 닿으면 그 끝은 안 늘임 — 경계 위 클릭 점 그대로(Classify가 1 mm 안 끝을 받음)
             bool extA = true, extB = true;

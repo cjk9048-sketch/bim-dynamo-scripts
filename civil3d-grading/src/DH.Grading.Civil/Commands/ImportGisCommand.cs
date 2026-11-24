@@ -178,6 +178,8 @@ public sealed class ImportGisCommand
                 }
             }
             finally { EventViewerMute.End(evPrev); }
+            // ★[JACK 1124 «표고 표시가 기본인데 원지반 가져와도 안 붙고 공통설정 [적용]을 눌러야 뜸»] 서버 길만 BuildGroundSurfaceFrom(끝에 Sync)을 안 거쳤음 — 네모 맞춤 뒤 한 번
+            try { string ge = GroundElevLabels.Sync(db); if (ge.Length > 0) ed.WriteMessage("\n[원지반 표고] " + ge); } catch { }
             DrawOrderFix.Apply(db);
             ed.Regen();
 

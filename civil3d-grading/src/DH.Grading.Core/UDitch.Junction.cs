@@ -304,7 +304,24 @@ public static partial class UDitch
                 foreach (double v in new[] { m.InV, m.OutV }) if (double.IsFinite(v)) wetTop = Math.Max(wetTop, v + m.D.Size.H);
             }
             var inv = j.M.SelectMany(m => new[] { m.InV, m.OutV }).Where(double.IsFinite).ToList();
-            if (inv.Count == 0) { j.Warn.Add($"{j.Name}: 이어진 측구 바닥고를 못 셈 → 측구 선 · 바닥고 확인"); j.B.Floor = double.NaN; }
+            // ★[JACK 1124 «못 지음으로 빼지 말 것»] 이어진 측구 짜임이 모두 없음(선이 집수정보다 짧음 등) → 측구마다 바닥 추정:
+            //   시작 · 끝 바닥고 보간 → 없으면 지표 − 덮개 − 안높이(자동 바닥고 규칙) · 안바닥 = 그 최저 − 침전(아래 같은 규칙) · 물 거꾸로 판정에는 안 씀
+            if (inv.Count == 0)
+            {
+                var how = new List<string>();
+                foreach (var m in j.M)
+                {
+                    var g = gs[m.Index]!;
+                    double v = double.NaN;
+                    if (double.IsFinite(m.D.StartInvert) && double.IsFinite(m.D.EndInvert) && g.L > 1e-9) { v = m.D.StartInvert + (m.D.EndInvert - m.D.StartInvert) * Math.Clamp(m.S / g.L, 0, 1); how.Add(m.D.Id + " 시작 · 끝 바닥고 보간"); }
+                    else if (double.IsFinite(m.Ground)) { v = m.Ground - s.Cover - m.D.Size.H; how.Add(m.D.Id + " 지표 − 덮개 − 안높이"); }
+                    if (!double.IsFinite(v)) continue;
+                    inv.Add(v);
+                    wetTop = Math.Max(wetTop, v + m.D.Size.H);
+                }
+                if (inv.Count > 0) j.Notes.Add(string.Format(Ic, "{0} 바닥고 추정 — 이어진 측구 구간 없음 → {1} · 최저 {2:0.000} − 침전 {3:0.00} m", j.Name, string.Join(" · ", how), inv.Min(), s.BasinSump));
+            }
+            if (inv.Count == 0) { j.Warn.Add($"{j.Name}: 이어진 측구 바닥고 · 지표를 못 셈 → 깊이 미정(평면 · 개소만) → 측구 선 · 바닥고 확인"); j.B.Floor = double.NaN; }
             else
             {
                 j.B.Floor = inv.Min() - s.BasinSump;
@@ -481,9 +498,92 @@ public static partial class UDitch
     /// <summary>★[검토 M3] 집수정 합계(단차 집수정 + 합류 · 교차 · 출구) — 개수 · 콘크리트(㎥). 보고서 합계 · 수량산출서가 같은 값을 쓴다. <see cref="Link"/> 뒤에 부른다.</summary>
     public static (int Count, double Volume) BasinTotals(Record rec, Settings s)
     {
-        int n = 0; double v = 0;
-        foreach (var d in rec.Ditches) { var x = Extras(d, s); n += x.Basins; v += x.BasinVol; }
-        foreach (var j in rec.Junctions) if (j.Ok) { n++; v += j.Volume; }
-        return (n, v);
+        var l = BasinList(rec, s);
+        return (l.Count, l.Sum(b => b.Volume));
+    }
+
+    /// <summary>★[JACK 1124 «집수정 블록 · 수량»] 집수정 하나 — 꼴 · 종류(단차 · 합류 · 교차 · 출구) · 임자(단차 = 측구 Id · 합류 = J1) · 이어진 측구 «D-001,D-002» · 이름 ·
+    /// 깊이(윗면 − 안바닥 · m) · 콘크리트(㎥) · <see cref="DepthKnown"/> 거짓 = 바닥고 · 지표를 못 셈(«깊이 미정» — 블록 · 개소만 · 콘크리트 0 · 3D 없음).</summary>
+    public sealed class BasinItem
+    {
+        public Basin B = new();
+        public string Kind = "", Owner = "", Members = "", Label = "";
+        public bool Junction, DepthKnown = true;
+        public double Volume;
+        public double Depth => DepthKnown ? B.ZTop - B.Floor : double.NaN;
+    }
+
+    /// <summary>★[JACK 1124] 집수정 목록 — 평면 블록(<c>UDitchStore.Build</c>) · 수량(<see cref="BasinTotals"/> · <see cref="BasinGroups"/>)이 같은 목록을 쓴다(블록 수 = 수량 개소).
+    /// 단차 집수정 = 지표 따라감 · 짜임 오류 없는 측구(<see cref="Extras"/>와 같은 조건) · 합류 · 교차 · 출구 = 모두(바닥고를 못 셌으면 «깊이 미정»으로 — 빠뜨리지 않음). <see cref="Link"/> 뒤에 부른다.</summary>
+    public static List<BasinItem> BasinList(Record rec, Settings s)
+    {
+        var o = new List<BasinItem>();
+        foreach (var d in rec.Ditches)
+        {
+            var lay = LayoutOf(d, s);
+            if (!lay.Follow || lay.Error.Length > 0) continue;
+            for (int k = 0; k < lay.Basins.Count; k++)
+            {
+                var b = lay.Basins[k];
+                o.Add(new BasinItem { B = b, Kind = "단차", Owner = d.Id, Members = d.Id, Label = $"{d.Id} 집수정 {k + 1}", Volume = b.Outer * b.Outer * (b.ZTop - b.ZBottom) - b.Inner * b.Inner * (b.ZTop - b.Floor) });
+            }
+        }
+        foreach (var j in rec.Junctions)
+            o.Add(new BasinItem { B = j.B, Kind = j.Kind, Owner = j.Name, Members = string.Join(",", j.M.Select(m => m.D.Id).Distinct()), Label = j.Label, Junction = true, DepthKnown = j.Ok, Volume = j.Volume });
+        return o;
+    }
+
+    /// <summary>집수정 규격 하나 — 안치수(m · 정사각) × 깊이(0.1 m 올림 · NaN = 깊이 미정) · 바깥치수(가장 큰 것) · 개소 · 콘크리트(㎥ · 실제 꼴 합) · 종류별 개소 글(«합류 2 · 교차 1 · 단차 2»).</summary>
+    public sealed class BasinGroup
+    {
+        public double Inner, Depth = double.NaN, Outer, Volume;
+        public int Count;
+        public string Kinds = "";
+        public bool DepthKnown => double.IsFinite(Depth);
+        /// <summary>«안 0.60×0.60 × 깊이 0.9 m» · «안 0.60×0.60 × 깊이 미정».</summary>
+        public string Label => string.Format(Ic, "안 {0:0.00}×{0:0.00} × 깊이 ", Inner) + (DepthKnown ? Depth.ToString("0.0", Ic) + " m" : "미정");
+        /// <summary>«0.60×0.60×0.9» · «0.60×0.60×미정».</summary>
+        public string Short => string.Format(Ic, "{0:0.00}×{0:0.00}×", Inner) + (DepthKnown ? Depth.ToString("0.0", Ic) : "미정");
+    }
+
+    /// <summary>깊이 규격(0.1 m 올림 — 깊이 0.857 → 0.9).</summary>
+    public static double DepthClass(double depth) => double.IsFinite(depth) ? Math.Ceiling(Math.Round(depth * 10, 6)) / 10 : double.NaN;
+
+    /// <summary>★[JACK 1124 «수량으로 나와야 · 안치수 × 깊이별 개소»] 집수정 규격별(안치수 cm × 깊이 0.1 m 올림 · 깊이 미정은 따로 · 작은 것부터) — 창 · 보고서 · 수량산출서가 같은 값.</summary>
+    public static List<BasinGroup> BasinGroups(Record rec, Settings s) => BasinGroups(BasinList(rec, s));
+
+    public static List<BasinGroup> BasinGroups(List<BasinItem> list)
+    {
+        string[] order = { "합류", "교차", "출구", "단차" };
+        return list.GroupBy(b => (Math.Round(b.B.Inner, 2), b.DepthKnown ? DepthClass(b.Depth) : -1.0))
+                   .OrderBy(g => g.Key.Item1).ThenBy(g => g.Key.Item2 < 0 ? double.MaxValue : g.Key.Item2)
+                   .Select(g => new BasinGroup
+                   {
+                       Inner = g.Key.Item1, Depth = g.Key.Item2 < 0 ? double.NaN : g.Key.Item2, Outer = g.Max(b => b.B.Outer), Count = g.Count(), Volume = g.Sum(b => b.Volume),
+                       Kinds = string.Join(" · ", g.GroupBy(b => b.Kind).OrderBy(x => Array.IndexOf(order, x.Key) is int i && i >= 0 ? i : 9).Select(x => $"{x.Key} {x.Count()}")),
+                   }).ToList();
+    }
+
+    /// <summary>집수정 규격별 한 줄 — «집수정 6개소(0.60×0.60×0.6 1 · 0.60×0.60×0.9 3 …) · 콘크리트 2.030 ㎥»(<paramref name="vol"/> 거짓 = 콘크리트 뺌 · 깊이 미정이 있으면 «깊이 미정 n» · 없으면 빈 글).</summary>
+    public static string BasinSummary(List<BasinItem> list, bool vol = true)
+    {
+        if (list.Count == 0) return "";
+        var gs = BasinGroups(list);
+        int un = list.Count(b => !b.DepthKnown);
+        return string.Format(Ic, "집수정 {0}개소({1})", list.Count, string.Join(" · ", gs.Select(g => g.Short + " " + g.Count.ToString(Ic))))
+             + (vol ? string.Format(Ic, " · 콘크리트 {0:0.000} ㎥", list.Sum(b => b.Volume)) : "")
+             + (un > 0 ? $" · ⚠깊이 미정 {un}(콘크리트 빠짐)" : "");
+    }
+
+    /// <summary>보고서 — 집수정 수량 절(안치수 × 깊이별 개소 · 종류 · 콘크리트 · 합계).</summary>
+    static void BasinQtyReport(StringBuilder sb, Record rec, Settings s)
+    {
+        var l = BasinList(rec, s);
+        if (l.Count == 0) return;
+        sb.AppendLine();
+        sb.AppendLine(string.Format(Ic, "■ 집수정 수량 — {0}개소 · 콘크리트 {1:0.000} ㎥(평면 블록 «DH_집수정»과 같은 자료 · 깊이 = 윗면 − 안바닥 0.1 m 올림)", l.Count, l.Sum(b => b.Volume)));
+        foreach (var g in BasinGroups(l))
+            sb.AppendLine(string.Format(Ic, "  {0}: {1}개소({2}) · ", g.Label, g.Count, g.Kinds)
+                          + (g.DepthKnown ? string.Format(Ic, "콘크리트 {0:0.000} ㎥", g.Volume) : "콘크리트 미정(바닥고 · 지표 모름 → 측구 확인)"));
     }
 }

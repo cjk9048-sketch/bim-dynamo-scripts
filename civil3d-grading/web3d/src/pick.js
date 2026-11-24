@@ -1,6 +1,7 @@
 // 누르면 정보 · 재기 · 두 번 누르면 가운데로.
 import * as THREE from 'three';
 import { describeUDitch } from './uditch.js';
+import { catchRows } from './catchzone.js';
 
 const fmt = (v, d = 2) => Number.isFinite(v) ? v.toLocaleString('ko-KR', { minimumFractionDigits: d, maximumFractionDigits: d }) : '—';
 const slopeText = (g) => {   // g = 높이/수평(무차원)
@@ -227,7 +228,11 @@ export class Picker {
     const rows = [];
     let title = '', go = null;
     if (u.layer === 'drain') {
-      if (u.kind === 'pond') {
+      if (u.kind === 'catch') {   // ★[JACK 1124] 측구 집수 구역
+        const z = (this.L.drain.zones || [])[u.faceOf[h.faceIndex]];
+        title = '집수 ' + (z ? z.name : '');
+        if (z) rows.push(...catchRows(z, fmt));
+      } else if (u.kind === 'pond') {
         const pd = this.L.drain.ponds[u.faceOf[h.faceIndex]];
         title = '고임';
         if (pd) {

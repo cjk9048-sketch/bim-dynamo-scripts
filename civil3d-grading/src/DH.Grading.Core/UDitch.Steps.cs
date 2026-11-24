@@ -790,6 +790,9 @@ public static partial class UDitch
             var c = new SegCheck { No = i + 1, Seg = g };
             double s0 = g.SMinPct / 100, s1 = g.SMaxPct / 100;
             if (s0 > 0) c.Qcap = ManningQ(B, H * s.DepthRatio, s0, n);
+            double Qall = Q;
+            Q = ReachQ(d, r, g.S1, lay.Length, Qall);   // ★[JACK 1124 구간 누가 유량] 자동 집수가 있으면 이 구간 끝까지 모인 몫
+            if (!(Q > 0) && Qall > 0) { c.Verdict = Verdict.Ok; c.Status = "OK"; c.Notes.Add("유입 없음"); }
             if (Q > 0)
             {
                 if (!(s0 > 0)) { c.Verdict = Verdict.NoSlope; c.Status = "경사 없음"; }
@@ -809,6 +812,7 @@ public static partial class UDitch
                     c.Status = StatusOf(c.Verdict);
                 }
             }
+            Q = Qall;
             h.Segs.Add(c);
         }
         for (int i = 0; i < lay.Pipes.Count; i++)
@@ -817,6 +821,8 @@ public static partial class UDitch
             var c = new PipeCheck { No = i + 1, Pipe = p };
             if (p.Legs.Count == 0) { h.Pipes.Add(c); continue; }
             double S = p.SlopeMinPct / 100;
+            double Qall = Q;
+            Q = ReachQ(d, r, p.S1, lay.Length, Qall);   // ★[JACK 1124] 관로 끝까지 모인 몫
             var run = p.Legs.Where(l => l.SlopePct <= FallPct).ToList();
             c.FallLegs = p.Legs.Count - run.Count;
             c.SFlat = S; c.SSteep = run.Count > 0 ? run.Max(l => l.SlopePct) / 100 : double.NaN;
@@ -841,6 +847,7 @@ public static partial class UDitch
                     }
                 }
             }
+            Q = Qall;
             h.Pipes.Add(c);
         }
         if (!r.Has) { h.Verdict = Verdict.NoRain; h.Status = "강우자료 없음"; h.Notes.Add("강우강도를 넣거나 CSV에서 고르면 검토합니다(값을 짓지 않음)"); return h; }

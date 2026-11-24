@@ -43,10 +43,15 @@ internal sealed class UDitchPanel : UserControl
     View _v = new() { HasDoc = false };
     readonly UDitchDemoView _demo = new();
     readonly TextBox _years, _mins, _int, _src, _ver, _start, _end, _area, _c;
-    readonly ComboBox _csv, _ditch, _size, _cover;
+    readonly ComboBox _csv, _ditch, _size, _cover, _uscale;
+    /// <summary>★[JACK 1124 «U 모양의 스케일을 조정할 수 있게»] U 표시 크기(배) 고르기 칸.</summary>
+    static readonly double[] UScales = { 0.5, 0.75, 1, 1.5, 2, 3 };
     readonly TextBlock _result, _status, _rainState, _site, _foot;
     readonly Button _build, _rev, _auto, _areaBtn, _zoom, _recBtn, _pick, _draw, _edge, _csvBtn;
     internal readonly Button DeleteButton;
+    /// <summary>★[JACK 1124 집수] [자동 집수] · 집수면적 출처 표(«자동» · «입력»).</summary>
+    readonly Button _catchBtn;
+    readonly TextBlock _areaSrc;
     readonly FrameworkElement _csvRow, _segBox;
     readonly StackPanel _segs;
     bool _loading;
@@ -90,22 +95,35 @@ internal sealed class UDitchPanel : UserControl
         _edge = Btn("경계 따라", "경계(사면 끝선 · 옹벽선 · 도로 경계 · 부지 경계) 선택 → 시점 · 종점 → 마우스 거리만큼 그 구간만 평행", "udLine");   // ★[JACK 1124]
         _zoom = Btn("도면에서 보기", "고른 측구로 화면 이동 + 빨간 선으로 표시", "udLine");
         root.Children.Add(new WrapPanel { Children = { _pick, _draw, _edge, _zoom }, Margin = new Thickness(0, 0, 0, 8) });
+        // ★[JACK 1124 «U 모양의 스케일을 조정할 수 있게»] 모든 측구 선의 «U» 크기(배 · 배치 탭도 같음)
+        _uscale = new ComboBox { Height = 28, MinWidth = 80, ToolTip = "모든 측구 선의 «U» 크기(배) — 배치 탭도 같은 배" };
+        foreach (var k in UScales) _uscale.Items.Add("×" + k.ToString("0.##", Ic));
+        root.Children.Add(Labeled("U 표시", Line(_uscale), "모든 측구 선의 «U» 크기(배)"));
 
+        // ★[JACK 1124 «측구의 규격을 고르는 부분과 집수 설계하는 부분을 소카테고리로»] ── 규격 ──
+        root.Children.Add(SubHead("규격"));
+        var g1 = Group(root);   // 소제목 아래 칸은 12px 들임(JACK 1029 «대제목 소제목간 들여쓰기»)
         _size = new ComboBox { Height = 28, MinWidth = 130, ToolTip = "표준 규격(설정 파일 UDitch.settings.json)" };
         foreach (var z in _v.S.Sizes) _size.Items.Add("U형 " + z.Label);
         _cover = new ComboBox { Height = 28, MinWidth = 100, ToolTip = "측구 덮개 — 스틸 그레이팅 = U 위에 판(벽 윗면에 맞춤)" };
         _cover.Items.Add("덮개 없음"); _cover.Items.Add("스틸 그레이팅");
         _cover.Margin = new Thickness(6, 0, 0, 0);
-        root.Children.Add(Labeled("규격", Line(_size, _cover), "안폭 × 안높이(mm) · 덮개"));
+        g1.Children.Add(Labeled("단면", Line(_size, _cover), "안폭 × 안높이(mm) · 덮개"));
         _rev = Btn("방향 바꾸기", "시점 ↔ 종점(흐름 방향)");
         _auto = Btn("지표면 맞춤", "바닥 = 지표면 − 덮개 − 안높이 · 최대 경사 넘으면 낙차 · 단차 = 집수정 + 관로(원 선 · 지표를 다시 읽음)", "udFit");
-        root.Children.Add(Labeled("", Line(_rev, _auto), ""));
+        g1.Children.Add(Labeled("", Line(_rev, _auto), ""));
         _start = Box(80, "시점(상류) 바닥고 m — 치면 한 경사(손 입력)"); _end = Box(80, "종점(하류) 바닥고 m");
-        root.Children.Add(Labeled("바닥고", Line(Unit("시점"), _start, Unit("종점"), _end, Unit("m")), "칸에 치면 한 경사(손 입력) · [지표면 맞춤] = 지표 따라감"));
+        g1.Children.Add(Labeled("바닥고", Line(Unit("시점"), _start, Unit("종점"), _end, Unit("m")), "칸에 치면 한 경사(손 입력) · [지표면 맞춤] = 지표 따라감"));
+        // ── 집수 ──
+        root.Children.Add(SubHead("집수"));
+        var g2 = Group(root);
         _area = Box(72, "집수면적(ha)"); _c = Box(46, "유출계수 C(0~1)");
         _areaBtn = Btn("면적 고르기", "도면의 닫힌 폴리선 · 원 · 영역 · 해치를 골라 넓이 합 → 집수면적(ha)", "udArea");
         _areaBtn.Height = 28;
-        root.Children.Add(Labeled("집수", Line(_area, Unit("ha"), Unit("C"), _c, new Border { Width = 4 }, _areaBtn), "합리식 Q = C · I · A / 360"));
+        _areaSrc = new TextBlock { VerticalAlignment = VerticalAlignment.Center, FontSize = 11, Margin = new Thickness(0, 0, 6, 0), ToolTip = "자동 = 빗물 셈 · 입력 = 친 값(자동이 안 덮음 · 비우면 자동)" };
+        _catchBtn = Btn("자동 집수", "빗물 셈 → 측구마다 집수 구역 · 면적 · C(토지 이용) · 구간 누가 유량 — 친 값은 그대로 · 평면 구역 DH-U형측구-집수", "udArea");
+        g2.Children.Add(Labeled("면적", Line(_area, Unit("ha"), _areaSrc, Unit("C"), _c, new Border { Width = 4 }, _areaBtn), "합리식 Q = C · I · A / 360"));
+        g2.Children.Add(Labeled("", Line(_catchBtn), "모든 측구 — 빗물 흐름으로 집수 구역"));
 
         // ── 강우 ──
         Section(root, "강우", "설계강우 — 공식 자료를 확인한 값만(값을 짓지 않음 · 모든 측구 공통)");
@@ -174,6 +192,10 @@ internal sealed class UDitchPanel : UserControl
         };
         foreach (var tb in new[] { _start, _end }) tb.TextChanged += (_, __) => DitchChanged(invertEdited: true);
         foreach (var tb in new[] { _area, _c }) tb.TextChanged += (_, __) => DitchChanged(invertEdited: false);
+        // ★[JACK 1124 집수] 친 값 = 입력(자동이 안 덮음)
+        _area.TextChanged += (_, __) => { if (_loading || Cur is not UDitch.Ditch d) return; d.AreaAuto = false; SrcMark(d); };
+        _c.TextChanged += (_, __) => { if (_loading || Cur is not UDitch.Ditch d) return; d.CUser = true; d.CAuto = false; SrcMark(d); };
+        _catchBtn.Click += (_, __) => Send?.Invoke("DHUDITCHCATCH");
         _size.SelectionChanged += (_, __) =>
         {
             if (_loading || Cur is not UDitch.Ditch d || _size.SelectedIndex < 0 || _size.SelectedIndex >= _v.S.Sizes.Count) return;
@@ -191,6 +213,14 @@ internal sealed class UDitchPanel : UserControl
             Relink(d);
             Changed?.Invoke();
             Refresh();
+        };
+        _uscale.SelectionChanged += (_, __) =>
+        {
+            if (_loading || !_v.HasDoc || _uscale.SelectedIndex < 0) return;
+            double k = _uscale.SelectedIndex < UScales.Length ? UScales[_uscale.SelectedIndex] : _v.Rec.UScale;
+            if (Math.Abs(k - _v.Rec.UScale) < 1e-9) return;
+            _v.Rec.UScale = k;
+            Send?.Invoke("DHUDITCHUSCALE " + k.ToString("0.##", Ic));   // 기록 저장 + 모든 측구 선 선종류 축척(명령 안 — 되돌리기 한 번)
         };
         _ditch.SelectionChanged += (_, __) => { if (_loading) return; _v.Sel = _ditch.SelectedIndex; MemoChanged?.Invoke(_v); LoadDitch(); };
         _csv.SelectionChanged += (_, __) =>
@@ -261,7 +291,11 @@ internal sealed class UDitchPanel : UserControl
         _foot.Text = v.Foot;
         FillCsv();
         FillDitches();
-        foreach (UIElement x in new UIElement[] { _years, _mins, _int, _src, _ver, _csvBtn, _pick, _draw, _edge }) x.IsEnabled = v.HasDoc;
+        foreach (UIElement x in new UIElement[] { _years, _mins, _int, _src, _ver, _csvBtn, _pick, _draw, _edge, _uscale }) x.IsEnabled = v.HasDoc;
+        while (_uscale.Items.Count > UScales.Length) _uscale.Items.RemoveAt(_uscale.Items.Count - 1);
+        int ui = Array.FindIndex(UScales, k => Math.Abs(k - v.Rec.UScale) < 1e-6);
+        if (ui < 0) { _uscale.Items.Add("×" + v.Rec.UScale.ToString("0.##", Ic)); ui = _uscale.Items.Count - 1; }   // 명령줄로 넣은 다른 값
+        _uscale.SelectedIndex = ui;
         _loading = false;
         LoadDitch();
     }
@@ -271,6 +305,18 @@ internal sealed class UDitchPanel : UserControl
 
     /// <summary>시험 · 그림용 — 설명 칸을 그 장면 그 시각으로.</summary>
     internal void DemoAt(string key, double t) => _demo.Draw(key, t);
+
+    /// <summary>★[JACK 1124 집수] 면적 칸 옆 «자동» · «입력»(C 자동이면 «C 자동»).</summary>
+    void SrcMark(UDitch.Ditch? d)
+    {
+        if (d == null || !(d.AreaHa > 0)) { _areaSrc.Text = d?.Auto != null ? "자동 0" : ""; _areaSrc.Foreground = DhBrand.Sub; return; }
+        _areaSrc.Text = d.AreaAuto ? "자동" : "입력";
+        _areaSrc.Foreground = d.AreaAuto ? DhBrand.Ok : DhBrand.Sub;
+    }
+
+    /// <summary>★[JACK 1124] 칸 안 소제목(«규격» · «집수» — 단면도 창 소제목과 같은 모양).</summary>
+    static TextBlock SubHead(string text) => new() { Text = text, FontSize = 12, FontWeight = FontWeights.Bold, Foreground = DhBrand.Ink, Margin = new Thickness(0, 6, 0, 4) };
+    static StackPanel Group(Panel root) { var g = new StackPanel { Margin = new Thickness(12, 0, 0, 0) }; root.Children.Add(g); return g; }
 
     static void Section(Panel root, string title, string sub)
     {
@@ -319,6 +365,8 @@ internal sealed class UDitchPanel : UserControl
         var d = Cur;
         bool on = d != null && _v.HasDoc;
         foreach (UIElement x in new UIElement[] { _size, _cover, _start, _end, _area, _c, _rev, _auto, _areaBtn, _zoom, DeleteButton }) x.IsEnabled = on;
+        _catchBtn.IsEnabled = _v.HasDoc && _v.Rec.Ditches.Count > 0;
+        SrcMark(d);
         _cover.SelectedIndex = d == null ? -1 : d.Grating ? 1 : 0;
         if (d != null)
         {
@@ -453,6 +501,18 @@ internal sealed class UDitchPanel : UserControl
                 }
                 _result.Inlines.Add(run);
             }
+            // ★[JACK 1124 «집수정이 수량으로»] 모든 측구의 집수정 — 규격별 개소 · 콘크리트(평면 블록 · 보고서 · 수량산출서와 같은 목록)
+            try
+            {
+                string bs = UDitch.BasinSummary(UDitch.BasinList(_v.Rec, _v.S));
+                if (bs.Length > 0)
+                {
+                    _result.Inlines.Add(new System.Windows.Documents.LineBreak());
+                    _result.Inlines.Add(new System.Windows.Documents.Run("전체  ") { Foreground = DhBrand.Sub });
+                    _result.Inlines.Add(new System.Windows.Documents.Run(bs) { Foreground = DhBrand.Ink });
+                }
+            }
+            catch { }
             foreach (var w in pr.Warn.Prepend(pr.Error).Where(w => w.Length > 0))
             {
                 _result.Inlines.Add(new System.Windows.Documents.LineBreak());
@@ -483,7 +543,7 @@ internal sealed class UDitchPanel : UserControl
         if (lay == null || h == null) return;
         static string N(double v, string f) => double.IsFinite(v) ? v.ToString(f, Ic) : "—";
         var grid = new Grid();
-        foreach (double w in new[] { 30.0, 80, 44, 66, 70 }) grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(w) });
+        foreach (double w in new[] { 26.0, 62, 38, 50, 58, 46, 44 }) grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(w) });   // ★[JACK 1124] + 유입 · 유량(창 폭 440에 판정까지 보이게 칸을 좁힘)
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         void Cell(int r, int c, string t, Brush fg, bool bold = false)
         {
@@ -491,7 +551,7 @@ internal sealed class UDitchPanel : UserControl
             Grid.SetRow(tb, r); Grid.SetColumn(tb, c); grid.Children.Add(tb);
         }
         grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-        string[] head = { "구간", "측점 m", "길이", "경사 %", "유속 m/s", "판정" };
+        string[] head = { "구간", "측점 m", "길이", "경사 %", "유속 m/s", "유입 ha", "Q m³/s", "판정" };
         for (int c = 0; c < head.Length; c++) Cell(0, c, head[c], DhBrand.Sub);
         int row = 1;
         foreach (var c in h.Segs)
@@ -503,7 +563,13 @@ internal sealed class UDitchPanel : UserControl
             Cell(row, 2, N(g.Length, "0.0"), DhBrand.Ink);
             Cell(row, 3, Math.Abs(g.SMaxPct - g.SMinPct) < 0.0005 ? N(g.SMinPct, "0.##") : N(g.SMinPct, "0.##") + "~" + N(g.SMaxPct, "0.##"), DhBrand.Ink);
             Cell(row, 4, double.IsFinite(c.VelMin) ? N(c.VelMin, "0.00") + "~" + N(c.VelMax, "0.00") : "—", DhBrand.Ink);
-            Cell(row, 5, c.Status, c.Verdict switch { UDitch.Verdict.Ok => DhBrand.Ok, UDitch.Verdict.Short or UDitch.Verdict.NoSlope => DhBrand.Warn, UDitch.Verdict.Caution => Amber, _ => DhBrand.Sub }, c.Verdict != UDitch.Verdict.NoRain);
+            if (Cur is UDitch.Ditch cd)   // ★[JACK 1124] 구간 끝까지 모인 넓이 · 유량(강우 없으면 넓이만)
+            {
+                var rf = UDitch.ReachFlow(cd, _v.Rec.Rain, g.S1, lay.Length);
+                Cell(row, 5, rf.Aha > 0 ? N(rf.Aha, "0.0000") : "—", DhBrand.Ink);
+                Cell(row, 6, double.IsFinite(rf.Q) ? N(rf.Q, "0.000") : "—", DhBrand.Ink);
+            }
+            Cell(row, 7, c.Status, c.Verdict switch { UDitch.Verdict.Ok => DhBrand.Ok, UDitch.Verdict.Short or UDitch.Verdict.NoSlope => DhBrand.Warn, UDitch.Verdict.Caution => Amber, _ => DhBrand.Sub }, c.Verdict != UDitch.Verdict.NoRain);
             row++;
         }
         _segs.Children.Add(grid);

@@ -281,6 +281,7 @@ public partial class RoadCommand
             try { s.Recompute(); } catch { }
             // ★[v111.8 · L13 · M2] 첫 면의 최종지표면이 실패했으면 상태 줄에도 까닭([업데이트]로 다시)
             if (s.FinalNote.StartsWith("⚠")) s.NoteFail("실패 — " + s.FinalNote.TrimStart('⚠'));
+            try { WallRoadCutPlan.ResyncSiteViews(doc, "진입도로"); } catch { }   // ★[JACK 1124 · 검토 GAP] 첫 도로 면이 부지 옹벽을 잘랐으면 그려 둔 부지 종단 · 횡단을 같은 자리에 다시
         }
         catch (System.Exception ex)
         {
@@ -1746,6 +1747,7 @@ public partial class RoadCommand
         // ★[1116 밤] 다시 그리지 못해 남은 종단도 · 횡단도가 지워진 면(옛 정지면 · 옛 진입도로 면)을 문 채면 지운다 — 설계 기록에 «다시 그리지 못함»(도킹창 상태 줄 · 깜박)
         if (run) { try { if (ErasedSource.Sweep(doc, "진입도로 업데이트", s.AlignId).Any) s.RecomputeCore(); } catch { } }
         if (surfDone || finalDone) { try { ed.Regen(); } catch { } }
+        if (surfDone || finalDone) { try { WallRoadCutPlan.ResyncSiteViews(doc, "진입도로"); } catch { } }   // ★[JACK 1124 · 검토 GAP] 도로가 바뀌어 부지 옹벽 자리가 바뀌었으면 그려 둔 부지 종단 · 횡단을 같은 자리에 다시
         try
         {
             var parts = new List<string>();

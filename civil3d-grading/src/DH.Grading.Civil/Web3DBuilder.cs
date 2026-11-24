@@ -348,7 +348,7 @@ internal static class Web3DBuilder
             {
                 // ★[계획 검토 중간 5] 범위 = 바뀐 자리 + 200 m — 비탈 위 산에서 내려오는 물(산마루 배수)도 센다
                 // ★[JACK 1124 «측구가 있을 경우 빗물 모드에서 측구가 반영된 빗물 모델»] U형 측구 물길을 빗물 셈 격자에만 판다(지형 · 면 · 그리는 지형은 그대로)
-                var udFlow = UDitchStore.FlowPaths(db, log);
+                var (udFlow, udIds) = UDitchCatchStore.FlowPathsWithIds(db, log);   // ★[JACK 1124 집수] 이름도(구역 색 · 풍선)
                 var dr = Drainage.Analyze(inp.X, inp.Y, inp.Z, inp.F, tm.CMinX - 200, tm.CMinY - 200, tm.CMaxX + 200, tm.CMaxY + 200, cell: 1.0, streamMin: 300, flatZone: tm.InChanged,
                                           channels: udFlow.Count > 0 ? udFlow : null);
                 log.AppendLine("  빗물: " + dr.Text);
@@ -374,6 +374,9 @@ internal static class Web3DBuilder
                 };
                 if (dr.ChannelLines > 0)   // ★[JACK 1124] 측구가 든 빗물 셈(없으면 열쇠 없음 — 옛 장면 바이트 그대로)
                     ((Dictionary<string, object>)drainHead)["uditch"] = new Dictionary<string, object> { ["lines"] = dr.ChannelLines, ["cells"] = dr.ChannelCells, ["streamCells"] = dr.ChannelStreamCells, ["accMax"] = Web3DScene.Num(dr.ChannelAccMax, 1) };
+                // ★[JACK 1124 «3D 뷰에서 빗물 기능을 이용해서 설계»] 측구마다 집수 구역(보기만 · 없으면 열쇠 없음)
+                if (dr.ChannelLines > 0 && UDitchCatchStore.Web3DHead(db, dr, udIds, ox, oy, sc, log) is object catchHead)
+                    ((Dictionary<string, object>)drainHead)["catch"] = catchHead;
             }
         }
         catch (System.Exception dex) { c.Warn.Add("빗물 검토를 못 했습니다 — " + dex.Message); log.AppendLine("  빗물: 실패 — " + dex); }

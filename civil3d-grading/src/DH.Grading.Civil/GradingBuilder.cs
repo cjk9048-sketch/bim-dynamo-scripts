@@ -2747,6 +2747,8 @@ public static class GradingBuilder
         var ids = new List<ObjectId>();
         foreach (ObjectId id in ms)
             if (tr.GetObject(id, OpenMode.ForRead) is AcadEntity ent && ent.Layer == layerName) ids.Add(id);
+        // ★[JACK 1124 · 검토 중간 3] 진입도로 자리로 숨긴 부지 옹벽선 원선(얼린 숨김 레이어)도 함께 — 남기면 다음 맞춤(WallRoadCutPlan.Refresh)이 옛 선을 되살린다
+        if (layerName.StartsWith("DH-옹벽선", System.StringComparison.Ordinal)) ids.AddRange(WallRoadCutPlan.HiddenOf(db, tr, layerName));
         foreach (ObjectId id in ids)
             if (tr.GetObject(id, OpenMode.ForWrite) is AcadEntity e) e.Erase();
     }
