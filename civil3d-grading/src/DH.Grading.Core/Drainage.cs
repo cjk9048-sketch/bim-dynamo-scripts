@@ -38,15 +38,23 @@ public static class Drainage
         public readonly List<(double X0, double Y0, double X1, double Y1, double Z0, double Z1)> FlatRuns = new();
         public double FlatArea;
         public long Ms;
-        public string Text => $"칸 {Cell:0.##} m · {W}×{H}(땅 {Valid:N0}) · 고임 {Ponds.Count}곳 {Ponds.Sum(p => p.Area):N0} ㎡(가장 깊은 {(Ponds.Count > 0 ? Ponds.Max(p => p.Depth) : 0):F2} m) · 평지 {FlatArea:N0} ㎡ · 물길 {Streams.Count}줄 · {Ms / 1000.0:F1}초";
+        /// <summary>★[JACK 1124 «측구가 있으면 빗물 모드에서 측구가 반영된 빗물 모델»] U형 측구 물길 — 줄 수 · 칸 수 · 그중 물길(흐름이 보이는) 칸 · 측구 칸 가장 큰 모인 넓이(㎡).</summary>
+        public int ChannelLines, ChannelCells, ChannelStreamCells;
+        public double ChannelAccMax;
+        public string Text => $"칸 {Cell:0.##} m · {W}×{H}(땅 {Valid:N0}) · 고임 {Ponds.Count}곳 {Ponds.Sum(p => p.Area):N0} ㎡(가장 깊은 {(Ponds.Count > 0 ? Ponds.Max(p => p.Depth) : 0):F2} m) · 평지 {FlatArea:N0} ㎡ · 물길 {Streams.Count}줄"
+                              + (ChannelLines > 0 ? $" · 측구 {ChannelLines}줄 {ChannelCells}칸(물길 {ChannelStreamCells}칸 · 모인 넓이 최대 {ChannelAccMax:N0} ㎡)" : "") + $" · {Ms / 1000.0:F1}초";
     }
 
     static readonly int[] DX = { 1, 1, 0, -1, -1, -1, 0, 1 }, DY = { 0, 1, 1, 1, 0, -1, -1, -1 };
 
     /// <summary>세모 면(점 X · Y · Z · 면 F 0부터 셋씩)을 [minX, maxX] × [minY, maxY] 격자(칸 <paramref name="cell"/> — 칸 수가 <paramref name="maxCells"/>를 넘으면 키움)로 셈한다.
-    /// <paramref name="flatZone"/>이 있으면 그 안에서만 평지를 센다(바뀐 칸).</summary>
+    /// <paramref name="flatZone"/>이 있으면 그 안에서만 평지를 센다(바뀐 칸).
+    /// ★[JACK 1124] <paramref name="channels"/> = U형 측구 물길(시점 = 상류 → 종점 = 하류 · 점 Z = 바닥고) — 이 셈의 격자에만 판다(지형 · 면은 그대로):
+    /// 선이 지나는 칸(4-이웃으로 이음)을 바닥고(하류로 갈수록 안 높게)까지 낮추고 · 채운 높이도 하류로 내려가게 맞추고 · 측구 칸의 흐름은 다음 측구 칸으로(끝 칸만 땅으로 나감).
+    /// 그래서 측구에 닿은 물은 측구로 들어가 그린 방향으로 흐른다(넘어가지 않음).</summary>
     public static Result Analyze(double[] X, double[] Y, double[] Z, int[] F, double minX, double minY, double maxX, double maxY,
-        double cell = 1.0, int maxCells = 1_000_000, double streamMin = 100, Func<double, double, bool>? flatZone = null)
+        double cell = 1.0, int maxCells = 1_000_000, double streamMin = 100, Func<double, double, bool>? flatZone = null,
+        IReadOnlyList<IReadOnlyList<Point3>>? channels = null)
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
         var r = new Result();
@@ -84,6 +92,57 @@ public static class Drainage
         bool Ok(int k) => !double.IsNaN(z[k]);
         for (int k = 0; k < N; k++) if (Ok(k)) r.Valid++;
 
+        // ①b ★[JACK 1124] 측구 물길 파기 — 선을 칸/4 걸음으로 따라 칸 차례(같은 칸은 한 번 · 대각 이동은 4-이웃 칸을 끼워 넣음 — 물이 대각으로 넘지 않게) ·
+        //   칸 바닥 = 그 칸을 지나는 바닥고 중 가장 낮은 값 → 하류로 «지금까지 가장 낮은 값»(올라가지 않음) · 땅 없는 칸 · 격자 밖에서 끊음
+        var paths = new List<int[]>();
+        // 측구 칸의 물길 그림 점 = 그 칸 가운데에 가장 가까운 측구 선 위 점(칸 가운데로 그리면 계단처럼 측구 밖으로 비뚤어짐)
+        Dictionary<int, (double X, double Y, double D)>? chXY = channels != null ? new() : null;
+        if (channels != null)
+            foreach (var ch in channels)
+            {
+                if (ch == null || ch.Count < 2) continue;
+                var cells = new List<int>(); var zs = new List<double>();
+                void Flush()
+                {
+                    if (cells.Count >= 2)
+                    {
+                        double run = double.PositiveInfinity;
+                        for (int q = 0; q < cells.Count; q++) { run = Math.Min(run, zs[q]); z[cells[q]] = Math.Min(z[cells[q]], run); }
+                        paths.Add(cells.ToArray());
+                    }
+                    cells = new List<int>(); zs = new List<double>();
+                }
+                void Put(int i, int j, double zz, double x, double y)
+                {
+                    int k = j * W + i;
+                    if (i < 0 || j < 0 || i >= W || j >= H || !Ok(k)) { Flush(); return; }
+                    double dc = Math.Abs(x - (minX + (i + 0.5) * cell)) + Math.Abs(y - (minY + (j + 0.5) * cell));
+                    if (!chXY!.TryGetValue(k, out var q) || dc < q.D) chXY[k] = (x, y, dc);
+                    if (cells.Count > 0 && cells[^1] == k) { zs[^1] = Math.Min(zs[^1], zz); return; }
+                    cells.Add(k); zs.Add(zz);
+                }
+                int pi = int.MinValue, pj = int.MinValue;
+                for (int q = 0; q + 1 < ch.Count; q++)
+                {
+                    var a = ch[q]; var b = ch[q + 1];
+                    if (!double.IsFinite(a.X + a.Y + a.Z + b.X + b.Y + b.Z)) { Flush(); pi = pj = int.MinValue; continue; }
+                    double len = Math.Sqrt((b.X - a.X) * (b.X - a.X) + (b.Y - a.Y) * (b.Y - a.Y));
+                    int n = Math.Max(1, (int)Math.Ceiling(len / (cell * 0.25)));
+                    for (int t = 0; t <= n; t++)
+                    {
+                        double f = (double)t / n, x = a.X + (b.X - a.X) * f, y = a.Y + (b.Y - a.Y) * f, zz = a.Z + (b.Z - a.Z) * f;
+                        int i = (int)Math.Floor((x - minX) / cell), j = (int)Math.Floor((y - minY) / cell);
+                        if (pi != int.MinValue && i != pi && j != pj) Put(i, pj, zz, x, y);
+                        Put(i, j, zz, x, y);
+                        pi = i; pj = j;
+                    }
+                }
+                Flush();
+                r.ChannelLines++;
+            }
+        var inCh = new bool[N];
+        foreach (var p in paths) { r.ChannelCells += p.Length; foreach (int k in p) inCh[k] = true; }
+
         // ② 웅덩이 채우기(priority-flood + ε) — 바깥(격자 끝 · 없음 칸 곁)에서 시작
         var fill = new double[N];
         var closed = new bool[N];
@@ -113,13 +172,18 @@ public static class Drainage
             }
         }
 
+        // ②b ★[JACK 1124] 측구 칸의 채운 높이는 하류로 늘 내려감(평평 · 막힌 측구도 그린 방향으로 흐름)
+        foreach (var p in paths)
+            for (int q = 1; q < p.Length; q++)
+                if (p[q] != p[q - 1] && fill[p[q]] > fill[p[q - 1]] - Eps) fill[p[q]] = fill[p[q - 1]] - Eps;
+
         // ③ 고임 덩어리
         var pondId = new int[N];
         Array.Fill(pondId, -1);
         var stack = new Stack<int>();
         for (int k = 0; k < N; k++)
         {
-            if (!Ok(k) || pondId[k] >= 0 || fill[k] - z[k] <= PondMin) continue;
+            if (!Ok(k) || pondId[k] >= 0 || fill[k] - z[k] <= PondMin || inCh[k]) continue;   // ★[JACK 1124] 측구 칸은 고임 아님(끝은 집수정 · 관으로 나감)
             var cells = new List<int>();
             pondId[k] = -2; stack.Push(k);
             while (stack.Count > 0)
@@ -131,7 +195,7 @@ public static class Drainage
                     int ni = ci + DX[d], nj = cj + DY[d];
                     if (ni < 0 || nj < 0 || ni >= W || nj >= H) continue;
                     int n = nj * W + ni;
-                    if (!Ok(n) || pondId[n] != -1 || fill[n] - z[n] <= PondMin) continue;
+                    if (!Ok(n) || pondId[n] != -1 || fill[n] - z[n] <= PondMin || inCh[n]) continue;
                     pondId[n] = -2; stack.Push(n);
                 }
             }
@@ -198,6 +262,10 @@ public static class Drainage
             }
             to[k] = bi;
         }
+        // ★[JACK 1124] 측구 칸 → 다음 측구 칸(채운 높이가 낮을 때만 — 늘 내려가는 쪽이라 고리 없음) · 끝 칸은 땅으로(위 D8)
+        foreach (var p in paths)
+            for (int q = 0; q + 1 < p.Length; q++)
+                if (p[q + 1] != p[q] && fill[p[q + 1]] < fill[p[q]]) to[p[q]] = p[q + 1];
         var order = Enumerable.Range(0, N).Where(Ok).OrderByDescending(k => fill[k]).ToArray();
         var acc = new double[N];
         var flowLen = new double[N];   // 가장 긴 위쪽 흐름 길이(m) — 나란히 흐르는 판에서는 모인 넓이 ≈ 길이 × 칸
@@ -215,6 +283,14 @@ public static class Drainage
         var isS = new bool[N]; var up = new int[N];
         foreach (int k in order)
             if (acc[k] >= streamMin && acc[k] >= ConvergeK * (flowLen[k] + cell) * cell && pondId[k] < 0 && !flat[k]) isS[k] = true;
+        // ★[JACK 1124] 측구 칸은 물이 들어오면(자기 칸 넘게 모이면) 물길로 그림 — 측구를 따라 흐르는 물이 보이게
+        for (int k = 0; k < N; k++)
+            if (inCh[k])
+            {
+                if (acc[k] > 1.5 * cell * cell && pondId[k] < 0) isS[k] = true;
+                if (isS[k]) r.ChannelStreamCells++;
+                r.ChannelAccMax = Math.Max(r.ChannelAccMax, acc[k]);
+            }
         foreach (int k in order) if (isS[k] && to[k] >= 0 && isS[to[k]]) up[to[k]]++;
         var done = new bool[N];
         foreach (int k in order)
@@ -225,7 +301,8 @@ public static class Drainage
             while (c >= 0)
             {
                 int ci = c % W, cj = c / W;
-                st.Pts.Add(new Point3(minX + (ci + 0.5) * cell, minY + (cj + 0.5) * cell, z[c]));
+                if (chXY != null && inCh[c] && chXY.TryGetValue(c, out var cq)) st.Pts.Add(new Point3(cq.X, cq.Y, z[c]));
+                else st.Pts.Add(new Point3(minX + (ci + 0.5) * cell, minY + (cj + 0.5) * cell, z[c]));
                 st.Acc.Add(acc[c]);
                 if (done[c]) break;
                 done[c] = true;

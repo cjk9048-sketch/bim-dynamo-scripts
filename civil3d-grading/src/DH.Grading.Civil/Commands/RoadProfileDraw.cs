@@ -34,7 +34,7 @@ public partial class RoadCommand
         {
             try
             {
-                if (vid.IsErased || tr.GetObject(vid, OpenMode.ForRead) is not CivilDb.ProfileView pv) continue;
+                if (vid.IsErased || tr.GetObject(vid, OpenMode.ForRead) is not CivilDb.ProfileView pv || RoadSheets.IsSheetTwin(pv)) continue;   // ★[v117.37.1] 배치탭 쌍둥이는 그리는 자리가 아님
                 double s0 = pv.StationStart, s1 = pv.StationEnd, z0 = pv.ElevationMin, z1 = pv.ElevationMax, xa = 0, ya = 0, xb = 0, yb = 0;
                 if (!(s1 - s0 > 1e-6) || !(z1 - z0 > 1e-6)) continue;
                 if (!pv.FindXYAtStationAndElevation(s0, z0, ref xa, ref ya) || !pv.FindXYAtStationAndElevation(s1, z1, ref xb, ref yb)) continue;

@@ -62,6 +62,7 @@ using AcadApp = Autodesk.AutoCAD.ApplicationServices.Application;
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.StructBoxCommand))]          // ★[v117.19 · JACK 1121] DHSTRUCTBOX(팝업) · DHSTRUCTBOXADD · DHSTRUCTBOXEDIT(명령줄) — 박스 구조물
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.StructCommand))]           // ★[v115 · JACK 1105] DHSTRUCT · DHSTRUCTPTS(v116.9 좌표계 내보내기) · DHSTRUCTOFF(Revit 구조물)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.UDitchCommand))]             // ★[배수지 U형 측구 1단계] DHUDITCH(창) · -DHUDITCH(명령줄)
+[assembly: CommandClass(typeof(DH.Grading.Civil.WallSetCommand))]                         // ★[JACK 1124] DHWALLSET · DHWALLSETROAD(옹벽 설정 팝업) · DHWALLSETAPPLY([적용] — 명령 밖 창이 넘긴 값)
 [assembly: CommandClass(typeof(DH.Grading.Civil.SectionPalette))]                         // ★[JACK 1112] DHSECPANEL · DHROADSECPANEL(종횡단도 도킹창 — 종단도 · 횡단도 단추를 하나로)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.WallMigrateCommand))]        // ★[v117.9] DHWALLMIGRATE(옛 옹벽 옮기기 — 키트에서 «알 수 없는 명령»으로 찾음)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.QtyXlsxCommand))]                // ★[수량산출서] DHQTYXLSX(토공 수량산출서 엑셀)
@@ -584,6 +585,13 @@ public sealed class RibbonApp : IExtensionApplication
                 "지반고는 **원지반에서 자동으로 읽습니다** — 사람이 치는 것은 **각 층의 두께**뿐입니다.\n" +
                 "**[확인]**을 누르면 지층면이 만들어집니다(평면에서는 숨겨 둡니다 — 종단·횡단에서만 보입니다).", null);
 
+            // ★★[JACK 1124 «옹벽 설정 버튼을 별도로 공통 카테고리에도»] [공통]의 [옹벽 설정] — 계획부지 수정 탭 · 진입도로 수정 탭 단추와 같은 팝업(계획부지 탭부터 · 열린 도로가 있으면 진입도로 칸도)
+            var btnWallSet = MakeButton(
+                "옹벽\n설정", "DHWALLSET ", "계획부지 · 진입도로 절성토 옹벽 단면 · 뒷채움 터파기", "옹벽");
+            btnWallSet.ToolTip = MakeTip("옹벽 설정 (DHWALLSET)",
+                "계획부지 · 진입도로 절성토 옹벽 단면 · 뒷채움 터파기\n" +
+                "**[적용]** = 저장 → 그려 둔 종단도 · 횡단도 · 진입도로 횡단도 다시", null);
+
             // ★[v111.6 · JACK 1102] «횡단» → [계획지표면] 패널의 [횡단도]
             var btnXsec = MakeButton(
                 "횡단도", "DHXVIEW ", "계획지표면 횡단도 — 종단도에서 정한 측점대로 횡단면도를 만듭니다(옹벽·가시설은 (전)(후) 두 장)", "횡단");
@@ -827,6 +835,7 @@ public sealed class RibbonApp : IExtensionApplication
             _always.Clear();
             _always.Add(btnExc);
             _always.Add(btnPlan);
+            _always.Add(btnWallSet);   // ★[JACK 1124] 창 여는 단추 — 찍는 중엔 잠그고 끝나면 다시 켬(위 btnExc · btnPlan과 같음)
             _all.AddRange(_always);
 
             // ── 패널 늘어놓기 ─────────────────────────────────────────────────
@@ -904,7 +913,7 @@ public sealed class RibbonApp : IExtensionApplication
                 "오른쪽에 **U형 측구 도킹창**이 열립니다(단추에 마우스 → 그림 설명).\n" +
                 "· 측구 선(고르기 · 그리기 · 도면에서 보기) · 규격 · 덮개 · 바닥고 · 지표면 맞춤\n" +
                 "· 집수면적(칸 · [면적 고르기]) · 강우(수동 · CSV) · [추천 규격 적용]\n" +
-                "· [모델 생성] = 솔리드(레이어 DH-U형측구) · 보고서(도면 옆 _U형측구.txt)\n" +
+                "· [측구 생성] = 평면 U 선(선종류 DH_U측구) · 3D 보기 실제 모양 · 지표면 안 바꿈 · 보고서(도면 옆 _U형측구.txt)\n" +
                 "· 수리검토는 모델과 따로 — 부족 = 빨강 · 주의 = 노랑", null);
             pGrade.Items.Add(btnUDitch);
             pGrade.Items.Add(Spacer());
@@ -935,6 +944,8 @@ public sealed class RibbonApp : IExtensionApplication
             pCommon.Items.Add(btnStrata);
             pCommon.Items.Add(Spacer());
             pCommon.Items.Add(btnStruct);
+            pCommon.Items.Add(Spacer());
+            pCommon.Items.Add(btnWallSet);
             pCommon.Items.Add(Spacer());
             // ★★[v112.1 · JACK 1104 «대안 저장»] 지금 설계를 도면 사본으로 · 대안끼리 수량표
             var btnAlt = MakeButton("대안", "DHALT ", "지금 설계(계획지표면 + 진입도로)를 도면 사본으로 저장하고 대안끼리 수량을 견줍니다", "대안");

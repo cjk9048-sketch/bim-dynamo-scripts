@@ -299,14 +299,15 @@ internal static class RoadSheets
     /// <para>실측(pvs1 · pvs2 · v117.5.0): 1:500으로 그린 도로 종단뷰가 부지 [종단도](1:100) 뒤 밴드 칸 · 글자 · 축 눈금 글자 1/5 — 도곽 · 표고바는 1:500 그대로.</para></summary>
     /// <param name="toSheetScale">★[v117.18.6 · JACK 1116 «도면화 진입도로 종단면도 글자 5배»] 참이면 «지금 주석 축척» 대신 이 도로를 그린 H(SheetScale)로 되돌려 굽는다 — 배치탭 뷰포트의 Civil 글자는
     /// 도면 주석 축척을 안 따르고 스타일 종이 값 그대로 나와서(실측 sbk2: 굽힌 ×5 스타일 → 글자 5배 · 안 구우면 정상 408/408), 도면화가 짓기 직전 부른다(모형 화면은 CANNOSCALE을 따르는 본래 꼴).</param>
-    internal static void KeepLook(Database db, System.Text.StringBuilder log, bool toSheetScale = false)
+    /// <param name="restoreModel">★[v117.37.1] 참이면 배치탭이 있어도 «배치탭 기준(sheet)»으로 구운 것을 모형 값으로 되돌린다(도면화 첫머리 — 배치탭은 쌍둥이가 맡음).</param>
+    internal static void KeepLook(Database db, System.Text.StringBuilder log, bool toSheetScale = false, bool restoreModel = false)
     {
         double a1 = SheetCommand.CurrentDrawingScale(db);
         if (!toSheetScale && !(a1 > 0)) return;
         var todo = new List<(ObjectId Aid, string Name, RoadDesign D, List<ObjectId> Views, double A0, double A1)>();
         // ★[검토 1] 진입도로 종단 배치탭이 있으면 스타일은 배치탭 기준(H) 그대로 — 모형용으로 다시 안 굽는다
         bool tabExists = false;
-        if (!toSheetScale) try { tabExists = SheetBookBuilder.OurTabs(db).Any(t => t.Kind == DH.Grading.Core.SheetBookRules.Kind.RProf); } catch { }
+        if (!toSheetScale && !restoreModel) try { tabExists = SheetBookBuilder.OurTabs(db).Any(t => t.Kind == DH.Grading.Core.SheetBookRules.Kind.RProf); } catch { }
         bool keptNote = false;
         try
         {
@@ -360,6 +361,279 @@ internal static class RoadSheets
         }
     }
 
+    /// <summary>★★[v117.37.1 · JACK 1124 «도면생성 뒤 모형 진입도로 종단도가 찌그러짐»] 배치탭 쌍둥이 종단뷰 이름 꼬리.
+    /// <para>실측(rpk · 1124): Civil 종단뷰 글자 · 밴드 칸은 모형에선 CANNOSCALE × 스타일 값, 배치탭 뷰포트에선 뷰포트 축척 × 스타일 값(뷰포트 주석 축척은 안 봄 — sbk3).
+    /// 부지 주석 축척(1:100 · 1:150) ≠ 도로 H(1:500)이면 한 종단뷰 · 한 스타일로 둘 다 맞출 수 없다 → 모형 원본은 모형 값 그대로 두고,
+    /// 배치탭은 모든 장 아래 빈 자리에 둔 쌍둥이(배치탭 값으로 구운 복사본 스타일)를 겹친 뷰포트로 보인다(장식 · 도곽은 원본 뷰포트가 그대로).</para></summary>
+    internal const string TwinMark = " (도면화)";
+    /// <summary>★[v117.37.1 · main 결정 1124] 쌍둥이 종단뷰 전용 레이어 · 쌍둥이 위 제목 글 레이어(배치탭 뷰포트에선 얼림).</summary>
+    internal const string LayTwin = "DH-도면화-쌍둥이", LayTwinNote = "DH-도면화-쌍둥이(글)";
+    internal const string TwinNote = "도면화용 사본 — 도면생성이 다시 만듦";
+
+    internal static bool IsSheetTwin(CivilDb.ProfileView pv) => (pv.Name ?? "").EndsWith(TwinMark, StringComparison.Ordinal);
+
+    /// <summary>지난 판 쌍둥이의 옮김(쌍둥이 자리 − 같은 이름 원본 자리) — 없으면 null.</summary>
+    internal static Vector3d? OldTwinOffset(Database db)
+    {
+        try
+        {
+            using var tr = db.TransactionManager.StartTransaction();
+            foreach (ObjectId aid in CivilApp.CivilDocument.GetCivilDocument(db).GetAlignmentIds())
+            {
+                if (aid.IsErased || !RoadDesign.Has(tr, aid)) continue;
+                var pvs = new Dictionary<string, CivilDb.ProfileView>(StringComparer.Ordinal);
+                foreach (ObjectId vid in ((CivilDb.Alignment)tr.GetObject(aid, OpenMode.ForRead)).GetProfileViewIds())
+                    try { if (!vid.IsErased && tr.GetObject(vid, OpenMode.ForRead) is CivilDb.ProfileView pv) pvs[pv.Name ?? ""] = pv; } catch { }
+                foreach (var kv in pvs)
+                    if (kv.Key.EndsWith(TwinMark, StringComparison.Ordinal) && pvs.TryGetValue(kv.Key.Substring(0, kv.Key.Length - TwinMark.Length), out var org))
+                        return kv.Value.Location - org.Location;
+            }
+        }
+        catch { }
+        return null;
+    }
+
+    /// <summary>지난 판 쌍둥이 종단뷰 · 그 스타일(«… 도면 #도로)») 지우기 — 도면화가 새 쌍둥이를 짓기 직전.</summary>
+    internal static int DropSheetTwins(Database db, System.Text.StringBuilder log)
+    {
+        int n = 0, nS = 0;
+        try
+        {
+            using var tr = db.TransactionManager.StartTransaction();
+            foreach (ObjectId aid in CivilApp.CivilDocument.GetCivilDocument(db).GetAlignmentIds())
+            {
+                try
+                {
+                    if (aid.IsErased || !RoadDesign.Has(tr, aid)) continue;
+                    foreach (ObjectId vid in ((CivilDb.Alignment)tr.GetObject(aid, OpenMode.ForRead)).GetProfileViewIds())
+                        try
+                        {
+                            if (vid.IsErased || tr.GetObject(vid, OpenMode.ForRead) is not CivilDb.ProfileView pv || !IsSheetTwin(pv)) continue;
+                            pv.UpgradeOpen(); pv.Erase(); n++;
+                        }
+                        catch { }
+                }
+                catch { }
+            }
+            tr.Commit();
+        }
+        catch (Exception ex) { log.AppendLine("  ⚠지난 배치탭 쌍둥이 종단뷰 지우기 실패 — " + ex.Message); }
+        int nT = 0;
+        try { using var tr = db.TransactionManager.StartTransaction(); nT = EraseTwinNotes(db, tr); tr.Commit(); } catch { }
+        try
+        {
+            var all = ProfileStyleTemplate.CollectAll(db, CivilApp.CivilDocument.GetCivilDocument(db));
+            using var tr = db.TransactionManager.StartTransaction();
+            int q = 0;
+            foreach (var (id, name) in all)
+            {
+                if (!ProfileScaleFit.IsClone(name) || !name.Contains(" 도면 #", StringComparison.Ordinal)) continue;
+                try
+                {
+                    var sb = (CivilDb.Styles.StyleBase)tr.GetObject(id, OpenMode.ForWrite);
+                    try { sb.Name = name.Replace(" 도면 #", $" 도면옛{DateTime.Now:MMddHHmmss}_{++q} #"); } catch { }   // 이름부터 비킴(DropRoadClones와 같은 까닭)
+                    sb.Erase(); nS++;
+                }
+                catch { }
+            }
+            tr.Commit();
+        }
+        catch (Exception ex) { log.AppendLine("  ⚠지난 배치탭 쌍둥이 스타일 지우기 실패 — " + ex.Message); }
+        if (n + nS + nT > 0) log.AppendLine($"  지난 배치탭 쌍둥이 지움 — 종단뷰 {n} · 스타일 {nS} · 제목 글 {nT}");
+        return n;
+    }
+
+    /// <summary>쌍둥이 제목 글(<see cref="LayTwinNote"/> 레이어 글) 지우기 — 글(TEXT)만 열어 본다. <paramref name="road"/>가 있으면 그 도로 것만(표식).</summary>
+    internal static int EraseTwinNotes(Database db, Transaction tr, string? road = null)
+    {
+        var ms = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForRead);
+        var kill = new List<ObjectId>();
+        foreach (ObjectId id in ms)
+        {
+            if (id.ObjectClass.DxfName != "TEXT") continue;
+            try
+            {
+                if (tr.GetObject(id, OpenMode.ForRead) is not DBText t || !string.Equals(t.Layer, LayTwinNote, StringComparison.OrdinalIgnoreCase)) continue;
+                if (road != null && !(SheetTag.Of(t, out string r, out _, out _) && string.Equals(r, road, StringComparison.OrdinalIgnoreCase))) continue;
+                kill.Add(id);
+            }
+            catch { }
+        }
+        int n = 0;
+        foreach (var id in kill) try { tr.GetObject(id, OpenMode.ForWrite, false, true).Erase(); n++; } catch { }
+        return n;
+    }
+
+    /// <summary>★[main 결정 ④] 이 도로 종단뷰를 지울 때 함께 — 쌍둥이 종단뷰 · 제목 글(스타일은 DropRoadClones가 이름 꼬리로 지움).</summary>
+    internal static int EraseTwinsOf(Database db, Transaction tr, CivilDb.Alignment al)
+    {
+        int n = 0;
+        foreach (ObjectId vid in al.GetProfileViewIds())
+            try
+            {
+                if (vid.IsErased || tr.GetObject(vid, OpenMode.ForRead) is not CivilDb.ProfileView pv || !IsSheetTwin(pv)) continue;
+                tr.GetObject(vid, OpenMode.ForWrite, false, true).Erase(); n++;
+            }
+            catch { }
+        try { n += EraseTwinNotes(db, tr, al.ObjectId.Handle.ToString()); } catch { }
+        return n;
+    }
+
+    /// <summary>배치탭 쌍둥이 짓기 — 모형 주석 축척(SheetAnno)이 그린 H와 다른 도로만(같으면 원본이 곧 배치탭 값).
+    /// 원본 종단뷰를 깊은 복사 → <paramref name="off"/>만큼 옮김 → 복사본 스타일에 SheetAnno ÷ H를 굽는다. 돌려줌 = 쌍둥이를 지은 도로 핸들 · 하나라도 못 지으면 null(지은 것도 지움 — 부르는 쪽이 옛 길로).</summary>
+    /// <param name="only">★[v117.37.1 · main 1124 ②] 이 도로만(종단도를 다시 그린 직후) — 못 지으면 이 도로 쌍둥이만 지운다(다른 도로 쌍둥이는 그대로).</param>
+    internal static HashSet<string>? MakeSheetTwins(Database db, Vector3d off, System.Text.StringBuilder log, ObjectId only = default)
+    {
+        var done = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var todo = new List<(ObjectId Aid, string Name, double H, double V, double A, List<ObjectId> Views)>();
+        try
+        {
+            using var tr = db.TransactionManager.StartTransaction();
+            foreach (ObjectId aid in CivilApp.CivilDocument.GetCivilDocument(db).GetAlignmentIds())
+            {
+                try
+                {
+                    if (!only.IsNull && aid != only) continue;
+                    var d = RoadDesign.Read(tr, aid);
+                    if (d == null || d.SheetViews.Count == 0 || !(d.SheetScale > 0)) continue;
+                    double a = d.SheetAnno is double an && an > 0 ? an : d.SheetScale;
+                    if (d.LookBakedFor == "sheet" || Math.Abs(a - d.SheetScale) < 1e-6) continue;
+                    var views = new List<ObjectId>();
+                    foreach (var h in d.SheetViews)
+                        try
+                        {
+                            if (db.TryGetObjectId(new Handle(Convert.ToInt64(h, 16)), out var vid) && !vid.IsErased
+                                && tr.GetObject(vid, OpenMode.ForRead) is CivilDb.ProfileView pv && pv.AlignmentId == aid) views.Add(vid);
+                        }
+                        catch { }
+                    if (views.Count > 0) todo.Add((aid, ((CivilDb.Alignment)tr.GetObject(aid, OpenMode.ForRead)).Name, d.SheetScale, d.SheetScaleV is double sv && sv > 0 ? sv : d.SheetScale, a, views));
+                }
+                catch { }
+            }
+            tr.Commit();
+        }
+        catch (Exception ex) { log.AppendLine("  ⚠배치탭 쌍둥이 — 읽기 실패 " + ex.Message); return null; }
+        bool fail = false;
+        var ms = SymbolUtilityServices.GetBlockModelSpaceId(db);
+        foreach (var (aid, name, h, v, a, views) in todo)
+        {
+            var twins = new List<ObjectId>();
+            try
+            {
+                using (var tr = db.TransactionManager.StartTransaction())
+                {
+                    var map = new IdMapping();
+                    db.DeepCloneObjects(new ObjectIdCollection(views.ToArray()), ms, map, false);
+                    var layTw = SectionCommand.EnsureLayer(db, tr, LayTwin, 8);
+                    var layNote = SectionCommand.EnsureLayer(db, tr, LayTwinNote, 1);
+                    var space = (BlockTableRecord)tr.GetObject(ms, OpenMode.ForWrite);
+                    ObjectId txtStyle = ObjectId.Null;
+                    try { txtStyle = ImportGisCommand.EnsureKoreanTextStyle(db, tr); } catch { }
+                    foreach (var vid in views)
+                    {
+                        if (!map.Contains(vid)) continue;
+                        var tid = map[vid].Value;
+                        if (tid.IsNull || tr.GetObject(tid, OpenMode.ForWrite) is not CivilDb.ProfileView tw) continue;
+                        var org = (CivilDb.ProfileView)tr.GetObject(vid, OpenMode.ForRead);
+                        tw.Location = org.Location + off;
+                        tw.Name = (org.Name ?? "") + TwinMark;
+                        tw.LayerId = layTw;
+                        twins.Add(tid);
+                        // ★[main 결정 ②] 쌍둥이 위 제목 글 — 종이 5 mm(H) · 그래프 위 왼쪽 · 배치탭 뷰포트는 이 레이어를 얼림 · 이 도로 표식(도로 종단 다시 그리기가 함께 지움)
+                        try
+                        {
+                            var e = org.GeometricExtents;
+                            double th = 0.005 * h;
+                            var t = new DBText { TextString = TwinNote, Height = th, Position = new Point3d(e.MinPoint.X + off.X, e.MaxPoint.Y + off.Y + th * 2, 0), LayerId = layNote };
+                            if (!txtStyle.IsNull) t.TextStyleId = txtStyle;
+                            space.AppendEntity(t); tr.AddNewlyCreatedDBObject(t, true);
+                            SheetTag.Put(db, tr, t, aid.Handle.ToString(), "", "TWIN");
+                        }
+                        catch { }
+                    }
+                    tr.Commit();
+                }
+                if (twins.Count != views.Count) { log.AppendLine($"  ⚠배치탭 쌍둥이 못 지음 — {name}: 복사 {twins.Count}/{views.Count}"); fail = true; break; }
+                string msg = ProfileScaleStyles.BakeTwin(db, twins, h, v, aid.Handle.ToString(), a / h, log);
+                done.Add(aid.Handle.ToString());
+                log.AppendLine($"  진입도로 종단도 배치탭 쌍둥이 — {name} 1:{h:0} · 모형 주석 1:{a:0} 그대로 · 쌍둥이 {twins.Count} · 옮김 ({off.X:0.#},{off.Y:0.#}) · {msg}");
+            }
+            catch (Exception ex)
+            {
+                log.AppendLine($"  ⚠배치탭 쌍둥이 못 지음 — {name}: {ex.Message}");
+                fail = true;
+                // 반쯤 지은 쌍둥이는 지운다(배치탭이 원본을 그대로 보게)
+                try { using var trE = db.TransactionManager.StartTransaction(); foreach (var t in twins) try { trE.GetObject(t, OpenMode.ForWrite, false, true).Erase(); } catch { } trE.Commit(); } catch { }
+                break;
+            }
+        }
+        if (fail)
+        {
+            if (only.IsNull) DropSheetTwins(db, log);
+            else try { using var trE = db.TransactionManager.StartTransaction(); EraseTwinsOf(db, trE, (CivilDb.Alignment)trE.GetObject(only, OpenMode.ForRead)); trE.Commit(); } catch { }
+            return null;
+        }
+        return done;
+    }
+
+    /// <summary>★★[v117.37.1 · main 1124 ② «배치탭이 절대 비지 않게»] 진입도로 종단도를 다시 그린 직후(<see cref="RoadSession.MakeSheets"/> — 종단 다시 · 측점 · PVI 고침 등 모든 길) —
+    /// 진입도로 종단 배치탭에 쌍둥이 뷰포트가 있으면 그 옮김(쌍둥이 뷰포트 보는 곳 − 원본 뷰포트 보는 곳)으로 이 도로 쌍둥이를 바로 다시 짓는다(원본 뷰포트는 종단뷰 레이어 얼림).
+    /// 못 짓거나 쌍둥이가 필요 없으면(모형 주석 = H) 옛 길 — 원본 뷰포트의 종단뷰 레이어 얼림을 푼다. 돌려줌 = 한 줄(배치탭 · 쌍둥이 뷰포트가 없으면 빈 글).</summary>
+    internal static string RefreshTwinsAfterRedraw(Database db, ObjectId aid, System.Text.StringBuilder log)
+    {
+        var tabs = new List<ObjectId>();
+        try { tabs = SheetBookBuilder.OurTabs(db).Where(t => t.Kind == DH.Grading.Core.SheetBookRules.Kind.RProf && !t.Temp).Select(t => t.Id).ToList(); } catch { }
+        if (tabs.Count == 0) return "";
+        Vector3d? off = null;
+        var vp1s = new List<ObjectId>();
+        using (var tr = db.TransactionManager.StartTransaction())
+        {
+            foreach (var lid in tabs)
+            {
+                var lo = (Layout)tr.GetObject(lid, OpenMode.ForRead);
+                var vps = new List<Viewport>();
+                foreach (ObjectId id in (BlockTableRecord)tr.GetObject(lo.BlockTableRecordId, OpenMode.ForRead))
+                    if (tr.GetObject(id, OpenMode.ForRead) is Viewport v && (v.Layer == SheetBookBuilder.LayVp || v.Layer == SheetBookBuilder.LayVpTwin)) vps.Add(v);
+                foreach (var v1 in vps.Where(v => v.Layer == SheetBookBuilder.LayVp))
+                {
+                    vp1s.Add(v1.ObjectId);
+                    var v2 = vps.FirstOrDefault(v => v.Layer == SheetBookBuilder.LayVpTwin && v.CenterPoint.DistanceTo(v1.CenterPoint) < 1e-6);
+                    if (v2 != null && off == null) off = new Vector3d(v2.ViewCenter.X - v1.ViewCenter.X, v2.ViewCenter.Y - v1.ViewCenter.Y, 0);
+                }
+            }
+            tr.Commit();
+        }
+        if (off == null) return "";   // 쌍둥이 없이 지은 배치탭(옛 판 · 주석 = H) — 그대로
+        HashSet<string>? made = null;
+        try { made = MakeSheetTwins(db, off.Value, log, aid); } catch (Exception ex) { log.AppendLine("  ⚠배치탭 쌍둥이 다시 짓기 실패 — " + ex.Message); }
+        bool ok = made != null && made.Contains(aid.Handle.ToString());
+        int n = 0;
+        try
+        {
+            using var tr = db.TransactionManager.StartTransaction();
+            var lt = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
+            if (lt.Has(RoadBuilder.LayView))
+            {
+                var lay = new ObjectIdCollection { lt[RoadBuilder.LayView] };
+                foreach (var id in vp1s)
+                {
+                    var vp = (Viewport)tr.GetObject(id, OpenMode.ForWrite);
+                    bool lk = vp.Locked; vp.Locked = false;
+                    bool frozen = vp.IsLayerFrozenInViewport(lt[RoadBuilder.LayView]);
+                    if (ok && !frozen) { vp.FreezeLayersInViewport(lay.GetEnumerator()); n++; }
+                    else if (!ok && frozen) { vp.ThawLayersInViewport(lay.GetEnumerator()); n++; }
+                    vp.Locked = lk;
+                }
+            }
+            tr.Commit();
+        }
+        catch (Exception ex) { log.AppendLine("  ⚠배치탭 원본 뷰포트 얼림 바꾸기 실패 — " + ex.Message); }
+        string msg = ok ? $"배치탭 쌍둥이 다시 지음(옮김 ({off.Value.X:0.#},{off.Value.Y:0.#}))" + (n > 0 ? $" · 원본 뷰포트 다시 얼림 {n}" : "")
+                        : $"배치탭 쌍둥이 없음 → 옛 길(원본 뷰포트 «{RoadBuilder.LayView}» 얼림 풂 {n})";
+        log.AppendLine("  " + msg);
+        return msg;
+    }
+
     /// <summary>★★[계획 3.1] 진입도로 종단도 짓기 — 부르는 쪽(<see cref="RoadSession.MakeSheets"/>)이 문서 잠금 · 바뀜 표시 막음(Suppress)을 건다.
     /// 돌려줌 = 결과 한 줄(자세한 것은 <paramref name="log"/>).</summary>
     internal static string Build(RoadSession s, Point3d at, System.Text.StringBuilder log)
@@ -382,6 +656,7 @@ internal static class RoadSheets
         {
             nTag = SheetTag.EraseRoad(db, tr, me);
             var al = (CivilDb.Alignment)tr.GetObject(aid, OpenMode.ForRead);
+            try { nView += EraseTwinsOf(db, tr, al); } catch { }   // ★[v117.37.1 · main 결정 ④] 배치탭 쌍둥이도 함께(전용 레이어라 아래 레이어 지우기에 안 걸림)
             // ★[v111.2 · 전체 검토 H1] 사람 노선(진입도로를 얹은 남의 Civil 노선)이면 이름으로 안 지움 — 사람 종단 «본선-지반고» 등이 «-지반»에 걸려 지워짐 → 적어 둔 핸들만
             bool ours = RoadBuilder.IsOurs(al);
             var hv = new HashSet<string>(d.SheetViews, StringComparer.OrdinalIgnoreCase);

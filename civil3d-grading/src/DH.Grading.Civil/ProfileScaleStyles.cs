@@ -241,7 +241,19 @@ internal static class ProfileScaleStyles
 
     /// <summary>비율 굽기 본체 — 뷰 스타일: 이 도로 복사본이면 그 자리에서 k배(이름 꼬리를 <paramref name="suffix"/>로) · 아니면(부지와 함께 쓰는 스타일) 이 도로 복사본을 만들어 걸고 k배.
     /// 밴드 스타일: 늘 새 복사본(라벨까지 깊은 복사)에 k배 · 밴드 칸 간격도 k배 · 갈아 낀 지난 판 이 도로 복사본은 끝에 지운다. 같은 이름이 남아 있으면 «옛»을 붙여 비켜 둔다.</summary>
-    static (int View, int Band, int Prop, int Label) Bake(Database db, IReadOnlyList<ObjectId> pvIds, string suffix, string tag, double k, System.Text.StringBuilder log)
+    /// <summary>★★[v117.37.1 · JACK 1124 «도면생성 뒤 모형 진입도로 종단도가 찌그러짐»] 배치탭 쌍둥이 종단뷰(<see cref="RoadSheets.MakeSheetTwins"/>)만 배치탭 값으로 굽는다 —
+    /// 뷰 · 밴드 스타일을 늘 새 복사본(이름 «… 도면 #도로»)으로 · 원본이 쓰는 복사본은 안 건드리고 안 지운다.</summary>
+    internal static string BakeTwin(Database db, IReadOnlyList<ObjectId> twinIds, double h, double v, string tag, double k, System.Text.StringBuilder log)
+    {
+        if (!(k > 0) || twinIds.Count == 0) return "";
+        var (nView, nBand, nProp, nLabel) = Bake(db, twinIds, TwinSuffix(h, v, tag), tag, k, log, twin: true);
+        return $"×{k:0.###} — 뷰 스타일 {nView} · 밴드 복사본 {nBand} · 크기 칸 {nProp} · 라벨 칸 {nLabel}";
+    }
+
+    /// <summary>쌍둥이 스타일 이름 꼬리 — «(DH H1:500 V1:500 도면 #도로)»(<see cref="ProfileScaleFit.IsRoadClone"/>에 걸림 → 도로를 다시 그리면 함께 지워짐).</summary>
+    internal static string TwinSuffix(double h, double v, string tag) => ProfileScaleFit.CloneSuffix(h, v, h, tag).Replace(" #" + tag + ")", " 도면 #" + tag + ")");
+
+    static (int View, int Band, int Prop, int Label) Bake(Database db, IReadOnlyList<ObjectId> pvIds, string suffix, string tag, double k, System.Text.StringBuilder log, bool twin = false)
     {
         int nView = 0, nBand = 0, nProp = 0, nLabel = 0;
         var doneStyle = new HashSet<ObjectId>(); var doneLabel = new HashSet<ObjectId>();
@@ -265,7 +277,7 @@ internal static class ProfileScaleStyles
             // 뷰 스타일 — 이 도로 복사본만 키운다(부지와 함께 쓰던 것이면 복사본을 만들어 건다 — 부지 것을 키우지 않게)
             var vs0 = (CivilDb.Styles.StyleBase)tr.GetObject(pv.StyleId, OpenMode.ForRead);
             string vsName = vs0.Name ?? "", vWant = ProfileScaleFit.BaseName(vsName) + suffix;
-            if (ProfileScaleFit.IsRoadClone(vsName, tag))
+            if (!twin && ProfileScaleFit.IsRoadClone(vsName, tag))
             {
                 if (doneStyle.Add(pv.StyleId))
                 {
@@ -296,7 +308,7 @@ internal static class ProfileScaleStyles
                 {
                     var src = (CivilDb.Styles.StyleBase)tr.GetObject(sid, OpenMode.ForRead);
                     string want = ProfileScaleFit.BaseName(src.Name) + suffix;
-                    if (ProfileScaleFit.IsRoadClone(src.Name, tag)) replaced.Add(sid);
+                    if (!twin && ProfileScaleFit.IsRoadClone(src.Name, tag)) replaced.Add(sid);   // 쌍둥이 = 원본이 아직 쓰는 스타일 → 안 지움
                     MakeRoom(want, ObjectId.Null);
                     cid = src.CopyAsSibling(want); mine[want] = cid;
                     if (cid.IsNull) throw new InvalidOperationException($"밴드 스타일 복사본 «{want}»을 못 만듦(같은 이름?)");

@@ -66,8 +66,9 @@ export class Section {
     if (this.cap) return;
     const base = { depthWrite: false, depthTest: false, colorWrite: false, stencilWrite: true, stencilFunc: THREE.AlwaysStencilFunc, clippingPlanes: this.planes };
     const inc = THREE.IncrementWrapStencilOp, dec = THREE.DecrementWrapStencilOp;
-    const back = new THREE.MeshBasicMaterial({ ...base, side: THREE.BackSide, stencilFail: inc, stencilZFail: inc, stencilZPass: inc });
-    const front = new THREE.MeshBasicMaterial({ ...base, side: THREE.FrontSide, stencilFail: dec, stencilZFail: dec, stencilZPass: dec });
+    // ★[JACK 1124] 스텐실 맨 위 비트는 U형 측구 윗면 가림(uditch.js MASK_BIT) — 자르기는 아래 7비트만 씀
+    const back = new THREE.MeshBasicMaterial({ ...base, side: THREE.BackSide, stencilWriteMask: 0x7f, stencilFail: inc, stencilZFail: inc, stencilZPass: inc });
+    const front = new THREE.MeshBasicMaterial({ ...base, side: THREE.FrontSide, stencilWriteMask: 0x7f, stencilFail: dec, stencilZFail: dec, stencilZPass: dec });
     this.stencil = [];
     for (const id of ['wall', 'pattern']) {
       const l = this.L[id];
@@ -88,7 +89,7 @@ export class Section {
     const rep = THREE.ReplaceStencilOp;
     const capMat = new THREE.MeshStandardMaterial({
       color: CAP, roughness: 0.95, side: THREE.DoubleSide,
-      stencilWrite: true, stencilRef: 0, stencilFunc: THREE.NotEqualStencilFunc, stencilFail: rep, stencilZFail: rep, stencilZPass: rep,
+      stencilWrite: true, stencilRef: 0, stencilFuncMask: 0x7f, stencilWriteMask: 0x7f, stencilFunc: THREE.NotEqualStencilFunc, stencilFail: rep, stencilZFail: rep, stencilZPass: rep,
     });
     this.cap = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), capMat);
     this.cap.renderOrder = 6;

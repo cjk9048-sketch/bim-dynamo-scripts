@@ -99,6 +99,7 @@ public sealed class ResetCommand
         if (!Ask("DH가 만든 것을 모두 지웁니다.\n\n" +
                  "· 정지·터파기·옹벽 지표면, 사면선·소단선·노리선·옹벽선 등\n" +
                  "· 진입도로(노선·종단·종단도·도로 면·도로 선)\n" +
+                 "· U형 측구(측구 선 · 기록 — 고른 선은 남기고 U 표시만 뺌)\n" +
                  "· 서버에서 가져온 지적도·지번\n\n" +
                  "직접 그린 것과 '원지반'(등고선·표고점 포함)은 남깁니다.\n\n" +
                  "계속할까요?", "DH 정지 — 전체 초기화"))
@@ -114,9 +115,12 @@ public sealed class ResetCommand
             // ★[JACK 0901 "초기화 누르면 서버지표면으로 가져온 자료도 다 초기화되게"]
             // ★★[v105.1.2 · JACK 1023 «초기화하면 사용자가 직접 그린 거 외에 최초 처음 원지반은 지우지 말아줘»] 원지반과 그 재료(등고선 · 표고점 · 범위 밖 자료)는 남긴다 —
             //   재료 선을 지우면 원지반 정의에 느낌표가 뜬다(CropGroundCommand.CutAwayLayer 설명 · JACK 0902). 지적도 · 지번은 종전처럼 지운다(0901).
+            var ud = WipeDitches(db, Scope.All);   // ★[JACK 1124] U형 측구 — 도로 면이 지워지기 전에(진입도로 초기화와 같은 차례)
             var rep = Wipe(doc, Scope.All, includeImported: true, keepGround: true);
             ed.Regen();
-            string msg = $"초기화 완료 — 지표면 {rep.Surfs}개 · 객체 {rep.Ents}개 삭제" + (rep.Bundle ? " · 정지 기록 제거" : "") + (rep.Tabs > 0 ? $" · 도면화 탭 {rep.Tabs} 지움" : "");
+            string msg = $"초기화 완료 — 지표면 {rep.Surfs}개 · 객체 {rep.Ents}개 삭제" + (rep.Bundle ? " · 정지 기록 제거" : "") + (rep.Tabs > 0 ? $" · 도면화 탭 {rep.Tabs} 지움" : "")
+                         + (ud.Ditches > 0 ? $" · U형 측구 {ud.Ditches} 지움" : "");
+            try { UDitchPalette.Refresh(); } catch { }
             // ★★★[JACK 0902 "초기화할 때 종단에 찌꺼기가 남아"] <b>지웠다고 말하기 전에 무엇이 남았는지 센다.</b>
             string left = Survivors(doc, Scope.All);
             // ★[v111.1.1 · JACK 1030] 진입도로도 지운다(v110에선 남겼음) — 남는 것은 직접 그린 것과 원지반
@@ -127,7 +131,7 @@ public sealed class ResetCommand
             AcadApp.ShowAlertDialog("전체 초기화 완료\n\n" + msg +
                 "\n\n" + keep + "만 남았습니다.\n[지표면 생성]부터 다시 시작하세요."
                 + (left.Length > 0 ? "\n\n⚠남은 것 — " + left : "") + (ret.Length > 0 ? "\n\n" + ret : ""));
-            try { DiagLog.Append($"\n■ DHRESET(전체 초기화)\n  {msg}" + (left.Length > 0 ? $"\n  ⚠남은 것 — {left}" : "\n  남은 것 없음") + $"\n  {rep.Log.ToString().Replace("\n", "\n  ")}\n"); } catch { }
+            try { DiagLog.Append($"\n■ DHRESET(전체 초기화)\n  {msg}" + (left.Length > 0 ? $"\n  ⚠남은 것 — {left}" : "\n  남은 것 없음") + $"\n  {ud.Log}{rep.Log.ToString().Replace("\n", "\n  ")}\n"); } catch { }
             string ourLeft = OurLeft(db);
             job.Done(left.Length == 0 && ourLeft.Length == 0, msg + (left.Length > 0 ? $" · ⚠남은 것 — {left}" : " · 남은 것 없음")
                 + (ourLeft.Length > 0 ? $" · ⚠우리 지표면이 남았다 — {ourLeft}" : "") + (ret.Length > 0 ? " · " + ret : ""));
@@ -153,6 +157,7 @@ public sealed class ResetCommand
         if (!inv.Any(Scope.Site)) { ed.WriteMessage("\n[계획지표면 초기화] 지울 계획지표면 없음"); return; }
         string ask = "계획지표면을 지웁니다.\n· 정지면 · 옹벽 · 터파기 · 종단도 · 횡단도\n"
                    + (inv.Roads.Count > 0 ? $"· 진입도로 {inv.Roads.Count}개 ({Names(inv.Roads)})\n" : "")
+                   + (inv.Ditches > 0 ? $"· U형 측구 {inv.Ditches}개\n" : "")
                    + (inv.HumanRoad ? "· 사람이 만든 노선은 남깁니다\n" : "")
                    + (inv.Users.Length > 0 ? $"· 이 면을 쓰는 것: {inv.Users}\n" : "")
                    + (inv.Tabs > 0 ? $"· 도면화 탭 {inv.Tabs}\n" : "")
@@ -174,6 +179,7 @@ public sealed class ResetCommand
         if (!inv.Any(Scope.Road)) { ed.WriteMessage("\n[진입도로 초기화] 지울 진입도로 없음"); return; }
         string ask = (inv.Roads.Count > 0 ? $"진입도로 {inv.Roads.Count}개를 지웁니다 ({Names(inv.Roads)}).\n" : "남은 진입도로 객체를 지웁니다.\n")
                    + "· 노선 · 종단도 · 횡단도 · 도로 면 · 최종지표면\n"
+                   + (inv.Ditches > 0 ? $"· 도로 위 U형 측구 {inv.Ditches}개\n" : "")
                    + (inv.HumanRoad ? "· 사람이 만든 노선은 남깁니다\n" : "")
                    + (inv.Users.Length > 0 ? $"· 이 면을 쓰는 것: {inv.Users}\n" : "")
                    + (inv.Tabs > 0 ? $"· 도면화 탭 {inv.Tabs}(진입도로 종단 · 횡단)\n" : "")
@@ -192,6 +198,7 @@ public sealed class ResetCommand
         try
         {
             inv ??= Inventory(db, scope);
+            var ud = WipeDitches(db, scope);   // ★[JACK 1124] U형 측구 — 도로 면이 지워지기 전에(진입도로 초기화는 도로 면 위 측구만)
             var rep = Wipe(doc, scope, includeImported: false, keepGround: true);
             // ★[v117.13 · 설치 전 검토 MED] 진입도로를 지우면 부지 노리선까지 지운다(도로 자리를 빼고 그려졌으므로) — [노리선] 단추가 없어졌으니 바로 다시 그림(설정 «노리선 그리기»를 따름)
             if (scope == Scope.Road && rep.Ticks > 0) { try { NoriCommand.AutoDraw(doc); } catch { } }
@@ -202,11 +209,13 @@ public sealed class ResetCommand
                 ? $"도로 {inv.Roads.Count} · 지표면 {rep.Surfs} · 객체 {rep.Ents} 지움" + (rep.Ticks > 0 ? $" · 노리선 {rep.Ticks} 지움" : "")
                 : $"지표면 {rep.Surfs} · 객체 {rep.Ents}" + (inv.Roads.Count > 0 ? $" · 진입도로 {inv.Roads.Count}" : "") + " 지움";
             if (rep.Tabs > 0) msg += $" · 도면화 탭 {rep.Tabs} 지움";
+            if (ud.Ditches > 0) msg += $" · U형 측구 {ud.Ditches} 지움";
+            try { UDitchPalette.Refresh(); } catch { }
             string ret = rep.Ret.Retired.Count + rep.Ret.Failed.Count > 0 ? rep.RetireLine : "";
             ed.WriteMessage($"\n[{what}] {msg}" + (left.Length > 0 ? "\n  ⚠남은 것 — " + left : "") + (ret.Length > 0 ? "\n  " + ret : ""));
             if ((left.Length > 0 || ret.Length > 0) && !SelfCheckLog.Headless)
                 AcadApp.ShowAlertDialog($"{what}\n\n{msg}" + (left.Length > 0 ? "\n\n⚠남은 것 — " + left : "") + (ret.Length > 0 ? "\n\n" + ret : ""));
-            try { DiagLog.Append($"\n■ {(scope == Scope.Road ? "DHROADRESET" : "DHGRADERESET")}({what})\n  {msg}" + (left.Length > 0 ? $"\n  ⚠남은 것 — {left}" : "\n  남은 것 없음") + $"\n  {rep.Log.ToString().Replace("\n", "\n  ")}\n"); } catch { }
+            try { DiagLog.Append($"\n■ {(scope == Scope.Road ? "DHROADRESET" : "DHGRADERESET")}({what})\n  {msg}" + (left.Length > 0 ? $"\n  ⚠남은 것 — {left}" : "\n  남은 것 없음") + $"\n  {ud.Log}{rep.Log.ToString().Replace("\n", "\n  ")}\n"); } catch { }
             job.Done(left.Length == 0 && ourLeft.Length == 0 && rep.Ret.Failed.Count == 0, msg + (left.Length > 0 ? $" · ⚠남은 것 — {left}" : " · 남은 것 없음")
                 + (ourLeft.Length > 0 ? $" · ⚠우리 지표면이 남았다 — {ourLeft}" : "") + (ret.Length > 0 ? " · " + ret : ""));
             return msg;
@@ -231,6 +240,44 @@ public sealed class ResetCommand
             return nJ > 0 ? stJ : "";
         }
         catch { return ""; }
+    }
+
+    /// <summary>★[JACK 1124 «전체 초기화 시 측구가 안 지워져»] 초기화가 지울 U형 측구 — 전체 · 계획지표면 = 모두 · 진입도로 = 도로에 딸린 측구(선 점 절반 이상이 진입도로 면 위).
+    /// 열린 트랜잭션 안에서 부름(도로 면을 그 안에서 읽음).</summary>
+    static System.Func<DH.Grading.Core.UDitch.Ditch, bool> DitchPick(Database db, Transaction tr, Scope scope)
+    {
+        if (scope != Scope.Road) return _ => true;
+        var roads = new System.Collections.Generic.List<CivilDb.TinSurface>();
+        try
+        {
+            foreach (ObjectId sid in Autodesk.Civil.ApplicationServices.CivilDocument.GetCivilDocument(db).GetSurfaceIds())
+                try { if (!sid.IsErased && tr.GetObject(sid, OpenMode.ForRead) is CivilDb.TinSurface ts && RoadBaseNames.Any(b => SectionCommand.IsBase(ts.Name ?? "", b))) roads.Add(ts); } catch { }
+        }
+        catch { }
+        bool On(double x, double y)
+        {
+            foreach (var ts in roads) try { if (double.IsFinite(ts.FindElevationAtXY(x, y))) return true; } catch { }
+            return false;
+        }
+        return d =>
+        {
+            var p = DH.Grading.Core.UDitch.CleanPts(d.Pts);
+            return roads.Count > 0 && p.Count > 0 && 2 * p.Count(q => On(q[0], q[1])) >= p.Count;
+        };
+    }
+
+    /// <summary>★[JACK 1124] 초기화의 U형 측구 몫(자기 트랜잭션 · <see cref="Wipe"/> 앞 — 진입도로 면이 있을 때 고름). 돌려줌 = (측구 수, 로그 줄).</summary>
+    static (int Ditches, string Log) WipeDitches(Database db, Scope scope)
+    {
+        var log = new System.Text.StringBuilder();
+        try
+        {
+            using var tr = db.TransactionManager.StartTransaction();
+            var r = UDitchStore.EraseForReset(db, tr, DitchPick(db, tr, scope), log);
+            tr.Commit();
+            return (r.Ditches, log.Length > 0 ? log.ToString().Replace("\n", "\n  ") : "");
+        }
+        catch (System.Exception ex) { return (0, "⚠U형 측구 못 지움 — " + ex.Message + "\n  "); }
     }
 
     // ══════════════════════════════ 몸통 ══════════════════════════════
@@ -433,8 +480,10 @@ public sealed class ResetCommand
         public string Users = "";
         /// <summary>★[v112.0 · 계획 4.11] 이 범위의 도면화 탭 수 — 탭만 남은 도면도 «지울 것 없음»으로 돌아서지 않게.</summary>
         public int Tabs;
-        public bool Any(Scope sc) => sc == Scope.Road ? Roads.Count + RoadSurfs + RoadObjs + Retired + Tabs > 0
-                                                      : Roads.Count + RoadSurfs + RoadObjs + SiteSurfs + SiteAligns + SiteLines + Retired + Tabs > 0 || Records;
+        /// <summary>★[JACK 1124] 이 범위의 U형 측구 수(진입도로 = 도로 면 위 측구).</summary>
+        public int Ditches;
+        public bool Any(Scope sc) => sc == Scope.Road ? Roads.Count + RoadSurfs + RoadObjs + Retired + Tabs + Ditches > 0
+                                                      : Roads.Count + RoadSurfs + RoadObjs + SiteSurfs + SiteAligns + SiteLines + Retired + Tabs + Ditches > 0 || Records;
     }
 
     static bool RoadLayer(string? ly) => (ly ?? "").StartsWith(RoadBuilder.AlignBase + "-", System.StringComparison.Ordinal);
@@ -471,6 +520,7 @@ public sealed class ResetCommand
                 }
                 catch { }
             if (site) I.Records = HasRecords(db, tr);
+            try { if (UDitchStore.TryLoad(db, tr, out var udRec, out _)) { var pick = DitchPick(db, tr, scope); I.Ditches = udRec.Ditches.Count(pick); } } catch { }   // ★[JACK 1124]
             // ★[v111.10] 아무도 안 쓰는 물러난 면 — 지울 것이 그것뿐이어도 «지울 것 없음»으로 끝내지 않음(쌓이지 않게)
             if (retired.Count > 0) { var stay = SurfaceRetire.MustStay(db, tr, retired); I.Retired = retired.Count(id => !stay.ContainsKey(id)); }
             var keep = new System.Collections.Generic.HashSet<string>(ImportGisCommand.ImportLayers.Concat(GroundKeepLayers).Concat(SiteKeepLayers), System.StringComparer.OrdinalIgnoreCase);
@@ -593,6 +643,7 @@ public sealed class ResetCommand
     {
         try { if ((GradingBundleStore.TryLoadAll(db, tr, out _)?.Count ?? 0) > 0) return true; } catch { }
         try { if (WallListStore.TryLoad(db, tr, out _, out var walls, out _) && walls.Count > 0) return true; } catch { }
+        try { if (UDitchStore.TryLoad(db, tr, out var ud, out _) && ud.Ditches.Count > 0) return true; } catch { }   // ★[JACK 1124] U형 측구만 남아도 [계획지표면 초기화] 켜짐
         return false;
     }
 
@@ -772,7 +823,9 @@ public sealed class ResetCommand
                         try
                         {
                             if (mine.Contains(id.Handle.ToString())) return true;
-                            return tr.GetObject(id, OpenMode.ForRead) is AcadEntity e && RoadLayer(e.Layer);
+                            var o = tr.GetObject(id, OpenMode.ForRead);
+                            if (o is CivilDb.ProfileView pvT && RoadSheets.IsSheetTwin(pvT)) return true;   // ★[v117.37.1] 배치탭 쌍둥이
+                            return o is AcadEntity e && RoadLayer(e.Layer);
                         }
                         catch { return false; }
                     }

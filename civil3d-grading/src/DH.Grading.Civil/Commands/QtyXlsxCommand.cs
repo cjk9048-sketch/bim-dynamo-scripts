@@ -17,6 +17,8 @@ public sealed class QtyXlsxCommand
 {
     /// <summary>도킹창에서 [만들기]를 누르면 값을 여기에 두고 DHQTYXLSXMAKE를 보낸다(문서 안에서 도는 명령).</summary>
     internal static QtyXlsxInput? Pending;
+    /// <summary>★[JACK 1124] 지난번 고른 저장 폴더(이 세션) — 다음 저장 창의 처음 폴더.</summary>
+    static string _lastDir = "";
 
     /// <summary>창 상단 상태 글 — scanDwg=false면 도면 검토선은 안 읽음(문서 바뀜 때 · 명령 밖).</summary>
     internal static string StatusText(Document doc, bool scanDwg)
@@ -62,7 +64,25 @@ public sealed class QtyXlsxCommand
         try { using (doc.LockDocument()) inp.Write(db); } catch (System.Exception ex) { ed.WriteMessage("\n[수량산출서] 값을 도면에 못 적음 — " + ex.Message); }
 
         string xlsx = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(dwg)!, System.IO.Path.GetFileNameWithoutExtension(dwg) + "_토공수량산출서.xlsx");
-        if (!SelfCheckLog.Headless && System.IO.File.Exists(xlsx) && MessageBox.Show("같은 이름 파일이 있음 → 덮어쓰기?\n" + System.IO.Path.GetFileName(xlsx), "수량산출서", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
+        // ★[JACK 1124 «[만들기] 누르면 저장 위치 설정 창이 떠야 함 — 그냥 바로 만들어짐»] 저장 위치 고르기(처음 = 도면 폴더 · 다음부터 지난 폴더) · 덮어쓰기 확인은 창이 함
+        if (!SelfCheckLog.Headless)
+        {
+            var dlg = new Microsoft.Win32.SaveFileDialog
+            {
+                Title = "수량산출서 저장 위치",
+                Filter = "엑셀 (*.xlsx)|*.xlsx",
+                FileName = System.IO.Path.GetFileName(xlsx),
+                DefaultExt = ".xlsx",
+                AddExtension = true,
+                OverwritePrompt = true,
+            };
+            try { dlg.InitialDirectory = _lastDir.Length > 0 && System.IO.Directory.Exists(_lastDir) ? _lastDir : System.IO.Path.GetDirectoryName(xlsx)!; } catch { }
+            bool? okD;
+            try { okD = dlg.ShowDialog(); } catch { okD = false; }
+            if (okD != true) { ed.WriteMessage("\n[수량산출서] 취소"); return; }
+            xlsx = dlg.FileName;
+            try { _lastDir = System.IO.Path.GetDirectoryName(xlsx) ?? ""; } catch { }
+        }
 
         QtyReportModel model;
         try { model = BuildModel(doc, inp, siteSnap, roadSnap, ed); }
@@ -74,13 +94,13 @@ public sealed class QtyXlsxCommand
         if (!SelfCheckLog.Headless) try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(xlsx) { UseShellExecute = true }); } catch { }
         if (inp.Land)
         {
-            try { MakeLand(doc, inp, dwg); }
+            try { MakeLand(doc, inp, dwg, System.IO.Path.GetDirectoryName(xlsx) ?? ""); }   // ★[JACK 1124] 산출서와 같은 폴더
             catch (System.Exception ex) { ed.WriteMessage("\n[용지조서] 못 만듦 — " + ex.Message); try { DiagLog.Append("\n[용지조서] " + ex); } catch { } }
         }
     }
 
     /// <summary>★[용지조서 · JACK 1117] 도면의 [지적도] 필지 ∩ 공사 범위(<see cref="PlanSheet.PlanArea"/> = 정지 경계 ∪ 진입도로 면 자리 — 벌개제근과 같은 범위) → «도면이름_용지조서.xlsx».</summary>
-    static void MakeLand(Document doc, QtyXlsxInput inp, string dwg)
+    static void MakeLand(Document doc, QtyXlsxInput inp, string dwg, string dir = "")
     {
         var ed = doc.Editor; var db = doc.Database;
         var gf = NtsSupport.Factory();
@@ -96,7 +116,7 @@ public sealed class QtyXlsxCommand
         var m = LandReport.Build(parcels, fp, inp.Facility.Trim());
         if (m.Rows.Count == 0) { ed.WriteMessage($"\n[용지조서] 공사 범위 안 필지 없음(지적 {m.Parcels}필지) → 지적도 범위 확인"); return; }
 
-        string path = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(dwg)!, System.IO.Path.GetFileNameWithoutExtension(dwg) + "_용지조서.xlsx");
+        string path = System.IO.Path.Combine(dir.Length > 0 && System.IO.Directory.Exists(dir) ? dir : System.IO.Path.GetDirectoryName(dwg)!, System.IO.Path.GetFileNameWithoutExtension(dwg) + "_용지조서.xlsx");
         if (!SelfCheckLog.Headless && System.IO.File.Exists(path) && MessageBox.Show("같은 이름 파일이 있음 → 덮어쓰기?\n" + System.IO.Path.GetFileName(path), "용지조서", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
         string err = Save(() => LandReportXlsx.Write(m, path));
         if (err.Length > 0) { ed.WriteMessage("\n[용지조서] " + err); return; }

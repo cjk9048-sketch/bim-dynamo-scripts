@@ -120,11 +120,13 @@ internal static class ErasedSource
             {
                 if (vid.IsErased) continue;
                 var v = (Entity)tr.GetObject(vid, OpenMode.ForRead);
-                if (!hv.Contains(vid.Handle.ToString()) && !string.Equals(v.Layer, RoadBuilder.LayView, StringComparison.OrdinalIgnoreCase)) continue;
+                if (!hv.Contains(vid.Handle.ToString()) && !string.Equals(v.Layer, RoadBuilder.LayView, StringComparison.OrdinalIgnoreCase)
+                    && !(v is CivilDb.ProfileView pv && RoadSheets.IsSheetTwin(pv))) continue;   // ★[v117.37.1] 배치탭 쌍둥이도 함께
                 tr.GetObject(vid, OpenMode.ForWrite, false, true).Erase(); n++;
             }
             catch { }
         }
+        try { n += RoadSheets.EraseTwinNotes(al.Database, tr, al.ObjectId.Handle.ToString()); } catch { }
         return n;
     }
 

@@ -596,6 +596,31 @@ public static partial class UDitch
         return pr;
     }
 
+    /// <summary>★[JACK 1124 «측구가 있을 경우 빗물 모드에서 측구가 반영된 빗물 모델»] 빗물 셈용 측구 물길 — 시점(상류) → 종점(하류) 평면 점 + 바닥고(<paramref name="step"/> m마다 · 마디 포함).
+    /// 지표 따라감이면 구간 바닥고(낙차 · 집수정 자리는 이웃 값) · 한 경사면 시작 → 끝 직선. 선 · 바닥고를 모르면 빈 목록(빗물 셈에 안 넣음). <b>읽기만</b>.</summary>
+    public static List<Point3> FlowPath(Ditch d, Settings s, double step = 0.5)
+    {
+        var o = new List<Point3>();
+        var p = CleanPts(d.Pts);
+        var pr = ProfileOf(d, s);
+        if (pr.Error.Length > 0 || p.Count < 2 || pr.Inv.Length != p.Count) return o;
+        if (!(step > 0)) step = 0.5;
+        for (int i = 0; i + 1 < p.Count; i++)
+        {
+            double s0 = pr.Sta[i], s1 = pr.Sta[i + 1], len = s1 - s0;
+            int n = Math.Max(1, (int)Math.Ceiling(len / step));
+            for (int t = i == 0 ? 0 : 1; t <= n; t++)
+            {
+                double f = (double)t / n, st = s0 + len * f;
+                double v = pr.Lay != null ? pr.Lay.InvAt(st) : double.NaN;
+                if (!double.IsFinite(v)) v = pr.Inv[i] + (pr.Inv[i + 1] - pr.Inv[i]) * f;
+                if (!double.IsFinite(v)) continue;
+                o.Add(new Point3(p[i][0] + (p[i + 1][0] - p[i][0]) * f, p[i][1] + (p[i + 1][1] - p[i][1]) * f, v));
+            }
+        }
+        return o.Count >= 2 ? o : new List<Point3>();
+    }
+
     /// <summary>★[v117.17 · JACK 1116 «남은 것 모두»] 마디 바닥고 — 집수정 · 관 구간 안이면 NaN 대신 가장 가까운 U 구간의 끝 값(Profile.Inv · Top을 읽는 쪽이 NaN을 안 받게).</summary>
     static double InvNear(Layout lay, double s)
     {

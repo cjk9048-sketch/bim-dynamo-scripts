@@ -41,7 +41,7 @@ test('닫힌 선 두 갈래 — 집수정은 첫 갈래 칸에 · 구멍 = 갈�
   const box = L.uditch.obj.children.find(c => c.userData.name && c.userData.name.startsWith('집수정 J1'));
   assert.ok(box, '집수정 상자');
   assert.equal(box.userData.rows[0][1], '출구 · D-001-1 + D-001-2');
-  assert.ok(L.terrain.holeGeom, '지형 구멍');
+  assert.ok(L.uditch.mask && !L.terrain.holeGeom, '윗면 가림 · 지형 그대로(★[JACK 1124])');
 });
 
 test('갈래 끝은 집수정 바깥면에 딱 붙음(구멍 테두리 = 집수정 네모 + 1 mm 안)', () => {

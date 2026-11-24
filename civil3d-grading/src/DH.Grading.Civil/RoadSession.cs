@@ -1284,7 +1284,10 @@ internal sealed class RoadSession
                 if (d != null) { Design = d; before = new List<string>(d.SheetViews); }
             }
             EnsureBase();
-            return RoadSheets.Build(this, at, log);   // ★[v111.7] 그려졌으면 Build가 «못 그림» 기록을 끔
+            string r = RoadSheets.Build(this, at, log);   // ★[v111.7] 그려졌으면 Build가 «못 그림» 기록을 끔
+            // ★[v117.37.1 · main 1124 ②] 진입도로 종단 배치탭이 있으면 쌍둥이도 바로 다시(배치탭이 비지 않게) — 못 지으면 원본 뷰포트 얼림 풂
+            try { RoadSheets.RefreshTwinsAfterRedraw(_doc.Database, AlignId, log); } catch (Exception exT) { log.AppendLine("  ⚠배치탭 쌍둥이 다시 짓기 실패 — " + exT.Message); }
+            return r;
         }
         catch { MarkLost(true, before); throw; }
         finally { Suppress = was; }

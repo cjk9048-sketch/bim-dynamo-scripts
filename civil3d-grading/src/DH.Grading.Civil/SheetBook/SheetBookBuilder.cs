@@ -205,6 +205,8 @@ internal static class SheetBookBuilder
 {
     internal const string TabTag = "DH_SHEETBOOK";
     internal const string LayFrame = "도면화-도곽", LayTitle = "도면화-표제", LayVp = "도면화-뷰포트", LayPlan = "도면화-평면";
+    /// <summary>★[v117.37.1] 진입도로 종단 쌍둥이 뷰포트 레이어(장 수 · 사람 그림 셈에서 빠짐 — «도면화-» 시작 · LayVp 아님).</summary>
+    internal const string LayVpTwin = "도면화-뷰포트(종단뷰)";
     internal const string MediaA1 = "ISO_full_bleed_A1_(841.00_x_594.00_MM)", MediaA3 = "ISO_full_bleed_A3_(420.00_x_297.00_MM)";
     internal const string Device = "DWG To PDF.pc3";
 
@@ -518,6 +520,12 @@ internal static class SheetBookBuilder
         public Result R = null!;
         public PlanSheet.Prep? Plan;
         public string FrameSig = "";
+        /// <summary>★[v117.37.1] 배치탭 쌍둥이 종단뷰를 지은 도로 핸들 · 쌍둥이 옮김 · 쌍둥이 뷰포트 레이어.</summary>
+        public HashSet<string> TwinRoads = new(StringComparer.OrdinalIgnoreCase);
+        public (double X, double Y) TwinOff;
+        public ObjectId LayVpTwin;
+        /// <summary>★[v117.37.1] 진입도로 종단 장 뷰포트 주석 축척 = H(이번에 진입도로 종단 탭을 지음).</summary>
+        public bool RProfH;
     }
 
     /// <summary>★[계획 4.4 ② ③] 종류 하나를 임시 탭으로 — 만든 직후 같은 단계에서 표식(임시 = 1). 실패하면 예외(부르는 쪽이 임시 탭을 지움).</summary>
@@ -558,6 +566,7 @@ internal static class SheetBookBuilder
                 }
             if (nOverall != 1) log.AppendLine($"  전체 뷰포트 {nOverall}개(1이 아님)");
             var layFrame = EnsureLayer(db, tr, LayFrame); var layTitle = EnsureLayer(db, tr, LayTitle); var layVp = EnsureLayer(db, tr, LayVp, plot: false);
+            if (kind == Kind.RProf && c.TwinRoads.Count > 0) c.LayVpTwin = EnsureLayer(db, tr, LayVpTwin, plot: false);
             var def = c.Frame.Def;
             int n = kind == Kind.Plan ? 1 : sheets.Count;
             for (int i = 0; i < n; i++)
@@ -646,14 +655,48 @@ internal static class SheetBookBuilder
         vp.ViewDirection = Vector3d.ZAxis; vp.ViewTarget = Point3d.Origin; vp.TwistAngle = 0;
         vp.ViewCenter = new Point2d(mx, my);
         if (!c.Wire2d.IsNull) try { vp.VisualStyleId = c.Wire2d; } catch { }
-        var anno = s.Anno > 0 && c.Annos.TryGetValue(s.Anno, out var a) ? a : c.CurAnno;
+        // ★[v117.37.1 · JACK 1124] 진입도로 종단 장에 배치탭 쌍둥이가 있으면 — 이 뷰포트는 원본 종단뷰(모형 값 스타일)를 얼려 장식 · 도곽만, 쌍둥이 뷰포트가 그 위에 종단뷰를(RoadSheets.TwinMark)
+        bool twin = s.Kind == Kind.RProf && c.TwinRoads.Contains(s.Road);
+        // 진입도로 종단 장의 뷰포트 주석 축척 = H(예전 판은 장 표식 주석을 H로 바꾼 뒤 읽었음 — 원본 모형 값은 이제 부지 주석 축척 그대로라 H를 따로 씀)
+        var anno = s.Kind == Kind.RProf && c.RProfH && c.Annos.TryGetValue(s.Scale, out var aH) ? aH : s.Anno > 0 && c.Annos.TryGetValue(s.Anno, out var a) ? a : c.CurAnno;
         double cs = 1000.0 / s.Scale;
         // ★[계획 4.4-3 · Step 0 실측] 주석 축척 먼저 → CustomScale(둘은 서로를 안 바꿈 — V97 S0A) · 혹시 CustomScale이 주석 축척을 덮으면 ⚠ + CustomScale이 이김(검토 후속 4)
         if (anno != null) vp.AnnotationScale = anno;
         vp.CustomScale = cs;
         vp.Locked = true;
         var (ids, names, mixed) = FreezeFor(c.Db, tr, c.Index, s.Draw);
-        if (ids.Count > 0) vp.FreezeLayersInViewport(ids.GetEnumerator());
+        ObjectId layView = ObjectId.Null, layTwin = ObjectId.Null, layNote = ObjectId.Null;
+        if (twin)
+        {
+            var lt = (LayerTable)tr.GetObject(c.Db.LayerTableId, OpenMode.ForRead);
+            if (lt.Has(RoadBuilder.LayView)) layView = lt[RoadBuilder.LayView];
+            if (lt.Has(RoadSheets.LayTwin)) layTwin = lt[RoadSheets.LayTwin];
+            if (lt.Has(RoadSheets.LayTwinNote)) layNote = lt[RoadSheets.LayTwinNote];
+        }
+        // 원본 뷰포트 = 원본 종단뷰 · 쌍둥이 · 쌍둥이 글 얼림 / 쌍둥이 뷰포트 = 쌍둥이만 남기고(제목 글 얼림)
+        var ids1 = ids.Concat(new[] { layView, layTwin, layNote }.Where(id => !id.IsNull)).Distinct().ToList();
+        if (ids1.Count > 0) vp.FreezeLayersInViewport(ids1.GetEnumerator());
+        if (twin && !layView.IsNull && !layTwin.IsNull)
+        {
+            var (dx, dy) = c.TwinOff;
+            var w2 = FreezeFor(c.Db, tr, c.Index, (s.Draw.X0 + dx, s.Draw.Y0 + dy, s.Draw.X1 + dx, s.Draw.Y1 + dy));
+            var ids2 = ids.Concat(w2.Ids).Concat(new[] { layView, layNote }.Where(id => !id.IsNull)).Distinct().Where(id => id != layTwin).ToList();
+            var vp2 = new Viewport();
+            ps.AppendEntity(vp2); tr.AddNewlyCreatedDBObject(vp2, true);
+            vp2.LayerId = c.LayVpTwin;
+            vp2.CenterPoint = vp.CenterPoint;
+            vp2.Width = w; vp2.Height = h;
+            vp2.ViewDirection = Vector3d.ZAxis; vp2.ViewTarget = Point3d.Origin; vp2.TwistAngle = 0;
+            vp2.ViewCenter = new Point2d(mx + dx, my + dy);
+            if (!c.Wire2d.IsNull) try { vp2.VisualStyleId = c.Wire2d; } catch { }
+            if (anno != null) vp2.AnnotationScale = anno;
+            vp2.CustomScale = cs;
+            vp2.Locked = true;
+            if (ids2.Count > 0) vp2.FreezeLayersInViewport(ids2.GetEnumerator());
+            if (Math.Abs(vp2.CustomScale - cs) > 1e-9) throw new InvalidOperationException($"쌍둥이 뷰포트 축척 되읽기 {vp2.CustomScale} ≠ {cs}");
+            c.R.Log.AppendLine($"  장 {i + 1}: 쌍둥이 뷰포트(종단뷰만) 보는 곳 ({mx + dx:F3},{my + dy:F3}) · 원본 뷰포트는 «{RoadBuilder.LayView}» 얼림 · 쌍둥이 얼림 {ids2.Count}");
+        }
+        else if (twin) c.R.Warns.Add($"장 {i + 1}: «{RoadBuilder.LayView}» 레이어가 없어 쌍둥이 뷰포트를 못 겹침 — 진입도로 종단 글자가 클 수 있음");
         // 되읽기
         if (Math.Abs(vp.CustomScale - cs) > 1e-9) throw new InvalidOperationException($"뷰포트 축척 되읽기 {vp.CustomScale} ≠ {cs}");
         string an = "";
@@ -896,8 +939,11 @@ internal static class SheetBookBuilder
         var lm = LayoutManager.Current;
         var sw = System.Diagnostics.Stopwatch.StartNew();
         log.AppendLine($"■ 도면화(DHSHEETMAKE) {GradingSettings.Version} · {DateTime.Now:HH:mm:ss}");
-        // ★[v117.18.6 · JACK 1116] 진입도로 종단뷰 스타일의 «부지 주석 축척 비율 굽기»(×H÷주석)를 되돌림 — 뷰포트 글자가 5배로 나옴(RoadSheets.KeepLook 설명). 장 표식 주석도 H로 → 아래 장 찾기가 읽음
-        if (only == null || only.Contains(Kind.RProf)) try { RoadSheets.KeepLook(db, log, toSheetScale: true); } catch (System.Exception exU) { R.Warns.Add("진입도로 종단 글자 크기 맞춤 실패 — " + exU.Message); }
+        // ★[v117.18.6 · JACK 1116] 진입도로 종단뷰 글자 — 배치탭 뷰포트는 스타일 종이 값 × 뷰포트 축척(뷰포트 글자 5배 — RoadSheets.KeepLook 설명).
+        // ★★[v117.37.1 · JACK 1124 «도면생성 뒤 모형 진입도로 종단도가 찌그러짐»] 원본을 배치탭 값으로 굽지 않는다(모형 꼴 그대로) — 지난 판 쌍둥이를 지우고,
+        //   예전 판이 배치탭 값으로 구운 원본은 모형 값으로 되돌린 뒤(restoreModel), 장 찾기 · 사람 그림 묻기 뒤에 지난 쌍둥이를 지우고 새로 짓는다(RoadSheets.MakeSheetTwins)
+        bool rprofOn = only != null ? only.Contains(Kind.RProf) : inp.On[Kind.RProf];   // 이번에 진입도로 종단 탭을 짓는 때만(고르지 않아 남겨 두는 탭의 쌍둥이는 그대로)
+        if (rprofOn) try { RoadSheets.KeepLook(db, log, restoreModel: true); } catch (System.Exception exU) { R.Warns.Add("진입도로 종단 모형 꼴 되돌리기 실패 — " + exU.Message); }
         c.Scan = SheetBookScan.Read(db);
         R.Warns.AddRange(c.Scan.Warns);
         log.AppendLine($"  모형 장 {c.Scan.Sheets.Count}(" + string.Join(" · ", Kinds.Where(k => k != Kind.Plan).Select(k => $"{ShortName(k)} {c.Scan.Of(k).Count()}")) + $") · 평면 {(c.Scan.PlanExt != null ? "있음" : "없음")} · 찾기 {c.Scan.Ms} ms" + (c.Scan.Ms > 1000 ? " ⚠1초 넘음" : ""));
@@ -954,6 +1000,36 @@ internal static class SheetBookBuilder
             if (a != null) c.Annos[n] = a;
         }
         try { c.CurAnno = db.Cannoscale; } catch { }
+        // ★[v117.37.1] 진입도로 종단 배치탭 쌍둥이 — 모든 장 · 평면 · 도면 범위 아래(장 높이 한 칸 띄움) · 장끼리 같은 옮김. 못 지으면 옛 길(원본을 배치탭 값으로 굽기)
+        if (rprofOn && kinds.Contains(Kind.RProf))
+        {
+            c.RProfH = true;
+            var rps = c.Scan.Of(Kind.RProf).ToList();
+            double minY = c.Scan.Sheets.Min(s => s.Y0), top = rps.Max(s => s.Y1), sh = rps.Max(s => s.Y1 - s.Y0);
+            if (c.Scan.PlanExt is { } pe) minY = Math.Min(minY, pe.Y0);
+            // 지난 쌍둥이 자리가 아직 모든 장 · 평면 아래면 그 자리 그대로(도면 범위 Extmin이 지난 쌍둥이를 품어 매번 내려가지 않게) · 아니면 도면 범위까지 보고 새로
+            var old = RoadSheets.OldTwinOffset(db);
+            if (old is { } o && top + o.Y < minY - 1e-6) c.TwinOff = (o.X, o.Y);
+            else
+            {
+                try { var e0 = db.Extmin; var e1 = db.Extmax; if (e0.Y < e1.Y && e0.Y > minY - 1e6) minY = Math.Min(minY, e0.Y); } catch { }
+                c.TwinOff = (0, minY - sh - top);
+            }
+            RoadSheets.DropSheetTwins(db, log);
+            HashSet<string>? tw = null;
+            try { tw = RoadSheets.MakeSheetTwins(db, new Vector3d(c.TwinOff.X, c.TwinOff.Y, 0), log); } catch (System.Exception exT) { log.AppendLine("  ⚠배치탭 쌍둥이 실패 — " + exT.Message); }
+            if (tw == null)
+            {
+                try { RoadSheets.DropSheetTwins(db, log); RoadSheets.KeepLook(db, log, toSheetScale: true); } catch (System.Exception exU) { R.Warns.Add("진입도로 종단 글자 크기 맞춤 실패 — " + exU.Message); }
+                R.Warns.Add("진입도로 종단 배치탭 쌍둥이 못 지음 → 옛 길(모형 종단도 글자가 작게 보임)");
+            }
+            else c.TwinRoads = tw;
+            foreach (double n in rps.Select(s => s.Scale).Where(v => v > 0 && !c.Annos.ContainsKey(v)).Distinct())
+            {
+                var a = EnsureAnno(db, n, log, R.Warns);
+                if (a != null) c.Annos[n] = a;
+            }
+        }
         var vals0 = new HashSet<string> { "도면명", "도면번호", "축척", "날짜" };
         if (inp.Project.Trim().Length > 0) vals0.Add("공사명");
         var clear = c.Frame.Def.Cells.Where(kv => kv.Value.Clear == "always" || vals0.Contains(kv.Key)).Select(kv => kv.Key).ToList();
@@ -991,7 +1067,7 @@ internal static class SheetBookBuilder
                 {
                     var lo = (Layout)tr.GetObject(lm.GetLayoutId(t), OpenMode.ForRead);
                     foreach (ObjectId id in (BlockTableRecord)tr.GetObject(lo.BlockTableRecordId, OpenMode.ForRead))
-                        if (tr.GetObject(id, OpenMode.ForRead) is Viewport v && v.Layer == LayVp && !v.On) { v.UpgradeOpen(); v.On = true; }
+                        if (tr.GetObject(id, OpenMode.ForRead) is Viewport v && (v.Layer == LayVp || v.Layer == LayVpTwin) && !v.On) { v.UpgradeOpen(); v.On = true; }
                     tr.Commit();
                 }
             }

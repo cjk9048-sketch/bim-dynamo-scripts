@@ -347,7 +347,10 @@ internal static class Web3DBuilder
             if (double.IsFinite(tm.CMinX))
             {
                 // ★[계획 검토 중간 5] 범위 = 바뀐 자리 + 200 m — 비탈 위 산에서 내려오는 물(산마루 배수)도 센다
-                var dr = Drainage.Analyze(inp.X, inp.Y, inp.Z, inp.F, tm.CMinX - 200, tm.CMinY - 200, tm.CMaxX + 200, tm.CMaxY + 200, cell: 1.0, streamMin: 300, flatZone: tm.InChanged);
+                // ★[JACK 1124 «측구가 있을 경우 빗물 모드에서 측구가 반영된 빗물 모델»] U형 측구 물길을 빗물 셈 격자에만 판다(지형 · 면 · 그리는 지형은 그대로)
+                var udFlow = UDitchStore.FlowPaths(db, log);
+                var dr = Drainage.Analyze(inp.X, inp.Y, inp.Z, inp.F, tm.CMinX - 200, tm.CMinY - 200, tm.CMaxX + 200, tm.CMaxY + 200, cell: 1.0, streamMin: 300, flatZone: tm.InChanged,
+                                          channels: udFlow.Count > 0 ? udFlow : null);
                 log.AppendLine("  빗물: " + dr.Text);
                 // 그리는 물길은 현장(바뀐 자리 + 30 m)에 닿는 것만 — 계산은 200 m 둘레(위에서 내려오는 물)까지 하지만 먼 골짜기까지 그리면 현장 물길이 묻힌다(1027 시험 180줄)
                 bool Near(Point3 p) => p.X >= tm.CMinX - 30 && p.X <= tm.CMaxX + 30 && p.Y >= tm.CMinY - 30 && p.Y <= tm.CMaxY + 30;
@@ -369,6 +372,8 @@ internal static class Web3DBuilder
                     ["flats"] = sc.F32(dr.FlatRuns.SelectMany(q => new[] { (float)(q.X0 - ox), (float)(q.Y0 - oy), (float)(q.X1 - ox), (float)(q.Y1 - oy), (float)q.Z0, (float)q.Z1 }).ToArray()),
                     ["flatArea"] = Web3DScene.Num(dr.FlatArea, 1),
                 };
+                if (dr.ChannelLines > 0)   // ★[JACK 1124] 측구가 든 빗물 셈(없으면 열쇠 없음 — 옛 장면 바이트 그대로)
+                    ((Dictionary<string, object>)drainHead)["uditch"] = new Dictionary<string, object> { ["lines"] = dr.ChannelLines, ["cells"] = dr.ChannelCells, ["streamCells"] = dr.ChannelStreamCells, ["accMax"] = Web3DScene.Num(dr.ChannelAccMax, 1) };
             }
         }
         catch (System.Exception dex) { c.Warn.Add("빗물 검토를 못 했습니다 — " + dex.Message); log.AppendLine("  빗물: 실패 — " + dex); }

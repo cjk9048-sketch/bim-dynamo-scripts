@@ -11,6 +11,8 @@ namespace DH.Grading.Civil;
 internal static class UDitchStore
 {
     internal const string Layer = "DH-U형측구", LineLayer = "DH-U형측구-선", App = "DH_UDITCH";
+    /// <summary>★[JACK 1124 «모형 뷰에서는 -----U-----u----- 이런 식으로 선형만»] 측구 선 선종류 — «—— U —— U ——»(m · 글 «U» 높이 1 m · DH-한글).</summary>
+    internal const string Ltype = "DH_U측구";
     const string DictName = "DH_GRADING", RecName = "UDITCH";
     internal const string SettingsFile = "UDitch.settings.json";
     const int Chunk = 200;
@@ -363,79 +365,38 @@ internal static class UDitchStore
         public double PipeLen, ExtraVol, GrateLen;
         /// <summary>★[JACK 1123] 합류 · 교차 · 출구 집수정 수(<see cref="Basins"/>에도 들어감) · 알림 수.</summary>
         public int Junctions, JunctionWarn;
+        /// <summary>★[JACK 1124] 선종류 U를 입힌 선 수(원 선 · 대신 그린 선) · 그중 대신 그린 선.</summary>
+        public int Lines, StandIn;
     }
 
-    /// <summary>모든 측구를 다시 짓는다(옛것 지움 → 원 선 다시 읽기 → 본체 · 기초 솔리드) · 색 = 수리 판정(부족 빨강 · 주의 노랑 · 그 밖 레이어 색).
-    /// 수리 결과와 무관하게 짓는다(§9 모델과 수리는 따로).
-    /// ★[JACK 1123] 원 선을 먼저 모두 다시 읽고(닫힌 선 → 두 갈래) 합류 · 교차 · 출구 집수정을 셈 → 측구(집수정 자리에서 끊김) → 집수정 솔리드.</summary>
+    /// <summary>★[JACK 1124 «측구는 모형 뷰에서는 선형만 · 3D 뷰에서는 실제 모양으로 지표면엔 영향을 주지 않게»] 모든 측구를 다시 셈 —
+    /// 옛 솔리드 · 메시(레이어 DH-U형측구 + XData — 옛 [모델 생성])를 지우고 · 원 선을 다시 읽고(닫힌 선 → 두 갈래) · 합류 · 교차 · 출구 집수정을 셈 →
+    /// 도면에는 <b>원 선에 선종류 «U»만</b>(<see cref="Ltype"/> · 솔리드 없음 · 지표면 안 건드림) · 수량(콘크리트 · 집수정 · 관)은 셈으로.
+    /// 지을 수 없는 측구(꺾임 · 바닥고 모름)는 «못 지음»(<see cref="UDitch.Meshes"/>로 판정 — 도면에는 안 넣음). 3D 보기는 <see cref="Web3DHead"/>가 같은 셈으로 그림.</summary>
     internal static BuildStats Build(Database db, UDitch.Record rec, UDitch.Settings s, System.Text.StringBuilder log)
     {
         var st = new BuildStats();
         using var tr = db.TransactionManager.StartTransaction();
-        bool locked = SetLocked(db, tr, false);   // ★[설치 전 검토 3] 잠긴 레이어 — 짓는 동안 풀고 끝에 되돌림
-        st.Erased = Erase(db, tr, "");
-        var lay = GradingBuilder.EnsureLayer(db, tr, Layer, 253);
-        GradingBuilder.EnsureRegApp(db, tr, App);
-        var ms = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForWrite);
+        st.Erased = Erase(db, tr, "");   // 옛 솔리드 · 메시 · 대신 그린 선(모두 레이어 DH-U형측구 + XData)
         RefreshAll(db, tr, rec, s, log);
-        // 덩어리 하나 → 메시 → 솔리드(못 바꾸면 메시로 남김) · XData [앱, 이름, 부분, 상태]
-        Entity Make(UDitch.Solid sol, string id, string status, short color, List<Entity> built, ref int nSol, ref int nMesh)
-        {
-            var o = sol.V[0];
-            var verts = new Point3dCollection();
-            foreach (var v in sol.V) verts.Add(new Point3d(v.X - o.X, v.Y - o.Y, v.Z - o.Z));   // 원점 가까이(대좌표 ACIS 오류 피함 — 옹벽 솔리드와 같은 법)
-            var fc = new Int32Collection();
-            foreach (var f in sol.F) { fc.Add(f.Length); foreach (int k in f) fc.Add(k); }
-            var mesh = new SubDMesh();
-            try { mesh.SetSubDMesh(verts, fc, 0); } catch { mesh.Dispose(); throw; }
-            mesh.LayerId = lay;
-            ms.AppendEntity(mesh); tr.AddNewlyCreatedDBObject(mesh, true);
-            built.Add(mesh);
-            var move = Matrix3d.Displacement(new Vector3d(o.X, o.Y, o.Z));
-            Entity made = mesh;
-            Solid3d? solid = null;
-            try
-            {
-                solid = mesh.ConvertToSolid(false, false);
-                bool live;
-                try { live = solid.MassProperties.Volume > 1e-9; } catch { live = false; }
-                if (live)
-                {
-                    solid.LayerId = lay;
-                    ms.AppendEntity(solid); tr.AddNewlyCreatedDBObject(solid, true);
-                    built.Add(solid);
-                    mesh.Erase();
-                    made = solid; solid = null;
-                    nSol++;
-                }
-                else if (st.FirstFail.Length == 0) st.FirstFail = $"{id} {sol.Part}: 빈 솔리드(메시로 남김)";
-            }
-            catch (System.Exception ex) { if (st.FirstFail.Length == 0) st.FirstFail = $"{id} {sol.Part}: {ex.Message}(메시로 남김)"; }
-            finally { solid?.Dispose(); }
-            if (made is SubDMesh) nMesh++;
-            made.TransformBy(move);
-            made.ColorIndex = sol.Part is "그레이팅" or "집수정 덮개" or "합류 집수정 덮개" ? (short)8 : color;   // ★[v117.16] 스틸 그레이팅 = 회색
-            using (var xd = new ResultBuffer(new TypedValue((int)DxfCode.ExtendedDataRegAppName, App), new TypedValue((int)DxfCode.ExtendedDataAsciiString, id),
-                                             new TypedValue((int)DxfCode.ExtendedDataAsciiString, sol.Part), new TypedValue((int)DxfCode.ExtendedDataAsciiString, status)))
-                made.XData = xd;
-            return made;
-        }
+        var lt = EnsureLinetype(db, tr);
+        var marked = new HashSet<string>();
         foreach (var d in rec.Ditches)
         {
-            // ★[설치 전 검토 2] 측구마다 따로 — 하나가 못 지어지면 그 측구만 «못 지음»(지은 조각은 지움) · 나머지는 짓는다
-            var built = new List<Entity>();
-            int nSol = 0, nMesh = 0;
             try
             {
                 d.Solids.Clear();
                 var h = UDitch.Check(d, rec.Rain, s);
-                var sols = UDitch.Meshes(d, s, out string why);
+                var sols = UDitch.Meshes(d, s, out string why);   // 지을 수 있나 · 부분 부피(도면에는 안 넣음)
                 if (sols.Count == 0) { st.Skipped++; if (st.FirstFail.Length == 0) st.FirstFail = $"{d.Id}: {why}"; log.AppendLine($"  {d.Id}: 못 지음 — {why}"); continue; }
-                short color = h.Verdict == UDitch.Verdict.Short ? (short)1 : h.Verdict == UDitch.Verdict.Caution ? (short)2 : (short)256;
-                foreach (var sol in sols) d.Solids.Add(Make(sol, d.Id, h.Status, color, built, ref nSol, ref nMesh).Handle.ToString());
+                // 도면 = 원 선에 선종류 U(닫힌 선 두 갈래는 선 하나) · 원 선이 없으면 점으로 대신 그림(레이어 DH-U형측구 · 다음 셈에 지움)
+                if (d.LineHandle.Length == 0 || !marked.Contains(d.LineHandle))
+                {
+                    if (MarkLine(db, tr, d.LineHandle, lt)) { marked.Add(d.LineHandle); st.Lines++; }
+                    else if (DrawStandIn(db, tr, d, lt, h.Verdict)) { st.Lines++; st.StandIn++; }
+                }
                 var q = UDitch.Qty(d, s);
                 var xq = UDitch.Extras(d, s);   // ★[v117.16 · JACK 1112] 낙차 · 집수정 · 관로 · 그레이팅
-                st.Solids += nSol; st.Meshes += nMesh;
                 st.BodyVol += q.BodyVol; st.FootVol += q.FootVol; st.Length += q.Length;
                 st.Drops += xq.Drops; st.Basins += xq.Basins; st.Pipes += xq.Pipes; st.PipeLen += xq.PipeLen; st.ExtraVol += xq.Concrete; st.GrateLen += xq.GrateLen;
                 var ly = UDitch.LayoutOf(d, s);
@@ -451,41 +412,202 @@ internal static class UDitchStore
             }
             catch (System.Exception ex)
             {
-                foreach (var e in built) try { if (!e.IsErased) e.Erase(); } catch { }
                 d.Solids.Clear();
                 st.Skipped++;
                 if (st.FirstFail.Length == 0) st.FirstFail = $"{d.Id}: {ex.Message}";
                 log.AppendLine($"  {d.Id}: 못 지음 — {ex.Message}");
             }
         }
-        // ★[JACK 1123] 합류 · 교차 · 출구 집수정 — 단차 집수정과 같은 컵 + 그레이팅 덮개 · XData 이름 = J1 · 넷째 칸 = 이어진 측구(그 측구를 지우면 같이 지움)
+        // ★[JACK 1123] 합류 · 교차 · 출구 집수정 — 수량 · 알림만(도면에는 안 넣음 · 3D 보기는 그림)
         foreach (var j in rec.Junctions)
         {
-            var built = new List<Entity>();
-            int nSol = 0, nMesh = 0;
             try
             {
                 var sols = UDitch.JunctionSolids(j, s);
                 if (sols.Count == 0) { log.AppendLine($"  {j.Label}: 못 지음 — 바닥고 모름"); continue; }
-                string members = string.Join(",", j.M.Select(m => m.D.Id));
-                foreach (var sol in sols) Make(sol, j.Name, members, 256, built, ref nSol, ref nMesh);
-                st.Solids += nSol; st.Meshes += nMesh;
                 st.Basins++; st.Junctions++; st.ExtraVol += j.Volume; st.JunctionWarn += j.Warn.Count;
-                log.AppendLine(string.Format(System.Globalization.CultureInfo.InvariantCulture, "  {0}: 안 {1:0.00} · 바깥 {2:0.00} m · 깊이 {3:0.00} m · 콘크리트 {4:F3} ㎥ · 솔리드 {5}{6}",
-                                             j.Label, j.B.Inner, j.B.Outer, j.B.Depth, j.Volume, nSol, nMesh > 0 ? $" · 메시 {nMesh}" : ""));
+                log.AppendLine(string.Format(System.Globalization.CultureInfo.InvariantCulture, "  {0}: 안 {1:0.00} · 바깥 {2:0.00} m · 깊이 {3:0.00} m · 콘크리트 {4:F3} ㎥",
+                                             j.Label, j.B.Inner, j.B.Outer, j.B.Depth, j.Volume));
             }
             catch (System.Exception ex)
             {
-                foreach (var e in built) try { if (!e.IsErased) e.Erase(); } catch { }
                 if (st.FirstFail.Length == 0) st.FirstFail = $"{j.Name}: {ex.Message}";
                 log.AppendLine($"  {j.Label}: 못 지음 — {ex.Message}");
             }
         }
-        if (locked) SetLocked(db, tr, true);
         rec.Updated = System.DateTime.Now.ToString("yyyy-MM-dd HH:mm");
         Save(db, tr, rec);
         tr.Commit();
         return st;
+    }
+
+    /// <summary>★[JACK 1124] 측구 선종류 «—— U —— U ——» — <b>종이 mm 기준</b>(줄 6 · 틈 1.6 + 1.6 가운데 글 «U» 높이 2.5 · 글꼴 DH-한글 · 없으면 지금 글꼴).
+    /// ★[JACK 1124 «배치 탭에서 U가 1 mm로 작게»] 같은 선이 모형 탭과 배치 탭 뷰포트에 함께 보이고 AutoCAD는 선종류를 공간마다 따로 키운다 —
+    /// 뷰포트(PSLTSCALE 1)는 종이 단위 그대로(1:500 · 1:1000 어느 뷰포트든 U 2.5 mm) · 모형 탭(MSLTSCALE 1)은 주석 축척만큼(DH 1:500이면 U 1.25 m · 줄 3 m).
+    /// 도면 축척을 선 축척에 구워 넣으면 뷰포트 축척이 다르거나 축척을 바꾸면 어긋나므로 정의를 종이 기준으로. 선마다 선종류 축척 = 1 / LTSCALE(도면 LTSCALE과 상관없게).
+    /// 옛 정의(길이 다름 — 레인 시험판의 m 기준)가 있으면 고쳐 씀.</summary>
+    internal static ObjectId EnsureLinetype(Database db, Transaction tr)
+    {
+        const double Dash = 6.0, Gap = 1.6, H = 2.5, Pattern = Dash + 2 * Gap;
+        var ltt = (LinetypeTable)tr.GetObject(db.LinetypeTableId, OpenMode.ForRead);
+        LinetypeTableRecord? r = null;
+        if (ltt.Has(Ltype))
+        {
+            r = (LinetypeTableRecord)tr.GetObject(ltt[Ltype], OpenMode.ForRead);
+            if (System.Math.Abs(r.PatternLength - Pattern) < 1e-6 && r.NumDashes == 3) return r.ObjectId;
+            r.UpgradeOpen();
+        }
+        var style = Commands.ImportGisCommand.EnsureKoreanTextStyle(db, tr);
+        if (style.IsNull) style = db.Textstyle;
+        bool add = r == null;
+        r ??= new LinetypeTableRecord { Name = Ltype };
+        r.AsciiDescription = "U형 측구 ---- U ---- U ----";
+        r.IsScaledToFit = false;
+        r.NumDashes = 3;
+        r.PatternLength = Pattern;
+        r.SetDashLengthAt(0, Dash);
+        r.SetDashLengthAt(1, -Gap);
+        r.SetShapeStyleAt(1, style);
+        r.SetTextAt(1, "U");
+        r.SetShapeScaleAt(1, H);
+        r.SetShapeRotationAt(1, 0.0);
+        r.SetShapeOffsetAt(1, new Vector2d(-0.32 * H, -0.5 * H));   // 글 너비 ≈ 0.65 H → 두 틈 사이 가운데 · 높이 가운데
+        r.SetShapeIsUcsOrientedAt(1, false);
+        r.SetDashLengthAt(2, -Gap);
+        if (!add) return r.ObjectId;
+        ltt.UpgradeOpen();
+        var id = ltt.Add(r);
+        tr.AddNewlyCreatedDBObject(r, true);
+        return id;
+    }
+
+    static double LtScale(Database db)
+    {
+        double g = 1.0;
+        try { g = db.Ltscale; } catch { }
+        return g > 1e-9 && double.IsFinite(g) ? 1.0 / g : 1.0;
+    }
+
+    /// <summary>★[JACK 1124] 원 선(핸들)에 선종류 U — 돌려줌 = 원 선이 있음(잠긴 레이어면 못 바꿔도 참). 선 · 지표면 모양은 안 바꿈.</summary>
+    internal static bool MarkLine(Database db, Transaction tr, string handle, ObjectId lt)
+    {
+        if (handle.Length == 0 || lt.IsNull) return false;
+        try
+        {
+            if (!db.TryGetObjectId(new Handle(System.Convert.ToInt64(handle, 16)), out var id) || id.IsErased) return false;
+            if (tr.GetObject(id, OpenMode.ForRead) is not Curve e) return false;
+            if (tr.GetObject(e.LayerId, OpenMode.ForRead) is LayerTableRecord lr && lr.IsLocked) return true;
+            double lts = LtScale(db);
+            bool plg = e is Polyline p0 && !p0.Plinegen;
+            if (e.LinetypeId == lt && System.Math.Abs(e.LinetypeScale - lts) < 1e-9 && !plg) return true;
+            e.UpgradeOpen();
+            e.LinetypeId = lt;
+            e.LinetypeScale = lts;
+            if (e is Polyline pl) pl.Plinegen = true;   // 꺾인 점마다 무늬가 끊기지 않게
+            return true;
+        }
+        catch { return false; }
+    }
+
+    /// <summary>★[JACK 1124] [측구 지우기] — 원 선의 선종류 U를 되돌림(레이어 따름).</summary>
+    internal static void UnmarkLine(Database db, Transaction tr, string handle)
+    {
+        if (handle.Length == 0) return;
+        try
+        {
+            var ltt = (LinetypeTable)tr.GetObject(db.LinetypeTableId, OpenMode.ForRead);
+            if (!ltt.Has(Ltype)) return;
+            if (!db.TryGetObjectId(new Handle(System.Convert.ToInt64(handle, 16)), out var id) || id.IsErased) return;
+            if (tr.GetObject(id, OpenMode.ForRead) is not Entity e || e.LinetypeId != ltt[Ltype]) return;
+            if (tr.GetObject(e.LayerId, OpenMode.ForRead) is LayerTableRecord lr && lr.IsLocked) return;
+            e.UpgradeOpen();
+            e.Linetype = "ByLayer";
+            e.LinetypeScale = 1.0;
+        }
+        catch { }
+    }
+
+    /// <summary>원 선이 없을 때(지워짐) — 기록 점으로 선을 대신 그림(레이어 DH-U형측구 · 선종류 U · XData [앱, 이름, «선», 상태] — 다음 셈 · 지우기에 지움).</summary>
+    static bool DrawStandIn(Database db, Transaction tr, UDitch.Ditch d, ObjectId lt, UDitch.Verdict v)
+    {
+        var pts = UDitch.CleanPts(d.Pts);
+        if (pts.Count < 2) return false;
+        var pl = new Polyline();
+        for (int i = 0; i < pts.Count; i++) pl.AddVertexAt(i, new Point2d(pts[i][0], pts[i][1]), 0, 0, 0);
+        pl.LayerId = GradingBuilder.EnsureLayer(db, tr, Layer, 253);
+        GradingBuilder.EnsureRegApp(db, tr, App);
+        if (!lt.IsNull) { pl.LinetypeId = lt; pl.LinetypeScale = LtScale(db); }
+        pl.Plinegen = true;
+        pl.ColorIndex = v == UDitch.Verdict.Short ? 1 : v == UDitch.Verdict.Caution ? 2 : 256;
+        var ms = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForWrite);
+        ms.AppendEntity(pl); tr.AddNewlyCreatedDBObject(pl, true);
+        using (var xd = new ResultBuffer(new TypedValue((int)DxfCode.ExtendedDataRegAppName, App), new TypedValue((int)DxfCode.ExtendedDataAsciiString, d.Id),
+                                         new TypedValue((int)DxfCode.ExtendedDataAsciiString, "선"), new TypedValue((int)DxfCode.ExtendedDataAsciiString, v.ToString())))
+            pl.XData = xd;
+        return true;
+    }
+
+    /// <summary>★[JACK 1124 «빗물 모드에서 측구가 반영된 빗물 모델»] 빗물 셈용 측구 물길(도면 좌표 · 시점 → 종점 · Z = 바닥고) — 기록이 없거나 못 읽으면 빈 목록. <b>읽기만</b>.</summary>
+    internal static List<IReadOnlyList<Point3>> FlowPaths(Database db, System.Text.StringBuilder log)
+    {
+        var o = new List<IReadOnlyList<Point3>>();
+        try
+        {
+            UDitch.Record rec;
+            using (var tr = db.TransactionManager.StartTransaction())
+            {
+                bool ok = TryLoad(db, tr, out rec, out _);
+                tr.Commit();
+                if (!ok || rec.Ditches.Count == 0) return o;
+            }
+            var s = LoadSettings(out _, out _);
+            UDitch.Link(rec, s);
+            foreach (var d in rec.Ditches)
+            {
+                var p = UDitch.FlowPath(d, s);
+                if (p.Count >= 2) o.Add(p);
+            }
+        }
+        catch (System.Exception ex) { log.AppendLine("  빗물 측구: 못 읽음 — " + ex.Message); }
+        return o;
+    }
+
+    // ══════════════════════════════ 초기화 ══════════════════════════════
+
+    /// <summary>★[JACK 1124 «전체 초기화 시 측구가 안 지워져»] 초기화가 고른 측구를 지움 — 기록에서 빼고(닫힌 선 갈래는 짝도) ·
+    /// 표식 붙은 것(옛 솔리드 · 메시 · 대신 그린 선 · 합류 집수정) 지움 · 원 선은 우리가 그린 선(레이어 DH-U형측구-선)이면 지우고 남의 선이면 선종류 U만 뺌.
+    /// 남은 측구가 없으면 표식 붙은 것 모두 · 강우는 남김(입력값 — 측구도 강우도 없으면 기록 자리째 지움). 기록을 못 읽으면 아무것도 안 함. 돌려줌 = (측구 수, 원 선 수, 표식 개체 수).</summary>
+    internal static (int Ditches, int Lines, int Ents) EraseForReset(Database db, Transaction tr, System.Func<UDitch.Ditch, bool> pick, System.Text.StringBuilder log)
+    {
+        if (!TryLoad(db, tr, out var rec, out string why)) { log.AppendLine("U형 측구: 기록 못 읽음 — " + why + " → 그대로"); return (0, 0, 0); }
+        var hit = rec.Ditches.Where(pick).ToList();
+        var handles = hit.Select(d => d.LineHandle).Where(h => h.Length > 0).ToHashSet();
+        var gone = rec.Ditches.Where(d => hit.Contains(d) || (d.LineHandle.Length > 0 && handles.Contains(d.LineHandle))).ToList();
+        int ents = 0, lines = 0;
+        foreach (var d in gone) { ents += Erase(db, tr, d.Id); rec.Ditches.Remove(d); }
+        foreach (var h in handles) if (!rec.Ditches.Any(x => x.LineHandle == h) && DropLine(db, tr, h)) lines++;
+        if (rec.Ditches.Count == 0) ents += Erase(db, tr, "");
+        if (gone.Count > 0 || ents > 0) Save(db, tr, rec);
+        if (gone.Count > 0 || ents > 0) log.AppendLine($"U형 측구: {gone.Count}개 지움({string.Join(" · ", gone.Select(d => d.Id))}) · 원 선 {lines} · 표식 개체 {ents} · 남은 측구 {rec.Ditches.Count}");
+        return (gone.Count, lines, ents);
+    }
+
+    /// <summary>원 선 — 우리가 그린 선([선 그리기] · 레이어 DH-U형측구-선)은 지우고, 고른 남의 선은 선종류 U만 뺌(선은 남김). 돌려줌 = 손댐.</summary>
+    static bool DropLine(Database db, Transaction tr, string handle)
+    {
+        try
+        {
+            if (!db.TryGetObjectId(new Handle(System.Convert.ToInt64(handle, 16)), out var id) || id.IsErased) return false;
+            if (tr.GetObject(id, OpenMode.ForRead) is not Entity e) return false;
+            if (e.Layer == LineLayer)
+            {
+                if (tr.GetObject(e.LayerId, OpenMode.ForRead) is LayerTableRecord lr && lr.IsLocked) return false;
+                e.UpgradeOpen(); e.Erase(); return true;
+            }
+            UnmarkLine(db, tr, handle);
+            return true;
+        }
+        catch { return false; }
     }
 
     // ══════════════════════════════ M08 보고서 ══════════════════════════════

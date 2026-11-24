@@ -11,7 +11,7 @@ using AcadApp = Autodesk.AutoCAD.ApplicationServices.Application;
 namespace DH.Grading.Civil.Commands;
 
 /// <summary>★★[배수지 U형 측구 1단계 MVP · 명세서 «배수지_U형측구_애드인_모듈별개발명세서.md» §7] DHUDITCH(창) · -DHUDITCH(명령줄 — 키트 · FILEDIA 0 · 화면 없는 Civil).
-/// <para>흐름: 부지 대표점(M01) → 강우(M02 수동 · CSV) → 측구 선(M04 고르기 · 그리기) → 규격 · 바닥고 · 집수(M05) → [모델 생성](M06 솔리드 · 모든 측구 다시) → 보고서(M08 txt · json).
+/// <para>흐름: 부지 대표점(M01) → 강우(M02 수동 · CSV) → 측구 선(M04 고르기 · 그리기) → 규격 · 바닥고 · 집수(M05) → [측구 생성](모든 측구 다시 · ★[JACK 1124] 도면 = 원 선에 선종류 U만 · 솔리드 없음 · 지표면 안 바꿈 · 3D 보기 = 실제 모양) → 보고서(M08 txt · json).
 /// 기록 = 도면 NOD «DH_GRADING/UDITCH»(다시 열면 그대로 · 고침). 셈 = Core <see cref="UDitch"/>.</para></summary>
 public sealed class UDitchCommand
 {
@@ -137,6 +137,11 @@ public sealed class UDitchCommand
     public void PalDraw() => PalRun("선 그리기", (c, m) =>
         DrawLine(c, out var id) && AddDitch(c, id, out int i, out string msg) ? Picked(m, i, msg) : ("", ""));
 
+    /// <summary>★[JACK 1124 «경계를 선택하고 시점 · 종점을 선택하면 그 부분만 마우스 거리만큼 오프셋»] [경계 따라] — 새 폴리선(<see cref="UDitchEdge"/>) → [선 그리기]와 같은 측구.</summary>
+    [CommandMethod("DHUDITCHEDGE")]
+    public void PalEdge() => PalRun("경계 따라", (c, m) =>
+        UDitchEdge.Draw(c.Doc, out var id, out string note) && AddDitch(c, id, out int i, out string msg) ? Picked(m, i, msg + " · " + note) : ("", ""));
+
     [CommandMethod("DHUDITCHDEL")]
     public void PalDelete() => PalRun("지우기", (c, m) =>
     {
@@ -148,11 +153,12 @@ public sealed class UDitchCommand
         using (var tr = c.Db.TransactionManager.StartTransaction())
         {
             foreach (var x in gone) { n += UDitchStore.Erase(c.Db, tr, x.Id); c.Rec.Ditches.Remove(x); }
+            if (!c.Rec.Ditches.Any(x => x.LineHandle == d0.LineHandle)) UDitchStore.UnmarkLine(c.Db, tr, d0.LineHandle);   // ★[JACK 1124] 원 선의 선종류 U 되돌림
             UDitchStore.Save(c.Db, tr, c.Rec);
             tr.Commit();
         }
         m.Sel = System.Math.Min(m.Sel, c.Rec.Ditches.Count - 1);
-        return ($"{string.Join(" · ", gone.Select(x => x.Id))} 지움(모델 {n}개 · 원 선은 그대로)" + (gone.Count > 1 ? " · " + UDitch.LoopText : ""), "");
+        return ($"{string.Join(" · ", gone.Select(x => x.Id))} 지움(원 선은 그대로{(n > 0 ? $" · 옛 모델 {n}개" : "")})" + (gone.Count > 1 ? " · " + UDitch.LoopText : ""), "");
     });
 
     [CommandMethod("DHUDITCHBUILD")]
@@ -465,6 +471,7 @@ public sealed class UDitchCommand
             UDitch.Link(c.Rec, c.S);
             if (c.Rec.Site.Source.Contains("없음")) c.Rec.Site = UDitchStore.SiteOf(c.Db, GradingSettings.ExportEpsg, c.Rec.Ditches);
             UDitchStore.Save(c.Db, tr, c.Rec);
+            UDitchStore.MarkLine(c.Db, tr, h, UDitchStore.EnsureLinetype(c.Db, tr));   // ★[JACK 1124] 측구 선 = 선종류 U
             tr.Commit();
             index = c.Rec.Ditches.FindIndex(d => d.LineHandle == h);
             var grp = c.Rec.Ditches.Where(d => d.LineHandle == h).ToList();
@@ -486,6 +493,7 @@ public sealed class UDitchCommand
         UDitch.Link(c.Rec, c.S);   // ★[JACK 1123] 합류 · 교차 집수정
         if (c.Rec.Site.Source.Contains("없음")) c.Rec.Site = UDitchStore.SiteOf(c.Db, GradingSettings.ExportEpsg, c.Rec.Ditches);
         UDitchStore.Save(c.Db, tr, c.Rec);
+        UDitchStore.MarkLine(c.Db, tr, h, UDitchStore.EnsureLinetype(c.Db, tr));   // ★[JACK 1124] 측구 선 = 선종류 U
         tr.Commit();
         index = k;
         var lay = UDitch.LayoutOf(d, c.S);
@@ -503,20 +511,21 @@ public sealed class UDitchCommand
 
     static bool Build(Ctx c, out string msg)
     {
-        c.Log.AppendLine("  모델 생성:");
+        c.Log.AppendLine("  측구 생성(선종류 U · 솔리드 없음 · 지표면 안 바꿈):");
         UDitchStore.BuildStats st;
         try { st = UDitchStore.Build(c.Db, c.Rec, c.S, c.Log); }
         catch (System.Exception ex) { msg = "모델을 못 지음 — " + ex.Message; Done(c, "⚠" + msg + "\n" + ex); return false; }
         string rep = UDitchStore.WriteReport(c.Db, c.Doc.Name ?? "", c.Rec, c.S, out string rwhy);
         int shortN = c.Rec.Ditches.Count(d => UDitch.Check(d, c.Rec.Rain, c.S).Verdict == UDitch.Verdict.Short);
-        msg = string.Format(Ic, "모델 {0}개(솔리드 {1}{2}) · 길이 {3:0.00} m · 콘크리트 {4:0.00} ㎥", c.Rec.Ditches.Count - st.Skipped, st.Solids, st.Meshes > 0 ? $" · 메시 {st.Meshes}" : "", st.Length, st.BodyVol + st.FootVol + st.ExtraVol)
+        // ★[JACK 1124] 도면 = 선종류 U 선만(솔리드 없음) · 옛 솔리드는 지움
+        msg = string.Format(Ic, "측구 {0}개(U 선 {1}{2}) · 길이 {3:0.00} m · 콘크리트 {4:0.00} ㎥", c.Rec.Ditches.Count - st.Skipped, st.Lines, st.Erased > 0 ? $" · 옛 솔리드 {st.Erased} 지움" : "", st.Length, st.BodyVol + st.FootVol + st.ExtraVol)
               + (st.Drops > 0 ? $" · 낙차 {st.Drops}" : "") + (st.Basins - st.Junctions > 0 ? string.Format(Ic, " · 집수정 {0} · 관 {1:0.0} m", st.Basins - st.Junctions, st.PipeLen) : "")   // ★[v117.16]
               + (st.Junctions > 0 ? $" · 합류 · 교차 · 출구 집수정 {st.Junctions}" + (st.JunctionWarn > 0 ? $"(⚠{st.JunctionWarn} — 보고서 확인)" : "") : "")   // ★[JACK 1123]
               + (st.GrateLen > 0 ? string.Format(Ic, " · 그레이팅 {0:0.0} m", st.GrateLen) : "")
               + (!c.Rec.Rain.Has ? " · 강우자료 없음" : shortN > 0 ? $" · ⚠수리 부족 {shortN}" : "")
               + (st.Skipped > 0 ? $" · ⚠못 지음 {st.Skipped}({st.FirstFail})" : st.FirstFail.Length > 0 ? " · ⚠" + st.FirstFail : "")
               + (rep.Length > 0 ? " · 보고서 " + Path.GetFileName(rep) : " · ⚠" + rwhy);
-        c.Log.AppendLine($"  → {msg} · 지운 옛 모델 {st.Erased}" + (rep.Length > 0 ? " · " + rep : ""));
+        c.Log.AppendLine($"  → {msg} · 지운 옛 모델 {st.Erased} · 대신 그린 선 {st.StandIn}" + (rep.Length > 0 ? " · " + rep : ""));
         Done(c, msg);
         return st.Skipped < c.Rec.Ditches.Count;
     }

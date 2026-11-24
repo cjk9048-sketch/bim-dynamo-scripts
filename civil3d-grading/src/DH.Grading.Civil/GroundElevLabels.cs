@@ -18,6 +18,8 @@ namespace DH.Grading.Civil;
 internal static class GroundElevLabels
 {
     const string Key = "DH_GROUNDELEV";
+    /// <summary>★[JACK 1124] 기본값 = 표고 표시(이 도면에서 «원지반 표시»를 한 번도 고르지 않았을 때).</summary>
+    internal const bool DefaultOn = true;
     internal const string App = "DH_GELEV";
     internal const string LayerName = "DH-원지반-표고";
     internal const string StyleName = "DH_원지반 표고";
@@ -25,7 +27,7 @@ internal static class GroundElevLabels
     /// <summary>안쪽에서 여러 번 짓는 명령(측량도 보정 · 도로 다듬기)이 중간 Sync를 건너뛰게 — 끝에서 한 번.</summary>
     internal static int Hold;
 
-    /// <summary>켜짐(표고 표시)인가 — 기록이 없으면 꺼짐(기본 = 지금까지 그대로).</summary>
+    /// <summary>켜짐(표고 표시)인가 — 기록이 없으면 <see cref="DefaultOn"/>(★JACK 1124 = 켜짐) · 못 읽으면 꺼짐.</summary>
     internal static bool IsOn(Database db)
     {
         try
@@ -41,9 +43,10 @@ internal static class GroundElevLabels
     static (bool On, string Sig, int Count) ReadRec(Transaction tr, Database db)
     {
         var nod = (DBDictionary)tr.GetObject(db.NamedObjectsDictionaryId, OpenMode.ForRead);
-        if (!nod.Contains(Key) || tr.GetObject(nod.GetAt(Key), OpenMode.ForRead) is not Xrecord xr || xr.Data == null) return (false, "", 0);
+        // ★[JACK 1124 «공통설정에서 표고 표시를 기본값으로»] 기록이 없는 도면(한 번도 고른 적 없음) = 표고 표시 · 고른 적 있으면 그 값
+        if (!nod.Contains(Key) || tr.GetObject(nod.GetAt(Key), OpenMode.ForRead) is not Xrecord xr || xr.Data == null) return (DefaultOn, "", 0);
         var v = xr.Data.AsArray();
-        bool on = v.Length > 0 && v[0].Value is short s && s != 0;
+        bool on = v.Length > 0 ? v[0].Value is short s && s != 0 : DefaultOn;
         string sig = v.Length > 1 && v[1].Value is string g ? g : "";
         int n = v.Length > 2 && v[2].Value is int c ? c : 0;
         return (on, sig, n);

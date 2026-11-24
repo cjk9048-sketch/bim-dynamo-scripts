@@ -307,7 +307,7 @@ async function main() {
       // ★[JACK 1111 옹벽 겉모습] 무늬 메시마다 옹벽 번호 · 층 · 겉모습(null = 옛 한 색) · 조각 수 — 시험(키트)이 형식별 겉모습을 확인
       faces: L.pattern ? L.pattern.obj.children.map(m => ({ wall: m.userData.wall, pat: m.userData.pat, face: m.userData.face || null, pieces: m.userData.pieces || 0 })) : [],
       // ★[v117.16] 측구 수 · 구멍(모양 수 · 자른 세모 · 못 셈) · 그레이팅 · 집수정 · 관로 · 지금 구멍 지형인지
-      uditch: L.uditch ? { n: L.uditch.n, ...L.uditch.stats, holeOn: !!(L.terrain && L.terrain.holeGeom && L.terrain.obj.geometry === L.terrain.holeGeom) } : null,
+      uditch: L.uditch ? { n: L.uditch.n, ...L.uditch.stats, holeOn: !!(L.terrain && L.terrain.holeGeom && L.terrain.obj.geometry === L.terrain.holeGeom), maskOn: !!(L.uditch.mask && L.uditch.obj.visible), terrainSame: !!(L.terrain && !L.terrain.holeGeom) } : null,
       forest: L.tree ? (L.tree.missing ? { missing: L.tree.missing, quiet: !!L.tree.quiet } : { n: L.tree.n, note: L.tree.note, legend: L.tree.legend }) : null,
       align: L.align ? { name: L.align.name, st: L.align.st.length, views: L.align.views } : null, build: !!head.build, geo: head.geo || null,
       ralign: L.ralign ? L.ralign.roads.map(a => ({ name: a.name, st: a.st.length, views: a.views })) : null,

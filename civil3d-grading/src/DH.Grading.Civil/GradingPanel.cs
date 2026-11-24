@@ -294,7 +294,7 @@ internal sealed class GradingPanel : UserControl
 
         // ── 옹벽 — ★★★[v103.3 · JACK 1021] 형식 + «뒷채움 터파기» ────────────
         // ★★[JACK 1124 «계획부지 수정 탭의 옹벽 부분을 통째로 옹벽 설정이라고 따로 빼서 일반 팝업 · 계획부지 수정 탭과 진입도로 수정 탭에 옹벽 설정 단추»]
-        //   칸 · 저장(도면 기록 WALLEXCAV · 바로 적기 · 0.7초 타이머) · 그림 · [단면 표]는 <see cref="WallSettingsWindow"/> [계획부지] 쪽으로 그대로 옮겼다 — 여기는 단추만(종전 «옹벽» 칸 자리)
+        //   칸 · 저장(도면 기록 WALLEXCAV — ★[JACK 1124] 팝업 [적용] 때만 · 그려 둔 종단 · 횡단 다시) · 그림 · [단면 표]는 <see cref="WallSettingsWindow"/> [계획부지] 쪽으로 옮겼다 — 여기는 단추만(DHWALLSET)
         _wallSetBtn = new Button
         {
             Content = "옹벽 설정", MinWidth = 96, Height = 30, Margin = new Thickness(0, 0, 6, 8), HorizontalAlignment = HorizontalAlignment.Left,

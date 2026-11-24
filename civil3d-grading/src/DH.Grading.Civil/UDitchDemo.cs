@@ -30,7 +30,7 @@ internal sealed class UDitchDemoView : Border
         ["udFit"] = (6.0, "지표면 맞춤 — 바닥이 지표를 따라 하강 · 급경사 구간은 낙차 · 큰 단차는 집수정 + 매설 관로"),
         ["udArea"] = (4.6, "면적 고르기 — 도면의 닫힌 폴리선 · 원 · 해치 선택 → 면적 합계 = 집수면적(ha)"),
         ["udRain"] = (4.2, "강우 — 공식 자료의 재현기간 · 지속기간 · 강우강도(CSV 표에서 1행 선택) · Q = C · I · A / 360"),
-        ["udBuild"] = (5.0, "모델 생성 — 전체 측구를 U형 콘크리트 솔리드로 생성(덮개 · 집수정 · 관로 포함) + 보고서"),
+        ["udBuild"] = (5.0, "측구 생성 — 평면은 U 선 · 3D 보기는 실제 모양(지표면 안 바꿈) + 보고서"),
         // ★[JACK 1122 «측구 입력값마다 애니메이션 — 측구 설계를 해 본 적이 없어 설계적인 뜻이 필요»]
         ["udSize"] = (6.0, "규격 — 안폭 B × 안높이 H(mm) · 허용 수심(통상 안높이의 80 %)까지의 유하 가능 유량 = 통수능 · 규격이 클수록 통수능 증가"),
         ["udCover"] = (4.6, "덮개 — 보행 · 차량 통행 구간은 스틸 그레이팅(틈새로 우수 유입) · 그 외는 개방형 U(청소 용이)"),
@@ -597,7 +597,7 @@ internal sealed class UDitchDemoView : Border
         {
             double a = Seg(t, 3.6, 4.4);
             var box = new Border { Opacity = a, Background = DhBrand.Card, BorderBrush = DhBrand.Line, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(4), Padding = new Thickness(8, 4, 8, 4),
-                Child = new TextBlock { Text = "솔리드 · 보고서(_U형측구.txt)", FontSize = 12, FontWeight = FontWeights.SemiBold, Foreground = DhBrand.Brand } };
+                Child = new TextBlock { Text = "U 선 · 보고서(_U형측구.txt)", FontSize = 12, FontWeight = FontWeights.SemiBold, Foreground = DhBrand.Brand } };
             Canvas.SetLeft(box, 40); Canvas.SetTop(box, 30); _cv.Children.Add(box);
         }
     }

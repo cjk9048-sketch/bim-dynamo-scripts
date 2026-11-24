@@ -4,11 +4,15 @@
 // ★[v117.16 · JACK 1112 «3D 뷰에서는 좀 보여야 하는데 … 측구가 지표면이랑 겹쳐서 안 보이네» · 열린 U형 · «civil3d 지표면엔 영향이 없게»]
 //   측구 자리 지형을 3D에서만 파낸다(uhole.js — 그릴 세모만 새로 · head.terrain · Civil 값은 그대로) · 안쪽(벽 안면 · 바닥)은 어두운 콘크리트 ·
 //   바닥 가운데 물 자국 · 양 끝 마구리 벽 · 층 «U형 측구»를 끄면 구멍도 닫힘(원래 지형).
+// ★[JACK 1124 «측구를 그렸더니 진입도로 모델링이 깨져 · 3D 뷰에서는 실제 모양으로 지표면엔 영향을 주지 않게 보이게만»]
+//   지형 세모를 더는 자르지 않는다(옛 CPU 구멍은 테두리 높이를 측구 윗면으로 내려 묻힌 측구 옆 도로 면이 꺼져 보였다).
+//   대신 그리기만 — 측구 · 집수정 윗면 자리(옛 구멍과 같은 평면 테두리)를 스텐실 한 비트에 먼저 적고(색 · 깊이 안 씀),
+//   지형 · 차선 · 줄눈은 그 비트가 선 화소만 안 그린다. 지형 메시 · 장면 값 · 누르기 · 자르기 · 빗물 셈은 원래 지형 그대로.
 // ★[v117.16 · JACK 1112 «측구에 스틸그라우팅도 선택되게 해줘»] head.uditch[*].grating = true → 윗면에 스틸 그레이팅(어두운 쇠 · 가는 살) · 구멍은 그대로.
 // ★[v117.16] 앞으로(C#이 넣으면 · 없으면 안 그림 · 같은 층) — 집수정 head.uditch[*].basins = [{ x, y, zTop, zBottom, w, l, rot? }](네모 상자 + 윗면 그레이팅 · 지형 구멍) ·
 //   관로 head.uditch[*].pipes = [{ x1, y1, z1, x2, y2, z2, d }](두 점 사이 원통 · z = 관 중심 · d = 바깥 지름 m) · 좌표 = 측구 메시와 같은 장면 좌표.
 import * as THREE from 'three';
-import { ditchFrames, chainFrames, mergeChain, holeShapes, cutTerrain, extendAttribute } from './uhole.js';
+import { ditchFrames, chainFrames, mergeChain, holeShapes } from './uhole.js';
 
 export const UDITCH_COLOR = '#c9c5bc';
 const TINT = { '부족': '#d79a92', '주의': '#d9cc8c' };
@@ -137,44 +141,67 @@ export function buildUDitch(head, scene, L, mk) {
   if (!grp.children.length) return;
   scene.add(grp);
   L.uditch = { obj: grp, label: 'U형 측구', on: true, n, stats };
-  // 지형 구멍 — 측구 바깥 벽 선 · 집수정 네모(관로는 땅속이라 없음)
+  // 윗면 자리 — 측구 바깥 벽 선 · 집수정 네모(관로는 땅속이라 없음) → 스텐실 가림(지형은 안 자름)
   const shapes = holeShapes(frames, basins);
   stats.holes = shapes.length;
-  if (shapes.length && L.terrain) holeTerrain(L.terrain, shapes, stats);
+  const mask = shapes.length ? openingMask(shapes) : null;
+  if (mask) {
+    grp.add(mask);                       // 층을 끄면(원지반 보기 포함) 가림도 같이 꺼짐 → 원래 지형
+    L.uditch.mask = mask;
+    if (L.terrain) maskTerrain(L.terrain);
+  }
 }
 
-// 지형 세모를 잘라 «구멍 지형»을 만든다 — 층을 끄면 원래 번호로 되돌림
-//   ★[v117.16 검토 M] 늘린 꼭짓점 값(원래 + 새 점)은 한 벌만 — 원래 지형도 그것을 쓴다(원래 번호는 앞 V0개만 가리킴 · 그래픽 카드에도 한 벌) ·
-//   head.terrain(pos · idx)은 그대로(누르기 · 자르기 선 · 경사는 원래 값)
-function holeTerrain(T, shapes, stats) {
-  const g0 = T.obj.geometry;
-  if (!g0.index || !g0.attributes.position) return;
-  let cut;
-  try { cut = cutTerrain(g0.attributes.position.array, g0.index.array, g0.groups, shapes); }
-  catch (e) { stats.error = String(e && e.message || e); return; }
-  if (!cut) return;
-  const V0 = g0.attributes.position.count, g = new THREE.BufferGeometry();
-  for (const [name, a] of Object.entries(g0.attributes)) {
-    const ext = new THREE.BufferAttribute(extendAttribute(a.array, a.itemSize, V0, cut, name), a.itemSize, a.normalized);
-    g0.setAttribute(name, ext);
-    g.setAttribute(name, ext);
+// ★[JACK 1124] 스텐실 맨 위 비트(3D 자르기 section.js는 아래 7비트) — 측구 윗면 자리
+export const MASK_BIT = 0x80;
+const KEEP = THREE.KeepStencilOp, REP = THREE.ReplaceStencilOp;
+
+// 윗면 자리 판(색 · 깊이 안 씀 · 지형보다 먼저 · 깊이 시험 없음) — 이 화소의 스텐실에 MASK_BIT
+function openingMask(shapes) {
+  const pos = [], idx = [];
+  for (const sh of shapes) {
+    const b = pos.length / 3;
+    for (let i = 0; i < sh.pts.length / 2; i++) pos.push(sh.pts[2 * i], sh.pts[2 * i + 1], (sh.zt[i] ?? 0) + 0.01);
+    for (const p of sh.polys) for (let k = 1; k + 1 < p.length; k++) idx.push(b + p[0], b + p[k], b + p[k + 1]);
   }
-  g.setIndex(new THREE.BufferAttribute(cut.index, 1));
-  for (const gr of cut.groups) g.addGroup(gr.start, gr.count, gr.materialIndex);
-  g.userData.faceSrc = cut.faceSrc;   // 누르기 — 새 세모 → 원래 세모(구분 · 절성토 · 경사는 원래 것으로)
+  if (!idx.length) return null;
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3));
+  g.setIndex(idx);
   g.computeBoundingSphere();
   g.computeBoundingBox();
-  T.fullGeom = g0;
-  T.holeGeom = g;
-  T.obj.userData.geomFull = g0;       // 세모 수 보고(DH3D.counts)는 원래 지형 그대로
-  Object.assign(stats, cut.stats);
+  const m = new THREE.MeshBasicMaterial({
+    colorWrite: false, depthWrite: false, depthTest: false, side: THREE.DoubleSide,
+    stencilWrite: true, stencilRef: MASK_BIT, stencilWriteMask: MASK_BIT, stencilFunc: THREE.AlwaysStencilFunc,
+    stencilFail: REP, stencilZFail: REP, stencilZPass: REP,
+  });
+  const mesh = new THREE.Mesh(g, m);
+  mesh.renderOrder = -10;
+  mesh.castShadow = false; mesh.receiveShadow = false;
+  mesh.raycast = () => {};
+  mesh.userData = { deco: 'mask' };
+  return mesh;
 }
 
-// 구멍은 U형 측구가 보일 때만 — 끄면 · 원지반 보기면 원래 지형(layers.js applyTerrainMode가 부름)
+// 지형(구분 재료 · 절성토 색) · 차선 · 줄눈 — MASK_BIT가 선 화소는 안 그림(쓰지는 않음)
+function maskTerrain(T) {
+  const set = (m) => {
+    if (!m) return;
+    Object.assign(m, {
+      stencilWrite: true, stencilWriteMask: 0x00, stencilRef: MASK_BIT, stencilFuncMask: MASK_BIT, stencilFunc: THREE.NotEqualStencilFunc,
+      stencilFail: KEEP, stencilZFail: KEEP, stencilZPass: KEEP,
+    });
+    m.userData.uditchMask = true;
+  };
+  for (const m of T.mats || []) set(m);
+  set(T.cfMat); set(T.laneMat); set(T.jointMat);
+}
+
+// ★[JACK 1124] 지형은 늘 원래 그대로 — 가림판은 층 묶음 안이라 층을 끄면 · 원지반 보기면 같이 꺼진다(layers.js applyTerrainMode가 부름 · 옛 이름 유지)
 export function applyUDitchHole(L, groundMode) {
   const T = L.terrain;
   if (!T || !T.holeGeom) return;
-  T.obj.geometry = L.uditch && L.uditch.on && !groundMode ? T.holeGeom : T.fullGeom;
+  T.obj.geometry = T.fullGeom;
 }
 
 // 측구 꾸밈(낙차로 이어진 구간 한 줄 ch) — 구간마다 바닥 물 자국 · 그레이팅(고른 측구만) · 줄 양 끝 마구리 벽(안쪽 재료 · 낙차 자리는 물이 넘어가니 안 막음)

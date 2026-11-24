@@ -46,7 +46,7 @@ test('U형 측구 — 풍선 = C# 줄 그대로 · 제목 없으면 이름', () 
 });
 
 // ── ★[v117.16 · JACK 1112 «측구가 지표면이랑 겹쳐서 안 보이네» · «스틸그라우팅도 선택되게»] 지형 구멍 · 안쪽 재료 · 그레이팅 · 집수정 · 관로 ──
-import { applyUDitchHole } from '../src/uditch.js';
+import { applyUDitchHole, MASK_BIT } from '../src/uditch.js';
 import { sceneMesh, gridTerrain } from './uditch-mesh.mjs';
 
 function fakeTerrain() {
@@ -63,9 +63,9 @@ function fakeTerrain() {
   return { obj: new THREE.Mesh(g, mats), mats, T };
 }
 
-test('U형 측구 — 지형 구멍(켜면 구멍 지형 · 끄면 · 원지반 보기면 원래) · 안쪽 어두운 재료 · 물 자국 · 마구리 · 그레이팅은 고른 측구만', () => {
+test('U형 측구 — ★[JACK 1124] 지형은 그대로(자르지 않음) · 윗면 자리 스텐실 가림 · 안쪽 어두운 재료 · 물 자국 · 마구리 · 그레이팅은 고른 측구만', () => {
   const scene = new THREE.Scene(), L = { terrain: fakeTerrain() };
-  const full = L.terrain.obj.geometry;
+  const full = L.terrain.obj.geometry, n0 = full.index.count, V0 = full.attributes.position.count;
   const a = sceneMesh([[-1, 5.2], [12, 5.2], [20, 9.1]], 9.75, 9.9), b = sceneMesh([[8.1, 15], [8.1, 5.2]], 9.85, 9.8, { B: 0.4, H: 0.4, Tw: 0.15 });
   buildUDitch({ uditch: [
     { name: 'D-001', status: 'OK', pos: a.pos, idx: a.idx },
@@ -76,13 +76,18 @@ test('U형 측구 — 지형 구멍(켜면 구멍 지형 · 끄면 · 원지반 
   assert.equal(U.stats.holes, 2);
   assert.equal(U.stats.failed, 0);
   assert.equal(U.stats.grating, 1);
-  assert.ok(T.holeGeom && T.fullGeom === full, '구멍 지형은 따로 · 원래는 그대로');
-  assert.ok(T.holeGeom.userData.faceSrc.length === T.holeGeom.index.count / 3);
-  assert.deepEqual(T.holeGeom.groups.map(g => g.materialIndex), [0, 1]);
-  assert.ok(T.holeGeom.attributes.uv2 && T.holeGeom.attributes.normal, '지형 값(uv2 · 법선) 함께 늘림');
-  assert.equal(T.obj.userData.geomFull, full);
-  // 켬/끔
-  applyUDitchHole(L, false); assert.equal(T.obj.geometry, T.holeGeom);
+  // ★[JACK 1124] 지형 메시 · 세모 · 점 그대로 — 윗면 자리는 가림판(층 묶음 안 · 색 · 깊이 안 씀 · 스텐실 맨 위 비트) · 지형 재료는 그 비트 자리만 안 그림
+  assert.equal(T.obj.geometry, full, '지형 메시 그대로');
+  assert.equal(T.holeGeom, undefined, '구멍 지형 없음');
+  assert.equal(full.index.count, n0);
+  assert.equal(full.attributes.position.count, V0);
+  const mask = U.mask;
+  assert.ok(mask && mask.parent === U.obj && mask.userData.deco === 'mask');
+  assert.ok(mask.material.colorWrite === false && mask.material.depthWrite === false && mask.material.stencilWrite && mask.material.stencilRef === MASK_BIT && mask.material.stencilWriteMask === MASK_BIT);
+  assert.ok(mask.renderOrder < 0, '지형보다 먼저');
+  assert.ok(T.mats.every(m => m.stencilWrite && m.stencilWriteMask === 0 && m.stencilFunc === THREE.NotEqualStencilFunc && m.stencilFuncMask === MASK_BIT), '지형은 가림 자리만 안 그림');
+  // 켬/끔 — 지형은 늘 그대로(가림판은 층과 같이 꺼짐)
+  applyUDitchHole(L, false); assert.equal(T.obj.geometry, full);
   U.on = false; applyUDitchHole(L, false); assert.equal(T.obj.geometry, full);
   U.on = true; applyUDitchHole(L, true); assert.equal(T.obj.geometry, full, '원지반 보기');
   // 측구 메시 — 바깥 · 안쪽(어두운) 두 재료 · 꾸밈 자식(물 자국 · 마구리 · 그레이팅)
@@ -117,8 +122,8 @@ test('U형 측구 — 집수정(상자 + 그레이팅 · 지형 구멍) · 관�
   assert.equal(U.n, 0, '측구 메시 없음');
   assert.equal(U.stats.basins, 1);
   assert.equal(U.stats.pipes, 1);
-  assert.equal(U.stats.holes, 1, '집수정 구멍 하나(관로는 땅속)');
-  assert.ok(L.terrain.holeGeom);
+  assert.equal(U.stats.holes, 1, '집수정 윗면 가림 하나(관로는 땅속)');
+  assert.ok(U.mask && !L.terrain.holeGeom, '가림판 · 지형 그대로');
   const [box, pipe] = U.obj.children;
   assert.equal(box.userData.layer, 'uditch');
   assert.equal(box.userData.title, '집수정');
@@ -167,7 +172,7 @@ test('U형 측구 — 구간 여럿(parts) · 낙차벽 · 집수정 사이: 구
   assert.deepEqual(pipe.userData.rows, [['지름', 'D300 (바깥 0.40 m)']]);
 });
 
-test('U형 측구(검토 M) — 원래 · 구멍 지형이 늘린 값 한 벌을 함께 씀 · 관로 토막 이음 공 · 집수정 안치수(inner)로 덮개', () => {
+test('U형 측구(검토 M) — ★[JACK 1124] 지형 값 그대로 · 관로 토막 이음 공 · 집수정 안치수(inner)로 덮개', () => {
   const scene = new THREE.Scene(), L = { terrain: fakeTerrain() };
   const full = L.terrain.obj.geometry, n0 = full.index.count, V0 = full.attributes.position.count;
   const m = sceneMesh([[2, 5], [12, 5]], 9.75, 9.7);
@@ -179,10 +184,9 @@ test('U형 측구(검토 M) — 원래 · 구멍 지형이 늘린 값 한 벌을
       { x1: 18, y1: 5, z1: 9.0, x2: 19.5, y2: 5, z2: 9.0, d: 0.4 },
     ] }] }, scene, L, mk);
   const T = L.terrain, U = L.uditch;
-  for (const k of Object.keys(full.attributes)) assert.equal(T.holeGeom.attributes[k], full.attributes[k], `${k} 한 벌`);
+  assert.equal(T.obj.geometry, full, '지형 메시 그대로');
   assert.equal(full.index.count, n0, '원래 번호 그대로');
-  assert.ok(full.attributes.position.count > V0, '새 점은 원래 번호가 안 가리킴');
-  assert.equal(T.obj.userData.geomFull, full);
+  assert.equal(full.attributes.position.count, V0, '지형 점 그대로(새 점 없음)');
   assert.equal(U.stats.pipes, 3);
   assert.equal(U.stats.joints, 2, '토막 셋 = 이음 둘(집수정 쪽 끝은 없음)');
   const joints = U.obj.children.filter(c => c.userData.deco === 'joint');

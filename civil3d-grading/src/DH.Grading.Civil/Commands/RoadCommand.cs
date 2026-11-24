@@ -1423,7 +1423,7 @@ public partial class RoadCommand
         {
             try
             {
-                if (tr.GetObject(vid, OpenMode.ForRead) is not CivilDb.ProfileView pv) continue;
+                if (tr.GetObject(vid, OpenMode.ForRead) is not CivilDb.ProfileView pv || RoadSheets.IsSheetTwin(pv)) continue;   // ★[v117.37.1] 배치탭 쌍둥이 빼고
                 for (int i = 0; i < n; i++)
                 {
                     var q = prof.PVIs[i];

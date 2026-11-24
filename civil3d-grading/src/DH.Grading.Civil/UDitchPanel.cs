@@ -45,7 +45,7 @@ internal sealed class UDitchPanel : UserControl
     readonly TextBox _years, _mins, _int, _src, _ver, _start, _end, _area, _c;
     readonly ComboBox _csv, _ditch, _size, _cover;
     readonly TextBlock _result, _status, _rainState, _site, _foot;
-    readonly Button _build, _rev, _auto, _areaBtn, _zoom, _recBtn, _pick, _draw, _csvBtn;
+    readonly Button _build, _rev, _auto, _areaBtn, _zoom, _recBtn, _pick, _draw, _edge, _csvBtn;
     internal readonly Button DeleteButton;
     readonly FrameworkElement _csvRow, _segBox;
     readonly StackPanel _segs;
@@ -87,8 +87,9 @@ internal sealed class UDitchPanel : UserControl
         root.Children.Add(_ditch);
         _pick = Btn("선 고르기", "폴리선 · 3D 폴리선 · 선 — 그린 방향 = 흐름", "udLine");
         _draw = Btn("선 그리기", "평면에서 점을 차례로 찍고 Enter", "udLine");
+        _edge = Btn("경계 따라", "경계(사면 끝선 · 옹벽선 · 도로 경계 · 부지 경계) 선택 → 시점 · 종점 → 마우스 거리만큼 그 구간만 평행", "udLine");   // ★[JACK 1124]
         _zoom = Btn("도면에서 보기", "고른 측구로 화면 이동 + 빨간 선으로 표시", "udLine");
-        root.Children.Add(new WrapPanel { Children = { _pick, _draw, _zoom }, Margin = new Thickness(0, 0, 0, 8) });
+        root.Children.Add(new WrapPanel { Children = { _pick, _draw, _edge, _zoom }, Margin = new Thickness(0, 0, 0, 8) });
 
         _size = new ComboBox { Height = 28, MinWidth = 130, ToolTip = "표준 규격(설정 파일 UDitch.settings.json)" };
         foreach (var z in _v.S.Sizes) _size.Items.Add("U형 " + z.Label);
@@ -138,8 +139,8 @@ internal sealed class UDitchPanel : UserControl
 
         _build = new Button
         {
-            Content = "모델 생성 (모든 측구)", Height = 36, Margin = new Thickness(0, 10, 0, 4), FontWeight = FontWeights.SemiBold,
-            ToolTip = "모든 측구를 다시 지음 — 솔리드(레이어 DH-U형측구) · 보고서(도면 옆 _U형측구.txt)",
+            Content = "측구 생성 (모든 측구)", Height = 36, Margin = new Thickness(0, 10, 0, 4), FontWeight = FontWeights.SemiBold,
+            ToolTip = "모든 측구를 다시 셈 — 평면 = U 선 · 3D 보기 = 실제 모양 · 지표면 안 바꿈 · 보고서(도면 옆 _U형측구.txt)",
         };
         try { var (pb, _) = DhBrand.FooterButtons("x"); if (pb.Style is Style ps) _build.Style = ps; } catch { }   // 기본 단추 모양(청록)
         _build.MouseEnter += (_, __) => _demo.Play("udBuild");
@@ -230,6 +231,7 @@ internal sealed class UDitchPanel : UserControl
         _auto.Click += (_, __) => Send?.Invoke("DHUDITCHFIT");
         _pick.Click += (_, __) => Send?.Invoke("DHUDITCHPICK");
         _draw.Click += (_, __) => Send?.Invoke("DHUDITCHDRAW");
+        _edge.Click += (_, __) => Send?.Invoke("DHUDITCHEDGE");
         _zoom.Click += (_, __) => Send?.Invoke("DHUDITCHZOOM");
         _areaBtn.Click += (_, __) => Send?.Invoke("DHUDITCHAREA");
         _build.Click += (_, __) => Send?.Invoke("DHUDITCHBUILD");
@@ -259,7 +261,7 @@ internal sealed class UDitchPanel : UserControl
         _foot.Text = v.Foot;
         FillCsv();
         FillDitches();
-        foreach (UIElement x in new UIElement[] { _years, _mins, _int, _src, _ver, _csvBtn, _pick, _draw }) x.IsEnabled = v.HasDoc;
+        foreach (UIElement x in new UIElement[] { _years, _mins, _int, _src, _ver, _csvBtn, _pick, _draw, _edge }) x.IsEnabled = v.HasDoc;
         _loading = false;
         LoadDitch();
     }
