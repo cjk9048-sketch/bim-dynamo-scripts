@@ -218,6 +218,13 @@ public static class GradingPalette
         catch { }
     }
 
+    /// <summary>★[JACK 1124] [옹벽 설정] 팝업이 터파기 · 형식 기록을 적은 뒤 — 정지 창이 그 도면 값을 다시 읽어 사면 그림의 옹벽 모양을 맞춘다(칸 값은 안 건드림).</summary>
+    internal static void ReloadExcav()
+    {
+        try { _panel?.ReloadExcav(); }
+        catch { }
+    }
+
     /// <summary>★<b>도면을 바꾸면 그 도면 값으로 맞춘다.</b>
     /// <para>이것이 없으면 창이 <b>앞 도면 값</b>을 보여주고, [값 저장]이 그것을
     /// <b>새 도면에 밀어 넣는다</b>(검토 0909가 짚은 함정).</para></summary>

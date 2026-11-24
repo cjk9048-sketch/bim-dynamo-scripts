@@ -601,7 +601,8 @@ internal static class WallSectionDraw
         {
             try
             {
-                if (tr.GetObject(id, OpenMode.ForRead) is Entity e && TagOf(e, out string k, out string v) && (kind == null || k == kind) && (view == null || v == view)) kill.Add(id);
+                // ★[JACK 1124] 진입도로 횡단 옹벽 단면(도로 표식)은 부지 지우기가 안 지운다 — 도로 [횡단도]가 자기 표식으로 지움
+                if (tr.GetObject(id, OpenMode.ForRead) is Entity e && TagOf(e, out string k, out string v) && (kind == null || k == kind) && (view == null || v == view) && !Commands.SheetTag.IsRoad(e)) kill.Add(id);
             }
             catch { }
         }

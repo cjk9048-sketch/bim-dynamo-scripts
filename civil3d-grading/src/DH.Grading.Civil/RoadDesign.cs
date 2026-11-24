@@ -20,6 +20,12 @@ internal sealed class RoadDesign
     public double[] BendBackup = Array.Empty<double>(), BendApplied = Array.Empty<double>();
     /// <summary>★[v117.18.12 · JACK 1116 «꺾임 소단: 단차 / 전이»] 급한 굽이 안쪽 소단 — 거짓 = 단차(기본 · 옛 기록) · 참 = 전이(<see cref="RoadGrade.Input.BendTrans"/>). 도로 면 지문에 듦(켰을 때만).</summary>
     public bool BendTrans;
+    /// <summary>★[JACK 1124 «옹벽 설정 팝업 — 진입도로 절성토 옹벽 모양»] 진입도로 절토 · 성토 옹벽 단면 형식(<see cref="WallSection.Kind"/> 이름) — null = 계획부지와 같음.
+    /// 옛 기록 = 칸 없음(옛 JSON 바이트 그대로) · 1단계는 저장만(쓰는 곳은 다음 판 — 진입도로 횡단 · 종단 표준 단면) · 도로 면 지문에 안 듦.</summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string? WallCutKind;
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string? WallFillKind;
     public double SuggestH = 0;                // 옹벽 제안 높이(0 = 안 봄)
     public string LimitHandle = "";             // 사업 경계 폴리선 핸들
     public string GroundHandle = "";            // ★[v117.19 · JACK 1116 «창마다 [원지반 선택]»] 이 도로가 놓일 원지반의 핸들(고른 것 · 빈 글 = 자동 — 원지반이 하나면 그것). 정지면이 바탕이면 안 씀. 옛 기록 = 빈 글

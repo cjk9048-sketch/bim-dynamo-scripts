@@ -264,6 +264,14 @@ internal sealed class RoadPanel : UserControl
             _wallAdd = WB(wRow2, "옹벽 추가", "DHROADWALLADD", "경계 → 사면 띠 안 → 경계 클릭 → 선 따라 옹벽", "add");
             _roadDel = WB(wRow2, "옹벽 삭제", "DHROADWALLDEL", "[옹벽 추가] 옹벽 자리 클릭 → Enter → 옹벽 지움 · 원래 사면", "delete");
             _host.Children.Add(wGrid);
+            // ★[JACK 1124 «진입도로 수정 탭에 옹벽 설정 단추 → 옹벽 설정 팝업(진입도로 쪽)»] 절토 · 성토 옹벽 단면 형식 — 도로가 없어도 열림(계획부지 쪽은 늘 씀)
+            _wallSetBtn = new Button
+            {
+                Content = "옹벽 설정", Height = 30, MinWidth = 96, Padding = new Thickness(12, 0, 12, 0), Margin = new Thickness(0, 2, 6, 6),
+                HorizontalAlignment = HorizontalAlignment.Left, VerticalContentAlignment = VerticalAlignment.Center, ToolTip = "절토 · 성토 옹벽 단면 형식 → 팝업(진입도로 · 계획부지)",
+            };
+            _wallSetBtn.Click += (_, __) => WallSettingsWindow.Open(road: true);
+            _host.Children.Add(_wallSetBtn);
         }
         // ★[v116.4 · JACK 1109 «옹벽 제안 기능은 필요 없으니 없앨 것»] 옹벽 제안 한 줄(제안 높이 · [사업 경계]) 없앰 — 옛 기록 칸(SuggestH · LimitHandle)은 읽기만 하고 안 씀
 
@@ -402,6 +410,9 @@ internal sealed class RoadPanel : UserControl
     internal Button? WallDelButton => _roadDel;
     internal Button UpdateButton => _updateBtn;
     internal Button ResetButton => _resetBtn;
+    /// <summary>★[JACK 1124] [옹벽 설정](■ 옹벽 끝) — 시험이 보이는지 잰다.</summary>
+    internal Button WallSetButton => _wallSetBtn;
+    Button _wallSetBtn = null!;
 
     StackPanel _ditchBody = null!;
     readonly List<TextBox> _ditchUBoxes = new(), _ditchLBoxes = new();

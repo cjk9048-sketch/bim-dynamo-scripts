@@ -2219,20 +2219,6 @@ internal sealed partial class FixDemoView : Border
         DashPl(c, A(Colors.White, op), 1.2, 6, 5);
         Pl(c, null, A(RdBlueC, op), 2.2, closed: false);
     }
-    /// <summary>곡선 반경 R 표시 — 곡선 시작 · 끝 접선에서 둥근 곡선의 가운데까지(중심점 · 점선 · «R»).</summary>
-    void RadiusMark(Point[] v, int i, double d, double op)
-    {
-        if (op <= 0.01) return;
-        var p = v[i]; double l0 = Dist(p, v[i - 1]), l1 = Dist(p, v[i + 1]);
-        var a = L(p, v[i - 1], Math.Min(d, l0 * 0.45) / l0); var b = L(p, v[i + 1], Math.Min(d, l1 * 0.45) / l1);
-        var m = new Point(0.25 * a.X + 0.5 * p.X + 0.25 * b.X, 0.25 * a.Y + 0.5 * p.Y + 0.25 * b.Y);
-        var mid = L(a, b, 0.5); double dl = Math.Max(1e-6, Dist(mid, p));
-        var dir = new Point((mid.X - p.X) / dl, (mid.Y - p.Y) / dl);
-        var c = new Point(m.X + dir.X * 40, m.Y + dir.Y * 40);
-        var br = A(RedC, op);
-        Ln(c, m, br, 1.4, true); Dot(c, 2.6, br);
-        TxB((c.X + m.X) / 2 + 3, (c.Y + m.Y) / 2 - 8, "R", 12, Red, true, op);
-    }
     void DimH(double x0, double x1, double y, string s, double op, double ty = -16)
     {
         if (op <= 0.01) return;
@@ -2282,19 +2268,6 @@ internal sealed partial class FixDemoView : Border
     }
     static string Num(double v, string f = "0.##") => double.IsFinite(v) ? v.ToString(f, System.Globalization.CultureInfo.InvariantCulture) : "—";
     static double Cl(double v, double lo, double hi, double fb) => double.IsFinite(v) ? Math.Clamp(v, lo, hi) : fb;
-
-    // 노선 — 꺾인 선이 그려지고 → 꺾인 곳이 곡선 반경 R로 둥글어짐 → R 표시(실제 값)
-    void RoadAlign(double t)
-    {
-        double draw = Seg(t, 0.3, 1.5), u = Seg(t, 2.0, 3.2);
-        double fd = Math.Clamp(46 * Cl(RP.CurveR, 3, 1000, 30) / 30, 12, 90);   // 곡선 반경 R에 따라 둥근 크기가 변함(그림 비례)
-        if (u <= 0) Pl(PartOf(RdV, draw), null, RouteBr, 2.6, closed: false);
-        else { DashPl(RdV, A(RdBlueC, 0.35), 1.4); Pl(Fillet(RdV, fd * u), null, RouteBr, 2.6, closed: false); }
-        double dots = Seg(t, 1.5, 1.8) * (1 - u);
-        for (int i = 1; i < 3; i++) if (dots > 0.05) Dot(RdV[i], 4, A(RedC, dots));
-        for (int i = 1; i < 3; i++) RadiusMark(RdV, i, fd, Seg(t, 3.2, 3.6));
-        TxB(14, 12, $"곡선 반경 R = {Num(RP.CurveR)} m", 12, Txt, true, Seg(t, 3.3, 3.7));
-    }
 
     // 횡단 — 실제 차로 반폭(좌 · 우) · 횡단경사 · 길어깨 폭 · 길어깨 경사 · 세로만 일정 배율로 과장(글자는 실제 값)
     void RoadXsec(double t)
@@ -2539,52 +2512,6 @@ internal sealed partial class FixDemoView : Border
                 Ln(new Point(s1.X, s1.Y - 2), new Point(cutC[2].X, s1.Y - 2), br, 3);
                 DimH(Math.Min(s1.X, cutC[2].X), Math.Max(s1.X, cutC[2].X), s1.Y - 14, $"소단 {Num(rp.CutBenchW)} m", ba);
             }
-        }
-    }
-
-    // 도로 경로 그리기 — 점을 차례로 찍고 → Enter → 꺾인 곳 곡선 → 도로 띠
-    void RoadDraw(double t)
-    {
-        double[] ck = { 0.7, 1.5, 2.3, 3.1 };
-        int n = 0; for (int i = 0; i < 4; i++) if (t >= ck[i]) n = i + 1;
-        double mo = Seg(t, 4.2, 5.0);
-        if (mo <= 0.01)
-        {
-            var pts = new List<Point>(); for (int i = 0; i < n; i++) pts.Add(RdV[i]);
-            if (n >= 2) Pl(pts, null, RouteBr, 2.4, closed: false);
-            foreach (var p in pts) Dot(p, 3.5, Red);
-        }
-        else
-        {
-            var cv = Fillet(RdV, 46 * mo);
-            RoadBand(cv, Math.Min(1, mo * 1.5));
-        }
-        Key(330, 16, "Enter", Seg(t, 3.7, 3.9) * (1 - Seg(t, 4.1, 4.3)));
-        if (t < 4.0)
-        {
-            var home = new Point(380, 280); Point m;
-            if (t < ck[0]) m = L(home, RdV[0], Seg(t, 0.1, ck[0]));
-            else { m = RdV[0]; for (int i = 1; i < 4; i++) if (t >= ck[i - 1]) m = L(RdV[i - 1], RdV[i], Seg(t, ck[i - 1] + 0.2, ck[i])); }
-            Ptr(m, Pulse(t, ck));
-        }
-    }
-
-    // 폴리선 선택 — 그려 둔 폴리선 클릭 → 빨강 · 도로로
-    void RoadPick(double t)
-    {
-        double sel = Seg(t, 1.5, 1.8), mo = Seg(t, 2.3, 3.4);
-        if (mo <= 0.01)
-        {
-            Pl(RdV, null, Fz(0x77, 0x77, 0x77), 2.2, closed: false);
-            if (sel > 0.01) Pl(RdV, null, A(RedC, 0.7 * sel), 3.4, closed: false);
-        }
-        else RoadBand(Fillet(RdV, 46 * mo), Math.Min(1, mo * 1.5));
-        TxB(18, 14, "기존 폴리선", 12, Txt, false, 1 - mo);
-        TxB(18, 14, "도로", 12, Green, true, mo);
-        if (t < 2.4)
-        {
-            var tgt = L(RdV[0], RdV[1], 0.55);
-            Ptr(L(new Point(380, 280), tgt, Seg(t, 0.2, 1.2)), Pulse(t, 1.3));
         }
     }
 

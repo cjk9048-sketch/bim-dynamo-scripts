@@ -177,6 +177,163 @@ public sealed partial class XsecViewCommand
         return nSec > 0 ? $"측구 단면 {nSec}" : "";
     }
 
+    /// <summary>★★[JACK 1124 · 진입도로 옹벽 표준단면 2단계] 진입도로 횡단 — 도로가 가진 옹벽(절토 · 성토)마다 부지 횡단과 같은 표준 단면(<see cref="WallSectionDraw.DrawOne"/> · 같은 레이어 · 인출 · 보강토 블록 무늬 · 보강재 점선).
+    /// <para>자리 = 엔진이 그린 이 도로의 옹벽선(«DH도로-옹벽선» · 도로 표식 DH_ROADLINE)과 표본선이 만나는 곳 · 높이 = 그 곁 진입도로 면의 수직 단차(표본선을 따라 1 cm마다 — 벽 밑 · 벽 위 · 흙 쪽).
+    /// 흙 쪽이 중심선에서 먼 쪽이면 절토 옹벽 · 가까운 쪽이면 성토 옹벽 · 형식 = <see cref="RoadWallKinds.Of"/>. 수량 · 터파기는 안 바꿈(그림만 · 표식은 <see cref="BuildRoad"/>가 «XSEC»).</para></summary>
+    static string DrawRoadWallSections(Database db, List<(ObjectId Id, double St, string Name)> views, ObjectId alignId, ObjectId roadSurfId, ObjectId baseSurfId, double wl, double wr, double scale, System.Text.StringBuilder log)
+    {
+        int nSec = 0, nEnt = 0, nSkip = 0, nNoStep = 0, nDup = 0, nMap = 0, nLab = 0, nOver = 0, nLines = 0;
+        string kc = "?", kf = "?", why = "";
+        try
+        {
+            if (views == null || views.Count == 0) why = "뷰 없음";
+            else if (roadSurfId.IsNull || roadSurfId.IsErased) why = "진입도로 지표면 없음";
+            else
+            {
+                var dash = WallSectionDraw.Prepare(db);
+                using var tr = db.TransactionManager.StartTransaction();
+                if (tr.GetObject(alignId, OpenMode.ForRead) is not CivilDb.Alignment al) { tr.Commit(); why = "노선 없음"; }
+                else
+                {
+                    var (kCut, kFill) = RoadWallKinds.Of(tr, alignId);
+                    kc = WallSection.Of(kCut).Name; kf = WallSection.Of(kFill).Name;
+                    // 엔진이 그린 이 도로의 옹벽선(평면 XY)
+                    string me = alignId.Handle.ToString();
+                    var ms = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForWrite);
+                    var lines = new List<List<(double X, double Y)>>();
+                    var cls = Autodesk.AutoCAD.Runtime.RXObject.GetClass(typeof(Polyline3d));
+                    foreach (ObjectId id in ms)
+                    {
+                        try
+                        {
+                            if (!id.ObjectClass.IsDerivedFrom(cls)) continue;
+                            if (tr.GetObject(id, OpenMode.ForRead) is not Polyline3d pl || !string.Equals(pl.Layer, RoadSession.LayWall, System.StringComparison.OrdinalIgnoreCase)) continue;
+                            using var rb = pl.GetXDataForApplication(RoadSession.LineApp);
+                            var v = rb?.AsArray();
+                            if (v == null || v.Length < 2 || v[1].Value as string != me) continue;
+                            var pts = new List<(double X, double Y)>();
+                            foreach (ObjectId pvId in pl) if (tr.GetObject(pvId, OpenMode.ForRead) is PolylineVertex3d pv) pts.Add((pv.Position.X, pv.Position.Y));
+                            if (pts.Count >= 2) lines.Add(pts);
+                        }
+                        catch { }
+                    }
+                    nLines = lines.Count;
+                    if (lines.Count == 0) { tr.Commit(); why = "옹벽선 없음"; }
+                    else
+                    {
+                        var surf = new CachedGroundSurface((CivilDb.TinSurface)tr.GetObject(roadSurfId, OpenMode.ForRead));
+                        // 진입도로 면 밖(벽 위 · 벽 밑이 데이라잇이면 면이 벽 끝에서 끝남)은 바탕면 — 그래야 단차 끝(벽 위 · 앞 땅)을 잰다(면 끝 점은 벽 면 위라 최대 1 m 낮게 잼 — rwxs3 실측)
+                        CivilDb.TinSurface? bTin = null;
+                        try { if (!baseSurfId.IsNull && !baseSurfId.IsErased && baseSurfId != roadSurfId) bTin = tr.GetObject(baseSurfId, OpenMode.ForRead) as CivilDb.TinSurface; } catch { }
+                        var tCut = WallListStore.SectionOf(db, kCut, out _);
+                        var tFill = kFill == kCut ? tCut : WallListStore.SectionOf(db, kFill, out _);
+                        double slopeW = GradingSettings.MinSlope;
+                        var cmn = WallListStore.ExcavOf(db, out _).Common(slopeW);
+                        var L = WallSectionDraw.XsecLayers(db, tr, dash);
+                        var kst = ImportGisCommand.EnsureKoreanTextStyle(db, tr);
+                        double txtH = WallSectionDraw.LabelMm / 1000.0 * scale;
+                        foreach (var (vid, _, _) in views)
+                        {
+                            try
+                            {
+                                if (tr.GetObject(vid, OpenMode.ForRead) is not CivilDb.SectionView sv) continue;
+                                if (tr.GetObject(sv.SampleLineId, OpenMode.ForRead) is not CivilDb.SampleLine sl) continue;
+                                if (!SectionCommand.TryCut(al, sl.Station, wl, wr, out var cut)) continue;
+                                double ax = cut.Left.X, ay = cut.Left.Y, ux = cut.Right.X - ax, uy = cut.Right.Y - ay, lc = System.Math.Sqrt(ux * ux + uy * uy);
+                                if (lc < 1e-6) continue;
+                                ux /= lc; uy /= lc;
+                                double Z(double s)
+                                {
+                                    if (s < 0 || s > lc) return double.NaN;
+                                    double x = ax + ux * s, y = ay + uy * s;
+                                    if (surf.TryGetElevation(x, y, out double z)) return z;
+                                    if (bTin != null) try { return bTin.FindElevationAtXY(x, y); } catch { }
+                                    return double.NaN;
+                                }
+                                var found = new List<WallExcav.CutSec>();
+                                for (int li = 0; li < lines.Count; li++)
+                                {
+                                    var pl = lines[li];
+                                    for (int i = 0; i + 1 < pl.Count; i++)
+                                    {
+                                        double ex = pl[i + 1].X - pl[i].X, ey = pl[i + 1].Y - pl[i].Y, eL = System.Math.Sqrt(ex * ex + ey * ey);
+                                        if (eL < 1e-9) continue;
+                                        double den = ux * ey - uy * ex, sinT = System.Math.Abs(den) / eL;
+                                        if (sinT < 1e-9) continue;
+                                        double wx = pl[i].X - ax, wy = pl[i].Y - ay;
+                                        double s = (wx * ey - wy * ex) / den, t = (wx * uy - wy * ux) / den;
+                                        if (s < 0 || s > lc || t < -1e-9 || t > 1 + 1e-9) continue;
+                                        if (sinT < WallSectionDraw.MinSin) { nSkip++; continue; }
+                                        var stp = RoadWallStep(Z, s);
+                                        if (stp == null) { nNoStep++; continue; }
+                                        var (sToe, toe, h, sign, rfSec) = stp.Value;
+                                        if (found.Exists(c => c.Sign == sign && System.Math.Abs(c.Dist - sToe) < 0.05)) { nDup++; continue; }   // 같은 벽(옹벽선 두 줄 · 꺾임점)
+                                        bool up = sign * (-wl + sToe) > 0;                                                                     // 흙 쪽이 중심선에서 멀면 절토 옹벽
+                                        var tb = up ? tCut : tFill; var kind = up ? kCut : kFill;
+                                        var row = WallSection.Lookup(tb, h, out bool over, out double hTot, out bool below, out double df, rfSec / sinT);
+                                        var sh = WallSection.BuildRow(kind, row, hTot, cmn, up, df);
+                                        sh.Over = over; sh.Below = below;
+                                        if (over) nOver++;
+                                        found.Add(new WallExcav.CutSec(sToe, sign, 1.0 / sinT, sinT, toe, sh, kind, up, li, i, System.Math.Clamp(t, 0, 1), slopeW));
+                                    }
+                                }
+                                if (found.Count == 0) continue;
+                                var map = WallSectionDraw.Affine(-wl, wr, sv.ElevationMin, sv.ElevationMax,
+                                    (o, z) => { double x = 0, y = 0; return sv.FindXYAtOffsetAndElevation(o, z, ref x, ref y) ? new Point2d(x, y) : (Point2d?)null; });
+                                if (map == null) { nMap++; continue; }
+                                found.Sort((a, b) => a.Dist.CompareTo(b.Dist));
+                                var offs = found.Select(c => -wl + c.Dist).ToList();
+                                var pick = WallSectionDraw.PickLabels(found, offs);
+                                for (int ci = 0; ci < found.Count; ci++)
+                                {
+                                    nEnt += WallSectionDraw.DrawOne(db, tr, ms, found[ci], offs[ci], map, txtH, System.Math.Max(0, pick[ci]), L, kst, WallSectionDraw.KindXsec, vid.Handle.ToString(), pick[ci] >= 0);
+                                    nSec++; if (pick[ci] >= 0) nLab++;
+                                }
+                            }
+                            catch (System.Exception exV) { log?.AppendLine("  진입도로 옹벽 단면 — 뷰 하나 실패: " + exV.Message); }
+                        }
+                        tr.Commit();
+                    }
+                }
+            }
+        }
+        catch (System.Exception ex) { why = "⚠못 그림 — " + ex.Message; }
+        log?.AppendLine($"  진입도로 옹벽 단면 {nSec}개 · 형식 절토 {kc} / 성토 {kf} · 옹벽선 {nLines}줄 · 인출 {nLab}"
+                      + $" · 보강토 점선 {WallSectionDraw.TakeGrid()}줄 · 블록 무늬 {WallSectionDraw.TakeBlockHatch()}"
+                      + (nDup > 0 ? $" · 겹친 자리 {nDup}" : "") + (nSkip > 0 ? $" · 벽과 거의 나란해 뺀 것 {nSkip}" : "")
+                      + (nNoStep > 0 ? $" · 단차 못 찾음 {nNoStep}" : "") + (nOver > 0 ? $" · ⚠표보다 높은 벽 {nOver}" : "")
+                      + (nMap > 0 ? $" · ⚠뷰 좌표를 못 잰 뷰 {nMap}" : "") + (why.Length > 0 ? $" · {why}" : "") + $" · 개체 {nEnt}");
+        return nSec > 0 ? $"옹벽 단면 {nSec}" : why.StartsWith("⚠") ? "⚠옹벽 단면 " + why : "";
+    }
+
+    /// <summary>표본선 위 <paramref name="s0"/>(옹벽선 교점) ± 0.6 m에서 면의 수직 단차 — 1 cm 칸 기울기가 5(1:0.2)보다 가파른 이어진 칸(같은 오름 방향) · 높이 0.2 m 이상 · 교점에 가장 가까운 것.
+    /// 돌려줌 = 벽 밑 자리(표본선 거리) · 벽 밑 높이 · 보이는 높이 · 흙 쪽(+1 = 표본선 방향) · 앞 땅 기울기(흙 쪽으로 오름 · 표본선 방향). 없으면 null.</summary>
+    static (double S, double Toe, double H, int Sign, double Rf)? RoadWallStep(System.Func<double, double> z, double s0)
+    {
+        const double dS = 0.01, win = 0.6, steep = 5, hMin = 0.2;
+        int n = (int)System.Math.Round(2 * win / dS);
+        double sA = s0 - win;
+        var zs = new double[n + 1];
+        for (int k = 0; k <= n; k++) zs[k] = z(sA + k * dS);
+        bool Steep(int k, int sg) => double.IsFinite(zs[k]) && double.IsFinite(zs[k + 1]) && System.Math.Abs(zs[k + 1] - zs[k]) >= steep * dS && (sg == 0 || System.Math.Sign(zs[k + 1] - zs[k]) == sg);
+        int bi0 = -1, bi1 = -1; double bestD = double.MaxValue;
+        for (int k = 0; k < n;)
+        {
+            if (!Steep(k, 0)) { k++; continue; }
+            int k0 = k, sg = System.Math.Sign(zs[k + 1] - zs[k]);
+            while (k < n && Steep(k, sg)) k++;
+            if (System.Math.Abs(zs[k] - zs[k0]) >= hMin)
+            {
+                double d = System.Math.Abs(sA + (k0 + k) / 2.0 * dS - s0);
+                if (d < bestD) { bestD = d; bi0 = k0; bi1 = k; }
+            }
+        }
+        if (bi0 < 0) return null;
+        int sign = zs[bi1] > zs[bi0] ? 1 : -1, lo = sign > 0 ? bi0 : bi1, hi = sign > 0 ? bi1 : bi0, fi = lo - sign * 10;
+        double rf = fi >= 0 && fi <= n && double.IsFinite(zs[fi]) ? (zs[lo] - zs[fi]) / (10 * dS) : 0;
+        return (sA + lo * dS, zs[lo], zs[hi] - zs[lo], sign, rf);
+    }
+
     /// <summary>★★[v116.8 · JACK 1110 «포장 아스팔트 · 콘크리트 — 횡단에도 표현» · 계획 `2026-11-10_진입도로_포장종류.md` §4] 진입도로 횡단 — 마감면(계획 종단 + 횡단 경사) 아래
     /// 길어깨 양 끝 사이 포장 층(<see cref="RoadPave.Rings"/> · ★[JACK 1117] 길어깨 = 차로와 같은 층) · 층마다 윤곽 + 비연관 해치(종이 1 mm보다 얇으면 윤곽만) · 뷰마다 지시선 하나에 층 이름 · 두께를 쌓은 글.
     /// 토공 · 도로 면은 그대로(표시만). 표식은 <see cref="BuildRoad"/>가 그린 것 모두에(«XSEC» — 다시 그릴 때 · 초기화가 지움).

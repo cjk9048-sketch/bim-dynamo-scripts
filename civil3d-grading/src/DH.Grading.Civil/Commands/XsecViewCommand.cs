@@ -888,6 +888,7 @@ public sealed partial class XsecViewCommand
         X9("옹벽 단면");
         // ★[v111.5 · 계획 2 · 검토 M2] 진입도로 = 옹벽 단면 · 터파기선을 안 그림(도로 옹벽은 지표면 선의 수직면으로만 — 부지 옹벽 기록은 부지 노선 것)
         string wsec = t == null ? DrawWallSections(db, viewIds, alignId, wl, wr, scale, log, qty.X2) : DrawDitchSections(db, viewIds, alignId, wl, wr, scale, log);
+        if (t != null) { string rws = DrawRoadWallSections(db, viewIds, alignId, t.RoadSurfId, t.BaseSurfId, wl, wr, scale, log); if (rws.Length > 0) wsec = wsec.Length > 0 ? wsec + " · " + rws : rws; }   // ★[JACK 1124] 진입도로 옹벽 = 부지와 같은 표준 단면(그림만)
         DrawBenchLines(db, viewIds, alignId, wl, wr, qty.Bench, log);   // ★[JACK 1116 층따기] 빨간 계단
         if (t != null) { string psec = DrawPaveSections(db, viewIds, alignId, wl, wr, scale, log); if (psec.Length > 0) wsec = wsec.Length > 0 ? wsec + " · " + psec : psec; }   // ★[v116.8 · JACK 1110] 진입도로 = 포장 층   // ★★★[v104.1 · JACK 1022] 옹벽 단면 넣기 · ★[v105.3] 2D 터파기선 · 배면 · ★[도로 마무리 ②] 진입도로 = 측구 단면
         // ★[v115 · JACK 1105 Revit 구조물] 자른 면(진입도로는 BuildRoad 표식이 붙는다) · 부지 축척은 [다시 반영]용으로 적어 둠
