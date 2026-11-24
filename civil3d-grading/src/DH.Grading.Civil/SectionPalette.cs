@@ -121,7 +121,7 @@ internal sealed class SectionPanel : UserControl
                                   pad: new Thickness(0, 0, 0, 6));
         head.Background = Brushes.Transparent;
 
-        var demo = new FixDemoView("단추에 마우스 → 예시", "pfProfile") { Margin = new Thickness(0, 0, 0, 8), HorizontalAlignment = HorizontalAlignment.Left, BenchRoad = road };
+        var demo = new FixDemoView("단추에 마우스를 올리면 예시 표시", "pfProfile") { Margin = new Thickness(0, 0, 0, 8), HorizontalAlignment = HorizontalAlignment.Left, BenchRoad = road };
         _secDemo = demo;
 
         // ── 1. 종단도 ──

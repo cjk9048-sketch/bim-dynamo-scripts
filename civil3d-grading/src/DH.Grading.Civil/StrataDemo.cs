@@ -57,11 +57,11 @@ internal sealed class StrataDemoView : Border
 
     static readonly Dictionary<string, (double Period, string Caption)> Spec = new()
     {
-        ["stLive"] = (1.0, "② 보링공 — 평면 위치 · 공마다 주상도(같은 표고 축 · 공끼리 안 이음)"),
-        ["stGl"] = (5.2, "층별 GL값 — 공마다 암층 상단 표고(EL) · 지반~첫 암 = 토사(자동)"),
-        ["stTh"] = (5.0, "층별 두께 — 공마다 지반고에서 아래로 층 두께(m)"),
+        ["stLive"] = (1.0, "② 보링공 — 평면 위치 · 공별 주상도(동일 표고 축 · 공 간 미연결)"),
+        ["stGl"] = (5.2, "층별 GL값 — 공별 암층 상단 표고(EL) · 지표~첫 암층 = 토사(자동)"),
+        ["stTh"] = (5.0, "층별 두께 — 공별 지반고 기준 하향 층 두께(m)"),
         ["stPick"] = (5.0, "평면에서 찍기 — 평면 클릭 → BH 표식 · 지반고 자동"),
-        ["stMake"] = (5.8, "확인 — 지층면 생성 → 종단 · 횡단에만 보임"),
+        ["stMake"] = (5.8, "확인 — 지층면 생성 → 종단 · 횡단에만 표시"),
     };
     /// <summary>미리보기 장면(타이머 없음 · 완성 그림 바로).</summary>
     static readonly HashSet<string> StaticKeys = new() { "stLive" };
@@ -73,7 +73,7 @@ internal sealed class StrataDemoView : Border
     public string Current => _key;
     public bool Playing => _tm.IsEnabled || _held;
 
-    public StrataDemoView(string idle = "항목에 마우스 → 예시")
+    public StrataDemoView(string idle = "항목에 마우스를 올리면 예시 표시")
     {
         _idle = idle;
         BorderBrush = DhBrand.Line; BorderThickness = new Thickness(1); CornerRadius = new CornerRadius(6);
@@ -157,7 +157,7 @@ internal sealed class StrataDemoView : Border
         string cap = Spec[key].Caption;
         int nb = 0;
         if (key == "stLive") try { nb = Source?.Invoke()?.Bores.Count ?? 0; } catch { }   // Live()처럼 — 읽다 실패해도 예시 글
-        if (key == "stLive" && nb == 0) cap ="예시 — [평면에서 찍기] 뒤 칸 값대로 바뀜";
+        if (key == "stLive" && nb == 0) cap ="예시 — [평면에서 찍기] 후 항목 값으로 갱신";
         int dash = cap.IndexOf(" — ", StringComparison.Ordinal);
         if (ButtonKeys.Contains(key) && dash > 0)
         {
@@ -477,7 +477,7 @@ internal sealed class StrataDemoView : Border
             Tx(lx, p.Y - 13, c.Name, 9.5, hi ? Fz(RedC) : Txt, true, pop);
             Tx(lx, p.Y - 1, gl, 8.5, c.GlKnown ? Dim : Fz(RedC), false, pop);
         }
-        if (xyOk.Count == 0) TxC((MX0 + MX1) / 2, (MY0 + MY1) / 2 - 8, "좌표 없음", 10, Dim, false, mapA);
+        if (xyOk.Count == 0) TxC((MX0 + MX1) / 2, (MY0 + MY1) / 2 - 8, "좌표 미지정", 10, Dim, false, mapA);
 
         // ── 오른쪽 기둥 — 같은 표고 축 ──
         Tx(CX0 - 30, 4, "주상도 · EL.(m)", 10, Txt, true, mapA);
@@ -490,7 +490,7 @@ internal sealed class StrataDemoView : Border
             Take(c.WaterZ);
             foreach (var b in c.Bands) { Take(b.Top); Take(b.Bot); if (b.Open) openTop = Math.Min(openTop, b.Top); }
         }
-        if (!double.IsFinite(zMax)) { TxC((CX0 + CX1) / 2, (CT + CB) / 2 - 8, "지반고 · 층 값 없음", 11, Dim); return; }
+        if (!double.IsFinite(zMax)) { TxC((CX0 + CX1) / 2, (CT + CB) / 2 - 8, "지반고 · 층 값 미입력", 11, Dim); return; }
         double span = Math.Max(4.0, zMax - zMin);
         double openExt = Math.Max(1.5, 0.18 * span);
         if (double.IsFinite(openTop)) zMin = Math.Min(zMin, openTop - openExt);
@@ -624,7 +624,7 @@ internal sealed class StrataDemoView : Border
         }
 
         if (example) { Rc(MX0 + 4, MY0 + 4, 34, 16, A(ChipBgC, 1), Fz(ChipLineC), 1); Tx(MX0 + 10, MY0 + 5, "예시", 10, Fz(ChipInkC), true); }
-        if (bad > 0) Tx(CX1 - 118, CB + 2, $"⚠ 맞지 않는 값 {bad}개 뺌", 9.5, Fz(RedC), true);
+        if (bad > 0) Tx(CX1 - 118, CB + 2, $"⚠ 부적합 값 {bad}개 제외", 9.5, Fz(RedC), true);
         else if (anyWait && !example) Tx(CX1 - 92, CB + 2, "층 값 입력 대기", 9.5, Fz(RedC), true, mapA);
         var leg = shown.Select(kv => (kv.Value.Item1, kv.Value.Item2, false)).ToList();
         if (anyWater) leg.Add(("지하수위", WaterC, true));
@@ -720,7 +720,7 @@ internal sealed class StrataDemoView : Border
             Canvas.SetLeft(e, x - 9); Canvas.SetTop(e, y - 9); _cv.Children.Add(e);
             TxC(x, y - 6, n, 7, Fz(RedC), true);
         }
-        Tx(16, 236, "변화 없음", 10, Dim, false, Seg(t, 2.6, 3.2));
+        Tx(16, 236, "미표시", 10, Dim, false, Seg(t, 2.6, 3.2));
         // 오른쪽 종단 · 횡단 — 지층선이 생김
         Rc(200, 30, 210, 200, Brushes.White, Fz(0xC8, 0xCE, 0xD0), 1);
         Tx(206, 10, "종단 · 횡단", 10.5, Txt, true);

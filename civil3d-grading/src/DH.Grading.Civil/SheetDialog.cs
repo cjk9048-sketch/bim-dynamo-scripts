@@ -35,6 +35,9 @@ public sealed class SheetDialog : Window
     /// <summary>★[JACK 1112] «노리선 그리기» — 도면에 저장(부르는 쪽이 <see cref="Commands.NoriSetting.Write"/>) · 열 때 값 = 그 도면 값(기본 켜짐).</summary>
     internal bool NoriDraw { get; private set; }
     private readonly CheckBox _noriDraw;
+    /// <summary>★[JACK 1124] «원지반 표시» — 기본 | 표고 표시(도면에 저장 — 부르는 쪽이 <see cref="GroundElevLabels.Set"/>) · 열 때 값 = 그 도면 값(기본).</summary>
+    internal bool GroundElev { get; private set; }
+    private readonly ComboBox _groundElev;
 
     // ★★[v117.19 · JACK 1121 «기타 설정을 공통설정으로 합치고 기타 설정 없애»] 옛 기타 설정(DHMISCSET) 칸 — 저장 자리 · 기본값 · 검사 그대로(GradingSettings · VWorldKey · ForestSettings)
     internal const string MiscKey = "SheetDlg.Misc";
@@ -55,9 +58,10 @@ public sealed class SheetDialog : Window
 
     public SheetDialog(string okText = "저장",
                        double contourMinor = ContourInterval.DefaultMinor, double contourMajor = ContourInterval.DefaultMajor,
-                       bool noriDraw = true, bool openMisc = false)
+                       bool noriDraw = true, bool openMisc = false, bool groundElev = false)
     {
         NoriDraw = noriDraw;
+        GroundElev = groundElev;
         ContourMinor = contourMinor; ContourMajor = contourMajor;
         Title = "DH 공통설정";
         Width = 560;   // ★머리띠(로고+제목)가 들어갈 만큼 넓혔다
@@ -131,6 +135,9 @@ public sealed class SheetDialog : Window
         _epsg0 = GradingSettings.ExportEpsg;
         int idx = System.Array.IndexOf(GradingDialog.EpsgCodes, _epsg0);
         _coordSys.SelectedIndex = idx >= 0 ? idx : 0;               // 기본 중부(5186)
+        // ★[JACK 1124 «원지반에 표고 텍스트 · 기본 스타일하고 표고가 있는 스타일을 고를 수 있게»] 원지반 계곡선 표고 — 도면에 저장
+        _groundElev = AddCombo(root, "원지반 표시", new[] { "기본", "표고 표시" }, groundElev ? 1 : 0, "");
+        _groundElev.ToolTip = "표고 표시: 원지반 계곡선에 표고 글자(도면층 DH-원지반-표고)";
         // ★★[v111.11 · JACK 1103 «원지형 및 모든 지형의 등고선 간격을 … 3. 공통에»] 지표면 스타일의 간격 — 도면에 저장
         const string contourTip = "원지반 · 정지면 · 최종지표면 · 진입도로 지표면의 등고선 간격\n"
                                 + "가져온 수치지도 등고선(선)은 원본 자료라 그대로";
@@ -203,7 +210,7 @@ public sealed class SheetDialog : Window
         var (ok, cancel) = DhBrand.FooterButtons(okText);
         ok.Click += OnOk;
         root.Margin = new Thickness(18, 14, 18, 14);
-        DhBrand.Dress(this, "공통설정", "노리선 · 표시 · 임상도 · 배경지도 화질 · 좌표계 · 등고선 간격 · VWorld 키", root, ok, cancel);
+        DhBrand.Dress(this, "공통설정", "노리선 · 표시 · 임상도 · 배경지도 화질 · 좌표계 · 원지반 표시 · 등고선 간격 · VWorld 키", root, ok, cancel);
     }
 
 
@@ -299,6 +306,7 @@ public sealed class SheetDialog : Window
             System.Math.Clamp(_basemapRes.SelectedIndex, 0, GradingSettings.BasemapResValues.Length - 1)];
         ContourMinor = cmi; ContourMajor = cma;
         NoriDraw = _noriDraw.IsChecked == true;
+        GroundElev = _groundElev.SelectedIndex == 1;
 
         DialogResult = true;
         Close();

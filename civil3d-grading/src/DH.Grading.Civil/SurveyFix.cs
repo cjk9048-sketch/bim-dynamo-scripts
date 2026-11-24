@@ -636,7 +636,10 @@ internal static class SurveyFix
             try { r.Cross = SurveyMerge.Crossings(use.Where(i => i.Kind != SurveyKind.Spot).Select(i => (i.Layer, (IReadOnlyList<Point3>)i.Pts, i.Closed)).ToList()); } catch { }
             // ★[JACK 1123 «도로를 가로질러 솟구침»] 도로 다듬기는 등고선 전체를 «틈 메우기» 없이 — 도로 범위에서 잘린 같은 높이 두 끝을 Civil이 도로 위로 다시 잇지 않게
             //   (잘린 것만 따로 넣으면 첫 묶음의 평탄부 최소화가 빈 도로 자리를 먼저 채워 45° 칸이 늘어남 — 실측 VWorld 171 → 499)
-            string surfNote = ImportGisCommand.BuildGroundSurfaceFrom(db, ed, contourIds, spotIds, breakIds, roadNote != null ? contourIds : null);
+            string surfNote;
+            GroundElevLabels.Hold++;   // ★[JACK 1124] 표고는 자르기 · 옛 원지반 치우기 뒤 끝에서 한 번
+            try { surfNote = ImportGisCommand.BuildGroundSurfaceFrom(db, ed, contourIds, spotIds, breakIds, roadNote != null ? contourIds : null); }
+            finally { GroundElevLabels.Hold--; }
             DrawOrderFix.Apply(db);
             bool built = !surfNote.StartsWith("지표면 생성 실패", StringComparison.Ordinal) && !surfNote.StartsWith("지표면 생략", StringComparison.Ordinal);
             foreach (var g in GroundSet.List(db, legacy: false)) if (!before.Contains(g.Id)) { r.NewId = g.Id; r.NewName = g.Name; }
@@ -754,6 +757,9 @@ internal static class SurveyFix
             r.Message = done + hid + partWarn;
             try { DiagLog.Append($"\n■ DHSURVEYFIX — {done} · 새 '{r.NewName}'{(hidLog.Length > 0 ? " · " + hidLog : "")}\n"); } catch { }
         }
+        // ★[JACK 1124] 공통설정 «원지반 표시 = 표고 표시» — 새 원지반으로 옮김(옛 · 숨긴 원지반 표고는 지움 · 꺼져 있으면 기록 한 번 읽고 끝)
+        string ge = GroundElevLabels.Sync(db);
+        if (ge.Length > 0) ed.WriteMessage("\n[원지반 표고] " + ge);
         try { ed.Regen(); } catch { }
         return r;
     }

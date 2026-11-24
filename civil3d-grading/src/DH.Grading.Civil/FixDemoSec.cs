@@ -96,16 +96,16 @@ internal sealed partial class FixDemoView
         if (pk.OverV)
         {
             Ln(new Point(gx, gy), new Point(gx + gw, gy), Red, 3);
-            TxB(gx + 6, gy + 4, "세로 넘침", 11, Red, true);
+            TxB(gx + 6, gy + 4, "높이 초과", 11, Red, true);
         }
 
         string hs = SxH > 0 ? $"H {Sc(H)}" : $"H 자동 → {Sc(H)}";
         string vs = SxV < 0 ? "V = H" : SxV > 0 ? $"V {Sc(V)}" : $"V 자동 → {Sc(V)}";
         SxLine(196, $"{hs} · {vs}", 14, Txt, true);
-        string ve = Math.Abs(H - V) < 1e-9 ? "세로 과장 없음 (H = V)" : $"세로 {Num(H / V)}배 과장";
-        SxLine(220, ve + (n > 1 ? $" · 길어서 {n}장" : " · 한 장"), 13, A(SxNoteC, 1), true);
-        if (pk.OverV) SxLine(243, "세로가 칸 넘침 → V 숫자 키우기", 12, Red, true);
-        SxLine(pk.OverV ? 265 : 245, "예: 노선 260 m · 높이차 18 m · 자동 = 한 장에 가장 크게", 11, Dim);
+        string ve = Math.Abs(H - V) < 1e-9 ? "수직 과장 없음 (H = V)" : $"수직 {Num(H / V)}배 과장";
+        SxLine(220, ve + (n > 1 ? $" · 연장 초과 {n}장" : " · 한 장"), 13, A(SxNoteC, 1), true);
+        if (pk.OverV) SxLine(243, "높이가 칸 초과 → V 값 증가", 12, Red, true);
+        SxLine(pk.OverV ? 265 : 245, "예: 노선 260 m · 고저차 18 m · 자동 = 1장 내 최대 크기", 11, Dim);
     }
 
     // ══ 2. 측점 간격 — 평면 노선에 No.0 · No.1 … 눈금 · 꺾인 곳 · 끝은 +측점(빨강) · 횡단도 장 수 ══
@@ -153,15 +153,15 @@ internal sealed partial class FixDemoView
         foreach (var c in plus)
         {
             string s = DH.Grading.Core.StationNaming.Fmt(c, iv);
-            if (Math.Abs(c - cb) < 1e-9) { var p = SxRt[1]; TxB(p.X - TW(s, 11) / 2, p.Y - 34, s, 11, Red, true); TxB(p.X - 16, p.Y - 50, "꺾인 곳", 10, Red); }
+            if (Math.Abs(c - cb) < 1e-9) { var p = SxRt[1]; TxB(p.X - TW(s, 11) / 2, p.Y - 34, s, 11, Red, true); TxB(p.X - 16, p.Y - 50, "굴절점", 10, Red); }
             else { var p = SxRt[^1]; TxB(Math.Min(p.X - TW(s, 11) / 2, W - TW(s, 11) - 6), p.Y + 14, s, 11, Red, true); }
         }
         if (dimOn) SxTickLabel(iv / 2 / SxRtLen, $"{Num(iv)} m", Red, -1, 16);
         bool tooMany = !BenchRoad && total > Commands.SectionCommand.MaxSections;
         SxLine(226, $"간격 {Num(iv)} m → 횡단도 {total}장", 14, tooMany ? Red : Txt, true);
-        SxLine(249, $"정측점 {major.Count}개 + 꺾인 곳 · 끝 +측점 {plus.Count}개", 12, A(SxNoteC, 1), true);
-        SxLine(271, tooMany ? $"{Commands.SectionCommand.MaxSections}장 넘음 → 횡단 안 만듦 · 간격 늘리기"
-                                             : BenchRoad ? "예: 노선 200 m · 진입도로 PVI도 이 간격" : "예: 노선 200 m · 종단 밴드 측점 이름도 이 간격",
+        SxLine(249, $"정측점 {major.Count}개 + 굴절점 · 종점 +측점 {plus.Count}개", 12, A(SxNoteC, 1), true);
+        SxLine(271, tooMany ? $"{Commands.SectionCommand.MaxSections}장 초과 → 횡단 미생성 · 간격 확대"
+                                             : BenchRoad ? "예: 노선 200 m · 진입도로 PVI도 동일 간격" : "예: 노선 200 m · 종단 밴드 측점명도 동일 간격",
                11, tooMany ? Red : Dim, tooMany);
     }
 
@@ -202,8 +202,8 @@ internal sealed partial class FixDemoView
         double X(int i) => x0 + i * ds * px;
         double Y(double v) => yBot - (v - zmin) * py;
 
-        Tx(10, 8, "종단 — 원지반선 (세로 과장)", 13, Dim, true);
-        SxLegend(232, 10, SxRealBr, 1.3, "실제 땅"); SxLegend(312, 10, Ground, 2.4, "원지반선");
+        Tx(10, 8, "종단 — 원지반선 (수직 과장)", 13, Dim, true);
+        SxLegend(232, 10, SxRealBr, 1.3, "실제 지반"); SxLegend(312, 10, Ground, 2.4, "원지반선");
         var real = new List<Point>(); for (int i = 0; i < n; i++) real.Add(new Point(X(i), Y(z[i])));
         var simp = idx.Select(i => new Point(X(i), Y(z[i]))).ToList();
         Pl(new List<Point>(real) { new(x1, yBot + 8), new(x0, yBot + 8) }, A(SoilC, 0.22), null, 0);
@@ -217,15 +217,15 @@ internal sealed partial class FixDemoView
         var e = new System.Windows.Shapes.Ellipse { Width = 22, Height = 22, Stroke = Red, StrokeThickness = 1.6 };
         Canvas.SetLeft(e, gx - 11); Canvas.SetTop(e, (ya + yb) / 2 - 11); _cv.Children.Add(e);
         Ln(new Point(gx, ya), new Point(gx, yb), Red, 1.6);
-        string gs = $"최대 차 {gap:0.00} m";
+        string gs = $"최대 편차 {gap:0.00} m";
         double lx = Math.Clamp(gx + 14, 4, W - TW(gs, 11) - 8), ly = Math.Min(ya, yb) - 26 < yTop - 6 ? Math.Max(ya, yb) + 10 : Math.Min(ya, yb) - 26;
         TxB(lx, ly, gs, 11, Red, true);
 
         int step = 0; double best0 = double.MaxValue;
         for (int i = 0; i < GradingSettings.GroundBreakValues.Length; i++) { double d = Math.Abs(GradingSettings.GroundBreakValues[i] - tol); if (d < best0) { best0 = d; step = i; } }
-        SxLine(214, $"{GradingSettings.GroundBreakLabels[step]} {tol:0.00} m → 꺾임점 {idx.Count}개", 14, Txt, true);
-        SxLine(237, $"최대 차 {gap:0.00} m ≤ {tol:0.00} m = 토공량 최대 높이오차", 12, A(SxNoteC, 1), true);
-        SxLine(259, "작을수록 실제 땅 따라감 · 측점 · 횡단도 늘어남", 11, Dim);
+        SxLine(214, $"{GradingSettings.GroundBreakLabels[step]} {tol:0.00} m → 절점 {idx.Count}개", 14, Txt, true);
+        SxLine(237, $"최대 편차 {gap:0.00} m ≤ {tol:0.00} m = 토공량 최대 높이 오차", 12, A(SxNoteC, 1), true);
+        SxLine(259, "작을수록 실제 지반에 근접 · 측점 · 횡단도 증가", 11, Dim);
     }
 
     // ══ 4 · 5. 횡단도 축척 · 배치 — A1 칸(배치 = 칸 크기) · 그림 자리 + 수량표 · 예시 단면 64 × 14 m ══
@@ -327,12 +327,12 @@ internal sealed partial class FixDemoView
         _tgt = host;
         try { over = SxCellDraw(x - 4, y - 26, k, cw, ch, s, "No.3", false, 11); }
         finally { _tgt = _cv; }
-        if (over) TxB(Math.Min(x + cwp + 4, W - 60), Math.Max(28, y - 18), "칸 넘침", 11, Red, true);
-        string l1 = SxXs > 0 ? (over ? $"{Sc(s)} 고정 → 칸 넘침 · 그대로 그림" : $"{Sc(s)} 고정 → 칸 안") : $"자동 → {Sc(s)} (칸에 가장 크게)";
+        if (over) TxB(Math.Min(x + cwp + 4, W - 60), Math.Max(28, y - 18), "칸 초과", 11, Red, true);
+        string l1 = SxXs > 0 ? (over ? $"{Sc(s)} 고정 → 칸 초과 · 축척 유지 작도" : $"{Sc(s)} 고정 → 칸 이내") : $"자동 → {Sc(s)} (칸 내 최대 크기)";
         SxLine(212, l1, 14, over ? Red : Txt, true);
         SxLine(235, $"배치 {c}×{r} → 칸 {cw:0}×{ch:0} mm · 수량표 {(right ? "오른쪽" : "아래")}", 12, A(SxNoteC, 1), true);
-        SxLine(257, over ? "넘치면 로그로 알림 → 축척 숫자 키우기" + $" (자동이면 {Sc(auto)})"
-                         : SxXs > 0 ? $"예: 단면 폭 64 m · 높이 14 m · 자동이면 {Sc(auto)}" : "예: 단면 폭 64 m · 높이 14 m", 11, over ? Red : Dim);
+        SxLine(257, over ? "초과 시 로그 알림 → 축척 값 증가" + $" (자동 시 {Sc(auto)})"
+                         : SxXs > 0 ? $"예: 단면 폭 64 m · 높이 14 m · 자동 시 {Sc(auto)}" : "예: 단면 폭 64 m · 높이 14 m", 11, over ? Red : Dim);
     }
 
     void SecLay()
@@ -352,8 +352,8 @@ internal sealed partial class FixDemoView
         for (int j = 0; j < r; j++)
             for (int i = 0; i < c; i++)
                 over |= SxCellDraw(ix + i * cw * k, iy + tH + j * ch * k, k, cw, ch, s, $"No.{j * c + i}", true, Math.Clamp(ch * k / 9, 7, 10));
-        SxLine(242, $"{c}×{r} → 한 장에 {c * r}개 · 칸 {cw:0}×{ch:0} mm", 14, Txt, true);
-        SxLine(265, SxXs > 0 ? (over ? $"축척 고정 {Sc(s)} → 칸 넘침" : $"축척 고정 {Sc(s)}") : $"축척 자동 → {Sc(s)} · 촘촘할수록 그림 작게", 12, over ? Red : A(SxNoteC, 1), true);
+        SxLine(242, $"{c}×{r} → 장당 {c * r}개 · 칸 {cw:0}×{ch:0} mm", 14, Txt, true);
+        SxLine(265, SxXs > 0 ? (over ? $"축척 고정 {Sc(s)} → 칸 초과" : $"축척 고정 {Sc(s)}") : $"축척 자동 → {Sc(s)} · 조밀할수록 그림 축소", 12, over ? Red : A(SxNoteC, 1), true);
         SxLine(285, "예: 단면 폭 64 m · 높이 14 m", 11, Dim);
     }
 
@@ -386,10 +386,10 @@ internal sealed partial class FixDemoView
         double b0 = 126 - 5 * pxm, b1 = 126 + 5 * pxm;
         Ln(new Point(b0, 196), new Point(b1, 196), Txt, 2); Ln(new Point(b0, 192), new Point(b0, 200), Txt, 1.4); Ln(new Point(b1, 192), new Point(b1, 200), Txt, 1.4);
         TxB(126 - TW("10 m", 11) / 2, 176, "10 m", 11, Txt, true);
-        SxLine(222, SxSl > 0 ? $"{Sc(s)} → 글씨 높이 {Num(hM)} m" : $"자동 → 도면 축척 따름 (예 {Sc(dwg)} → {Num(hM)} m)", 14, Txt, true);
-        SxLine(245, $"{Sc(s)}로 출력하면 종이 2.5 mm", 12, A(SxNoteC, 1), true);
-        SxLine(267, overlap ? "글씨가 이웃 측점과 겹침 → 축척 숫자 줄이기"
-                            : Math.Abs(s - dwg) < 1e-9 ? "그림 = 1:1000 도면 예 · 측점 20 m 간격" : $"그림 = 1:1000 도면 예 → 종이 {Num(2.5 * s / dwg)} mm",
+        SxLine(222, SxSl > 0 ? $"{Sc(s)} → 문자 높이 {Num(hM)} m" : $"자동 → 도면 축척 적용 (예 {Sc(dwg)} → {Num(hM)} m)", 14, Txt, true);
+        SxLine(245, $"{Sc(s)} 출력 시 용지 2.5 mm", 12, A(SxNoteC, 1), true);
+        SxLine(267, overlap ? "문자가 인접 측점과 중첩 → 축척 값 축소"
+                            : Math.Abs(s - dwg) < 1e-9 ? "그림 = 1:1000 도면 예 · 측점 20 m 간격" : $"그림 = 1:1000 도면 예 → 용지 {Num(2.5 * s / dwg)} mm",
                11, overlap ? Red : Dim, overlap);
     }
 
@@ -423,15 +423,15 @@ internal sealed partial class FixDemoView
         if (cutL) Ln(new Point(rx - dl * pxm, ly), new Point(xl, ly), Red, 4);
         if (cutR) Ln(new Point(xr, ly), new Point(rx + dr * pxm, ly), Red, 4);
         Dot(new Point(rx - dl * pxm, ly), 3.4, DayBr); Dot(new Point(rx + dr * pxm, ly), 3.4, DayBr);
-        TxB(rx - dl * pxm - 22, ly - 24, "사면 끝", 10, DayBr, true);
-        TxB(rx + dr * pxm - 18, ly - 24, "사면 끝", 10, DayBr, true);
+        TxB(rx - dl * pxm - 22, ly - 24, "사면 끝단", 10, DayBr, true);
+        TxB(rx + dr * pxm - 18, ly - 24, "사면 끝단", 10, DayBr, true);
         TxB(rx + 6, ly - 44, "No.5", 11, Txt, true);
         DimH(cl, rx, ly + 16, $"좌 {Num(wl)} m", 1, 4);
         DimH(rx, cr, ly + 16, $"우 {Num(wr)} m", 1, 4);
         if (auto) { TxB(xl - 10, ly + 38, "여유", 10, A(SxNoteC, 1), true); TxB(rx + dr * pxm + 4, ly + 38, "여유", 10, A(SxNoteC, 1), true); }
         if (cutL || cutR) TxB(cutL ? Math.Max(4, xl - 8) : Math.Min(xr - 8, W - 40), ly - 46, "잘림", 11, Red, true);
-        SxLine(242, auto ? $"자동 → 사면 끝 {Num(far)} m + 여유 5 m → 좌 · 우 {Num(wa)} m" : $"수동 → 좌 {Num(wl)} m · 우 {Num(wr)} m", 14, Txt, true);
-        SxLine(265, auto ? "정지 결과에서 잼 · 5 m 단위 올림 · 좌우 같은 폭" : cutL || cutR ? "사면 잘림 → 길이 늘리기" : "예: 사면 끝 좌 34 m · 우 27 m",
+        SxLine(242, auto ? $"자동 → 사면 끝단 {Num(far)} m + 여유 5 m → 좌 · 우 {Num(wa)} m" : $"수동 → 좌 {Num(wl)} m · 우 {Num(wr)} m", 14, Txt, true);
+        SxLine(265, auto ? "정지 결과 기준 산정 · 5 m 단위 올림 · 좌우 동일 폭" : cutL || cutR ? "사면 잘림 → 길이 확대" : "예: 사면 끝단 좌 34 m · 우 27 m",
                12, !auto && (cutL || cutR) ? Red : A(SxNoteC, 1), true);
     }
 }

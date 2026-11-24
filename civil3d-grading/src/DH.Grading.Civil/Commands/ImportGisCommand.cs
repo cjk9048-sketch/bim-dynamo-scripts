@@ -749,8 +749,13 @@ public sealed class ImportGisCommand
         // ★[JACK 1122 스샷 «이벤트 오류가 많이 뜸»] 측량 · 등고선 자료는 엇갈린 3D 선 · 겹친 점이 흔하다 — Civil이 이벤트 뷰어 창을 띄우며 수백 줄을 적음.
         //   계획부지 생성 · 옹벽 합성처럼 자동 알림 창만 끈다(기록은 남음 · EVENTVIEWER로 볼 수 있음 · 끝나면 원래 설정). 엇갈림 수는 우리 알림에 따로 적는다.
         var evPrev = EventViewerMute.Begin();
-        try { return BuildGroundSurface(db, ed, contourIds, spotIds, breakIds, noGapContourIds); }
+        string note;
+        try { note = BuildGroundSurface(db, ed, contourIds, spotIds, breakIds, noGapContourIds); }
         finally { EventViewerMute.End(evPrev); }
+        // ★[JACK 1124] 공통설정 «원지반 표시 = 표고 표시»면 새 원지반에도 표고(꺼져 있으면 기록 한 번 읽고 끝 · 측량도 보정은 끝에서 한 번)
+        string ge = GroundElevLabels.Sync(db);
+        if (ge.Length > 0) ed.WriteMessage("\n[원지반 표고] " + ge);
+        return note;
     }
 
     private static string BuildGroundSurface(Database db, Editor ed, ObjectIdCollection contourIds,

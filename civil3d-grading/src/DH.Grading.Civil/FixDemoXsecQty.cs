@@ -27,7 +27,7 @@ internal sealed partial class FixDemoView
         XqLimC = Color.FromRgb(0x00, 0x48, 0x4E), XqMulchC = Color.FromRgb(0x9C, 0xC9, 0x5A), XqLineC = Color.FromRgb(0x33, 0x33, 0x33);
     /// <summary>도로 높이 · 왼끝 · 오른끝 · 표토 두께(px) · 그림 바닥 · 임상도 입목지 왼끝 · 오른끝.</summary>
     const double XqRY = 140, XqRL = 176, XqRR = 244, XqTs = 7, XqYB = 238, XqFa = 60, XqFb = 296;
-    const string XqAreaLine = "면적 = (앞 측점 + 이 측점 길이) ÷ 2 × 거리";
+    const string XqAreaLine = "면적 = (전 측점 + 현 측점 길이) ÷ 2 × 거리";
 
     /// <summary>원지반(왼쪽 높음 → 오른쪽 낮음 · 조금 울퉁불퉁).</summary>
     static double XqG(double x) => 140 + 95 * Math.Tanh((x - 210) / 211) + 1.6 * Math.Sin(0.05 * x + 0.7) + 0.9 * Math.Sin(0.13 * x + 2.1);
@@ -368,15 +368,15 @@ internal sealed partial class FixDemoView
         Pl(new[] { new Point(xa, yb), new Point(xa, y0 + 8), new Point(xb, y0 + 16), new Point(xb, yb) }, A(c, 0.2 * op), null, 0);
         Ln(new Point(xa, yb), new Point(xa, y0 + 8), A(c, op), 2.4); Ln(new Point(xb, yb), new Point(xb, y0 + 16), A(c, op), 2.4);
         Ln(new Point(xa, yb), new Point(xb, yb), A(c, 0.6 * op), 1);
-        SbTc(new Point(xa - 10, y0 + 18), "앞", 11, DhBrand.Ink, false, op, 0, false);
-        SbTc(new Point(xb + 10, y0 + 24), "이", 11, DhBrand.Ink, false, op, 0, false);
+        SbTc(new Point(xa - 10, y0 + 18), "전", 11, DhBrand.Ink, false, op, 0, false);
+        SbTc(new Point(xb + 10, y0 + 24), "현", 11, DhBrand.Ink, false, op, 0, false);
         SbTc(new Point((xa + xb) / 2, y0 + 25), "㎡", 12, A(XqInk(c), 1), true, op, 0, false);
         SbTc(new Point((xa + xb) / 2, y0 + 45), "거리", 11, DhBrand.Sub, false, op, 0, false);
     }
     void XqOff(int bit)
     {
         if ((XqMask & bit) != 0) return;
-        var tb = new TextBlock { Text = "꺼짐 → 표에 –", FontSize = 11, FontWeight = FontWeights.Bold, Foreground = DhBrand.Warn, Background = HaloBr, Padding = new Thickness(3, 0, 3, 0) };
+        var tb = new TextBlock { Text = "미사용 → 표에 –", FontSize = 11, FontWeight = FontWeights.Bold, Foreground = DhBrand.Warn, Background = HaloBr, Padding = new Thickness(3, 0, 3, 0) };
         tb.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
         Canvas.SetLeft(tb, W - tb.DesiredSize.Width - 6); Canvas.SetTop(tb, 1); _tgt.Children.Add(tb);
     }
@@ -430,7 +430,7 @@ internal sealed partial class FixDemoView
             Pl(sp, null, A(XqForestC, cl), 3, closed: false);
         }
         XqDimH(x0, x1, 64, "벌개 길이", XqForestC, Seg(t, 5.5, 6.2), Seg(t, 5.5, 5.7), g.XS);
-        XqCalc("길이 = 공사 범위 ∩ 임상도 숲 가로 길이", "계획부지 토적표 계 = 평면 면적(임상도 ∩ 공사 범위)", XqForestC, Seg(t, 6.4, 7.0));
+        XqCalc("길이 = 공사 범위 ∩ 임상도 입목지 수평 길이", "계획부지 토적표 계 = 평면 면적(임상도 ∩ 공사 범위)", XqForestC, Seg(t, 6.4, 7.0));
         XqOff(XsecQtyOptions.Clear);
     }
 
@@ -475,7 +475,7 @@ internal sealed partial class FixDemoView
             XqDozer(new Point(bx, by), ang, dop);
         }
         XqDimH(g.XL, g.XR, 64, "표토제거 길이", XqStripC, Seg(t, 5.0, 5.7), Seg(t, 5.0, 5.2), g.XS);
-        XqCalc("길이 = 공사 범위 전체 가로 길이", "두께는 안 곱함 → ㎡", XqStripC, Seg(t, 5.9, 6.5));
+        XqCalc("길이 = 공사 범위 전체 수평 길이", "두께 미적용 → ㎡", XqStripC, Seg(t, 5.9, 6.5));
         XqOff(XsecQtyOptions.Strip);
     }
     /// <summary>확대 원 — 표토 층 · 두께 t.</summary>
@@ -681,7 +681,7 @@ internal sealed partial class FixDemoView
         XqTag(new Point(112, 66), "절토부 빗길이", XqSeedC, mc, la);
         XqTag(new Point(336, 104), "성토부 빗길이", XqSeedC, mf, la);
         SbTc(new Point(214, 128), "도로 제외", 11, DhBrand.Sub, false, la);
-        XqCalc("길이 = 면고르기 길이 (마감 사면 빗길이)", "성토부 · 절토부 따로 → 표 두 줄", XqSeedC, Seg(t, 7.6, 8.2));
+        XqCalc("길이 = 면고르기 길이 (마감 사면 빗길이)", "성토부 · 절토부 구분 → 표 2행", XqSeedC, Seg(t, 7.6, 8.2));
         XqOff(XsecQtyOptions.Seed);
     }
     /// <summary>뿜어 붙인 띠(연두) → 풀이 자람 — 뿜은 때(a~b 동안 위 → 아래) 뒤 0.2~1.0초.</summary>

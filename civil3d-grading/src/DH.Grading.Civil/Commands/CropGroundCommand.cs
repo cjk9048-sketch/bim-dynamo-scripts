@@ -192,6 +192,9 @@ public sealed class CropGroundCommand
                 string done = res.Done + (wiped > 0 ? $" · 범위 밖 원본 {wiped:N0}개 껐음(지우지 않음)" : "");
                 ed.WriteMessage($"\n[원지형 자르기] {done}" + (res.GrowNote.Length > 0 ? "\n[원지형 자르기] " + res.GrowNote : ""));
                 if (res.FinalNote.StartsWith("⚠")) ed.WriteMessage("\n[원지형 자르기] " + res.FinalNote);
+                // ★[JACK 1124] 공통설정 «원지반 표시 = 표고 표시» — 자른 원지반으로(꺼져 있으면 기록 한 번 읽고 끝)
+                string ge = GroundElevLabels.Sync(db);
+                if (ge.Length > 0) ed.WriteMessage("\n[원지반 표고] " + ge);
                 job.Done(res.Stale == 0 && !res.FinalNote.StartsWith("⚠"), done + (res.GrowNote.Length > 0 ? " · " + res.GrowNote : "") + $" · {res.Line.Trim()}");
                 // ★★★[JACK 0903 "잘되는데 별도 팝업은 안 띄웠으면 좋겠어"] 잘된 일은 화면이 말해 준다 — 명령창 · 로그에만.
                 //   ★[Q3 · JACK 1103] 다시 키웠는데 못 커진 DH 면은 한 줄로 알림(위 명령창 줄).
@@ -274,6 +277,8 @@ public sealed class CropGroundCommand
             string extra = more.Count > 0 ? " · 자른 면도 다시 지음 " + string.Join(" · ", more) : "";
             ed.WriteMessage($"\n[지표면 재작성] '{gname}' — {how} · 상태 {stale} · 삼각형 {tri:N0}개" + extra);
             try { DiagLog.Append($"\n■ DHGNDREBUILD — '{gname}' {how} · 상태 {stale} · 삼각형 {tri}" + extra + "\n"); } catch { }
+            string ge = GroundElevLabels.Sync(db);   // ★[JACK 1124] 다시 지어 바뀌었으면 표고도(같으면 아무것도 안 함)
+            if (ge.Length > 0) ed.WriteMessage("\n[원지반 표고] " + ge);
         }
         catch (System.Exception ex)
         {

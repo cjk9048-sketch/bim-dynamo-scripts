@@ -787,7 +787,7 @@ public sealed class RibbonApp : IExtensionApplication
 
             // ── 무엇이 있어야 눌 수 있나(JACK 0901) ───────────────────────────
             //   여기 한 곳만 보면 <b>일하는 순서</b>가 그대로 읽힌다.
-            _needGround.Clear(); _needPlan.Clear(); _all.Clear();
+            _needGround.Clear(); _needPlan.Clear(); _all.Clear(); _needRoad.Clear(); _needAny.Clear();
             _needGround.Add(btnCrop);        // 원지형 자르기 — 자를 지형이 있어야
             _needGround.Add(btnStrata);      // 지층 구성 — 지반고를 원지반에서 읽는다
             //   ※[계획부지 생성] 스플릿은 <b>안 끈다</b> — 통째로 끄면 그 안의
@@ -813,10 +813,12 @@ public sealed class RibbonApp : IExtensionApplication
             //   ※btnWall/btnSlope는 리본에 안 얹히므로 잠금 목록에서도 뺀다 — 헛돈다.
             _needPlan.Add(btnSecSite);       // ★[JACK 1112] 종횡단도 — 계획지표면이 있어야(옛 종단도 · 횡단도 단추와 같은 규칙)
             //   ★[v111.6 · JACK 1102] 진입도로 단추(창 · 종단도 · 횡단도)는 어느 목록에도 안 넣는다 — 열린 도로가 없으면 명령이 물러난다
+            //   ★[JACK 1124 «진입도로의 종횡단도도 진입도로 생성 전엔 비활성»] 단 [종횡단도](진입도로)는 도면에 진입도로가 하나라도 있어야 켬
+            _needRoad.Add(btnSecRoad);
 
             // ★[계획 §4] 찍는 중에 한꺼번에 잠글 목록 — <b>둘의 합집합</b>이면 충분하다.
             //   (여기 없는 항목은 찍기를 죽여도 사용자가 곧 알아차리는 것들이다.)
-            _all.AddRange(_needGround); _all.AddRange(_needPlan);
+            _all.AddRange(_needGround); _all.AddRange(_needPlan); _all.AddRange(_needRoad);
             // ★★[검토 0910 · 보통3] <b>창 여는 단추도 찍는 중에는 잠근다.</b>
             //   리본 단추는 <c>^C^C</c>를 앞세워 보내므로(<see cref="RelayCommand"/>),
             //   찍는 도중에 눌리면 <b>그 찍기가 죽는다</b>. 계획면 잠금(<c>_needPlan</c>)에서 뺀 것과
@@ -964,6 +966,9 @@ public sealed class RibbonApp : IExtensionApplication
                 "· 도면 옆 «도면이름_토공수량산출서.xlsx»", null);
             pExport.Items.Add(btnQty);
             pExport.Items.Add(Spacer());
+            // ★[JACK 1124 «도면생성 · 수량산출서도 계획부지든 진입도로든 하나도 안 한 처음 상태는 비활성»] 계획지표면 또는 진입도로가 있어야 켬 · 찍는 중엔 잠금
+            _needAny.Add(btnBook); _needAny.Add(btnQty);
+            _all.Add(btnBook); _all.Add(btnQty);
             pExport.Items.Add(btnInfra);
             pExport.Items.Add(Spacer());
 
@@ -1683,6 +1688,8 @@ public sealed class RibbonApp : IExtensionApplication
         try { PickSession.Changed += RefreshEnabled; } catch { _pickHooked = false; }
     }
     private static readonly System.Collections.Generic.List<RibbonItem> _needGround = new();
+    /// <summary>★[JACK 1124] 진입도로가 하나라도 있어야(진입도로 [종횡단도]) · 계획지표면 또는 진입도로가 있어야([도면생성] · [수량산출서]).</summary>
+    private static readonly System.Collections.Generic.List<RibbonItem> _needRoad = new(), _needAny = new();
 
     /// <summary>★★[JACK 0825] <b>계획지표면·터파기가 없으면 그 보기 버튼을 끈다.</b>
     ///
@@ -1704,6 +1711,10 @@ public sealed class RibbonApp : IExtensionApplication
             if (_btnViewExcav != null) _btnViewExcav.IsEnabled = hasExc;
             foreach (var it in _needPlan) if (it != null) it.IsEnabled = hasPlan;
             foreach (var it in _needGround) if (it != null) it.IsEnabled = hasGround;
+            // ★[JACK 1124] 진입도로 있음(싸게 — 노선 목록 · 설계 기록 · 면 이름) · 계획지표면 또는 진입도로
+            bool hasRoad = doc != null && Commands.ResetCommand.AnyRoad(doc.Database);
+            foreach (var it in _needRoad) if (it != null) it.IsEnabled = hasRoad;
+            foreach (var it in _needAny) if (it != null) it.IsEnabled = hasPlan || hasRoad;
             // ★★★[JACK 0910 "계획지표면을 생성하니깐 스플릿버튼 모두 비활성화가 되었어"]
             //   <b>끄는 자리만 있고 켜는 자리가 없었다.</b>
             //

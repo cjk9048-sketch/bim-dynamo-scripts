@@ -26,10 +26,10 @@ internal sealed class StructBoxDemoView : Border
 
     static readonly Dictionary<string, (double Period, string Caption)> Spec = new()
     {
-        ["bxDraw"] = (5.6, "평면에서 그리기 — 외곽 점 찍기(Enter = 닫기) · S = 닫힌 폴리선 고르기"),
-        ["bxH"] = (3.6, "높이 · 두께 — 윗면 = 바닥고 + 높이 · 벽 · 상판 · 바닥판으로 속 빈 박스"),
-        ["bxEl"] = (4.4, "바닥 — 바닥고 EL 직접 · 또는 원지반에서 깊이"),
-        ["bxQty"] = (4.6, "목록 · 고치기 — 횡단 수량이 박스 단면만큼 성토 · 되메우기에서 뺌"),
+        ["bxDraw"] = (5.6, "평면에서 그리기 — 외곽점 지정(Enter = 닫기) · S = 닫힌 폴리선 선택"),
+        ["bxH"] = (3.6, "높이 · 두께 — 상면 = 바닥고 + 높이 · 벽 · 상판 · 바닥판으로 중공 박스 구성"),
+        ["bxEl"] = (4.4, "바닥 — 바닥고 EL 직접 입력 · 또는 원지반 기준 깊이"),
+        ["bxQty"] = (4.6, "목록 · 고치기 — 횡단 수량에서 박스 단면만큼 성토 · 되메우기 공제"),
     };
     static readonly HashSet<string> ButtonKeys = new() { "bxDraw" };
 
@@ -39,7 +39,7 @@ internal sealed class StructBoxDemoView : Border
                           BoxTop = Fz(0xB8, 0xC4, 0xC8), BoxL = Fz(0x8E, 0x9C, 0xA1), BoxR = Fz(0xA4, 0xB1, 0xB5), BoxEdge = Fz(0x36, 0x46, 0x4A),
                           Pt = Fz(0xD0, 0x3B, 0x2F), Grid = Fz(0xE6, 0xEC, 0xED), Dim = Fz(0x00, 0x48, 0x4E);
 
-    public StructBoxDemoView(string idle = "항목에 마우스 → 예시")
+    public StructBoxDemoView(string idle = "항목에 마우스를 올리면 예시 표시")
     {
         BorderBrush = DhBrand.Line; BorderThickness = new Thickness(1); CornerRadius = new CornerRadius(6);
         Background = DhBrand.Card; Padding = new Thickness(4);
@@ -252,7 +252,7 @@ internal sealed class StructBoxDemoView : Border
             // 또는 깊이
             double gx = (bx0 + bx1) / 2;
             Ln(gx, Gy(gx), gx, Gy(gx) + (by1 - Gy(gx)) * v, Pt, 1.4);
-            Tx(gx + 6, (Gy(gx) + by1) / 2 - 16, "또는 원지반에서 깊이", 11, Pt, true, v);
+            Tx(gx + 6, (Gy(gx) + by1) / 2 - 16, "또는 원지반 기준 깊이", 11, Pt, true, v);
         }
         else
         {
@@ -266,8 +266,8 @@ internal sealed class StructBoxDemoView : Border
                 if (xb - xa < 1) continue;
                 Ln(xa, by0 + (xa - k), xb, by0 + (xb - k), hatch, 1, false);
             }
-            Chip(bx0 + 18, by0 + 34, "공제 = 바깥 껍질 전체", u);
-            Tx(16, 14, "횡단마다 — 성토 · 되메우기에서 바깥 껍질(속 빈 칸 포함)을 뺌", 11, DhBrand.Ink, true, Seg(t, 2.6, 3.6));
+            Chip(bx0 + 18, by0 + 34, "공제 = 외곽 체적 전체", u);
+            Tx(16, 14, "횡단별 — 성토 · 되메우기에서 외곽 단면(내공 포함) 공제", 11, DhBrand.Ink, true, Seg(t, 2.6, 3.6));
         }
     }
 }

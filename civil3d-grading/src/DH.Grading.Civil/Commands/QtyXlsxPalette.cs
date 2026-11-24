@@ -97,7 +97,7 @@ internal sealed class QtyXlsxPanel : UserControl
         var head = DhBrand.Header("수량산출서", "", drag: null, onClose: null, logoHeight: 17, titleSize: 13, pad: new Thickness(0, 0, 0, 6));
         head.Background = Brushes.Transparent;
         top.Children.Add(head);
-        var demo = new FixDemoView("항목에 마우스 → 예시", "qtyForestArea") { Margin = new Thickness(0, 0, 0, 8), HorizontalAlignment = HorizontalAlignment.Left, QtySrc = () => (_pf, _pdeep) };
+        var demo = new FixDemoView("항목에 마우스를 올리면 예시 표시", "qtyForestArea") { Margin = new Thickness(0, 0, 0, 8), HorizontalAlignment = HorizontalAlignment.Left, QtySrc = () => (_pf, _pdeep) };
         void Hook(FrameworkElement? fe, string key) { if (fe == null) return; fe.MouseEnter += (_, __) => demo.Play(key); fe.MouseLeave += (_, __) => demo.Idle(); }
         static FrameworkElement? HeadOf(TextBlock b) => (b.Parent as FrameworkElement)?.Parent as FrameworkElement;   // 요약칸 -> 머리 줄 -> 머리
         top.Children.Add(DemoFrame.Wrap("QtyXlsx", demo));

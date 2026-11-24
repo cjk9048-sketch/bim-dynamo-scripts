@@ -117,6 +117,8 @@ public sealed class GroundOffCommand
             string done, left;
             if (partial) (done, left) = GroundDeps.Execute(doc, plan, gIds, only);
             else (done, left) = Erase(doc, results, only, plan.Fallback);
+            // ★[JACK 1124] 지운 원지반의 표고 라벨도 걷음(남은 원지반은 그대로 · 꺼져 있으면 기록 한 번 읽고 끝)
+            try { using (doc.LockDocument()) { string ge = GroundElevLabels.Sync(doc.Database); if (ge.Length > 0) ed.WriteMessage("\n[원지반 표고] " + ge); } } catch { }
             ed.Regen();
             ed.WriteMessage($"\n[원지반 삭제] {done}." + (left.Length > 0 ? "\n  " + left : ""));
             if (!SelfCheckLog.Headless)

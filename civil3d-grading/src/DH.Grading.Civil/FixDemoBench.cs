@@ -142,7 +142,7 @@ internal sealed partial class FixDemoView
                     Ln(P(xs[i], gy[i]), P(xs[i + 1], gy[i + 1]), A(BnSteepC, so), 4);
                     tag ??= P(xs[i], gy[i]);
                 }
-            if (tag is Point tp) SbTc(new Point(Math.Clamp(tp.X + 40, 60, 360), tp.Y + 26), $"1:{Num(1 / grade)}보다 급함", 12, A(XqInk(BnSteepC), 1), true, so);
+            if (tag is Point tp) SbTc(new Point(Math.Clamp(tp.X + 40, 60, 360), tp.Y + 26), $"1:{Num(1 / grade)}보다 급경사", 12, A(XqInk(BnSteepC), 1), true, so);
         }
 
         // 계단 — 줄마다 차례로 · 잘라 낸 넓이(빨강 옅게)
@@ -210,13 +210,13 @@ internal sealed partial class FixDemoView
         double ea = Seg(t, 5.6, 6.2);
         if (on)
         {
-            string l1 = lines.Count > 0 ? $"층따기 {Num(area)} ㎡ (이 단면 예시)" : "급한 곳 없음 → 층따기 없음";
+            string l1 = lines.Count > 0 ? $"층따기 {Num(area)} ㎡ (이 단면 예시)" : "급경사 없음 → 층따기 미적용";
             TxB(14, 246, l1, 12, lines.Count > 0 ? Red : Txt, true, ea);
         }
-        TxB(14, 266, $"성토 아래 원지반이 1:{Num(1 / grade)}보다 급한 곳만 계단 · 잘라 낸 넓이 → 수량표", 11, DhBrand.Sub, false, on ? ea : 1);
+        TxB(14, 266, $"성토 하부 원지반 1:{Num(1 / grade)}보다 급한 구간만 계단 굴착 · 절취 면적 → 수량표", 11, DhBrand.Sub, false, on ? ea : 1);
         if (!on)
         {
-            var tb = new TextBlock { Text = "꺼짐 → 표에 –", FontSize = 11, FontWeight = FontWeights.Bold, Foreground = DhBrand.Warn, Background = HaloBr, Padding = new Thickness(3, 0, 3, 0) };
+            var tb = new TextBlock { Text = "미사용 → 표에 –", FontSize = 11, FontWeight = FontWeights.Bold, Foreground = DhBrand.Warn, Background = HaloBr, Padding = new Thickness(3, 0, 3, 0) };
             tb.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
             Canvas.SetLeft(tb, W - tb.DesiredSize.Width - 6); Canvas.SetTop(tb, 1); _tgt.Children.Add(tb);
         }

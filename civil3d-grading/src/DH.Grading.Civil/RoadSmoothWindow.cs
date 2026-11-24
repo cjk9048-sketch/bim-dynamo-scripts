@@ -91,6 +91,8 @@ internal sealed class RoadSmoothWindow : Window
             rw.MouseEnter += (_, __) => _demo.Play(sc);
             tb.GotKeyboardFocus += (_, __) => _demo.Play(sc);
             tb.PreviewMouseDown += (_, __) => _demo.Play(sc);
+            tb.TextChanged += (_, __) => _demo.SetDemoValue(sc, ParseOr(tb.Text, -1));   // ★[JACK 1116 숫자 칸 = 미리보기] 값 따라 그림 바로 바뀜
+            _demo.SetDemoValue(sc, ParseOr(tb.Text, -1));
             opts.Children.Add(rw);
         }
         foreach (var t in new[] { _len, _jump, _width }) t.TextChanged += (_, __) => Stale();

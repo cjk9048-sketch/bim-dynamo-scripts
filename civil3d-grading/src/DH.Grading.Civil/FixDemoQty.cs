@@ -61,7 +61,7 @@ internal sealed partial class FixDemoView
             SbTc(new Point(x + w / 2, 227), tabs[i], 9, Txt, i == 1, 1, 0, false);
             x += w + 4;
         }
-        TxB(24, 250, "시트 5장 · 둘째 시트 이름 = «1)» + 시설명", 11, Txt, true, Seg(t, 2.6, 3.2));
+        TxB(24, 250, "시트 5장 · 둘째 시트명 = «1)» + 시설명", 11, Txt, true, Seg(t, 2.6, 3.2));
     }
 
     // ── 벌개제근 면적(임상) ──
@@ -101,7 +101,7 @@ internal sealed partial class FixDemoView
         Ln(new Point(268, 204), new Point(404, 204), A(Color.FromRgb(0x44, 0x44, 0x44), sm), 1.2);
         TxB(268, 208, "벌개제근 계 " + v.Sum().ToString("#,##0") + " ㎡", 11, Txt, true, sm);
         TxB(268, 228, "예시", 10, Dim, false, sm);
-        TxB(16, 266, "공사 범위 ∩ 임상도 숲 → 임상별 ㎡ → 벌개제근 ㎡", 11, Txt, true, Seg(t, 5.8, 6.5));
+        TxB(16, 266, "공사 범위 ∩ 임상도 산림 → 임상별 ㎡ → 벌개제근 ㎡", 11, Txt, true, Seg(t, 5.8, 6.5));
     }
 
     // ═══ 수치 칸 = 미리보기 뷰(완성 그림 바로 · 값 바뀌면 RedrawHeld) — 타이머 · 포인터 · 쌓기 없음 ═══
@@ -140,8 +140,8 @@ internal sealed partial class FixDemoView
         SbTc(new Point(315, 157), "토공집계표", 10, Txt, true, 1, 0, false);
         SbTc(new Point(272, 179), "터파기 " + le, 10, Txt, false, 1, 0, false); SbTc(new Point(372, 179), "단가 ①", 10, QRed, true, 1, 0, false);
         SbTc(new Point(272, 201), "터파기 " + gt, 10, Txt, false, 1, 0, false); SbTc(new Point(372, 201), "단가 ②", 10, QRed, true, 1, 0, false);
-        TxB(16, 230, "왜 나누나 → 깊이마다 단가가 다름", 12, QRed, true);
-        TxB(16, 252, "깊으면 굴착 작업량이 달라 → 집계표에 따로 한 줄", 10.5, Txt, false);
+        TxB(16, 230, "구분 이유 → 깊이별 단가 상이", 12, QRed, true);
+        TxB(16, 252, "깊이별 굴착 작업량 상이 → 집계표 별도 행", 10.5, Txt, false);
         TxB(16, 272, "H = 단가 구분 깊이(양식 4.5 m) · 1 ~ 30 m", 10, Dim, false);
     }
 
@@ -160,7 +160,7 @@ internal sealed partial class FixDemoView
             for (int k = 0; k < ln.Length; k++) SbTc(new Point(x + 35, y + (ln.Length == 1 ? 123 : 116 + k * 13)), ln[k], 9, Brushes.Black, true, a, 0, false);
         }
         TxB(16, 218, "도면이름_토공수량산출서.xlsx", 12, Txt, true, Seg(t, 3.2, 3.8));
-        TxB(16, 242, "도면 옆 폴더에 저장 → 엑셀 열림", 10, Dim, false, Seg(t, 3.6, 4.2));
+        TxB(16, 242, "도면과 같은 폴더에 저장 → 엑셀 자동 열기", 10, Dim, false, Seg(t, 3.6, 4.2));
         if (t < 0.9) Ptr(L(new Point(380, 100), new Point(46, 24), Seg(t, 0.0, 0.45)), 0);
     }
 }

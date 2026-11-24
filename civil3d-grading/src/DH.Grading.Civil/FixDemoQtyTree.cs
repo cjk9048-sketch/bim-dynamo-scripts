@@ -127,10 +127,10 @@ internal sealed partial class FixDemoView
         TxB(rx, y0 + 72, "× " + Qn(f.Density) + " ÷ 100", 11, Txt, false);
         Ln(Q(rx, y0 + 96), Q(404, y0 + 96), Fz(0x44, 0x44, 0x44), 1.2);
         TxB(rx, y0 + 100, "= " + QtyReportCalc.Trees(a, f.Density).ToString("#,##0") + " 주", 14, QRed, true);
-        TxB(rx, y0 + 126, "예시 · 소수 버림", 9, Dim, false);
+        TxB(rx, y0 + 126, "예시 · 소수 절사", 9, Dim, false);
         QTop(rx + 6, y0 + 152, 6, false); TxB(rx + 16, y0 + 145, "활엽", 9, Txt, false); QTop(rx + 62, y0 + 152, 6, true); TxB(rx + 72, y0 + 145, "침엽", 9, Txt, false);
-        if (f.Density > 90) TxB(16, 224, "그림은 90주까지", 9, Dim, false);
-        TxB(16, 236, "밀도 = 100 ㎡ 안 나무 수 → × 면적 → 본수", 11, Txt, true);
+        if (f.Density > 90) TxB(16, 224, "그림 표시 최대 90주", 9, Dim, false);
+        TxB(16, 236, "밀도 = 100 ㎡당 본수 → × 면적 → 총 본수", 11, Txt, true);
         TxB(16, 256, "양식 값 " + Qn(QDef.Density) + " 주 / 100 ㎡", 10, Txt, false);
         TxB(16, 276, QSrcLine, 9, Dim, false);
     }
@@ -153,11 +153,11 @@ internal sealed partial class FixDemoView
         SbTc(Q(cx + wb / 2 + 12, yb), "d", 12, QRed, true, 1, 0, true);
         TxB(250, 40, "흉고직경 d", 12, Txt, true);
         TxB(250, 62, "= " + Qn(f.Dbh) + " m", 16, QRed, true);
-        TxB(250, 94, "지상 1.2 m 줄기 지름", 10, Dim, false);
+        TxB(250, 94, "지상 1.2 m 수간 직경", 10, Dim, false);
         TxB(250, 130, "지상부 중량 W₁", 10, Txt, true);
         TxB(250, 148, "= " + Qn(QR(QtyReportCalc.TopWeight(f), 3)) + " ton/주", 12, QRed, true);
         TxB(250, 174, "지상부 발생량 " + Qn(QR(QtyReportCalc.TopVol(f), 3)) + " ㎥/주", 10, Dim, false);
-        TxB(16, 264, "양식 값 " + Qn(QDef.Dbh) + " m · 줄자로 잰 줄기 지름", 10, Txt, false);
+        TxB(16, 264, "양식 값 " + Qn(QDef.Dbh) + " m · 줄자 실측 수간 직경", 10, Txt, false);
         TxB(16, 280, QSrcLine, 9, Dim, false);
     }
 
@@ -205,9 +205,9 @@ internal sealed partial class FixDemoView
         string def = Qn(QtyForest.DefaultHeight);
         (string L, string Ls, string R, string Rs, bool On)[] rows =
         {
-            ("숫자 입력", "칸에 쓴 숫자", typed ? "그 값 · H = " + Qn(f.Height) + " m" : "그 값", "숫자가 항상 먼저", typed),
-            ("칸 비움", "칸이 빈 상태", "임상도 평균", "공사 범위 안 숲 높이 면적평균 · 재면 앎", !typed),
-            ("임상도 못 읽음 · 숲 없음", "비움이어도 못 구함", def + " m (양식)", "2D 산출서 평균수고", false),
+            ("숫자 입력", "입력값", typed ? "입력값 · H = " + Qn(f.Height) + " m" : "입력값", "입력값 우선", typed),
+            ("미입력", "미입력 상태", "임상도 평균", "공사 범위 내 임분고 면적가중평균 · 실행 시 산정", !typed),
+            ("임상도 읽기 실패 · 산림 부재", "미입력 · 산정 불가", def + " m (양식)", "2D 산출서 평균수고", false),
         };
         for (int i = 0; i < 3; i++)
         {
@@ -216,14 +216,14 @@ internal sealed partial class FixDemoView
             Pl(SbR(210, y, 194, 50), on ? A(RedC, 0.1) : Brushes.White, on ? QRed : Fz(0xBB, 0xBB, 0xBB), on ? 1.8 : 1);
             TxB(24, y + 8, r.L, 11, on ? Txt : Dim, true); TxB(24, y + 28, r.Ls, 10, Dim, false);
             TxB(218, y + 8, r.R, 12, on ? QRed : Dim, true); TxB(218, y + 28, r.Rs, 9, Dim, false);
-            if (on) TxB(160 - 0, y + 3, "지금", 9, QRed, true);
+            if (on) TxB(160 - 0, y + 3, "현재", 9, QRed, true);
             Ln(Q(190, y + 25), Q(206, y + 25), on ? QRed : Fz(0xBB, 0xBB, 0xBB), 1.6);
             Ln(Q(200, y + 21), Q(206, y + 25), on ? QRed : Fz(0xBB, 0xBB, 0xBB), 1.6); Ln(Q(200, y + 29), Q(206, y + 25), on ? QRed : Fz(0xBB, 0xBB, 0xBB), 1.6);
         }
         Ln(Q(101, 142), Q(101, 158), Fz(0x88, 0x88, 0x88), 1.4, true); Ln(Q(96, 152), Q(101, 158), Fz(0x88, 0x88, 0x88), 1.4); Ln(Q(106, 152), Q(101, 158), Fz(0x88, 0x88, 0x88), 1.4);
-        TxB(112, 142, "못 구하면", 9, Dim, false);
+        TxB(112, 142, "산정 불가 시", 9, Dim, false);
         TxB(16, 232, "지상부 중량 W₁ = " + Qn(QR(QtyReportCalc.TopWeight(f), 3)) + " ton/주 (H " + Qn(f.HeightUsed) + " m)", 10, Txt, false);
-        TxB(16, 250, "비움 ≠ 없음 · 비움 = 내가 안 씀 · 없음 = 임상도에서 못 구함", 10, Txt, true);
+        TxB(16, 250, "미입력 ≠ 산정 불가 · 미입력 = 칸 공란 · 산정 불가 = 임상도에서 미확보", 10, Txt, true);
         TxB(16, 270, "7.2 m = 평균수고 양식 값 · " + QSrcLine, 9, Dim, false);
     }
 
@@ -232,11 +232,11 @@ internal sealed partial class FixDemoView
     static readonly (string A, string B)[] QCMean =
     {
         ("K = 뿌리부 단위중량 1.3 ton/㎥", "뿌리분 V × K × f = 뿌리부 중량 W₂"),
-        ("f = 뿌리분 중 실제 뿌리가 차지하는 비율", "50 % 적용 (양식 0.5)"),
+        ("f = 뿌리분 중 실제 뿌리 점유 비율", "50 % 적용 (양식 0.5)"),
         ("W₀ = 수간 단위체적당 단위중량(ton/㎥)", "목재 0.8 · 자연상태"),
-        ("K = 수간의 형상계수", "수종에 따라 다르지만 보통 0.5"),
-        ("P = 지상부 중량 할증률(가지와 잎)", "많고 적음에 따라 약 0.3 ~ 1.0 · 양식 0.5 적용"),
-        ("지상부 할증 = 가지와 잎 몫", "지상부 발생량 V = (π·d²/4)·H·1.3"),
+        ("K = 수간의 형상계수", "수종별 상이 · 통상 0.5"),
+        ("P = 지상부 중량 할증률(가지 · 잎)", "가지 · 잎 양에 따라 약 0.3 ~ 1.0 · 양식 0.5 적용"),
+        ("지상부 할증 = 가지 · 잎 분 반영", "지상부 발생량 V = (π·d²/4)·H·1.3"),
     };
 
     void QtyConst(int hi, double t)
@@ -258,7 +258,7 @@ internal sealed partial class FixDemoView
         QTerms(x, 146, new[] { ("지상부 발생량 (㎥/주)", -1) }, hi, sz, 1);
         QTerms(x, 164, new[] { ("= π · d² / 4 · H · ", -1), ("할증", 5) }, hi, sz, 1);
         QTerms(x, 182, new[] { ("= 3.14 · " + D + "² / 4 · " + H + " · ", -1), (Qn(f.Surcharge), 5), (" = " + Qn(tv), -1) }, hi, sz, 1);
-        QTerms(x, 210, new[] { ("발생량 = 뿌리 " + Qn(rv) + " + 지상 " + Qn(tv) + " = " + Qn(QR(rv + tv, 3)) + " ㎥ = 적사량", -1) }, hi, sz, 1);
+        QTerms(x, 210, new[] { ("발생량 = 뿌리부 " + Qn(rv) + " + 지상부 " + Qn(tv) + " = " + Qn(QR(rv + tv, 3)) + " ㎥ = 적사량", -1) }, hi, sz, 1);
         QTerms(x, 228, new[] { ("계 = " + Qn(QR(QTon(f), 1)) + " TON  (예시 면적 " + QExample.ByFrtp.Sum().ToString("#,##0") + " ㎡)", -1) }, hi, sz, 1);
         Ln(Q(12, 246), Q(408, 246), QGrid, 1);
         if (hi >= 0)
@@ -268,8 +268,8 @@ internal sealed partial class FixDemoView
         }
         else
         {
-            TxB(16, 252, "상수 6개 · 임목폐기물 계산에만 씀", 11, QRed, true);
-            TxB(16, 269, "칸에 마우스 → 그 상수가 하는 일", 10, Txt, false);
+            TxB(16, 252, "상수 6개 · 임목폐기물 산정 전용", 11, QRed, true);
+            TxB(16, 269, "항목에 마우스를 올리면 상수 역할 표시", 10, Txt, false);
         }
         TxB(16, 284, QSrcLine, 9, Dim, false);
     }

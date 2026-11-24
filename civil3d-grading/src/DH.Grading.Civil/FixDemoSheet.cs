@@ -409,7 +409,7 @@ internal sealed partial class FixDemoView
                 var p = new Point(120 + 40 * mv, 150 - 36 * mv);
                 Ptr(p, Seg(t, 1.0, 1.4));
                 double note = Seg(t, 3.4, 4.0);
-                TxB(20, 140, "비우면 = 작성하는 날", 10, Dim, false, note);
+                TxB(20, 140, "미입력 시 = 작성일", 10, Dim, false, note);
                 SbArrowTo(new Point(130, 110), new Point(212, 253), Seg(t, 1.8, 2.4));
                 double f = Seg(t, 2.4, 3.0);
                 SbTSheet(3, f, (x, y) => TxB(x, y, "2026.11.16", 9, Txt, true, f));

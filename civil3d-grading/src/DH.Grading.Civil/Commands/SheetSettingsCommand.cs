@@ -33,11 +33,13 @@ public sealed class SheetSettingsCommand
         var (cm0, cM0) = ContourInterval.Read(doc.Database);
         bool nori0 = NoriSetting.IsOn(doc.Database);
         double bm0 = GradingSettings.BasemapRes;
-        var dlg = new SheetDialog("저장", cm0, cM0, nori0, openMisc);
+        bool ge0 = GroundElevLabels.IsOn(doc.Database);
+        var dlg = new SheetDialog("저장", cm0, cM0, nori0, openMisc, ge0);
         AcadApp.ShowModalWindow(dlg);
         if (dlg.DialogResult != true) return;
         SavedNori(doc, nori0, dlg.NoriDraw);
         SavedContour(doc, cm0, cM0, dlg.ContourMinor, dlg.ContourMajor);
+        SavedGroundElev(doc, ge0, dlg.GroundElev);
         SheetPrefs.TryPin(doc.Database, "저장");   // 배경지도 화질(DH_SHEETPREFS · 같으면 안 씀)
         if (System.Math.Abs(GradingSettings.BasemapRes - bm0) > 1e-9)
             doc.Editor.WriteMessage("\n[공통설정] 배경지도 화질 " + GradingSettings.BasemapRes.ToString("0.##") + " m/픽셀 — 다음 [위성지도]부터");
@@ -78,6 +80,14 @@ public sealed class SheetSettingsCommand
             }
         }
         catch (System.Exception ex) { doc.Editor.WriteMessage("\n[공통설정] 노리선 저장 실패 — " + ex.Message); }
+    }
+
+    /// <summary>★[JACK 1124] «원지반 표시» [저장] 뒤 — 바꿨으면 적고 맞춤(기본 = 우리 표고 라벨 다 지움 · 표고 표시 = 지금 원지반에) ·
+    /// 안 바꿨어도 켜져 있으면 맞춤(등고선 간격을 바꿨으면 그 계곡선으로 다시 · 같으면 아무것도 안 함). 창 없이 시험이 같은 길을 부른다.</summary>
+    internal static void SavedGroundElev(Document doc, bool before, bool after)
+    {
+        string r = before != after ? GroundElevLabels.Set(doc.Database, after) : after ? GroundElevLabels.Sync(doc.Database) : "";
+        if (r.Length > 0) doc.Editor.WriteMessage("\n[공통설정] " + r);
     }
 
     /// <summary>★★[v113.1 · 계획_종단방향_축척.md 3] 진입도로 종단 H · V — 판 2로 적음(바뀌었거나 판 2가 없던 도면에서 값이 옛 규칙과 다를 때). 창 없이 시험이 같은 길을 부른다.</summary>

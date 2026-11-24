@@ -29,11 +29,11 @@ internal sealed class StructDemoView : Border
 
     static readonly Dictionary<string, (double Period, string Caption)> Spec = new()
     {
-        ["sImport"] = (6.6, "구조물 불러오기 — Revit 3D DWG · IFC를 제자리에 붙여 평면 · 종단 · 횡단에 자른 면 · 토공에서 공제"),
-        ["sBox"] = (6.0, "박스 구조물 배치 — Revit 모델 없이 평면 외곽 × 높이로 박스(같은 그림 · 같은 수량)"),
-        ["sPts"] = (10.4, "좌표계 내보내기 — 구조물 배치 경계의 기준점 두 곳 + 땅 범위 → 파일 하나 → Revit 애드인이 이 파일 기준으로 모델 좌표를 맞춤"),
-        ["sAddin"] = (7.2, "Revit 애드인 설치 — [좌표계 내보내기] 파일을 읽는 Revit 애드인(DH 좌표)을 이 PC Revit 2026에"),
-        ["sOff"] = (5.0, "구조물 지우기 — 도면에 그린 것 · xref · 기록만 지움(원본 파일은 그대로)"),
+        ["sImport"] = (6.6, "구조물 불러오기 — Revit 3D DWG · IFC를 원위치에 삽입 → 평면 · 종단 · 횡단 단면 표시 · 토공 수량에서 공제"),
+        ["sBox"] = (6.0, "박스 구조물 배치 — Revit 모델 없이 평면 외곽 × 높이로 박스 생성(동일 표현 · 동일 수량)"),
+        ["sPts"] = (10.4, "좌표계 내보내기 — 구조물 배치 경계의 기준점 두 곳 + 지반 범위 → 단일 파일 → Revit 애드인이 이 파일 기준으로 모델 좌표 정합"),
+        ["sAddin"] = (7.2, "Revit 애드인 설치 — [좌표계 내보내기] 파일을 읽는 Revit 애드인(DH 좌표)을 이 PC의 Revit 2026에 설치"),
+        ["sOff"] = (5.0, "구조물 지우기 — 도면 내 작도 객체 · xref · 기록만 삭제(원본 파일 유지)"),
     };
 
     static Brush Fz(byte r, byte g, byte b, byte a = 255) { var x = new SolidColorBrush(Color.FromArgb(a, r, g, b)); x.Freeze(); return x; }
@@ -45,7 +45,7 @@ internal sealed class StructDemoView : Border
                           Grid = Fz(0xE6, 0xEC, 0xED), Dim = Fz(0x00, 0x48, 0x4E), Tint = Fz(0x7E, 0xA8, 0x5A, 0x50), Bank = Fz(0xB8, 0x9A, 0x6A),
                           RevitBar = Fz(0x2B, 0x57, 0x9A);
 
-    public StructDemoView(string idle = "단추에 마우스 → 설명")
+    public StructDemoView(string idle = "단추에 마우스를 올리면 설명 표시")
     {
         BorderBrush = DhBrand.Line; BorderThickness = new Thickness(1); CornerRadius = new CornerRadius(6);
         Background = DhBrand.Card; Padding = new Thickness(4);
@@ -299,7 +299,7 @@ internal sealed class StructDemoView : Border
         double co = op * cutOp;
         Pg(new[] { new Point(bx0, byT), new Point(bx1, byT), new Point(bx1, byB), new Point(bx0, byB) }, BoxR, BoxEdge, 1.6, co);
         Pg(new[] { new Point(bx0 + tw, byT + tw), new Point(bx1 - tw, byT + tw), new Point(bx1 - tw, byB - tw), new Point(bx0 + tw, byB - tw) }, DhBrand.Card, BoxEdge, 1, co);
-        Tx(bx1 + 8, byT + 2, "구조물 자른 면", 10.5, BoxEdge, true, co);
+        Tx(bx1 + 8, byT + 2, "구조물 단면", 10.5, BoxEdge, true, co);
         if (deduct > 0)
         {
             Pg(new[] { new Point(bx0, byT), new Point(bx1, byT), new Point(bx1, byB), new Point(bx0, byB) }, ExFill, ExC, 1.8, op * deduct);
@@ -323,12 +323,12 @@ internal sealed class StructDemoView : Border
             if (move < 0.35) FileCard(18, 18, 120, 66, "배수지.ifc", "Revit · 공유 좌표", appear * (1 - move / 0.35), RevitC);
         }
         if (move >= 1) Footprint(1);
-        Chip(150, 128, "제자리 — 공유 좌표 그대로", Seg(t, 2.2, 2.6) * (1 - Seg(t, 3.4, 3.7)));
+        Chip(150, 128, "원위치 — 공유 좌표 유지", Seg(t, 2.2, 2.6) * (1 - Seg(t, 3.4, 3.7)));
         Route(Seg(t, 2.6, 3.4));
         double sec = Seg(t, 3.6, 4.4);
         SectionInset(sec, 30 * (1 - sec), Seg(t, 4.0, 4.6), Seg(t, 4.9, 5.6));
-        string foot0 = t < 1.0 ? "Revit에서 내보낸 3D DWG · IFC" : t < 2.6 ? "공유 좌표 그대로 — 옮기지 않아도 제자리"
-                     : t < 3.6 ? "평면에 외곽 · 종단 노선이 지나가면" : t < 4.9 ? "종단 · 횡단에 구조물 자른 면" : "횡단 토공 수량에서 구조물만큼 뺌";
+        string foot0 = t < 1.0 ? "Revit에서 내보낸 3D DWG · IFC" : t < 2.6 ? "공유 좌표 유지 — 이동 없이 원위치 배치"
+                     : t < 3.6 ? "평면 외곽 표시 · 종단 노선 통과 시" : t < 4.9 ? "종단 · 횡단에 구조물 단면 표시" : "횡단 토공 수량에서 구조물 체적 공제";
         Tx(16, H - 24, foot0, 11, Ink);
     }
 
@@ -393,8 +393,8 @@ internal sealed class StructDemoView : Border
             if (shown > 0) DrawCursor(tip.X, tip.Y);
         }
         Chip(16, 12, "Revit 모델 없이", Seg(t, 0.1, 0.5) * (1 - Seg(t, 2.6, 3.0)));
-        Chip(16, 12, "이름 · 높이 · 바닥고 → 속 빈 박스", Seg(t, 4.6, 5.2));
-        string foot = t < 2.6 ? "평면에 외곽 점 찍기(Enter = 닫기 · S = 닫힌 폴리선)" : t < 5.0 ? "바닥고 ~ 바닥고 + 높이" : "불러온 구조물과 같은 그림 · 같은 공제(개략 토공)";
+        Chip(16, 12, "이름 · 높이 · 바닥고 → 중공 박스 생성", Seg(t, 4.6, 5.2));
+        string foot = t < 2.6 ? "평면에 외곽점 지정(Enter = 닫기 · S = 닫힌 폴리선)" : t < 5.0 ? "바닥고 ~ 바닥고 + 높이" : "불러온 구조물과 동일한 표현 · 공제(개략 토공)";
         Tx(16, H - 24, foot, 11, Ink);
     }
 
@@ -442,7 +442,7 @@ internal sealed class StructDemoView : Border
         {
             var e = t < 3.7 ? cur : r1;
             Pg(new[] { r0, new Point(e.X, r0.Y), e, new Point(r0.X, e.Y) }, Fz(0x00, 0x7A, 0x80, 0x14), Region, 1.6, 1, dash: t < 3.7);
-            Tx(r0.X + 4, e.Y - 18, "함께 보낼 땅(3D 영역)", 10.5, Region, true, Seg(t, 3.7, 4.0));
+            Tx(r0.X + 4, e.Y - 18, "함께 내보낼 지반(3D 영역)", 10.5, Region, true, Seg(t, 3.7, 4.0));
         }
         if (t < 3.8) DrawCursor(cur.X, cur.Y);
 
@@ -501,11 +501,11 @@ internal sealed class StructDemoView : Border
             Tx(c.X - 26, c.Y - 7, "Revit 모델", 9.5, BoxEdge, true, model);
         }
         Chip(256, 70, "파일 불러오기", Seg(t, 5.0, 5.4) * (1 - Seg(t, 6.6, 6.9)));
-        Chip(256, 70, "같은 모서리 두 곳 찍기", Seg(t, 6.8, 7.1) * (1 - Seg(t, 8.6, 8.9)));
-        Chip(256, 236, "이 파일 기준으로 맞춤", Seg(t, 8.9, 9.4));
-        string ft = t < 0.9 ? "구조물을 놓을 자리(배치 경계)" : t < 2.8 ? "배치 경계 모서리 두 곳 = 기준점 1 · 2" : t < 3.9 ? "네모 = 함께 보낼 땅(3D 영역)"
-                  : t < 5.4 ? "파일 하나로 저장(기준점 + 3D 영역 · JSON · m)" : t < 7.5 ? "Revit «DH 좌표» → 파일 불러오기 → 모델의 같은 모서리 두 곳"
-                  : t < 8.9 ? "애드인이 두 점이 겹치게 모델을 옮기고 돌림" : "Revit 모델 = Civil 좌표 → IFC → [구조물 불러오기]";
+        Chip(256, 70, "동일 모서리 두 곳 지정", Seg(t, 6.8, 7.1) * (1 - Seg(t, 8.6, 8.9)));
+        Chip(256, 236, "이 파일 기준으로 좌표 정합", Seg(t, 8.9, 9.4));
+        string ft = t < 0.9 ? "구조물 배치 위치(배치 경계)" : t < 2.8 ? "배치 경계 모서리 두 곳 = 기준점 1 · 2" : t < 3.9 ? "사각 범위 = 함께 내보낼 지반(3D 영역)"
+                  : t < 5.4 ? "단일 파일로 저장(기준점 + 3D 영역 · JSON · m)" : t < 7.5 ? "Revit «DH 좌표» → 파일 불러오기 → 모델의 동일 모서리 두 곳 지정"
+                  : t < 8.9 ? "애드인이 두 점이 일치하도록 모델 이동 · 회전" : "Revit 모델 = Civil 좌표 → IFC → [구조물 불러오기]";
         Tx(16, H - 24, ft, 11, Ink);
     }
 
@@ -528,19 +528,19 @@ internal sealed class StructDemoView : Border
     {
         string[] names = { "DH.CivilCoord.Revit.dll", "DH.CivilCoord.Core.dll", "DH.CivilCoord.addin" };
         double fold = Seg(t, 0.1, 0.6) * (1 - Seg(t, 3.8, 4.2));
-        Folder(10, 44, 156, 150, "DH 부지 애드인", "번들 안 RevitAddin", fold);
+        Folder(10, 44, 156, 150, "DH 부지 애드인", "번들 내 RevitAddin", fold);
         Folder(254, 44, 156, 150, "Revit 애드인 폴더", "Addins\\2026", fold);
         Chip(10, 8, "Revit 2026 ✓", Seg(t, 0.8, 1.1) * (1 - Seg(t, 3.8, 4.2)));
-        Chip(126, 8, "Revit 꺼짐 ✓", Seg(t, 1.1, 1.4) * (1 - Seg(t, 3.8, 4.2)));
+        Chip(126, 8, "Revit 종료 ✓", Seg(t, 1.1, 1.4) * (1 - Seg(t, 3.8, 4.2)));
         // 옛 판 → 백업
         double old = Seg(t, 1.4, 2.0);
         Folder(254, 206, 156, 50, "백업", "%APPDATA%\\DH.CivilCoord", fold * Seg(t, 1.2, 1.5));
         for (int i = 0; i < 3; i++)
         {
             var o = Lerp(new Point(262, 92 + i * 32), new Point(262, 226), old);
-            FileTile(o.X, o.Y, "옛 판 · " + names[i].Replace("DH.CivilCoord.", ""), BaseC, fold * Seg(t, 0.1, 0.6) * (1 - Seg(t, 1.8, 2.0)));
+            FileTile(o.X, o.Y, "기존 버전 · " + names[i].Replace("DH.CivilCoord.", ""), BaseC, fold * Seg(t, 0.1, 0.6) * (1 - Seg(t, 1.8, 2.0)));
         }
-        Tx(336, 210, "옛 판 3개", 10.5, Ink, true, fold * Seg(t, 1.9, 2.2));
+        Tx(336, 210, "기존 버전 3개", 10.5, Ink, true, fold * Seg(t, 1.9, 2.2));
         // 새 판 — 하나씩 날아감 · 해시 ✓
         for (int i = 0; i < 3; i++)
         {
@@ -579,10 +579,10 @@ internal sealed class StructDemoView : Border
             if (t >= 6.0) Ring(270, 120, 8 + 14 * Seg(t, 6.0, 6.4), Region, 1 - Seg(t, 6.3, 6.8));
             if (card > 0) { var at = Lerp(new Point(30, 160), new Point(60, 104), card); FileCard(at.X, at.Y, 132, 62, "구조물.json", "[좌표계 내보내기]", card, Region); }
         }
-        Chip(30, 222, "Revit을 켜면 «DH 좌표» 탭", Seg(t, 4.9, 5.3));
-        string ft = t < 0.8 ? "DH 부지 애드인 안에 든 Revit 애드인(DLL 둘 + .addin)" : t < 1.6 ? "Revit 2026 있음 · Revit은 꺼져 있어야 함"
-                  : t < 3.0 ? "Revit 애드인 폴더로 복사 — 옛 판은 백업" : t < 3.9 ? "복사한 파일 해시 대조" : t < 5.4 ? "Revit을 켜면 «DH 좌표» 탭 · [Civil 좌표 맞춤]"
-                  : "[Civil 좌표 맞춤]에서 [좌표계 내보내기] 파일을 불러옴";
+        Chip(30, 222, "Revit 실행 시 «DH 좌표» 탭 표시", Seg(t, 4.9, 5.3));
+        string ft = t < 0.8 ? "DH 부지 애드인에 포함된 Revit 애드인(DLL 둘 + .addin)" : t < 1.6 ? "Revit 2026 설치 · Revit 종료 필요"
+                  : t < 3.0 ? "Revit 애드인 폴더로 복사 — 기존 버전은 백업" : t < 3.9 ? "복사 파일 해시 대조" : t < 5.4 ? "Revit 실행 시 «DH 좌표» 탭 · [Civil 좌표 맞춤] 표시"
+                  : "[Civil 좌표 맞춤]에서 [좌표계 내보내기] 파일 불러오기";
         Tx(16, H - 24, ft, 11, Ink);
     }
 
@@ -602,7 +602,7 @@ internal sealed class StructDemoView : Border
             Ln(f[0].X, f[0].Y, f[2].X, f[2].Y, ExC, 2.4, false, xo); Ln(f[1].X, f[1].Y, f[3].X, f[3].Y, ExC, 2.4, false, xo);
             Ln(196, 186, 292, 254, ExC, 2.4, false, xo); Ln(292, 186, 196, 254, ExC, 2.4, false, xo);
         }
-        Chip(206, 124, "그린 것 · xref · 기록 지움", Seg(t, 2.4, 2.8));
+        Chip(206, 124, "작도 객체 · xref · 기록 삭제", Seg(t, 2.4, 2.8));
         // 원본 파일 — 그대로(초록 표)
         FileCard(18, 18, 120, 66, "배수지.ifc", "원본 파일", 1, RevitC);
         double keep = Seg(t, 3.0, 3.6);
@@ -611,9 +611,9 @@ internal sealed class StructDemoView : Border
             var e = new Ellipse { Width = 22, Height = 22, Fill = Pick, Opacity = keep };
             Canvas.SetLeft(e, 128); Canvas.SetTop(e, 8); _cv.Children.Add(e);
             Tx(133, 9, "✓", 13, Brushes.White, true, keep);
-            Chip(18, 92, "원본 파일은 그대로", keep);
+            Chip(18, 92, "원본 파일 유지", keep);
         }
-        string foot = t < 2.4 ? "평면 외곽 · 종단 · 횡단에 그린 것 · xref · 기록" : t < 3.0 ? "도면에서만 지움" : "원본은 그대로 — 다시 불러오면 제자리";
+        string foot = t < 2.4 ? "평면 외곽 · 종단 · 횡단 작도 객체 · xref · 기록" : t < 3.0 ? "도면에서만 삭제" : "원본 유지 — 다시 불러오기 시 원위치 복원";
         Tx(16, H - 24, foot, 11, Ink);
     }
 }

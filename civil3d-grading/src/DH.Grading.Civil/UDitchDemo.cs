@@ -26,21 +26,21 @@ internal sealed class UDitchDemoView : Border
 
     static readonly Dictionary<string, (double Period, string Caption)> Spec = new()
     {
-        ["udLine"] = (4.6, "측구 선 — 폴리선을 고르거나 평면에서 점을 찍어 그림 · 그린 방향 = 물 흐름(시점 상류 → 종점 하류)"),
-        ["udFit"] = (6.0, "지표면 맞춤 — 바닥이 지표를 따라 내려감 · 너무 급하면 낙차 · 높은 단차는 집수정 + 묻힌 관로"),
-        ["udArea"] = (4.6, "면적 고르기 — 도면의 닫힌 폴리선 · 원 · 해치를 고르면 넓이 합이 집수면적(ha)"),
-        ["udRain"] = (4.2, "강우 — 공식 자료의 재현기간 · 지속기간 · 강우강도(CSV 표에서 한 줄) · Q = C · I · A / 360"),
-        ["udBuild"] = (5.0, "모델 생성 — 모든 측구를 U형 콘크리트 솔리드로(덮개 · 집수정 · 관로 포함) + 보고서"),
+        ["udLine"] = (4.6, "측구 선 — 폴리선 선택 또는 평면에서 점 지정으로 작도 · 작도 방향 = 유하 방향(시점 상류 → 종점 하류)"),
+        ["udFit"] = (6.0, "지표면 맞춤 — 바닥이 지표를 따라 하강 · 급경사 구간은 낙차 · 큰 단차는 집수정 + 매설 관로"),
+        ["udArea"] = (4.6, "면적 고르기 — 도면의 닫힌 폴리선 · 원 · 해치 선택 → 면적 합계 = 집수면적(ha)"),
+        ["udRain"] = (4.2, "강우 — 공식 자료의 재현기간 · 지속기간 · 강우강도(CSV 표에서 1행 선택) · Q = C · I · A / 360"),
+        ["udBuild"] = (5.0, "모델 생성 — 전체 측구를 U형 콘크리트 솔리드로 생성(덮개 · 집수정 · 관로 포함) + 보고서"),
         // ★[JACK 1122 «측구 입력값마다 애니메이션 — 측구 설계를 해 본 적이 없어 설계적인 뜻이 필요»]
-        ["udSize"] = (6.0, "규격 — 안폭 B × 안높이 H(mm). 물이 허용 수심(보통 안높이의 80 %)까지 찰 때 흘릴 수 있는 양 = 통수능. 클수록 많이 흘림"),
-        ["udCover"] = (4.6, "덮개 — 사람 · 차가 지나는 자리는 스틸 그레이팅(빗물은 틈으로 들어감) · 아니면 열린 U(청소 쉬움)"),
-        ["udRev"] = (4.8, "방향 — 물은 높은 곳 → 낮은 곳. 오르막으로 그리면 측구가 땅에 묻힘 → 새 측구는 자동으로 맞추고, 바꾸려면 [방향 바꾸기]"),
-        ["udInvert"] = (6.0, "바닥고 — 측구 바닥 높이. 지표 − 덮개(흙) − 안높이. 시점이 종점보다 높아야 흐름 · 경사 = 높이 차 ÷ 길이(최소 경사 이상)"),
-        ["udC"] = (5.4, "유출계수 C — 내린 비 중 측구로 흘러드는 몫(0~1). 포장 0.9 · 잔디 0.3 · 숲 0.2 — 땅에 스며드는 만큼 작음"),
-        ["udYears"] = (5.0, "재현기간 — 그만한 비가 평균 몇 년에 한 번 오는지. 길게 잡을수록 큰 비 → 안전하지만 측구가 커짐(기준서 값을 따름)"),
-        ["udMins"] = (5.6, "지속기간 — 집수면 가장 먼 곳의 빗물이 측구까지 오는 시간(도달시간). 짧을수록 그 시간 동안 내리는 비가 강함"),
-        ["udIdf"] = (5.4, "강우강도 — 공식 IDF 자료(재현기간 × 지속기간 표)에서 읽은 시간당 비(mm/h). 값을 짓지 말고 자료에서"),
-        ["udResult"] = (6.4, "결과 — 필요 유량 Q = C · I · A / 360 과 통수능을 견줌 · 유속도 범위 안이어야 OK. 부족하면 [추천 규격 적용]"),
+        ["udSize"] = (6.0, "규격 — 안폭 B × 안높이 H(mm) · 허용 수심(통상 안높이의 80 %)까지의 유하 가능 유량 = 통수능 · 규격이 클수록 통수능 증가"),
+        ["udCover"] = (4.6, "덮개 — 보행 · 차량 통행 구간은 스틸 그레이팅(틈새로 우수 유입) · 그 외는 개방형 U(청소 용이)"),
+        ["udRev"] = (4.8, "방향 — 고점 → 저점으로 유하 · 역경사 작도 시 측구 매몰 → 신규 측구는 자동 보정 · 변경은 [방향 바꾸기]"),
+        ["udInvert"] = (6.0, "바닥고 — 측구 바닥 표고 = 지표 − 덮개(흙) − 안높이 · 유하 조건 = 시점 > 종점 · 경사 = 고저차 ÷ 길이(최소 경사 이상)"),
+        ["udC"] = (5.4, "유출계수 C — 강우 중 측구로 유입되는 비율(0~1) · 포장 0.9 · 잔디 0.3 · 숲 0.2 — 침투량이 클수록 감소"),
+        ["udYears"] = (5.0, "재현기간 — 해당 강우의 평균 발생 주기(년) · 길수록 설계 강우 증가 → 안전성 향상 · 측구 규격 증가(기준서 값 적용)"),
+        ["udMins"] = (5.6, "지속기간 — 집수구역 최원점의 우수가 측구에 도달하는 시간(도달시간) · 짧을수록 강우강도 증가"),
+        ["udIdf"] = (5.4, "강우강도 — 공식 IDF 자료(재현기간 × 지속기간 표)의 시간당 강우량(mm/h) · 임의 값 금지 · 자료 값 적용"),
+        ["udResult"] = (6.4, "결과 — 필요 유량 Q = C · I · A / 360 과 통수능 비교 + 유속 허용 범위 확인 → OK · 부족 시 [추천 규격 적용]"),
     };
 
     static Brush Fz(byte r, byte g, byte b, byte a = 255) { var x = new SolidColorBrush(Color.FromArgb(a, r, g, b)); x.Freeze(); return x; }
@@ -49,7 +49,7 @@ internal sealed class UDitchDemoView : Border
                           Conc = Fz(0xB8, 0xBC, 0xBE), ConcDark = Fz(0x8A, 0x90, 0x93), Pick = Fz(0xD0, 0x30, 0x28), Area = Fz(0x2E, 0x8B, 0x57, 0x40),
                           AreaLine = Fz(0x2E, 0x8B, 0x57), Grid = Fz(0xE6, 0xEC, 0xED), Ink = Fz(0x36, 0x46, 0x4A), Pipe = Fz(0x55, 0x5E, 0x62), Contour = Fz(0xC9, 0xBF, 0xA8);
 
-    public UDitchDemoView(string idle = "단추에 마우스 → 설명")
+    public UDitchDemoView(string idle = "단추에 마우스를 올리면 설명 표시")
     {
         BorderBrush = DhBrand.Line; BorderThickness = new Thickness(1); CornerRadius = new CornerRadius(6);
         Background = DhBrand.Card; Padding = new Thickness(4);
@@ -271,7 +271,7 @@ internal sealed class UDitchDemoView : Border
         {
             Tx(150, GroundZ(200) + 52, "집수정 + 관로(단차)", 10.5, Ink, true);
             Tx(36, GroundZ(40) + 26, "바닥 = 지표 − 덮개 − 안높이", 10, DhBrand.Sub);
-            Tx(300, GroundZ(320) + 26, "급하면 낙차", 10, DhBrand.Sub);
+            Tx(300, GroundZ(320) + 26, "급경사 시 낙차", 10, DhBrand.Sub);
         }
         // 물 흐름
         if (t > 4.2)
@@ -336,7 +336,7 @@ internal sealed class UDitchDemoView : Border
                 Child = new TextBlock { Text = "30년 · 10분 · 171.8 mm/h", FontSize = 13, FontWeight = FontWeights.SemiBold, Foreground = DhBrand.Brand } };
             Canvas.SetLeft(box, 70); Canvas.SetTop(box, 170); _cv.Children.Add(box);
         }
-        if (t > 2.8) Tx(70, 222, "Q = C · I · A / 360  →  통수능과 견줌", 12, Ink, true);
+        if (t > 2.8) Tx(70, 222, "Q = C · I · A / 360  →  통수능과 비교", 12, Ink, true);
         // 빗줄기
         for (int k = 0; k < 18; k++)
         {
@@ -385,9 +385,9 @@ internal sealed class UDitchDemoView : Border
         {
             Ln(x - 30, y + h * 0.2, x + b + 4, y + h * 0.2, DhBrand.Brand, 1.4, 4);
             Tx(16, y + h * 0.2 - 22, "허용 수심 80 %", 11, DhBrand.Brand, true);
-            Tx(16, y + h * 0.2 - 8, "(위 20 % = 여유)", 10, DhBrand.Sub);
+            Tx(16, y + h * 0.2 - 8, "(상부 20 % = 여유고)", 10, DhBrand.Sub);
         }
-        if (t > 4.2) Box(60, 236, "통수능 = 물 단면 × 유속(매닝 공식) — 이만큼까지 흘림", Seg(t, 4.2, 4.9));
+        if (t > 4.2) Box(60, 236, "통수능 = 통수 단면적 × 유속(매닝 공식) — 최대 유하 유량", Seg(t, 4.2, 4.9));
     }
 
     void SceneCover(double t)
@@ -407,15 +407,15 @@ internal sealed class UDitchDemoView : Border
                 // 빗물이 틈으로
                 if (t > 2.0) for (int k = 0; k < 6; k++) { double dy = ((t * 90 + k * 17) % 60); Ln(x0 + 10 + k * 14, y - 60 + dy, x0 + 8 + k * 14, y - 52 + dy, Water, 1.6); }
                 Tx(x0 - 12, y + h + 22, "스틸 그레이팅", 12, Ink, true);
-                Tx(x0 - 22, y + h + 38, "사람 · 차 지나는 자리", 10, DhBrand.Sub);
+                Tx(x0 - 22, y + h + 38, "보행 · 차량 통행 구간", 10, DhBrand.Sub);
             }
             else
             {
                 Tx(x0 + 2, y + h + 22, "덮개 없음", 12, Ink, true);
-                Tx(x0 - 6, y + h + 38, "열린 U · 청소 쉬움", 10, DhBrand.Sub);
+                Tx(x0 - 6, y + h + 38, "개방형 U · 청소 용이", 10, DhBrand.Sub);
             }
         }
-        if (t > 2.6) Tx(110, 30, "그레이팅 무게는 물량에만 — 통수능은 같음", 11, Ink, true);
+        if (t > 2.6) Tx(110, 30, "그레이팅 중량은 물량에만 반영 — 통수능 동일", 11, Ink, true);
     }
 
     static double SlopeZ(double x) => 80 + x * 0.32;   // 왼쪽 높음(위) → 오른쪽 낮음
@@ -424,7 +424,7 @@ internal sealed class UDitchDemoView : Border
         var g = new List<Point>(); for (double x = 20; x <= 400; x += 10) g.Add(new Point(x, SlopeZ(x)));
         Poly(new List<Point>(g) { new(400, H), new(20, H) }, null, 0, Ground, true);
         Poly(g, GroundLine, 2);
-        Tx(24, SlopeZ(24) - 28, "높음", 11, Ink, true); Tx(360, SlopeZ(370) - 28, "낮음", 11, Ink, true);
+        Tx(24, SlopeZ(24) - 28, "고점", 11, Ink, true); Tx(360, SlopeZ(370) - 28, "저점", 11, Ink, true);
         bool wrong = t < 2.4;
         double a = wrong ? Seg(t, 0.3, 1.6) : Seg(t, 2.6, 3.9);
         double xa = wrong ? 360 : 60, xb = wrong ? 60 : 360;
@@ -432,15 +432,15 @@ internal sealed class UDitchDemoView : Border
         if (a > 0.05) Arrow(xa, SlopeZ(xa) - 10, xe, SlopeZ(xe) - 10, wrong ? Pick : AreaLine);
         if (wrong && t > 1.6)
         {
-            Tx(150, 40, "✕ 오르막으로 그림", 13, Pick, true);
+            Tx(150, 40, "✕ 역경사 작도", 13, Pick, true);
             // 묻힌 측구(평평하게 땅 속)
             Ln(60, SlopeZ(360) + 16, 360, SlopeZ(360) + 16, Ditch, 4, 6);
-            Tx(70, SlopeZ(360) + 22, "측구가 땅 속에 묻힘", 10.5, Pick, true);
+            Tx(70, SlopeZ(360) + 22, "측구 매몰", 10.5, Pick, true);
         }
         if (!wrong)
         {
             Ln(60, SlopeZ(60) + 14, 360, SlopeZ(360) + 14, Ditch, 4);
-            if (t > 3.9) Tx(150, 40, "✓ 높은 쪽 → 낮은 쪽", 13, AreaLine, true);
+            if (t > 3.9) Tx(150, 40, "✓ 고점 → 저점", 13, AreaLine, true);
             if (t > 4.1) for (int k = 0; k < 3; k++) { double x = 60 + ((t * 120 + k * 100) % 300); Dot(x, SlopeZ(x) + 11, 3, Water); }
         }
     }
@@ -466,7 +466,7 @@ internal sealed class UDitchDemoView : Border
         }
         if (t > 3.0) { double x = 370; Dot(x, Zg(x) + cov + hh, 4, Pick); Tx(x - 80, Zg(x) + cov + hh + 8, "종점 바닥고 40.80", 11, Pick, true); }
         if (t > 3.8) Box(40, 40, "경사 = (41.20 − 40.80) ÷ 40 m = 1.0 %", Seg(t, 3.8, 4.4));
-        if (t > 4.6) Tx(40, 76, "최소 경사보다 작으면 흙이 쌓임 · 칸에 치면 한 경사(손 입력)", 10.5, DhBrand.Sub);
+        if (t > 4.6) Tx(40, 76, "최소 경사 미만 시 토사 퇴적 · 항목에 입력 시 단일 경사(수동 입력)", 10.5, DhBrand.Sub);
     }
 
     void SceneC(double t)
@@ -488,13 +488,13 @@ internal sealed class UDitchDemoView : Border
         }
         // 측구(오른쪽 끝)
         Rect(W - 14, 140, 10, 40, Ditch);
-        if (t > 2.4) Box(40, 230, "C = 측구로 흘러드는 몫 · 여러 땅이면 넓이로 가중 평균", Seg(t, 2.4, 3.0));
+        if (t > 2.4) Box(40, 230, "C = 측구 유입 비율 · 복수 피복 시 면적 가중 평균", Seg(t, 2.4, 3.0));
     }
 
     void SceneYears(double t)
     {
         (string Y, double I)[] r = { ("10년", 0.55), ("30년", 0.72), ("50년", 0.82), ("100년", 1.0) };
-        Tx(16, 10, "재현기간이 길수록 큰 비", 12, Ink, true);
+        Tx(16, 10, "재현기간이 길수록 강우강도 증가", 12, Ink, true);
         for (int i = 0; i < r.Length; i++)
         {
             double a = Seg(t, 0.3 + i * 0.5, 1.0 + i * 0.5), x = 40 + i * 92, hgt = 170 * r[i].I * a;
@@ -505,7 +505,7 @@ internal sealed class UDitchDemoView : Border
             int n = (int)(4 + 10 * r[i].I);
             for (int j = 0; j < n; j++) { double yy = 76 + ((t * 140 + j * 29) % 14); Ln(x + 4 + j * 52.0 / n, yy, x + 2 + j * 52.0 / n, yy + 7, Water, 1.4); }
         }
-        if (t > 2.8) Tx(16, 28, "보통 기준서(도로 · 단지 배수)가 정한 연수를 씀", 10.5, DhBrand.Sub);
+        if (t > 2.8) Tx(16, 28, "통상 기준서(도로 · 단지 배수) 규정 연수 적용", 10.5, DhBrand.Sub);
     }
 
     void SceneMins(double t)
@@ -517,11 +517,11 @@ internal sealed class UDitchDemoView : Border
         // 가장 먼 점 → 측구 끝(종점)까지 물방울
         var path = new[] { new Point(100, 90), new Point(180, 120), new Point(250, 160), new Point(300, 210), Route[^1] };
         double a = Seg(t, 0.6, 3.8);
-        Dot(path[0].X, path[0].Y, 5, Pick); Tx(path[0].X + 10, path[0].Y + 2, "가장 먼 곳", 10.5, Pick, true);
+        Dot(path[0].X, path[0].Y, 5, Pick); Tx(path[0].X + 10, path[0].Y + 2, "최원점", 10.5, Pick, true);
         Poly(Upto(path, a), Water, 2, null);
         var p = At(path, a); Dot(p.X, p.Y, 5, Ditch);
         Box(250, 18, $"{a * 10:0}분", 1);
-        if (t > 4.0) Tx(40, 256, "도달시간 = 지속기간 · 짧으면 더 센 비로 셈", 12, Ink, true);
+        if (t > 4.0) Tx(40, 256, "도달시간 = 지속기간 · 짧을수록 큰 강우강도로 산정", 12, Ink, true);
     }
 
     void SceneIdf(double t)
@@ -571,7 +571,7 @@ internal sealed class UDitchDemoView : Border
             Ln(40, 274, 380, 274, Ink, 1.2);
             Rect(40 + 340 * 0.6 / 4, 268, 340 * 2.4 / 4, 12, Area, AreaLine);
             Tx(40, 280, "0", 9, DhBrand.Sub); Tx(40 + 340 * 0.6 / 4 - 6, 280, "0.6", 9, DhBrand.Sub); Tx(40 + 340 * 3.0 / 4 - 6, 280, "3.0 m/s", 9, DhBrand.Sub);
-            Dot(40 + 340 * 1.4 / 4, 274, 5, Ditch); Tx(250, 246, "유속도 범위 안", 11, Ink, true);
+            Dot(40 + 340 * 1.4 / 4, 274, 5, Ditch); Tx(250, 246, "유속 허용 범위 내", 11, Ink, true);
         }
     }
 

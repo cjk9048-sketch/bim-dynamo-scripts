@@ -610,6 +610,7 @@ public sealed class ViewSurfaceCommand
                     }
                     catch { }
                 }
+                GroundElevLabels.MatchVisibility(tr, _db);   // ★[JACK 1124] 되돌린 원지반 보임에 표고 라벨도
                 tr.Commit();
             }
             catch { }

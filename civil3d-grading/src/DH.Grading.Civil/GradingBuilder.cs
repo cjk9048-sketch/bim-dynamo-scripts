@@ -1424,9 +1424,11 @@ public static class GradingBuilder
     public static void IsolateSurfaces(Transaction tr, string? keepBaseName, Func<Autodesk.Civil.DatabaseServices.Surface, bool>? alsoKeep)
     {
         var civilDoc = Autodesk.Civil.ApplicationServices.CivilApplication.ActiveDocument;
+        Database? db = null;
         foreach (ObjectId sid in civilDoc.GetSurfaceIds())
         {
             if (tr.GetObject(sid, OpenMode.ForRead) is not Autodesk.Civil.DatabaseServices.Surface s) continue;
+            db ??= s.Database;
             // ★[v111.10 · 계획_초기화.md 3.1] 물러난 면(«…(옛)»)은 늘 끔 — 초기화 · 정지옵션 저장이 «모든 면 켬»으로 다시 보이게 하지 않게
             bool keep = !SurfaceRetire.IsRetired(s) && (keepBaseName == null
                 || s.Name == keepBaseName
@@ -1445,6 +1447,7 @@ public static class GradingBuilder
             }
             catch { }
         }
+        GroundElevLabels.MatchVisibility(tr, db);   // ★[JACK 1124] 원지반 표고 라벨도 원지반 보임을 따라감(꺼져 있으면 기록 한 번 읽고 끝)
     }
 
     public const string ContourLiftSuffix = " (DH +1cm)";
@@ -2381,9 +2384,11 @@ public static class GradingBuilder
     {
         var civilDoc = Autodesk.Civil.ApplicationServices.CivilApplication.ActiveDocument;
         int n = 0;
+        Database? db = null;
         foreach (ObjectId sid in civilDoc.GetSurfaceIds())
         {
             if (tr.GetObject(sid, OpenMode.ForRead) is not Autodesk.Civil.DatabaseServices.Surface s) continue;
+            db ??= s.Database;
             string nm = s.Name;
             if (nm != baseName && !(nm.StartsWith(baseName + "_") && int.TryParse(nm.Substring(baseName.Length + 1), out _)))
                 continue;
@@ -2396,6 +2401,7 @@ public static class GradingBuilder
             }
             catch { }
         }
+        if (baseName == Commands.ImportGisCommand.GroundSurfaceName) GroundElevLabels.MatchVisibility(tr, db);   // ★[JACK 1124] 원지반 표고 라벨도 따라감
         return n;
     }
 

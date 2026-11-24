@@ -44,7 +44,7 @@ internal static class DemoFrame
         {
             Background = DhBrand.Brand, CornerRadius = new CornerRadius(4), Padding = new Thickness(8, 2, 8, 2), Margin = new Thickness(2, 0, 0, 4),
             HorizontalAlignment = HorizontalAlignment.Left, Height = 22, Cursor = System.Windows.Input.Cursors.Hand, Child = row,
-            ToolTip = "끄면 설명 칸 접힘",
+            ToolTip = "끄면 설명 칸 숨김",
         };
     }
 
