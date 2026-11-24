@@ -153,6 +153,36 @@ public static partial class RoadRing
     /// <summary>★[검토 9] 기록 끝을 도로 끝으로 붙이는 거리(m) — 고를 선 끝 · 선 자르기 오차(수 cm)보다 넉넉히.</summary>
     const double RecEndSnap = 0.5;
 
+    /// <summary>★[JACK 1125 «진입도로도 옹벽 변환한 부분과 계획부지의 옹벽 변환한 부분이 닿으면 깨짐»] 부지 바닥에 붙은 도로 끝(<see cref="RoadGrade.Input.FloorStart"/> · <see cref="RoadGrade.Input.FloorEnd"/>) 곁 옹벽 기록 끝 —
+    /// 그 끝에서 단 거리(단 × (단높이 × 기울기 + 소단) · 절 · 성 중 큰 것) 안이고 그 사이에 같은 쪽 다른 기록이 없으면 도로 끝(<paramref name="sA"/> · <paramref name="sB"/>)으로.
+    /// <para>까닭(대안3 실측): 부지 바닥 곁 토막은 사면이 부지 사면 · 옹벽에 먼저 닿아 그 단까지 못 내려가 단 선이 없다 — [옹벽 변환]이 고른 선은 기록 끝(5.03 m)에서 시작하고,
+    /// 남은 토막(0 ~ 5.03 m)의 사면 원뿔이 부지 옹벽 면과 도로 옹벽 사이에 0.3 ~ 0.6 m 띠로 끼어 땅에 못 닿았다(5.7 m · 최대 287 cm) · 옹벽 단 바닥(−5 m) 바늘 · 최종지표면 실오라기 ·
+    /// 3D 부지 옹벽이 그 띠만큼 더 잘려(진입도로 자리) 하늘이 보임. 그 토막은 사면이 단까지 안 내려가므로 옹벽 단면이어도 단 위 모양은 같다 — 띠만 없어지고 두 옹벽이 모서리에서 만난다.</para>
+    /// 돌려줌 = (기록 차례, 새 시작, 새 끝) — 안 바뀐 기록은 없음. 부르는 쪽: <see cref="BuildDeck(RoadGrade.Input, out string, bool)"/>(짓기) · Civil 지문(붙일 기록이 있을 때만 몫 하나).</summary>
+    public static List<(int I, double A, double C)> FloorSnaps(RoadGrade.Input inp, IReadOnlyList<RoadGrade.TierWall> recs, double sA, double sB)
+    {
+        var o = new List<(int, double, double)>();
+        if (!inp.FloorStart && !inp.FloorEnd) return o;
+        double br = Math.Max(inp.Cut.BenchH * inp.Cut.Slope + inp.Cut.BenchW, inp.Fill.BenchH * inp.Fill.Slope + inp.Fill.BenchW);
+        for (int i = 0; i < recs.Count; i++)
+        {
+            var t = recs[i];
+            if (t.Side != -1 && t.Side != 1) continue;
+            double a = Math.Min(t.S0, t.S1), c = Math.Max(t.S0, t.S1), reach = Math.Max(1, t.Tier) * br;
+            bool Other(double lo, double hi)
+            {
+                for (int j = 0; j < recs.Count; j++)
+                    if (j != i && recs[j].Side == t.Side && Math.Max(recs[j].S0, recs[j].S1) > lo + 1e-6 && Math.Min(recs[j].S0, recs[j].S1) < hi - 1e-6) return true;
+                return false;
+            }
+            double na = a, nc = c;
+            if (inp.FloorStart && a > sA + 1e-9 && a <= sA + reach && !Other(sA, a)) na = sA;
+            if (inp.FloorEnd && c < sB - 1e-9 && c >= sB - reach && !Other(c, sB)) nc = sB;
+            if (na != a || nc != c) o.Add((i, na, nc));
+        }
+        return o;
+    }
+
     const double BendMargin = 1.0, BendWin = 1.0, BendSnapSeg = 0.26;
 
     /// <summary>★[v117.18.8 · JACK 1116 «급한 굽이만»] 급한 굽이 구간 — 측점마다 ±<see cref="BendWin"/> m 앞뒤 꺾은선 방향 차 ÷ 호길이 = 곡률 → 곡률 반경 R · 안쪽 가장자리 반경 = R − 안쪽 바깥 폭(측구 포함)이
@@ -277,6 +307,14 @@ public static partial class RoadRing
             if (c < S[^1] && c >= S[^1] - RecEndSnap) { widen.Add((c, S[^1])); c = S[^1]; }
             if (a > S[0] && a <= S[0] + RecEndSnap) { widen.Add((a, S[0])); a = S[0]; }
             if (a != recs[i].S0 || c != recs[i].S1) recs[i] = recs[i] with { S0 = a, S1 = c };
+        }
+        //   ★[JACK 1125 «진입도로 옹벽 변환 × 부지 옹벽 닿으면 깨짐»] 부지 바닥에 붙은 끝 곁 기록 끝 → 도로 끝(FloorSnaps 설명 · 가장자리 옹벽(고리 엔진 밖)은 그대로)
+        foreach (var (i, a, c) in FloorSnaps(inp, recs, S[0], S[^1]))
+        {
+            if (recProf[i] < 0) continue;
+            if (a != recs[i].S0) widen.Add((recs[i].S0, a));
+            if (c != recs[i].S1) widen.Add((recs[i].S1, c));
+            recs[i] = recs[i] with { S0 = a, S1 = c };
         }
         //   급한 굽이 모퉁이 늘림 — 모퉁이 셈을 쓰는 도로(전이 끔 · 코리더식 · 모퉁이 셈 켬)만 · 기록 끝마다 그 끝이 든 굽이 하나만(이웃 굽이로 이어 늘리지 않음)
         if (!lines && recs.Count > 0 && sharp.Count > 0 && !inp.BendTrans && CornerRule && Corridor)

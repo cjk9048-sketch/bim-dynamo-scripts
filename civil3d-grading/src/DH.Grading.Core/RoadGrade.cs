@@ -103,6 +103,9 @@ public static partial class RoadGrade
         public List<LineWall> LineWalls = new();
         /// <summary>★[v117.18.12 · JACK 1116 «꺾임 소단: 단차 / 전이»] 급한 굽이 안쪽 소단 — 거짓 = 단차(옛 셈 그대로 · 기본) · 참 = 전이(두 다리 높이를 소단 따라 섞음 · 고리 엔진만 · <see cref="RoadRing"/> Trans).</summary>
         public bool BendTrans;
+        /// <summary>★[JACK 1125 «진입도로 옹벽 변환 부분과 계획부지 옹벽 변환 부분이 닿으면 깨짐»] 이 토막 시작 · 끝이 부지 바닥에 붙었나(도로 끝 «부지 바닥» · 빈 구간 경계) —
+        /// 참이면 그 끝 곁 옹벽 기록 끝을 도로 끝으로 붙인다(<see cref="RoadRing.FloorSnaps"/> · 짓기 안에서만 · 기록 그대로). 지문에는 붙일 기록이 있을 때만 든다.</summary>
+        public bool FloorStart, FloorEnd;
     }
 
     public sealed class SlopeAt

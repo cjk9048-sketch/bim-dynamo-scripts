@@ -854,6 +854,7 @@ internal sealed class RoadSession
         if (inp.Ditches.Count > 0) sb.Append("|측구").Append(System.Text.Json.JsonSerializer.Serialize(inp.Ditches, opt));
         if (inp.LineWalls.Count > 0) sb.Append("|선옹벽2").Append(System.Text.Json.JsonSerializer.Serialize(inp.LineWalls, opt));   // ★[v114.3] 있을 때만(판 2 · 여유 포함 — 벽 없는 도로 지문 그대로)
         if (inp.BendTrans) sb.Append("|꺾임전이");   // ★[v117.18.12] 켰을 때만(단차 도로 지문 = 옛 문자열 그대로) — 바꾸면 «지표면 업데이트 필요»
+        sb.Append(FloorSnapTag(inp));   // ★[JACK 1125] 부지 끝 곁 옹벽 기록을 붙일 때만(그런 도로의 옛 면은 «지표면 업데이트 필요» 한 번 · 나머지 도로 지문 그대로)
         // ★[v115 · 설치 전 검토 R8] 엔진이 바뀌면(굽은 안쪽 새 길 · B1 격자 · 선 옹벽) 옛 판 면은 한 번 «수정됨 — [업데이트]»
         //   ★[v116 · 고리 엔진 §4 M5a] 토막 엔진(고리 · 옛)도 — 벽을 넣거나 빼 엔진이 바뀌면 지문이 바뀐다
         // ★[v116.7] tag 끝 «|옛!» = 선 옹벽 도로의 앞 판 토큰(벽 있는 토막 «|옛» · 없는 토막 «|고리» — 그때 판 EngineOf)
@@ -908,6 +909,15 @@ internal sealed class RoadSession
         catch { }
         return false;
     }
+    /// <summary>★[JACK 1125 «진입도로 옹벽 변환 × 부지 옹벽 닿으면 깨짐»] 지문 몫 — 부지 바닥 곁 옹벽 기록 끝을 도로 끝으로 붙일 때만(<see cref="RoadRing.FloorSnaps"/> · 기록 차례) · 아니면 빈 글(지문 그대로).</summary>
+    static string FloorSnapTag(RoadGrade.Input inp)
+    {
+        if (inp.TierWalls.Count == 0 || (!inp.FloorStart && !inp.FloorEnd) || inp.X.Length < 2) return "";
+        double len = 0; for (int i = 0; i + 1 < inp.X.Length; i++) len += Math.Sqrt((inp.X[i + 1] - inp.X[i]) * (inp.X[i + 1] - inp.X[i]) + (inp.Y[i + 1] - inp.Y[i]) * (inp.Y[i + 1] - inp.Y[i]));
+        var fs = RoadRing.FloorSnaps(inp, inp.TierWalls, 0, len);
+        return fs.Count == 0 ? "" : "|부지끝옹벽" + string.Join(";", fs.Select(f => f.I.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+    }
+
     /// <summary>★[v111.3.1] 지문을 몫으로 — 노선(X · Y) · 종단(Z) · 값(횡단 · 사면 · 옹벽 기록) · 바탕면(핸들 · 곁 높이). [진입도로 지표면 생성] 아래 «무엇이 바뀌었나» 한 줄용(SigOf 값은 그대로 — 이미 만든 면의 지문이 안 바뀌게).</summary>
     static string[] SigParts(RoadGrade.Input inp, ObjectId baseSurf, bool engine = true)
     {
@@ -920,6 +930,7 @@ internal sealed class RoadSession
         if (inp.Ditches.Count > 0) vals += "|측구" + System.Text.Json.JsonSerializer.Serialize(inp.Ditches, opt);   // ★[도로 마무리 ②] 있을 때만
         if (inp.LineWalls.Count > 0) vals += "|선옹벽2" + System.Text.Json.JsonSerializer.Serialize(inp.LineWalls, opt);   // ★[v114.3] 있을 때만
         if (inp.BendTrans) vals += "|꺾임전이";   // ★[v117.18.12] 켰을 때만
+        vals += FloorSnapTag(inp);   // ★[JACK 1125] SigOf와 같은 몫
         if (engine) vals += EngineTag + EngineOf(inp);   // ★[v115 · R8] «무엇이 바뀌었나»에서는 값 몫으로 보임 · ★[v116] 토막 엔진도
         var bs = new System.Text.StringBuilder(baseSurf.IsNull ? "" : baseSurf.Handle.ToString());
         if (inp.Base != null)
@@ -968,6 +979,18 @@ internal sealed class RoadSession
                     BendTrans = d.BendTrans,   // ★[v117.18.12 · JACK 1116 «꺾임 소단 전이»] 급한 굽이 안쪽 소단 단차 / 전이
                 },
             });
+        }
+        // ★[JACK 1125 «진입도로 옹벽 변환 부분과 계획부지 옹벽 변환 부분이 닿으면 깨짐»] 토막 끝이 부지 바닥에 붙었나 — 도로 끝 판정 «부지 바닥»(그 측점과 0.5 m 안) · 빈 구간 경계(바닥을 가로지름).
+        //   옹벽 변환 기록이 있을 때만 판정(없으면 쓸 데 없음 · 시간 0) · 못 재면 둘 다 거짓(옛 동작)
+        if (o.Count > 0 && d.TierWalls.Count > 0)
+        {
+            RoadEnds.Result? ends = null;
+            try { ends = RoadRanges.Solve(tr, aid.Database, aid, PadFloors.Load(aid.Database, tr, out _), null, false); } catch { }
+            for (int i = 0; i < o.Count; i++)
+            {
+                o[i].Inp.FloorStart = i > 0 || (ends != null && ends.Start.Kind == RoadEnds.Kind.Floor && Math.Abs(ends.Start.Station - o[i].S0) < 0.5);
+                o[i].Inp.FloorEnd = i < o.Count - 1 || (ends != null && ends.Finish.Kind == RoadEnds.Kind.Floor && Math.Abs(ends.Finish.Station - o[i].S1) < 0.5);
+            }
         }
         if (o.Count == 0) throw new InvalidOperationException("도로 구간에서 표본을 못 읽었습니다");
         return o;
