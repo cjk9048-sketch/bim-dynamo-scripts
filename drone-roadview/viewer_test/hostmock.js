@@ -2,6 +2,7 @@
  * check_interact.py 가 시험 폴더의 복사본 html 에만 app.js 앞에 넣는다 (배포 화면에는 없음).
  * window.__host.calls = [{ name, arg, t }] 부른 차례 · window.__host.picks = pick_pipes 가 차례로 돌려줄 답.
  * save_pipes (관로 고치기 저장) · export_pipes_shp: window.__host.shps 가 차례로 돌려줄 답 (없으면 저장함 · 경로).
+ * trim_shots (사진점 지우기): window.__host.trims 가 차례로 돌려줄 답 (없으면 {ok, removed, msg}).
  * import_pipes 는 파이썬 시험기에 'SELFTEST HOSTCMD write_pipes' 를 보내 data/pipes.js 를 새 자료로 바꿔 쓰게 하고,
  * 다 썼다는 답 (window.__hostAck.write_pipes) 을 기다린다 (진짜 프로그램처럼 파일을 쓴 뒤 돌아옴).
  * pick_obstacles: window.__host.opicks 가 차례로 돌려줄 답 · import_obstacles: type_field 'FAIL' → 못 넣음,
@@ -10,7 +11,7 @@
 (function () {
   'use strict';
   const Q = new URLSearchParams(location.search);
-  const H = window.__host = { calls: [], picks: [], opicks: [], shps: [], jobs: 0 };
+  const H = window.__host = { calls: [], picks: [], opicks: [], shps: [], trims: [], jobs: 0 };
   const rec = (name, arg) => { H.calls.push({ name: name, arg: arg, t: performance.now() }); };
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   function ask(cmd) {
@@ -35,6 +36,10 @@
     },
     save_calib: (text) => { rec('save_calib', text); return wait(10).then(() => ({ ok: true })); },
     save_pipes: (text) => { rec('save_pipes', text); return wait(10).then(() => ({ ok: true })); },
+    trim_shots: (ids) => {
+      rec('trim_shots', ids);
+      return wait(20).then(() => (H.trims.length ? H.trims.shift() : { ok: true, removed: (ids || []).length, msg: '사진 ' + (ids || []).length + '개 지움' }));
+    },
     export_pipes_shp: () => {
       rec('export_pipes_shp');
       return wait(30).then(() => (H.shps.length ? H.shps.shift() : { ok: true, path: 'C:\\시험\\관로.shp', lines: 3 }));

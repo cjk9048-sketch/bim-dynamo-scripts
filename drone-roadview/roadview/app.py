@@ -20,7 +20,7 @@ import uuid
 from pathlib import Path
 
 APP_NAME = '드론 로드뷰'
-APP_VERSION = '1.0.7'
+APP_VERSION = '1.0.8'
 FROZEN = getattr(sys, 'frozen', False)
 BASE = Path(sys._MEIPASS) if FROZEN else Path(__file__).resolve().parent.parent      # noqa: SLF001
 HOME_HTML = (BASE / 'roadview' / 'app_home' / 'index.html') if not FROZEN else (BASE / 'app_home' / 'index.html')
@@ -438,6 +438,17 @@ class Api:
                                       nz(p.get('depth_field')), nz(p.get('label_field')),
                                       float(p.get('default_depth') or 1.0), log=lambda s: None)
             return {'ok': True, 'lines': n, 'note': msg}
+        except Exception as ex:
+            return {'ok': False, 'msg': str(ex)[:200]}
+
+    def trim_shots(self, ids):
+        """위성지도에서 고른 구간의 사진점 지우기 (보기 화면 «사진점 지우기»)."""
+        if not self._project:
+            return {'ok': False, 'msg': '열린 프로젝트 없음'}
+        from .pipes_update import trim_shots
+        try:
+            n, msg = trim_shots(self._project, list(ids or []))
+            return {'ok': n > 0, 'removed': n, 'msg': msg}
         except Exception as ex:
             return {'ok': False, 'msg': str(ex)[:200]}
 

@@ -118,6 +118,71 @@ def reground(out, fn, var, dem=None):
     return len(D.get('lines', []))
 
 
+TRIM_FILE = 'trim.json'
+
+
+def load_trims(out):
+    """data/trim.json → [{video: 영상 이름, t0, t1}] (지운 사진점 시간 구간 · 다시 만들기에서 뺌)."""
+    try:
+        with open(os.path.join(out, 'data', TRIM_FILE), encoding='utf-8') as f:
+            v = json.load(f)
+        return [r for r in v if isinstance(r, dict) and r.get('video') and
+                isinstance(r.get('t0'), (int, float)) and isinstance(r.get('t1'), (int, float))]
+    except (OSError, ValueError):
+        return []
+
+
+def trim_shots(out, ids):
+    """위성지도에서 고른 사진점 지우기 (처음 · 끝 쓸데없는 구간 · JACK 1124) → (지운 수, 알림).
+
+    project.js 에서 빼고 그 사진 파일(영상에서 다시 만들 수 있는 것)은 지운다. 영상 사진은 영상 이름 + 시간 구간을
+    data/trim.json 에 남겨 다시 만들어도 안 돌아오게 한다. 맞춤 · 관로 · 원점은 그대로."""
+    ids = {str(i) for i in (ids or [])}
+    d = os.path.join(out, 'data')
+    P = _read_js(os.path.join(d, 'project.js'), 'RV_PROJECT')
+    shots = P.get('shots', [])
+    gone = [s for s in shots if s.get('id') in ids]
+    keep = [s for s in shots if s.get('id') not in ids]
+    if not gone:
+        return 0, '고른 사진점 없음'
+    if len(keep) < 2:
+        return 0, '사진점이 2개 이상 남아야 함'
+    vname = {v.get('id'): v.get('name') for v in P.get('videos', [])}
+    trims = load_trims(out)
+    for vid in sorted({s.get('video') for s in gone}):
+        name = vname.get(vid)
+        if not name or str(name).startswith('360 사진'):   # 사진 모드는 시간 기준이 없어 기록 안 함
+            continue
+        ts = sorted(float(s['time']) for s in gone if s.get('video') == vid)
+        kt = sorted(float(s['time']) for s in keep if s.get('video') == vid)
+        # 이어진 덩어리마다 한 구간 (사이에 남긴 사진이 끼면 나눔)
+        run = [ts[0]]
+        for t in ts[1:]:
+            if any(run[-1] < k < t for k in kt):
+                trims.append({'video': name, 't0': round(run[0] - 0.01, 3), 't1': round(run[-1] + 0.01, 3)})
+                run = [t]
+            else:
+                run.append(t)
+        trims.append({'video': name, 't0': round(run[0] - 0.01, 3), 't1': round(run[-1] + 0.01, 3)})
+    _write_atomic(os.path.join(d, TRIM_FILE), json.dumps(trims, ensure_ascii=False, indent=1) + '\n')
+    P['shots'] = keep
+    _write_atomic(os.path.join(d, 'project.js'),
+                  'window.RV_PROJECT = ' + json.dumps(P, ensure_ascii=False, indent=1) + ';\n')
+    try:
+        with open(os.path.join(d, 'pano_index.json'), encoding='utf-8') as f:
+            idx = json.load(f)
+        _write_atomic(os.path.join(d, 'pano_index.json'), json.dumps({k: v for k, v in idx.items() if k not in ids}))
+    except (OSError, ValueError):
+        pass
+    for s in gone:
+        for p in (os.path.join(d, 'pano', s['id'] + '.js'), os.path.join(d, 'thumb', s['id'] + '.jpg')):
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+    return len(gone), '사진점 %d개 지움 · 남은 %d개' % (len(gone), len(keep))
+
+
 # ---------------------------------------------------------------- 지장물
 
 OBST_COLORS = [  # (낱말들, 색) — 지하시설물 관례 색
@@ -214,8 +279,55 @@ def update_obstacles(out, path, type_field=None, dia_field=None, depth_field=Non
 
 # ---------------------------------------------------------------- 고친 관로 → SHP (중심선)
 
+# 가시설 (RV_PIPES.lines[i].shore = [{a: 시작 측점 m, b: 끝 측점 m, t: 종류}] · 측점 = 줄 첫 점부터 평면 길이)
+SHORE_NAMES = {'panel': '조립식간이흙막이', 'hpile': '토류벽흙막이', 'sheet': '시트파일'}
+MAT_NAMES = {'ci': '주철관', 'steel': '강관', 'plastic': '비금속관'}      # RV_PIPES.lines[i].mat (보기 화면에서 고름)
+
+
+def guess_mat(text):
+    """관 이름 · 묶음 글자로 관종 짐작 (보기 화면과 같은 규칙) · 모르면 주철관."""
+    import re
+    u = str(text or '').upper()
+    if re.search(r'비금속|폴리|PVC|HDPE|GRP|(?<![A-Z])PE(?![A-Z])', u):
+        return 'plastic'
+    if re.search(r'강관|STEEL|STPW|STS|(?<![A-Z])SP(?![A-Z])', u):
+        return 'steel'
+    return 'ci'
+
+
+def _cut_at(xy, s_marks):
+    """평면 줄 xy 를 측점들에서 자른 조각들 → [(s0, s1, [[x, y], …])]. 측점은 줄 안 값만."""
+    seg = [((xy[k + 1][0] - xy[k][0]) ** 2 + (xy[k + 1][1] - xy[k][1]) ** 2) ** 0.5 for k in range(len(xy) - 1)]
+    L = sum(seg)
+    cuts = sorted({0.0, L} | {min(max(float(s), 0.0), L) for s in s_marks})
+
+    def at(s):                                   # 측점 s 의 자리 · 그 앞 꼭짓점 번호
+        acc = 0.0
+        for k, d in enumerate(seg):
+            if s <= acc + d or k == len(seg) - 1:
+                t = 0.0 if d <= 0 else min(max((s - acc) / d, 0.0), 1.0)
+                return [xy[k][0] + (xy[k + 1][0] - xy[k][0]) * t, xy[k][1] + (xy[k + 1][1] - xy[k][1]) * t], k
+            acc += d
+        return list(xy[-1]), len(xy) - 2
+
+    out = []
+    for s0, s1 in zip(cuts[:-1], cuts[1:]):
+        if s1 - s0 < 1e-6:
+            continue
+        p0, k0 = at(s0)
+        p1, k1 = at(s1)
+        acc, mid = 0.0, []
+        for k, d in enumerate(seg):              # 두 측점 사이 꼭짓점
+            acc += d
+            if s0 + 1e-6 < acc < s1 - 1e-6:
+                mid.append(list(xy[k + 1]))
+        out.append((s0, s1, [p0] + mid + [p1]))
+    return out
+
+
 def export_pipes_shp(out, shp_path):
-    """data/pipes.js 의 원래 꼭짓점(ctrl · 고친 점 포함)만으로 중심선 SHP. → 선 수."""
+    """data/pipes.js 의 원래 꼭짓점(ctrl · 고친 점 포함)만으로 중심선 SHP. → 선 수.
+    가시설 구간은 그 자리에서 선을 끊고 SHORING 속성에 가시설 이름 (1124 JACK)."""
     from .shp import write_lines
     from pyproj import CRS
     P = _read_js(os.path.join(out, 'data', 'project.js'), 'RV_PROJECT')
@@ -227,14 +339,26 @@ def export_pipes_shp(out, shp_path):
         pts = ln['pts']
         idx = ln.get('ctrl') or list(range(len(pts)))
         xy = [[pts[i][0] + E0, pts[i][1] + N0] for i in idx if 0 <= i < len(pts)]
+        if len(xy) < 2:
+            continue
         dia = ln.get('dia')
-        lines.append({'pts': xy, 'rec': {
-            'DIA_MM': round(dia * 1000) if dia else None,
-            'NAME': ln.get('label') or '',
-            'GROUP': names[ln['layer']] if isinstance(ln.get('layer'), int) and ln['layer'] < len(names) else '',
-            'LEN_M': sum(((xy[k + 1][0] - xy[k][0]) ** 2 + (xy[k + 1][1] - xy[k][1]) ** 2) ** 0.5
-                         for k in range(len(xy) - 1))}})
-    fields = [('DIA_MM', 'N', 6, 0), ('NAME', 'C', 60, 0), ('GROUP', 'C', 30, 0), ('LEN_M', 'N', 12, 2)]
+        shore = [q for q in (ln.get('shore') or [])
+                 if isinstance(q, dict) and isinstance(q.get('a'), (int, float)) and isinstance(q.get('b'), (int, float))]
+        marks = [v for q in shore for v in (q['a'], q['b'])]
+        for s0, s1, part in _cut_at(xy, marks):
+            mid = 0.5 * (s0 + s1)
+            q = next((q for q in shore if min(q['a'], q['b']) - 1e-6 <= mid <= max(q['a'], q['b']) + 1e-6), None)
+            lines.append({'pts': part, 'rec': {
+                'DIA_MM': round(dia * 1000) if dia else None,
+                'NAME': ln.get('label') or '',
+                'GROUP': names[ln['layer']] if isinstance(ln.get('layer'), int) and ln['layer'] < len(names) else '',
+                'LEN_M': s1 - s0,
+                'PIPE_MAT': MAT_NAMES[ln['mat'] if ln.get('mat') in MAT_NAMES else guess_mat(
+                    '%s %s' % (ln.get('label') or '',
+                               names[ln['layer']] if isinstance(ln.get('layer'), int) and ln['layer'] < len(names) else ''))],
+                'SHORING': SHORE_NAMES.get(q.get('t'), str(q.get('t') or '')) if q else ''}})
+    fields = [('DIA_MM', 'N', 6, 0), ('NAME', 'C', 60, 0), ('GROUP', 'C', 30, 0), ('LEN_M', 'N', 12, 2),
+              ('PIPE_MAT', 'C', 20, 0), ('SHORING', 'C', 30, 0)]
     wkt = CRS.from_user_input(P.get('crs', 'EPSG:5186')).to_wkt('WKT1_ESRI')
     return write_lines(shp_path, lines, fields, wkt, 'cp949')
 

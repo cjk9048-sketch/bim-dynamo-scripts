@@ -487,6 +487,8 @@ def main(argv=None):
             old_terrain = json.load(f)
     except Exception:
         old_terrain = []
+    from .pipes_update import load_trims
+    trims = load_trims(out)
     with ProcessPoolExecutor(max_workers=workers) as pool:
         for osv in osvs:
             name = os.path.splitext(os.path.basename(osv))[0]
@@ -520,6 +522,11 @@ def main(argv=None):
             picks, s = select_shots(frames, en, a.interval)
             if a.max_shots:
                 picks = picks[:a.max_shots]
+            picks_all = picks                       # 땅 높이 범위는 자르기 전 것 (지난번 잰 값을 그대로 쓰게)
+            cut = [r for r in trims if r['video'] == name]
+            if cut:                                 # 위성지도에서 지운 구간 (data/trim.json · 1124)
+                picks = [i for i in picks if not any(r['t0'] <= frames[i].time <= r['t1'] for r in cut)]
+                log('  지운 구간 %d곳 → 촬영점 %d 뺌' % (len(cut), len(picks_all) - len(picks)), fp)
             log('  장면 %d · 진행 %.0f m · 촬영점 %d' % (len(frames), s[-1], len(picks)), fp)
             eta.video_read(nbytes, time.time() - t_read, len(picks))
             if not picks:
@@ -529,7 +536,7 @@ def main(argv=None):
             key = None
             if not a.no_terrain:
                 step_m = 20.0
-                s_lo, s_hi = s[picks[0]] - step_m, s[picks[-1]] + step_m
+                s_lo, s_hi = s[picks_all[0]] - step_m, s[picks_all[-1]] + step_m
                 key = [name, round(a.from_time, 2), min(a.to_time, 1e6), step_m, round(s_lo), round(s_hi),
                        TERRAIN_VERSION, hashlib.md5(rig_sig.encode()).hexdigest()[:10], a.crs]
                 hit = next((v for v in old_terrain if v.get('key') == key), None)
@@ -690,14 +697,25 @@ def main(argv=None):
             old_idx = {}
         new_idx = {}
         jobs = []
-        for k, sh in enumerate(shots):
-            sid = '%04d' % (k + 1)
-            sh['id'] = sid
-            pano_js = os.path.join(out, 'data', 'pano', sid + '.js')
-            thumb = os.path.join(out, 'data', 'thumb', sid + '.jpg')
+        pdir, tdir = os.path.join(out, 'data', 'pano'), os.path.join(out, 'data', 'thumb')
+        # 사진 번호는 바꾸지 않는다 (1124): 같은 장면(sig)이면 옛 번호 그대로 — 앞 구간을 지워도 번호가 밀리지 않아
+        # 점 찍어 맞추기 짝(사진 번호로 기억) · 사진 파일이 그대로 맞는다. 새 장면만 비어 있는 번호를 받는다.
+        sigs = []
+        for sh in shots:
             rhash = hashlib.md5(np.round(sh['R'], 6).tobytes()).hexdigest()[:12]
             src = sh['osv']['path'] if isinstance(sh['osv'], dict) else sh['osv']
-            sig = [os.path.basename(src), sh['frame'], a.width, a.quality, rig_sig, PANO_VERSION, rhash]
+            sigs.append([os.path.basename(src), sh['frame'], a.width, a.quality, rig_sig, PANO_VERSION, rhash])
+        old_by_sig = {json.dumps(v): k for k, v in old_idx.items()}
+        keep_id = [old_by_sig.get(json.dumps(sg)) for sg in sigs]
+        taken = {i for i in keep_id if i}
+        free = (('%04d' % n) for n in range(1, 10 ** 7) if '%04d' % n not in taken)
+        for k, sh in enumerate(shots):
+            sid = keep_id[k] or next(free)
+            taken.add(sid)
+            sh['id'] = sid
+            pano_js = os.path.join(pdir, sid + '.js')
+            thumb = os.path.join(tdir, sid + '.jpg')
+            sig = sigs[k]
             new_idx[sid] = sig
             if old_idx.get(sid) == sig and os.path.exists(pano_js) and os.path.exists(thumb):
                 continue
@@ -737,7 +755,10 @@ def main(argv=None):
         # 이번 목록에 없는 옛 파일 지우기
         for fn in os.listdir(os.path.join(out, 'data', 'pano')):
             sid = fn.split('.')[0]
-            if fn.endswith('.tmp') or sid not in ok_ids:
+            if fn.endswith(('.tmp', '.mv')):              # 만들다 / 옮기다 만 것 (그 번호 작은 그림은 살림)
+                os.remove(os.path.join(out, 'data', 'pano', fn))
+                continue
+            if sid not in ok_ids:
                 os.remove(os.path.join(out, 'data', 'pano', fn))
                 tfn = os.path.join(out, 'data', 'thumb', sid + '.jpg')
                 if os.path.exists(tfn):

@@ -424,14 +424,15 @@ def main():
     elif not args.no_pipes:
         pipes = {'layers': LAYERS, 'lines': []}
         for verts, hw, _, layer in STRIPES:
+            # mat = 강관 (하늘색 3D 관 · 관종 짐작은 '상수' → 주철 = 짙은 회색이라 회색 땅 위 원통 윤곽 재기가 흐려짐 · 관종은 1124 에 생김)
             if args.legacy_pipes:
                 pipes['lines'].append({
-                    'layer': layer, 'label': LABELS[layer],
+                    'layer': layer, 'label': LABELS[layer], 'mat': 'steel',
                     'pts': [[x, y, GZ - COVER] for x, y in verts],
                     'll': [en2ll(x, y) for x, y in verts],
                 })
                 continue
-            ln = {'layer': layer, 'label': LABELS[layer], 'dia': round(hw * 2, 3),
+            ln = {'layer': layer, 'label': LABELS[layer], 'dia': round(hw * 2, 3), 'mat': 'steel',
                   'pts': [[x, y, None] for x, y in verts], 'g': [ground_z(x, y, slope) for x, y in verts],
                   'll': [en2ll(x, y) for x, y in verts]}
             if layer == 1:
