@@ -155,6 +155,16 @@ class Edge:
         self.ws = _WS(page['webSocketDebuggerUrl'])
         self.call('Runtime.enable')
         self.call('Page.enable')
+        # 받기(«파일로 저장» 등)는 시험 프로필 안으로 — 안 그러면 사용자 «다운로드» 폴더에
+        # «확인되지 않음 NNN.crdownload» 가 쌓인다 (1124 JACK · 끝낼 때 브라우저를 닫아 반쯤 받은 채 남음)
+        dl = os.path.join(self.profile, 'downloads')
+        os.makedirs(dl, exist_ok=True)
+        for meth in ('Browser.setDownloadBehavior', 'Page.setDownloadBehavior'):
+            try:
+                self.call(meth, {'behavior': 'allow', 'downloadPath': dl})
+                break
+            except Exception:
+                continue
         self.call('Emulation.setDeviceMetricsOverride',
                   {'width': self.size[0], 'height': self.size[1], 'deviceScaleFactor': 1, 'mobile': False})
         return self
