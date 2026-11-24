@@ -163,7 +163,7 @@ public sealed class SurveyFixCommand
         };
         try { if (_lastDir.Length > 0 && System.IO.Directory.Exists(_lastDir)) dlg.InitialDirectory = _lastDir; } catch { }
         bool? ok;
-        try { ok = dlg.ShowDialog(); } catch { ok = false; }
+        try { ok = DhBrand.ShowFileDialog(dlg); } catch { ok = false; }
         if (ok != true) return null;
         try { _lastDir = System.IO.Path.GetDirectoryName(dlg.FileName) ?? ""; } catch { }
         return dlg.FileName;

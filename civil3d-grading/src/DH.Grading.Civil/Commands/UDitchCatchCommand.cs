@@ -16,6 +16,31 @@ public sealed partial class UDitchCommand
         return r.Why.Length > 0 ? ("", r.Text) : (r.Text + CatchList(c), "");
     });
 
+    /// <summary>★[JACK 1124 «측구 창에서 집수구역 범위 껐다 켰다 하는 단추»] 평면 집수 구역 레이어(DH-U형측구-집수) 켜기 ↔ 끄기 — 도면은 안 고침(레이어 표시만).</summary>
+    [CommandMethod("DHUDITCHCATCHVIS")]
+    public void CatchVis()
+    {
+        var doc = Autodesk.AutoCAD.ApplicationServices.Core.Application.DocumentManager.MdiActiveDocument;
+        if (doc == null) return;
+        var db = doc.Database;
+        try
+        {
+            using (doc.LockDocument())
+            using (var tr = db.TransactionManager.StartTransaction())
+            {
+                var lt = (Autodesk.AutoCAD.DatabaseServices.LayerTable)tr.GetObject(db.LayerTableId, Autodesk.AutoCAD.DatabaseServices.OpenMode.ForRead);
+                if (!lt.Has(UDitchCatchStore.Layer)) { doc.Editor.WriteMessage("\n[U형 측구] 집수 구역이 없습니다 — [자동 집수]부터"); tr.Commit(); return; }
+                var ltr = (Autodesk.AutoCAD.DatabaseServices.LayerTableRecord)tr.GetObject(lt[UDitchCatchStore.Layer], Autodesk.AutoCAD.DatabaseServices.OpenMode.ForWrite);
+                if (ltr.IsFrozen) ltr.IsFrozen = false;
+                ltr.IsOff = !ltr.IsOff;
+                doc.Editor.WriteMessage("\n[U형 측구] 집수 구역 " + (ltr.IsOff ? "숨김" : "보임"));
+                tr.Commit();
+            }
+            doc.Editor.Regen();
+        }
+        catch (System.Exception ex) { doc.Editor.WriteMessage("\n[U형 측구] 집수 구역 표시 바꾸기 실패 — " + ex.Message); }
+    }
+
     /// <summary>[측구 생성] 끝 — 집수 셈(못 세면 알림 없이 로그만). 돌려줌 = 알림 조각(빈 글 = 안 셈).</summary>
     static string CatchAfterBuild(Ctx c)
     {

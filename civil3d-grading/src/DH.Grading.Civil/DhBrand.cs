@@ -115,10 +115,91 @@ internal static class DhBrand
         }
     }
 
+    [System.Runtime.InteropServices.DllImport("user32.dll")] static extern bool GetWindowRect(System.IntPtr h, out RECT r);
+    [System.Runtime.InteropServices.DllImport("user32.dll")] static extern uint GetDpiForWindow(System.IntPtr h);
+    struct RECT { public int L, T, R, B; }
+
+    /// <summary>★[JACK 1124] Civil 3D 주 창 사각형(WPF 단위) — 못 읽으면 null(화면 없는 Civil 등).</summary>
+    internal static Rect? CivilRect(Visual? v = null)
+    {
+        try
+        {
+            var h = Autodesk.AutoCAD.ApplicationServices.Core.Application.MainWindow.Handle;
+            if (h == System.IntPtr.Zero || !GetWindowRect(h, out var r) || r.R - r.L < 200) return null;
+            double sx, sy;
+            var src = v != null ? PresentationSource.FromVisual(v) : null;
+            if (src?.CompositionTarget != null) { var m = src.CompositionTarget.TransformFromDevice; sx = m.M11; sy = m.M22; }
+            else { uint dpi = GetDpiForWindow(h); sx = sy = dpi > 0 ? 96.0 / dpi : 1; }
+            return new Rect(r.L * sx, r.T * sy, (r.R - r.L) * sx, (r.B - r.T) * sy);
+        }
+        catch { return null; }
+    }
+
+    /// <summary>★[JACK 1124 «오디세이 49인치 절반에 Civil 3D · 그 화면만 녹화»] «화면 가운데»로 뜨는 창을 Civil 3D 창 가운데로(넓은 화면 한가운데 = 두 절반 경계라 녹화에서 잘림).
+    /// 뜰 때(Loaded) 그 창이 CenterScreen일 때만 옮김 — 직접 자리를 잡는 창은 그대로.</summary>
+    internal static void KeepOnCivil(Window w)
+    {
+        // ★[JACK 1124 녹화 «팝업이 자꾸 화면 중심에 떠서 옮겨야 함»] Loaded에서 옮겨도 크기를 내용에 맞추는 창은 WPF가 «화면 가운데»로 다시 되돌림
+        //   → 창이 만들어질 때(SourceInitialized — WPF가 시작 자리를 정하기 전) CenterScreen을 끄고 Civil 3D 창 가운데로 · 크기가 정해질 때마다(처음 그려질 때까지) 다시 가운데
+        try
+        {
+            bool ours = false, settled = false;
+            void Center()
+            {
+                try
+                {
+                    if (CivilRect(w) is not Rect c) return;
+                    double ww = w.ActualWidth > 0 ? w.ActualWidth : (double.IsNaN(w.Width) ? 600 : w.Width);
+                    double hh = w.ActualHeight > 0 ? w.ActualHeight : (double.IsNaN(w.Height) ? 400 : w.Height);
+                    w.Left = c.Left + System.Math.Max(0, (c.Width - ww) / 2);
+                    w.Top = c.Top + System.Math.Max(0, (c.Height - hh) / 2);
+                }
+                catch { }
+            }
+            w.SourceInitialized += (_, __) =>
+            {
+                if (w.WindowStartupLocation != WindowStartupLocation.CenterScreen || CivilRect(w) == null) return;
+                ours = true;
+                w.WindowStartupLocation = WindowStartupLocation.Manual;
+                Center();
+            };
+            w.SizeChanged += (_, __) => { if (ours && !settled) Center(); };
+            w.Loaded += (_, __) => { if (ours) Center(); };
+            w.ContentRendered += (_, __) => { if (ours && !settled) { Center(); settled = true; } };
+        }
+        catch { }
+    }
+
+    /// <summary>★[JACK 1124 녹화 «파일 여는 창이 화면 중심에 뜸»] 파일 · 폴더 창 — 부모 없이 띄우면 윈도우가 화면 한가운데(넓은 화면의 두 절반 경계)에 놓음.
+    /// Civil 3D 창 가운데에 보이지 않는 작은 부모 창을 두고 그 위에 띄운다. 못 하면 예전처럼.</summary>
+    internal static bool? ShowFileDialog(Microsoft.Win32.CommonDialog dlg)
+    {
+        Window? host = null;
+        try
+        {
+            if (CivilRect() is Rect c)
+            {
+                host = new Window
+                {
+                    WindowStyle = WindowStyle.None, AllowsTransparency = true, Background = System.Windows.Media.Brushes.Transparent,
+                    ShowInTaskbar = false, ShowActivated = true, Width = 1, Height = 1, ResizeMode = ResizeMode.NoResize,
+                    WindowStartupLocation = WindowStartupLocation.Manual, Left = c.Left + c.Width / 2, Top = c.Top + c.Height / 3,
+                };
+                try { new System.Windows.Interop.WindowInteropHelper(host).Owner = Autodesk.AutoCAD.ApplicationServices.Core.Application.MainWindow.Handle; } catch { }
+                host.Show();
+                return dlg.ShowDialog(host);
+            }
+        }
+        catch { }
+        finally { try { host?.Close(); } catch { } }
+        return dlg.ShowDialog();
+    }
+
     /// <summary>이 요소와 그 아래 전부에 <see cref="Skin"/>을 씌운다.
     /// 팝업이든 도킹창이든 <b>이 한 줄</b>이면 같은 모양이 된다.</summary>
     internal static void Apply(FrameworkElement fe)
     {
+        if (fe is Window ww) KeepOnCivil(ww);   // ★[JACK 1124 «49인치 화면 절반에 Civil 3D — 그 화면만 녹화»] 화면 가운데 → Civil 3D 창 가운데
         var sk = Skin;
         if (sk == null) return;
         try

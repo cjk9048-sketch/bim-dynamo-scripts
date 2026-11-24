@@ -1,4 +1,4 @@
-using System.Globalization;
+﻿using System.Globalization;
 using System.Windows;
 using System.Windows.Controls;
 using Autodesk.AutoCAD.DatabaseServices;
@@ -62,9 +62,22 @@ internal sealed class PlanOptsWindow : Window
                 try { new System.Windows.Interop.WindowInteropHelper(_win).Owner = AcadApp.MainWindow.Handle; } catch { }
             }
             _win.LoadFrom(doc!.Database);
-            if (!_win.IsVisible) _win.Show();
+            if (!_win.IsVisible) { _win.Show(); _win.PlaceOnCivil(); }
         }
         catch (System.Exception ex) { try { DiagLog.Append("\n[평면 꾸미기] 창 실패 — " + ex.Message); } catch { } }
+    }
+
+    /// <summary>★[JACK 1124 녹화 «배치탭의 평면 꾸미기가 이상한 곳에 뜸»] 뜰 때마다 Civil 3D 창 오른쪽 위(넓은 화면 절반에 Civil 3D)</summary>
+    internal void PlaceOnCivil()
+    {
+        try
+        {
+            if (DhBrand.CivilRect(this) is not Rect c) return;
+            double w = ActualWidth > 0 ? ActualWidth : 300;
+            Left = c.Right - w - 24;
+            Top = c.Top + 140;
+        }
+        catch { }
     }
 
     PlanOptsWindow()
@@ -77,6 +90,9 @@ internal sealed class PlanOptsWindow : Window
         WindowStartupLocation = WindowStartupLocation.Manual;
         Topmost = false;
         try { var wa = SystemParameters.WorkArea; Left = wa.Right - 330; Top = wa.Top + 140; } catch { }
+        // ★[JACK 1124] 넓은 화면에 Civil 3D를 절반만 쓸 때 — Civil 3D 창 오른쪽 위(녹화 영역 안)
+        Loaded += (_, __) => PlaceOnCivil();
+        ContentRendered += (_, __) => PlaceOnCivil();
         Closing += (_, e) => { e.Cancel = true; Hide(); };   // 닫기 = 숨김(배치탭을 다시 누르면 뜸)
 
         var root = new StackPanel { Margin = new Thickness(14, 12, 14, 12), MinWidth = 280 };

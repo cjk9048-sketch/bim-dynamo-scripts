@@ -1,4 +1,4 @@
-namespace DH.Grading.Civil.Tutorial;
+﻿namespace DH.Grading.Civil.Tutorial;
 
 /// <summary>★[튜토리얼 · JACK 1117] 단계 정하기 — <b>Autodesk 형을 안 쓴다</b>(화면 없이 시험 가능).
 /// <para>지금 도면 · 창의 사실(<see cref="Facts"/>)만 보고 단계를 다시 정한다 — 사용자가 다른 일을 하거나 창을 닫아도
@@ -35,8 +35,9 @@ internal static class TutorialFlow
         SecPanel, Prof, Xsec,                                               //   종단 · 횡단
         RdOpen, RdDraw, RdWall, RdSlope, RdWallAdd, RdWallDel,             // 3 진입도로 생성: 진입도로 창
         RdSec, RdProf, RdPviAdd, RdPviDel, RdPviDraw, RdRedraft, RdRev, RdXsec,   //   진입도로 종횡단도 창
+        RdPviMove,                                                          //   ★[JACK 1124] 측점(PVI) 손잡이 끌어 옮기기
         RdPave, RdUpdate, RdReset,                                         //   포장 → 업데이트 → 초기화(맨 끝)
-        Book, Qty, View3D,                                                  // 4 도면화: 도면생성 · 수량산출서 · 3D 보기
+        Book, PlanDeco, Qty, View3D, Sight3D, Share3D,                     // 4 도면화: 도면생성 · 평면 꾸미기 · 수량산출서 · 3D 보기 · 시야 검토 · 웹 공유(JACK 1124)
         Done,
     }
 
@@ -72,9 +73,9 @@ internal static class TutorialFlow
         bool ExBoundary = false, bool ExElev = false, bool ExPanelOpen = false, bool ExPicked = false, bool Shore = false, bool ExSurf = false,
         bool SecOpen = false, bool Prof = false, bool Xsec = false, bool QtyFile = false, bool Cropped = false,
         bool RdPanel = false, bool RdSecOpen = false, bool RdRoad = false, int RdDone = 0, bool FixTab = false, bool WallAdd = false,
-        bool ParcelIn = false, bool ParcelOut = false, bool MapIn = false, bool MapOut = false, bool Book = false, bool View3D = false);
+        bool ParcelIn = false, bool ParcelOut = false, bool MapIn = false, bool MapOut = false, bool Book = false, bool View3D = false, bool PlanDeco = false, bool Sight = false, bool Shared = false);
 
-    internal static int Total(Chapter c) => c switch { Chapter.Ground => 6, Chapter.Site => 20, Chapter.Road => RoadAll.Length, _ => 3 };
+    internal static int Total(Chapter c) => c switch { Chapter.Ground => 6, Chapter.Site => 20, Chapter.Road => RoadAll.Length, _ => 6 };
 
     internal static Step Derive(Facts f)
     {
@@ -95,8 +96,11 @@ internal static class TutorialFlow
             case Chapter.Sheet:
                 // ★[JACK 1124 4단원 도면화] 도면생성 → 수량산출서 → 3D 보기
                 if (!f.Book) return Step.Book;
+                if (!f.PlanDeco) return Step.PlanDeco;   // ★[JACK 1124 «전체 계획평면도에서 평면 꾸미기도 설명하고 수량산출서로»]
                 if (!f.QtyFile) return Step.Qty;
                 if (!f.View3D) return Step.View3D;
+                if (!f.Sight) return Step.Sight3D;    // ★[JACK 1124 «3D 보기도 만들고 끝내지 말고 시야 검토 · 웹 공유도»]
+                if (!f.Shared) return Step.Share3D;
                 return Step.Done;
             default:
                 if (!f.Grade)
@@ -142,7 +146,7 @@ internal static class TutorialFlow
         Step.FixTab => 11, Step.Wall => 12, Step.WallAdd => 13,
         Step.ExDraw => 14, Step.ExElev => 14, Step.ExPanel => 15, Step.ExPick => 15, Step.ExShore => 16, Step.ExBuild => 17,
         Step.SecPanel => f.Prof ? 20 : 18, Step.Prof => 19, Step.Xsec => 20,
-        Step.Book => 1, Step.Qty => 2, Step.View3D => 3,
+        Step.Book => 1, Step.PlanDeco => 2, Step.Qty => 3, Step.View3D => 4, Step.Sight3D => 5, Step.Share3D => 6,
         _ when IsRoad(s) => Array.IndexOf(RoadAll, s) + 1,
         _ => 0,
     };
@@ -189,7 +193,10 @@ internal static class TutorialFlow
         Step.Prof => "[종단도 생성] → 부지 가로질러 점 클릭 → Enter → 빈 자리 클릭 → 종단도",
         Step.Xsec => "[횡단도 생성] → 놓을 자리 클릭 → 측점마다 횡단도",
         Step.Book => "[도면생성] → 창 [작성하기] → 배치탭 도면",
+        Step.PlanDeco => "배치탭 «전체 계획평면도» 클릭 → [평면 꾸미기] 창에서 도면 기울기 · 등고값 · 측점 바꾸기 → 평면이 바로 바뀜",
         Step.Qty => "[수량 산출서] → 창 [만들기] → 저장 → 토공 수량 엑셀",
+        Step.Sight3D => "3D 창 아래 [시야 검토](눈 단추) → 땅 클릭 → 방향키로 걷기 → 사람 눈높이(1.7 m)로 옹벽 · 사면 보기",
+        Step.Share3D => "3D 창 [저장] ▼ → [웹 주소로 공유] → 올린 주소를 복사해 발주처 · 동료에게 전달",
         Step.View3D => "[3D 보기] → 3D 창 → 지형 · 옹벽 · 사면 보기",
         Step.RdOpen => "[진입도로 생성] → 진입도로 창 열기",
         Step.RdDraw => "창 [진입도로 생성](경로 그리기) → " + (guide ? "노란 점선 따라" : "부지 끝에서 바깥 땅으로") + " 점 클릭 → Enter → 도로 · 지표면",
@@ -201,12 +208,13 @@ internal static class TutorialFlow
         Step.RdProf => "[종단도 생성] → 빈 자리 클릭 → 종단도",
         Step.RdPviAdd => "[측점 넣기] → 종단도 계획선 클릭 → Enter → 측점 더하기",
         Step.RdPviDel => "[측점 지우기] → 넣은 측점 클릭 → Enter → 측점 빼기",
+        Step.RdPviMove => "종단도 계획선의 측점(꺾인 점) 클릭 → 파란 손잡이를 위 · 아래로 끌기 → 종단 바뀜",
         Step.RdPviDraw => "[종단 직접 그리기] → 시점 · 꺾인 점 · 종점 클릭 → 새 종단",
         Step.RdRedraft => "[종단 자동으로 다시] → Enter(예) → 땅 따라 종단",
         Step.RdRev => "[시점↔종점] → 방향 뒤집기",
         Step.RdXsec => "[횡단도 생성] → 빈 자리 클릭 → 측점마다 횡단도",
         Step.RdPave => "[진입도로 생성] 탭 → 포장 «종류» 바꾸기(예: 아스팔트 → 콘크리트) → 횡단도 포장",
-        Step.RdUpdate => "[지표면 업데이트](빨강) → 지표면 · 종단도 · 횡단도 다시",
+        Step.RdUpdate => "[지표면 업데이트](빨강) → 옮긴 측점 · 포장대로 지표면 다시 → 바뀐 땅 확인",
         Step.RdReset => "진입도로 창 [진입도로 초기화] → [예] → 진입도로 모두 지우기",
         _ => "완료",
     };
@@ -231,6 +239,7 @@ internal static class TutorialFlow
         "DHPROFILE" => ("Prof", true),
         "DHXVIEW" => ("Xsec", true),
         "DHSHEETMAKE" => ("Book", true),
+        "DHSHEETPLAN" => ("PlanDeco", false),
         "DHQTYXLSXMAKE" => ("QtyFile", false),
         "DH3D" => ("View3D", false),
         _ => null,
@@ -241,7 +250,7 @@ internal static class TutorialFlow
     {
         ("DHPARCEL", Step.CadIn) or ("DHPARCELOFF", Step.CadOut) or ("DHMAP", Step.MapIn) or ("DHMAPOFF", Step.MapOut) => true,
         ("DHPROFILE", Step.Prof or Step.SecPanel) or ("DHXVIEW", Step.Xsec or Step.SecPanel) => true,
-        ("DHSHEETMAKE", Step.Book) or ("DHQTYXLSXMAKE", Step.Qty) or ("DH3D", Step.View3D) => true,
+        ("DHSHEETMAKE", Step.Book) or ("DHSHEETPLAN", Step.PlanDeco) or ("DHQTYXLSXMAKE", Step.Qty) or ("DH3D", Step.View3D) => true,
         _ => false,
     };
 
@@ -270,21 +279,22 @@ internal static class TutorialFlow
     internal static readonly Step[] RoadAll =
     {
         Step.RdOpen, Step.RdDraw, Step.RdWall, Step.RdSlope, Step.RdWallAdd, Step.RdWallDel,
-        Step.RdSec, Step.RdProf, Step.RdPviAdd, Step.RdPviDel, Step.RdPviDraw, Step.RdRedraft, Step.RdRev, Step.RdXsec,
-        Step.RdPave, Step.RdUpdate, Step.RdReset,
+        // ★[JACK 1124 «측점 수정을 하나하나 다 하니 지루함 → 측점 추가 · PVI 이동으로 지표면 바뀌는 것만 확인»]
+        Step.RdSec, Step.RdProf, Step.RdPviAdd, Step.RdPviMove,
+        Step.RdPave, Step.RdUpdate, Step.RdXsec, Step.RdReset,
     };
 
     /// <summary>명령 기록으로 끝내는 일(비트가 있는 단계) — 창 열기 둘 · 노선 그리기(도면에 도로가 있나로 봄)는 뺌.</summary>
     internal static readonly Step[] RoadOrder =
     {
         Step.RdWall, Step.RdSlope, Step.RdWallAdd, Step.RdWallDel,
-        Step.RdProf, Step.RdPviAdd, Step.RdPviDel, Step.RdPviDraw, Step.RdRedraft, Step.RdRev, Step.RdXsec,
-        Step.RdPave, Step.RdUpdate, Step.RdReset,
+        Step.RdProf, Step.RdPviAdd, Step.RdPviMove,
+        Step.RdPave, Step.RdUpdate, Step.RdXsec, Step.RdReset,
     };
 
     internal static bool IsRoad(Step s) => Array.IndexOf(RoadAll, s) >= 0;
     /// <summary>진입도로 종횡단도 창에서 하는 단계.</summary>
-    internal static bool IsRdSec(Step s) => s is Step.RdProf or Step.RdPviAdd or Step.RdPviDel or Step.RdPviDraw or Step.RdRedraft or Step.RdRev or Step.RdXsec or Step.RdUpdate;
+    internal static bool IsRdSec(Step s) => s is Step.RdProf or Step.RdPviAdd or Step.RdPviMove or Step.RdPviDel or Step.RdPviDraw or Step.RdRedraft or Step.RdRev or Step.RdXsec or Step.RdUpdate;
     /// <summary>진입도로 창에서 하는 단계.</summary>
     internal static bool IsRdPanel(Step s) => s is Step.RdDraw or Step.RdWall or Step.RdSlope or Step.RdWallAdd or Step.RdWallDel or Step.RdPave or Step.RdReset;
     internal static int RdBit(Step s) { int i = Array.IndexOf(RoadOrder, s); return i < 0 ? 0 : 1 << i; }
@@ -363,6 +373,9 @@ internal static class TutorialFlow
 
     /// <summary>포장 단계 — 그 단계가 된 때의 종류(<paramref name="baseKind"/>)와 지금 기록이 다른가.</summary>
     internal static bool PaveDid(int baseKind, RoadSnap b) => b.Road && b.Pave != baseKind;
+
+    /// <summary>★[JACK 1124] 측점 옮기기 단계 — 그 단계가 된 때의 꺾인 점 기록(<paramref name="baseSig"/>)과 지금이 다른가(손잡이 끌기는 DH 명령이 아님).</summary>
+    internal static bool PviMoveDid(string baseSig, RoadSnap b) => b.Road && b.Pvi >= 2 && b.PviSig.Length > 0 && b.PviSig != baseSig;
 
     // ── 5단원 알림 한 줄 ──
     internal const string NoteRdClosed = "진입도로 창 닫힘 → [진입도로 생성]으로 다시 열기";

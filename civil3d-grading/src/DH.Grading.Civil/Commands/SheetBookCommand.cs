@@ -1,4 +1,4 @@
-using Autodesk.AutoCAD.ApplicationServices;
+﻿using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.Runtime;
 using AcadApp = Autodesk.AutoCAD.ApplicationServices.Application;
 
@@ -22,7 +22,7 @@ public class SheetBookCommand
     public void FrameAdd()
     {
         var dlg = new Microsoft.Win32.OpenFileDialog { Filter = "도곽 DWG (*.dwg)|*.dwg", Title = "도곽 DWG 고르기" };
-        if (dlg.ShowDialog() == true)
+        if (DhBrand.ShowFileDialog(dlg) == true)
         {
             var (ok, msg) = FrameLibrary.Pick(dlg.FileName);
             if (!ok) System.Windows.MessageBox.Show("도곽으로 쓸 수 없습니다 — " + msg, "도곽", System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Warning);

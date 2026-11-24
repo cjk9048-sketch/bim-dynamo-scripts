@@ -1,4 +1,4 @@
-using Autodesk.AutoCAD.ApplicationServices;
+﻿using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.EditorInput;
 using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.Runtime;
@@ -78,7 +78,7 @@ public sealed class QtyXlsxCommand
             };
             try { dlg.InitialDirectory = _lastDir.Length > 0 && System.IO.Directory.Exists(_lastDir) ? _lastDir : System.IO.Path.GetDirectoryName(xlsx)!; } catch { }
             bool? okD;
-            try { okD = dlg.ShowDialog(); } catch { okD = false; }
+            try { okD = DhBrand.ShowFileDialog(dlg); } catch { okD = false; }
             if (okD != true) { ed.WriteMessage("\n[수량산출서] 취소"); return; }
             xlsx = dlg.FileName;
             try { _lastDir = System.IO.Path.GetDirectoryName(xlsx) ?? ""; } catch { }

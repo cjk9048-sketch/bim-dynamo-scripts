@@ -531,7 +531,8 @@ export function buildStations(view, head, L) {
   const S = stationLayer(view, [head.align], 0xff4d4d, false);
   if (!S) return;
   const a = S.aligns[0];
-  L.align = { ...S, label: '부지 측점', name: a.name, line: a.line, s0: a.s0, s1: a.s1, step: a.step, index: a.index, views: a.views };
+  S.obj.visible = false;   // ★[JACK 1124 «처음 만들어질 때 부지 측점 · 진입도로 측점은 체크 해제»]
+  L.align = { ...S, on: false, label: '부지 측점', name: a.name, line: a.line, s0: a.s0, s1: a.s1, step: a.step, index: a.index, views: a.views };
 }
 
 // ★★[JACK 1103] 진입도로 측점 — 머리 «roadAlign»(도로마다 «align»과 같은 꼴) · 도로가 없으면 층 없음 · 도로 이름은 풍선 · 층 풍선 글
@@ -540,7 +541,8 @@ export function buildRoadStations(view, head, L) {
   if (!Array.isArray(R) || !R.length) return;
   const S = stationLayer(view, R, ROAD_CENTER, true);
   if (!S) return;
-  L.ralign = { ...S, label: '진입도로 측점', roads: S.aligns, title: S.aligns.map(a => a.name).join(' · ') };
+  S.obj.visible = false;   // ★[JACK 1124] 처음엔 끔
+  L.ralign = { ...S, on: false, label: '진입도로 측점', roads: S.aligns, title: S.aligns.map(a => a.name).join(' · ') };
 }
 
 // 중심선 위 측점 s의 점 · 진행 방향(수평 단위) — 3D 자르기 면

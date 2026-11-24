@@ -50,7 +50,7 @@ internal sealed class UDitchPanel : UserControl
     readonly Button _build, _rev, _auto, _areaBtn, _zoom, _recBtn, _pick, _draw, _edge, _csvBtn;
     internal readonly Button DeleteButton;
     /// <summary>★[JACK 1124 집수] [자동 집수] · 집수면적 출처 표(«자동» · «입력»).</summary>
-    readonly Button _catchBtn;
+    readonly Button _catchBtn, _catchVis;
     readonly TextBlock _areaSrc;
     readonly FrameworkElement _csvRow, _segBox;
     readonly StackPanel _segs;
@@ -123,7 +123,9 @@ internal sealed class UDitchPanel : UserControl
         _areaSrc = new TextBlock { VerticalAlignment = VerticalAlignment.Center, FontSize = 11, Margin = new Thickness(0, 0, 6, 0), ToolTip = "자동 = 빗물 셈 · 입력 = 친 값(자동이 안 덮음 · 비우면 자동)" };
         _catchBtn = Btn("자동 집수", "빗물 셈 → 측구마다 집수 구역 · 면적 · C(토지 이용) · 구간 누가 유량 — 친 값은 그대로 · 평면 구역 DH-U형측구-집수", "udArea");
         g2.Children.Add(Labeled("면적", Line(_area, Unit("ha"), _areaSrc, Unit("C"), _c, new Border { Width = 4 }, _areaBtn), "합리식 Q = C · I · A / 360"));
-        g2.Children.Add(Labeled("", Line(_catchBtn), "모든 측구 — 빗물 흐름으로 집수 구역"));
+        // ★[JACK 1124 «집수구역 범위 껐다 켰다 하는 단추»]
+        _catchVis = Btn("구역 보이기 · 숨기기", "평면의 집수 구역(DH-U형측구-집수)을 켜고 끔 — 누를 때마다 바뀜", "udArea");
+        g2.Children.Add(Labeled("", Line(_catchBtn, _catchVis), "모든 측구 — 빗물 흐름으로 집수 구역"));
 
         // ── 강우 ──
         Section(root, "강우", "설계강우 — 공식 자료를 확인한 값만(값을 짓지 않음 · 모든 측구 공통)");
@@ -196,6 +198,7 @@ internal sealed class UDitchPanel : UserControl
         _area.TextChanged += (_, __) => { if (_loading || Cur is not UDitch.Ditch d) return; d.AreaAuto = false; SrcMark(d); };
         _c.TextChanged += (_, __) => { if (_loading || Cur is not UDitch.Ditch d) return; d.CUser = true; d.CAuto = false; SrcMark(d); };
         _catchBtn.Click += (_, __) => Send?.Invoke("DHUDITCHCATCH");
+        _catchVis.Click += (_, __) => Send?.Invoke("DHUDITCHCATCHVIS");
         _size.SelectionChanged += (_, __) =>
         {
             if (_loading || Cur is not UDitch.Ditch d || _size.SelectedIndex < 0 || _size.SelectedIndex >= _v.S.Sizes.Count) return;
@@ -366,6 +369,7 @@ internal sealed class UDitchPanel : UserControl
         bool on = d != null && _v.HasDoc;
         foreach (UIElement x in new UIElement[] { _size, _cover, _start, _end, _area, _c, _rev, _auto, _areaBtn, _zoom, DeleteButton }) x.IsEnabled = on;
         _catchBtn.IsEnabled = _v.HasDoc && _v.Rec.Ditches.Count > 0;
+        _catchVis.IsEnabled = _v.HasDoc && _v.Rec.Ditches.Count > 0;
         SrcMark(d);
         _cover.SelectedIndex = d == null ? -1 : d.Grating ? 1 : 0;
         if (d != null)
@@ -447,7 +451,7 @@ internal sealed class UDitchPanel : UserControl
     {
         var dlg = new Microsoft.Win32.OpenFileDialog { Title = "강우 IDF 표(CSV)", Filter = "CSV (*.csv;*.txt)|*.csv;*.txt|모든 파일 (*.*)|*.*" };
         if (_v.CsvFile.Length > 0) try { dlg.InitialDirectory = System.IO.Path.GetDirectoryName(_v.CsvFile); } catch { }
-        if (dlg.ShowDialog() != true) return;
+        if (DhBrand.ShowFileDialog(dlg) != true) return;
         string text;
         try { text = System.IO.File.ReadAllText(dlg.FileName); }
         catch (Exception ex) { _v.Error = "CSV를 못 읽음 — " + ex.Message; Refresh(); return; }

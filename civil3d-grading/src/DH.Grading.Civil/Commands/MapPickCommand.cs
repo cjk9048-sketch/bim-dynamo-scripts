@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Net;
 using System.Text;
 using System.Threading;
@@ -502,6 +502,7 @@ public static class MapPickCommand
             row.Children.Add(quit);
             sp.Children.Add(row);
             win.Content = sp;
+            DhBrand.KeepOnCivil(win);   // ★[JACK 1124] Civil 3D 창 가운데
 
             bool quitPressed = false;
             reopen.Click += (_, __) =>

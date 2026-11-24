@@ -1,4 +1,4 @@
-using System.Globalization;
+﻿using System.Globalization;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
@@ -72,6 +72,7 @@ public sealed class AltDialog : Window
         Width = Math.Min(980, Math.Max(600, SystemParameters.WorkArea.Width - 40)); Height = Math.Min(820, hMax); MinWidth = Math.Min(720, Width); MinHeight = Math.Min(560, Height);
         double picH = Height >= 760 ? 300 : Math.Max(140, 300 - (760 - Height)), picW = Math.Round(picH * 1.4);
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
+        DhBrand.KeepOnCivil(this);
         ShowInTaskbar = false;
         _taken = book.Rows.Select(r => r.Name).ToList();
 

@@ -1,4 +1,4 @@
-using System.IO;
+﻿using System.IO;
 using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.EditorInput;
@@ -38,7 +38,7 @@ public sealed partial class StructCommand
             Filter = "Revit 내보내기 (*.dwg;*.ifc)|*.dwg;*.ifc|Revit 3D DWG (*.dwg)|*.dwg|IFC (*.ifc)|*.ifc|Revit · FBX · Navisworks (*.rvt;*.rfa;*.fbx;*.nwc;*.nwd) — 못 읽음(까닭 안내)|*.rvt;*.rfa;*.fbx;*.nwc;*.nwd",
             Title = "Revit 구조물 — DWG · IFC",
         };
-        return dlg.ShowDialog() == true ? dlg.FileName : null;
+        return DhBrand.ShowFileDialog(dlg) == true ? dlg.FileName : null;
     }
 
     /// <summary>옆 DB로 INSUNITS · 원본 XY 범위(원점 삽입 · 축척 1) — 붙이기 전에 단위 계수를 정한다(D7).</summary>

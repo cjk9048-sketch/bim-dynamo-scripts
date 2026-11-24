@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Windows;
 using System.Windows.Controls;
 using Autodesk.AutoCAD.ApplicationServices;
@@ -107,6 +107,12 @@ public sealed class Web3DCommand
 /// <para>★[계획 검토 중간 11] 페이지가 <c>ready</c>를 보내야 «떴다» — 웹GL이 안 되거나 문맥을 잃으면 페이지가 <c>fail</c>을 보내고, 25초 안에 <c>ready</c>가 없으면 대체 화면.</para></summary>
 public static class Web3DPalette
 {
+    /// <summary>★[JACK 1124 튜토리얼 4단원 «3D 창에서 시야 검토 · 웹 공유도»] 시야 검토(걷기) 켜고 끔(페이지 알림 m = 'off' 아니면 켬) · 웹 공유 끝(성공 여부).</summary>
+    internal static event Action<string>? WalkChanged;
+    internal static event Action<bool>? ShareDone;
+    internal static void RaiseWalk(string m) { try { WalkChanged?.Invoke(m); } catch { } }
+    internal static void RaiseShare(bool ok) { try { ShareDone?.Invoke(ok); } catch { } }
+
     private static PaletteSet? _ps;
     private static Web3DPanel? _panel;
 
@@ -364,6 +370,9 @@ internal sealed class Web3DPanel : UserControl
                 _msg.Visibility = Visibility.Collapsed;
                 try { DiagLog.Append("\n[3D 보기] 페이지 떴다 — " + (r.TryGetProperty("info", out var iv) ? iv.ToString() : "")); } catch { }
                 break;
+            case "walk":
+                Web3DPalette.RaiseWalk(r.TryGetProperty("m", out var mv) ? mv.GetString() ?? "" : "");
+                break;
             case "fail":
                 try { DiagLog.Append("\n[3D 보기] 페이지 실패 — " + (r.TryGetProperty("why", out var wv) ? wv.GetString() : "")); } catch { }
                 break;
@@ -427,12 +436,14 @@ internal sealed class Web3DPanel : UserControl
             _lastShareUrl = url;
             Post(new { t = "busy", text = (string?)null });
             Post(new { t = "shared", url, note });
+            Web3DPalette.RaiseShare(url.Length > 0);
         }
         catch (System.Exception ex)
         {
             Post(new { t = "busy", text = (string?)null });
             Post(new { t = "toast", text = "공유 실패 — " + ex.Message });
             try { DiagLog.Append("\n[3D 공유] 실패 — " + ex); } catch { }
+            Web3DPalette.RaiseShare(false);
         }
     }
 
@@ -468,7 +479,7 @@ internal sealed class Web3DPanel : UserControl
                 };
                 if (!string.IsNullOrEmpty(GradingSettings.ExportFolder) && System.IO.Directory.Exists(GradingSettings.ExportFolder))
                     dlg.InitialDirectory = GradingSettings.ExportFolder;
-                if (dlg.ShowDialog() == true)
+                if (DhBrand.ShowFileDialog(dlg) == true)
                 {
                     e.ResultFilePath = dlg.FileName;
                     e.Handled = true;                                   // 웹뷰 내려받기 띠를 띄우지 않는다
@@ -514,7 +525,7 @@ internal sealed class Web3DPanel : UserControl
             };
             if (!string.IsNullOrEmpty(GradingSettings.ExportFolder) && System.IO.Directory.Exists(GradingSettings.ExportFolder))
                 dlg.InitialDirectory = GradingSettings.ExportFolder;
-            if (dlg.ShowDialog() != true) return;
+            if (DhBrand.ShowFileDialog(dlg) != true) return;
             System.IO.File.Copy(src, dlg.FileName, true);
             Post(new { t = "toast", text = $"저장했습니다 — {System.IO.Path.GetFileName(dlg.FileName)} ({new System.IO.FileInfo(dlg.FileName).Length / 1048576.0:F0} MB)" });
             try { DiagLog.Append("\n[3D 보기] 3D 파일 저장 — " + dlg.FileName); } catch { }

@@ -1,4 +1,4 @@
-using System.Threading;
+﻿using System.Threading;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
@@ -110,6 +110,7 @@ internal static class BusyPopup
                         };
                         if (!double.IsNaN(cx))
                             _win.Loaded += (_, __) => { _win.Left = cx - _win.ActualWidth / 2; _win.Top = cy - _win.ActualHeight / 2; };
+                            DhBrand.KeepOnCivil(_win);   // ★[JACK 1124] 자리 모름(가운데) → Civil 3D 창 가운데
                         // ★[v105.1.1] 묻는 창이 떠 있으면 숨고, 닫히면 잠깐 뒤 다시 보인다 — 이 스레드의 창 · 가리개만 만진다(닫은 뒤 새 판이 뜨면 멈춘다)
                         var win = _win; var watch = _watch;
                         var lastAsk = System.DateTime.MinValue;

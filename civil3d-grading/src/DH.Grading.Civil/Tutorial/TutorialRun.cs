@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Windows;
@@ -85,6 +85,10 @@ public sealed class TutorialCommand
         Log($"시작 — {(int)ch}. {TutorialFlow.ChapterName(ch)} · {how}");
         Tut.Current = new Tut(doc, ch);
         Tut.Current.Begin();
+        Tut.Current.StepLogStart();
+        // ★[JACK 1124 스샷 «도면화 튜토리얼 — 도면생성 단추 비활성»] 연 직후(문서 바뀜 이벤트)에는 도면을 다 안 읽어 «계획지표면 없음»으로 꺼질 수 있음 → 한가할 때 리본 다시 칠함
+        void Once(object? s, System.EventArgs e) { AcadApp.Idle -= Once; try { RibbonApp.RefreshEnabled(); } catch { } }
+        try { AcadApp.Idle += Once; } catch { }
     }
 
     static void Say(DocumentCollection dm, string s)
@@ -199,6 +203,7 @@ internal sealed class Tut
     int _rdDone;
     readonly List<(string Cmd, TutorialFlow.RoadSnap Before, Step At)> _rdRuns = new();
     int? _paveBase;
+    string? _pviBase;   // ★[JACK 1124] 측점 옮기기 단계가 된 때의 꺾인 점 기록
     bool _rdGuideFound;
     ObjectId _rdGuide = ObjectId.Null;
     List<Point2d>? _rdPts;
@@ -237,6 +242,8 @@ internal sealed class Tut
             AcadApp.DocumentManager.DocumentToBeDestroyed += OnDocDestroy;
             PickSession.Changed += Kick;
             MapPalette.TutMessage += OnPage;
+            Commands.Web3DPalette.WalkChanged += On3DWalk;
+            Commands.Web3DPalette.ShareDone += On3DShare;
         }
         catch (System.Exception ex) { Log("훅 실패 — " + ex.Message); }
         _balloon = new TutBalloon();
@@ -356,6 +363,31 @@ internal sealed class Tut
     }
 
     /// <summary>다음 한가한 때 한 번 다시 본다(사건마다 바로 하지 않는다 — 명령 끝 알림 안에서는 도면을 못 고친다).</summary>
+    // ★[JACK 1124] 4단원 3D — 시야 검토를 켜면 · 웹 공유가 끝나면(실패여도 — 공유 설정이 없는 PC에서 멈추지 않게 · 알림은 3D 창이 띄움)
+    void On3DWalk(string m)
+    {
+        try { _disp?.BeginInvoke(new Action(() => { if (m != "off" && _step == Step.Sight3D && _done.Add("Sight")) { Log("시야 검토 켬 → 끝"); Kick(); } })); } catch { }
+    }
+    void On3DShare(bool ok)
+    {
+        try { _disp?.BeginInvoke(new Action(() => { if (_step == Step.Share3D && _done.Add("Shared")) { Log($"웹 공유 {(ok ? "됨" : "실패")} → 끝"); Kick(); } })); } catch { }
+    }
+
+    /// <summary>★[JACK 1124 «튜토리얼 녹화 → 설명 곁들인 영상»] 단계가 바뀐 시각 · 단원 · 단계 · 글 — %LOCALAPPDATA%\DHGrading\tutorial\steps.log(탭 구분 · 영상 자막 시각 맞춤용).</summary>
+    internal void StepLogStart() => StepLog(_step);
+
+    void StepLog(Step s)
+    {
+        try
+        {
+            string t = s == Step.Done ? TutorialFlow.DoneText(_ch) : TutorialFlow.Text(s, _part2, true);
+            System.IO.Directory.CreateDirectory(TutorialData.Home);
+            System.IO.File.AppendAllText(System.IO.Path.Combine(TutorialData.Home, "steps.log"),
+                $"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}\t{(int)_ch}\t{TutorialFlow.ChapterName(_ch)}\t{s}\t{t}{Environment.NewLine}", new System.Text.UTF8Encoding(false));
+        }
+        catch { }
+    }
+
     void Kick()
     {
         if (_ended || _idleQueued) return;
@@ -501,7 +533,8 @@ internal sealed class Tut
                 RdRoad: _rdLast.Road && _rdLast.Surf, RdDone: _rdDone, FixTab: _fFixTab, WallAdd: _fWallAdd,
                 SecOpen: SectionPalette.SiteOpenPanel != null, Prof: _done.Contains("Prof"), Xsec: _done.Contains("Xsec"), QtyFile: _done.Contains("QtyFile"),
                 ParcelIn: _done.Contains("ParcelIn"), ParcelOut: _done.Contains("ParcelOut"), MapIn: _done.Contains("MapIn"), MapOut: _done.Contains("MapOut"),
-                Book: _done.Contains("Book"), View3D: _done.Contains("View3D"));
+                Book: _done.Contains("Book"), View3D: _done.Contains("View3D"), PlanDeco: _done.Contains("PlanDeco"),
+                Sight: _done.Contains("Sight"), Shared: _done.Contains("Shared"));
             _facts = f;
             var s = TutorialFlow.Derive(f);
             // 1단원: 서버 지표면이 됐으면 2부(수치지도 DXF)로 — DXF가 없으면 그대로 끝
@@ -526,6 +559,7 @@ internal sealed class Tut
             {
                 var old = _step;
                 _step = s;
+                StepLog(s);
                 if (_note != TutorialFlow.NoteServerOk || s != Step.Dxf) _note = null;
                 if (TutorialFlow.IsMap(old) && s == Step.Ground) _note = TutorialFlow.NoteMapClosed;
                 else if (TutorialFlow.IsPanel(old) && s == Step.Panel) _note = TutorialFlow.NotePanelClosed;
@@ -533,7 +567,8 @@ internal sealed class Tut
                 else if (old is Step.Elev or Step.Panel or Step.PickPlan or Step.PickGround or Step.Slope or Step.Build && s == Step.Draw) _note = TutorialFlow.NoteLineLost;
                 else if (TutorialFlow.IsRdPanel(old) && s == Step.RdOpen) _note = TutorialFlow.NoteRdClosed;
                 else if (TutorialFlow.IsRdSec(old) && s == Step.RdSec) _note = TutorialFlow.NoteRdSecClosed;
-                if (s == Step.RdPave) _paveBase = _rdLast.Pave;   // ★[5단원] 포장 단계가 된 때의 종류 — 바꾸면 끝
+                if (s == Step.RdPave) _paveBase = _rdLast.Pave;
+                if (s == Step.RdPviMove) _pviBase = _rdLast.PviSig;   // ★[JACK 1124] 옮기면(꺾인 점 기록이 바뀌면) 끝   // ★[5단원] 포장 단계가 된 때의 종류 — 바꾸면 끝
                 if (_balloon != null) _balloon.Dragged = false;
                 // 점선 단계 → 다른 점선 단계(옹벽 추가 → 터파기선)도 앞 점선을 걷고 새로 그림
                 if (HasHint(old)) { _hintWanted = false; _hintEraseWanted = true; }
@@ -652,6 +687,7 @@ internal sealed class Tut
             else { _rdNote = TutorialFlow.RoadFailNote(cmd); Log($"{cmd} → 기록 안 바뀜 ({st})"); }
         }
         _rdRuns.Clear();
+        if (_step == Step.RdPviMove && _pviBase != null && TutorialFlow.PviMoveDid(_pviBase, now)) { _rdDone |= TutorialFlow.RdBit(Step.RdPviMove); Log("측점 옮김 → 끝"); }
         if (_step == Step.RdPave && _paveBase is int pb && TutorialFlow.PaveDid(pb, now)) { _rdDone |= TutorialFlow.RdBit(Step.RdPave); Log($"포장 {pb} → {now.Pave}"); }
         if (_rdLast.Road && !now.Road && (_rdDone & TutorialFlow.RdBit(Step.RdReset)) == 0) { _rdDone = 0; _rdNote = TutorialFlow.NoteRdLost; Log("진입도로 없어짐 → 처음부터"); }
         _rdLast = now;
@@ -1208,10 +1244,11 @@ internal sealed class Tut
             sp.ShowTab(s == Step.RdXsec);   // ★[JACK 1119] 횡단도 생성만 «횡단도 생성» 탭 · 나머지(종단 · 측점 · 지표면 업데이트)는 «종단도 생성» 탭
             string cmd = s switch
             {
+                Step.RdPviMove => "",   // 손잡이 끌기 — 누를 단추 없음(글만)
                 Step.RdProf => "DHROADSHEET", Step.RdPviAdd => "DHROADPVIADD", Step.RdPviDel => "DHROADPVIDEL", Step.RdPviDraw => "DHROADPVIDRAW",
                 Step.RdRedraft => "DHROADREDRAFT", Step.RdRev => "DHROADREV", Step.RdXsec => "DHROADXSEC", _ => "DHROADUPDATE",
             };
-            var b = sp.RoadButton(cmd);
+            var b = cmd.Length > 0 ? sp.RoadButton(cmd) : null;
             targets = b != null && b.IsVisible ? new() { b } : null;
         }
         // ★[JACK 1119] 4단원 종단도 · 횡단도 — 계획지표면 종횡단도 창이 떠 있으면 누를 단추가 든 탭으로(덮개 없음 · 글만인 것은 그대로)
@@ -1339,6 +1376,7 @@ internal sealed class Tut
         try { AcadApp.DocumentManager.DocumentActivated -= OnDocActivated; AcadApp.DocumentManager.DocumentToBeDestroyed -= OnDocDestroy; } catch { }
         try { PickSession.Changed -= Kick; } catch { }
         try { MapPalette.TutMessage -= OnPage; } catch { }
+        try { Commands.Web3DPalette.WalkChanged -= On3DWalk; Commands.Web3DPalette.ShareDone -= On3DShare; } catch { }
         try { NgiiCommand.PresetFile = null; } catch { }
         RestoreSnap();
         UnhookSlope();

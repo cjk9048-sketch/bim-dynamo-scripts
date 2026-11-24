@@ -258,6 +258,27 @@ public sealed class RibbonApp : IExtensionApplication
             };
         }
         catch { }
+        // ★[JACK 1124 «시연 녹화 → 대기 구간 줄이고 설명 넣은 영상»] DH 명령 시작 · 끝 시각 — %LOCALAPPDATA%\DHGrading\cmdtime.log(탭 구분 · 영상 편집용)
+        try
+        {
+            static void T(string ev, string? cmd)
+            {
+                string c = (cmd ?? "").ToUpperInvariant();
+                if (!c.StartsWith("DH", System.StringComparison.Ordinal)) return;
+                try
+                {
+                    string dir = System.IO.Path.Combine(System.Environment.GetFolderPath(System.Environment.SpecialFolder.LocalApplicationData), "DHGrading");
+                    System.IO.Directory.CreateDirectory(dir);
+                    System.IO.File.AppendAllText(System.IO.Path.Combine(dir, "cmdtime.log"), $"{System.DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}\t{ev}\t{c}{System.Environment.NewLine}");
+                }
+                catch { }
+            }
+            d.CommandWillStart += (_, e5) => T("시작", e5.GlobalCommandName);
+            d.CommandEnded += (_, e5) => T("끝", e5.GlobalCommandName);
+            d.CommandCancelled += (_, e5) => T("취소", e5.GlobalCommandName);
+            d.CommandFailed += (_, e5) => T("실패", e5.GlobalCommandName);
+        }
+        catch { }
         // ★★[v103.1.7 · JACK 1014] 자가점검 — 우리 긴 명령마다 진행 표지(Civil이 그 도중에 죽으면 남는다) · 끝/취소/실패와 걸린 시간 한 줄
         try
         {

@@ -1,4 +1,4 @@
-using Autodesk.AutoCAD.ApplicationServices;
+﻿using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.EditorInput;
 using Autodesk.AutoCAD.Runtime;
@@ -231,7 +231,7 @@ public sealed class InfraworksCommand
                 var dlg = new Microsoft.Win32.OpenFolderDialog { Title = "infraworks 기초자료 내보낼 폴더 선택" };
                 if (!string.IsNullOrEmpty(GradingSettings.ExportFolder) && System.IO.Directory.Exists(GradingSettings.ExportFolder))
                     dlg.InitialDirectory = GradingSettings.ExportFolder;
-                if (dlg.ShowDialog() != true) { ed.WriteMessage("\n[infraworks 기초자료] 폴더 선택 취소"); return null; }
+                if (DhBrand.ShowFileDialog(dlg) != true) { ed.WriteMessage("\n[infraworks 기초자료] 폴더 선택 취소"); return null; }
                 folder = dlg.FolderName;
                 GradingSettings.ExportFolder = folder;
             }

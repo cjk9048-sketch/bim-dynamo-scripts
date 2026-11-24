@@ -204,7 +204,7 @@ public sealed class NgiiCommand
         };
         try { if (!string.IsNullOrEmpty(pre) && System.IO.File.Exists(pre)) { dlg.InitialDirectory = System.IO.Path.GetDirectoryName(pre); dlg.FileName = System.IO.Path.GetFileName(pre); } } catch { }
         bool? ok;
-        try { ok = dlg.ShowDialog(); }
+        try { ok = DhBrand.ShowFileDialog(dlg); }
         catch { ok = false; }
         if (ok != true) return null;
         return new List<string>(dlg.FileNames);

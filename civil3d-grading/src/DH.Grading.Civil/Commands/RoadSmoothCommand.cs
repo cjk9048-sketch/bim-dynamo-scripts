@@ -275,6 +275,7 @@ public sealed class RoadSmoothCommand
         st.Children.Add(B("파일 고르기 (수치지도 DXF · 측량도)", Source.File));
         var (_, cancel) = DhBrand.FooterButtons("");   // [취소] = IsCancel(Esc · 누르면 닫힘 → Cancel) — 원지반 삭제 창과 같음
         DhBrand.Dress(w, "도로 다듬기", "도로선", st, cancel);
+        DhBrand.KeepOnCivil(w);   // ★[JACK 1124] Civil 3D 창 가운데
         try { if (AcadApp.ShowModalWindow(w) != true) return Source.Cancel; } catch { return Source.Cancel; }
         return pick;
     }
@@ -316,7 +317,7 @@ public sealed class RoadSmoothCommand
         };
         try { if (_lastDir.Length > 0 && System.IO.Directory.Exists(_lastDir)) dlg.InitialDirectory = _lastDir; } catch { }
         bool? ok;
-        try { ok = dlg.ShowDialog(); } catch { ok = false; }
+        try { ok = DhBrand.ShowFileDialog(dlg); } catch { ok = false; }
         if (ok != true) return null;
         try { _lastDir = System.IO.Path.GetDirectoryName(dlg.FileName) ?? ""; } catch { }
         return dlg.FileName;
