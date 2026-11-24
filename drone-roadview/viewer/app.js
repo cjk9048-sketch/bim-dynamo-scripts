@@ -412,12 +412,18 @@
     return x.every(Number.isFinite) ? x : null;
   }
   // 영상 vid 의 짝으로 맞춤 풀기 (Levenberg–Marquardt, 지금 값에서 시작). 1 짝 → 동 · 북, 2 → + 방향, 3 이상 → + 높이 (수치지형도 프로젝트는 높이 빼고).
-  // 남북 · 동서 기울기는 그대로. 결과: 'ok' (적용함) · 'bad' (못 풂 · 값이 터무니없음 → 그대로 둠) · 'none' (짝 없음)
+  // 남북 · 동서 기울기: 먼 곳(사진에서 40 m 넘게)을 찍은 짝이 있고 짝이 넉넉하면(풀 값 수 ≤ 짝 × 2) 같이 푼다 —
+  // 비스듬히 보는 먼 곳은 기울기 0.3° 가 150 m 에서 6 m 로 부풀어 어긋난다 (1124 JACK «먼 곳 안 맞음»). 가까운 짝만이면 기울기는 드러나지 않아 그대로.
+  // 결과: 'ok' (적용함) · 'bad' (못 풂 · 값이 터무니없음 → 그대로 둠) · 'none' (짝 없음)
+  const AL_FAR = 40;       // m · 이보다 먼 곳을 찍은 짝이 있어야 기울기를 푼다
+  const AL_TILT_MAX = 5;   // ° · 이보다 크게 풀리면 점이 잘못 찍힌 것으로 봄
   function alSolve(vid) {
     const c0 = calibFor(vid), R0 = rot64(c0), use = [];
     pairRes(vid).forEach((o) => { if (o.h) use.push(o); });
     if (!use.length) return pairsOf(vid).length ? 'bad' : 'none';
     const keys = use.length === 1 ? ['dx', 'dy'] : use.length === 2 || DZ_LOCK ? ['dx', 'dy', 'dyaw'] : ['dx', 'dy', 'dz', 'dyaw'];
+    const far = use.some((o) => Math.hypot(o.h[0] - o.s.e, o.h[1] - o.s.n) > AL_FAR);
+    if (use.length >= 3 && far && keys.length + 2 <= use.length * 2) keys.push('dpitch', 'droll');
     const calOf = (x) => { const c = Object.assign({}, c0); keys.forEach((k, i) => { c[k] = x[i]; }); return c; };
     const res = (x) => {
       const c = calOf(x), R = keys.length > 2 ? rot64(c) : R0, out = [];
@@ -456,7 +462,8 @@
       if (step < 1e-7) break; // 더 줄지 않음 · 다 옴
     }
     const c = calOf(x);
-    if (!x.every(Number.isFinite) || Math.abs(c.dz) > 15 || Math.abs(c.dyaw) > 30) return 'bad';
+    if (!x.every(Number.isFinite) || Math.abs(c.dz) > 15 || Math.abs(c.dyaw) > 30 ||
+        Math.abs(c.dpitch || 0) > AL_TILT_MAX || Math.abs(c.droll || 0) > AL_TILT_MAX) return 'bad';
     keys.forEach((k) => setCal(vid, k, c[k]));
     return 'ok';
   }

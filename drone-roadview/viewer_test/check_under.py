@@ -6,7 +6,7 @@
   m  표현 둘 (터파기 영역 · 터파기 · JACK 1124): 처음 = 영역 · 단추 하나만 켜짐 · 주소 ?mode= (area · bury → 영역 · trench · depth · open · sec → 터파기) ·
      표시 항목은 터파기에서만 (영역 = 범례 임시점용 · 영구점용) · 표시 항목 · 범례 이 브라우저 기억 (관로 본체는 안 기억) ·
      [단면] = 터파기 설정 창 (다시 누르면 닫힘) · «가시화 기본값» ↔ «직접 입력» · calib.js trench 에 prot (옛 파일 = 기본값) ·
-     맞춤 칸 안내 «시점 · 종점 포함 2곳 이상 찍기» · 옛 층 단추 (기초·보호 · 되메우기) 없음 · 옛 기억을 넣어도 화소 그대로
+     맞춤 칸 안내 «시점 · 종점 포함 2곳 이상 · 먼 곳 포함 3곳이면 기울기까지» · 옛 층 단추 (기초·보호 · 되메우기) 없음 · 옛 기억을 넣어도 화소 그대로
   a  영역: 임시점용 주황 점선 = 지표 ±wv 투영 (중앙 ≤ 1.5 px) · 영구점용 띠 (관경 폭) 가 그 안 · 범례 끄면 점선 없음 ·
      터파기 표현엔 점선 없음 · 지도에도 주황 점선 (영역만) · 수량 칸 임시점용 = 포장 깨기 (∫ 2·wv) · 영구점용 = Σ 관경 × 길이 (따로 셈)
   c  관 정보: T1 누름 → 관경 · 토피 · 관 중심고 · 지반고 = 따로 셈 · 관종 = 짐작 (주철) · [강관] → RV_PIPES mat · 이 브라우저 저장 ·
@@ -199,7 +199,7 @@ def test_modes(ed, out_dir, shots_dir):
     ed.js("if (!document.getElementById('calPane').classList.contains('open')) document.getElementById('calHead').click()")
     ed.frames(2)
     hint = js_json(ed, "{t: document.getElementById('alHint').textContent, w: document.getElementById('alHint').offsetWidth}")
-    report('맞춤 안내 «시점 · 종점 포함 2곳 이상 찍기»', hint['t'] == '시점 · 종점 포함 2곳 이상 찍기' and hint['w'] > 0, json.dumps(hint, ensure_ascii=False))
+    report('맞춤 안내 «시점 · 종점 포함 2곳 이상 · 먼 곳 포함 3곳이면 기울기까지»', hint['t'] == '시점 · 종점 포함 2곳 이상 · 먼 곳 포함 3곳이면 기울기까지' and hint['w'] > 0, json.dumps(hint, ensure_ascii=False))
     # 가시화 기본값 ↔ 직접 입력
     tag = lambda: js_json(ed, "[document.getElementById('ugTag').textContent, document.getElementById('ugTag').classList.contains('user')]")  # noqa: E731
     report('기본값 → «가시화 기본값»', tag() == ['가시화 기본값', False], json.dumps(tag()))
