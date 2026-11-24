@@ -1075,6 +1075,7 @@ public sealed partial class XsecViewCommand
         }
         catch (System.Exception ex) { log?.AppendLine("  옹벽 단면 실패 — " + ex.Message); return "⚠옹벽 단면 못 넣음 — " + ex.Message; }
         string s = $"옹벽 단면 {nSec}개(CALS CC-GSTR-NEWC · NEWD · LEAN · 인출 CC-LEAL · CC-LEAT) · 인출 {nLab}(단 묶음마다 하나) · 기울기 글 {nSlope}"
+                 + $" · 보강토 점선 {WallSectionDraw.TakeGrid()}줄"   // ★[JACK 1124] 보강토체 회색 세로 점선
                  + (n2d > 0 ? $" · 2D 터파기 · 배면 선 {n2dEnt}줄(뷰 {n2d} · 가로지르는 벽만)" : "")
                  + (n2dMiss > 0 ? $" · ⚠2D 터파기선 없는 뷰 {n2dMiss}(그 측점 수량을 못 쟀다 — 로그 수량 줄)" : "")
                  + (nSkip > 0 ? $" · 벽과 거의 나란해 뺀 것 {nSkip}" : "")

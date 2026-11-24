@@ -24,11 +24,11 @@ internal static class CursorLabel
     /// <param name="hint">둘째 줄(작고 흐린 글) — 그 질문에서 듣는 키만(예: «Enter 지난 자리 · Esc 그만») · 빈 글이면 한 줄 카드.</param>
     /// <param name="extra">★[v112.4 · JACK 1104 «경로 찍다가 휠로 줌하면 전에 찍은 게 없어져»] 이름표 밑에 함께 그릴 것(WCS 커서 자리 · 커서를 받았나) — 지그가 화면마다 다시 그려 줌 · 확대 · 축소에도 안 사라짐(DrawVector는 Regen에서 사라짐).</param>
     /// <param name="live">★[v113.3 · JACK 1105 «다음 점이 클릭이 안 돼»] 화면마다 카드 글을 바꿀 때(<paramref name="extra"/> 뒤에 불림 — 그 자리의 거절 까닭 등) · null 또는 빈 글이면 <paramref name="label"/>.</param>
-    internal static Result GetPoint(Editor ed, PromptPointOptions ppo, string label, string hint = "", System.Action<WorldDraw, Point3d, bool>? extra = null, System.Func<string?>? live = null, CursorType? cursor = null)
+    internal static Result GetPoint(Editor ed, PromptPointOptions ppo, string label, string hint = "", System.Action<WorldDraw, Point3d, bool>? extra = null, System.Func<string?>? live = null, CursorType? cursor = null, Tone tone = Tone.Brand)
     {
         if (SelfCheckLog.Headless || ppo.UseBasePoint || string.IsNullOrWhiteSpace(label)) return Plain(ed, ppo);
         LabelJig jig;
-        try { jig = new LabelJig(ed, ppo, label, hint ?? "") { Extra = extra, Live = live }; if (cursor != null) jig.SetCursor(cursor.Value); }   // ★[v117.14 · JACK 1112 «선택 마우스가 선 그리기 모양 — 선택 모양이 되어야»] 고르는 질문은 픽박스(EntitySelect)
+        try { jig = new LabelJig(ed, ppo, label, hint ?? "") { Extra = extra, Live = live, Pal = Colors(tone) }; if (cursor != null) jig.SetCursor(cursor.Value); }   // ★[v117.14 · JACK 1112 «선택 마우스가 선 그리기 모양 — 선택 모양이 되어야»] 고르는 질문은 픽박스(EntitySelect)
         catch (System.Exception ex) { try { DiagLog.Append("\n[커서 이름표] 못 만듦 — 그냥 찍기: " + ex.Message); } catch { } return Plain(ed, ppo); }
         using (jig)
         {
@@ -93,6 +93,15 @@ internal static class CursorLabel
     internal const double OffPx = 18, MainPx = 15, HintPx = 11, PadLPx = 11, PadRPx = 12, PadTPx = 7, PadBPx = 7, GapPx = 5, BarPx = 4, RadPx = 4;
     internal static readonly (byte R, byte G, byte B) CardRgb = (0x0A, 0x62, 0x69), EdgeRgb = (0x5F, 0xB3, 0xB8),
         AccentRgb = (0xA8, 0xE0, 0xE3), MainRgb = (0xFF, 0xFF, 0xFF), HintRgb = (0xD6, 0xEE, 0xEF);
+
+    /// <summary>★[JACK 1124 «말상자 색만 바꿔 — 종단도 배치가 이어서 나올 때 알아보게»] 카드 색 — 기본 = 도화 청록 · <see cref="Tone.Blue"/> = 파랑(종단도 노선 찍기).
+    /// 한 명령 안에서 단계가 바뀌면(노선 찍기 → 종단도 놓을 자리) 색이 바뀌어 다음 질문이 왔다는 것이 보인다.</summary>
+    internal enum Tone { Brand, Blue }
+    static ((byte R, byte G, byte B) Card, (byte R, byte G, byte B) Edge, (byte R, byte G, byte B) Accent) Colors(Tone t) => t switch
+    {
+        Tone.Blue => ((0x1E, 0x4F, 0x9C), (0x7F, 0xA6, 0xE0), (0xBF, 0xD4, 0xF5)),
+        _ => (CardRgb, EdgeRgb, AccentRgb),
+    };
 
     /// <summary>볼록 다각형을 가로선 y로 자른 구간(없으면 null).</summary>
     internal static (double A, double B)? SpanAt(List<(double X, double Y)> poly, double y)
@@ -163,6 +172,7 @@ internal static class CursorLabel
         readonly string _label, _hint;
         internal System.Action<WorldDraw, Point3d, bool>? Extra;
         internal System.Func<string?>? Live;
+        internal ((byte R, byte G, byte B) Card, (byte R, byte G, byte B) Edge, (byte R, byte G, byte B) Accent) Pal = (CardRgb, EdgeRgb, AccentRgb);
         string _cur = "";         // 지금 카드에 쓴 글(_ext는 이 글의 범위)
         readonly Vector3d _right = Vector3d.XAxis, _up = Vector3d.YAxis, _normal = Vector3d.ZAxis;
         readonly TextStyle _ts = SharedStyle();
@@ -274,7 +284,7 @@ internal static class CursorLabel
                 tr.FillType = FillType.FillNever;
                 // ★★[v112.4] 바탕 = 화면 1 화소마다 가로선(면 채우기는 지그에서 반투명으로 나옴) · 왼쪽 띠는 다른 색
                 double step = System.Math.Max(u / System.Math.Max(_dpi, 1.0), 1e-9) * 0.9, xBar = x0 + BarPx * u;
-                var bodyC = new EntityColor(CardRgb.R, CardRgb.G, CardRgb.B); var barC = new EntityColor(AccentRgb.R, AccentRgb.G, AccentRgb.B);
+                var bodyC = new EntityColor(Pal.Card.R, Pal.Card.G, Pal.Card.B); var barC = new EntityColor(Pal.Accent.R, Pal.Accent.G, Pal.Accent.B);
                 for (double y = yB; y <= yT + 1e-12; y += step)
                 {
                     if (SpanAt(card, y) is not (double a, double b)) continue;
@@ -286,7 +296,7 @@ internal static class CursorLabel
                     }
                     tr.TrueColor = bodyC; draw.Geometry.WorldLine(P(a, y), P(b, y));
                 }
-                tr.TrueColor = new EntityColor(EdgeRgb.R, EdgeRgb.G, EdgeRgb.B);         // 밝은 청록 테
+                tr.TrueColor = new EntityColor(Pal.Edge.R, Pal.Edge.G, Pal.Edge.B);      // 밝은 테(청록 · 파랑)
                 var edge = Pc(card); edge.Add(edge[0]);
                 draw.Geometry.Polyline(edge, _normal, System.IntPtr.Zero);
                 // 글 — 줄 칸(높이 = 글자 크기) 가운데에 실제 글자 범위의 가운데를 맞춤(글 자리 = 바닥선 왼쪽)

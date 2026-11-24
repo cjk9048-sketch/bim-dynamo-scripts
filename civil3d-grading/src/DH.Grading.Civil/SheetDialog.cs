@@ -22,7 +22,7 @@ namespace DH.Grading.Civil;
 public sealed class SheetDialog : Window
 {
     // ★★[JACK 1117 «도면설정엔 노리선 · 배경지도 화질 · 도곽 정도만 남기고 다 각 종횡단도로»] 종단 · 횡단 축척 · 배치 · 측점 간격 · 단면검토선 · 원지반 굴곡 · 층따기
-    //   → 종횡단도 도킹창(SectionPalette — 부지 · 진입도로). 저장 자리(키)는 그대로 · 그 창 [설정 적용] = 옛 [저장]과 같은 길(SheetSettingsCommand.Saved).
+    //   → 종횡단도 도킹창(SectionPalette — 부지 · 진입도로). 저장 자리(키)는 그대로 · 그 창 [변경 설정 적용] = 옛 [저장]과 같은 길(SheetSettingsCommand.Saved).
     //   등고선 · 계곡선 간격은 평면 지표면 값이라 종횡단도에 안 맞음 → 여기 남김(내 판단).
     private readonly ComboBox _basemapRes;
     private readonly TextBox _contourMinor;

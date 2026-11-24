@@ -373,11 +373,15 @@ internal static class WallSectionDraw
             pl.SetDatabaseDefaults(db);
             bool lean = part.Material == "버림";
             bool dash = !part.Structure || part.Fraction < 1 - 1e-12;          // 비구조물 · 부벽 평균 조각
+            // ★[JACK 1124 «보강토 그리드 쪽이 박스로만 나와 두꺼운 벽처럼 헷갈림 → 회색 세로 점선을 간격으로 · 범위 박스는 두되 회색 점선»]
+            bool grid = part.Material == "보강토체";
             pl.LayerId = lean ? L.Lean : dash ? L.Dash : L.Line;
             bool ownLt = dash && !L.DashByLayer && L.DashLt != null;
             if (ownLt) pl.Linetype = L.DashLt;
             if ((ownLt || (dash && L.DashOurs)) && L.DashLts > 0) pl.LinetypeScale = L.DashLts;
+            if (grid) pl.Color = Autodesk.AutoCAD.Colors.Color.FromColorIndex(Autodesk.AutoCAD.Colors.ColorMethod.ByAci, GridAci);
             Add(db, tr, ms, pl, kind, view); n++;
+            if (grid) GridLines(db, tr, ms, part.Ring, faceB, c, along0, map, L, kind, view);   // 세로 점선(개체 수 n에는 안 넣음 — 로그 · 시험 수 그대로)
         }
         if (!label) return n;
         // 인출 — 구조물 맨 위(같으면 가장 앞) 꼭짓점
@@ -488,6 +492,60 @@ internal static class WallSectionDraw
             Add(db, tr, ms, pl, kind, view); made++;
         }
         return made;
+    }
+
+    /// <summary>★[JACK 1124] 보강토체(보강재 구역) 회색 — ACI 8 · 세로 점선 간격(단면 m).</summary>
+    internal const short GridAci = 8;
+    internal const double GridStep = 0.5;
+    static int _gridDrawn;
+    /// <summary>지난번 읽은 뒤 그린 보강토 세로 점선 수(읽으면 0으로) — 진단 로그 한 줄용.</summary>
+    internal static int TakeGrid() { int k = _gridDrawn; _gridDrawn = 0; return k; }
+
+    /// <summary>★[JACK 1124] 보강토체 안 세로 점선 — 도면에서 세로(블록 기울기 · 앞면 맞춤 전단을 뺀 가로 자리 h = X − faceB·Z가 같은 선)로 <see cref="GridStep"/>마다 ·
+    /// 구역 다각형과 만나는 토막만(위아래 테두리 사이). 테두리와 같은 레이어 · 회색 · 파선. 그린 수.</summary>
+    static int GridLines(Database db, Transaction tr, BlockTableRecord ms, IReadOnlyList<(double X, double Z)> ring, double faceB, WallExcav.CutSec c,
+                         double along0, System.Func<double, double, Point2d> map, Layers L, string kind, string view)
+    {
+        int n = 0;
+        try
+        {
+            var q = ring.Select(p => (H: p.X - faceB * p.Z, p.Z)).ToList();
+            double h0 = q.Min(p => p.H), h1 = q.Max(p => p.H);
+            if (!(h1 - h0 > GridStep * 1.2)) return 0;   // 좁으면 테두리만
+            int k = (int)System.Math.Floor((h1 - h0) / GridStep);
+            double first = h0 + 0.5 * ((h1 - h0) - k * GridStep);   // 남는 폭을 양끝에 반씩
+            Point2d D(double h, double z) => map(along0 + c.Sign * h * c.Stretch, c.Toe + z);
+            for (int j = first <= h0 + 1e-6 ? 1 : 0; j <= k; j++)
+            {
+                double h = first + j * GridStep;
+                if (h <= h0 + 1e-6 || h >= h1 - 1e-6) continue;
+                var zs = new List<double>();
+                for (int i = 0; i < q.Count; i++)
+                {
+                    var a = q[i]; var b = q[(i + 1) % q.Count];
+                    bool cross = (a.H <= h && h < b.H) || (b.H <= h && h < a.H);   // 반열린 구간 — 꼭짓점을 두 번 세지 않음
+                    if (!cross) continue;
+                    zs.Add(a.Z + (b.Z - a.Z) * (h - a.H) / (b.H - a.H));
+                }
+                zs.Sort();
+                for (int m = 0; m + 1 < zs.Count; m += 2)
+                {
+                    if (zs[m + 1] - zs[m] < 1e-6) continue;
+                    Point2d pa = D(h, zs[m]), pb = D(h, zs[m + 1]);
+                    var ln = new Autodesk.AutoCAD.DatabaseServices.Line(new Point3d(pa.X, pa.Y, 0), new Point3d(pb.X, pb.Y, 0));
+                    ln.SetDatabaseDefaults(db);
+                    ln.LayerId = L.Dash;
+                    bool ownLt = !L.DashByLayer && L.DashLt != null;
+                    if (ownLt) ln.Linetype = L.DashLt;
+                    if ((ownLt || L.DashOurs) && L.DashLts > 0) ln.LinetypeScale = L.DashLts;
+                    ln.Color = Autodesk.AutoCAD.Colors.Color.FromColorIndex(Autodesk.AutoCAD.Colors.ColorMethod.ByAci, GridAci);
+                    Add(db, tr, ms, ln, kind, view); n++;
+                }
+            }
+        }
+        catch { }   // 꾸밈 — 실패해도 단면 · 테두리는 그대로
+        _gridDrawn += n;
+        return n;
     }
 
     static void Add(Database db, Transaction tr, BlockTableRecord ms, Entity e, string kind, string view)

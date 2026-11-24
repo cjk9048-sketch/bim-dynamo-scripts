@@ -158,8 +158,9 @@ public sealed class StrataPanel : UserControl
         c1.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });     // 옵션단추
         c1.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });     // 설명
         c1.RowDefinitions.Add(new RowDefinition { Height = new GridLength(150) }); // 표
-        var head1 = MakeHead("① 지층 높이 설정",
-            "시추주상도를 어떻게 읽어 오실지 고르세요.");
+        // ★[JACK 1124 «보링공 칸이 좁아 굴려 가며 넣어야 함 → ① · ② 접었다 펴기 · 처음엔 둘 다 펼침 · ② 작업 때는 ①의 도면표시이름 표만 접힘»]
+        var head1 = FoldHead(MakeHead("① 지층 높이 설정",
+            "시추주상도를 어떻게 읽어 오실지 고르세요."), out var chev1);
         c1.Children.Add(head1);
         // ★[JACK 1121 «지층 높이 설정 칸에서는 정확히 층별 GL값 · 층별 두께 그 항목에 마우스를 올릴 때만»]
         //   칸 머리 · 안내 글 · 층 표 · 빈 자리에는 설명 장면을 안 건다 — 아래 두 선택지(RadioButton)에만 건다(Rb 안 HookDemo).
@@ -215,6 +216,13 @@ public sealed class StrataPanel : UserControl
             IsReadOnly = true,
         });
         Grid.SetRow(_gLayer, 3); c1.Children.Add(_gLayer);
+        // ★[JACK 1124] 표만 접혔을 때 그 자리 한 줄 — 누르면 다시 펼침
+        var layerFold = new TextBlock
+        {
+            Text = "▸ 도면표시이름", FontSize = 11, Foreground = Sub, Cursor = System.Windows.Input.Cursors.Hand,
+            Background = Brushes.Transparent, Visibility = System.Windows.Visibility.Collapsed, Margin = new Thickness(0, 0, 0, 2), ToolTip = "눌러서 펼치기",
+        };
+        Grid.SetRow(layerFold, 3); c1.Children.Add(layerFold);
         // ★★[JACK 0901 "층 추가·선택 삭제 등 기능은 없애자 — 버튼이 많으면 헷갈리거든"]
         //   층 목록은 <b>모드가 정한다</b>(SeedFor). 수량 분류가 다섯뿐이라
         //   더 넣을 것도 뺄 것도 없다 — 안 쓰는 층은 <b>비워 두면</b> 수량에서 저절로 빠진다.
@@ -247,7 +255,7 @@ public sealed class StrataPanel : UserControl
         c2.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });                      // 단추 줄
         c2.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) }); // 표
         // ★[JACK 0901 문구 확정] 짧게 — 무엇을 치는지는 <b>위 모드 안내</b>가 이미 말한다.
-        var head2 = MakeHead("② 보링공", "지층 데이터 입력. (지반고 자동 로딩)");
+        var head2 = FoldHead(MakeHead("② 보링공", "지층 데이터 입력. (지반고 자동 로딩)"), out var chev2);
         c2.Children.Add(head2);
         // ★★[JACK 1119 «2번 보링공에서 입력받은 값에 따라 실시간으로»] 표 = 미리보기 뷰 — 마우스 · 칸 선택 · 글자 바뀜마다 바로(값은 표에서만 읽음)
         HookDemo(head2, () => "stLive");
@@ -368,7 +376,51 @@ public sealed class StrataPanel : UserControl
         bbtn.Children.Add(_sizeText);
 
         Grid.SetRow(bbtn, 1); c2.Children.Add(bbtn);
-        root.Children.Add(MakeCard(c2, 3));
+        var card2 = MakeCard(c2, 3);
+        root.Children.Add(card2);
+
+        // ── ★[JACK 1124] 접었다 펴기 ── ① = 옵션 · 안내 · 표 / ② = 단추 줄 · 표 · 처음엔 둘 다 펼침
+        //   ② 안을 누르거나 ② 칸에 글을 넣기 시작하면 ①의 도면표시이름 표만 접는다(② 표가 그만큼 길어짐) · ① 머리를 누르면 ① 전부 펼침
+        var c1Body = new FrameworkElement[] { modeBox, _modeHint };
+        var rowLayer = c1.RowDefinitions[3];
+        var rowBore = root.RowDefinitions[3];
+        bool open1 = true, table1 = true;
+        void Show1()
+        {
+            foreach (var fe in c1Body) fe.Visibility = open1 ? System.Windows.Visibility.Visible : System.Windows.Visibility.Collapsed;
+            bool tbl = open1 && table1;
+            _gLayer.Visibility = tbl ? System.Windows.Visibility.Visible : System.Windows.Visibility.Collapsed;
+            layerFold.Visibility = open1 && !table1 ? System.Windows.Visibility.Visible : System.Windows.Visibility.Collapsed;
+            rowLayer.Height = tbl ? new GridLength(150) : GridLength.Auto;
+            chev1.Text = open1 ? "▾" : "▸";
+            head1.Margin = new Thickness(0, 0, 0, open1 ? 6 : 0);
+        }
+        void Show2()
+        {
+            bbtn.Visibility = _boreOpen ? System.Windows.Visibility.Visible : System.Windows.Visibility.Collapsed;
+            _gBore.Visibility = _boreOpen ? System.Windows.Visibility.Visible : System.Windows.Visibility.Collapsed;
+            rowBore.Height = _boreOpen ? new GridLength(1, GridUnitType.Star) : GridLength.Auto;
+            rowBore.MinHeight = _boreOpen ? BoreCardMin : 0;
+            chev2.Text = _boreOpen ? "▾" : "▸";
+            head2.Margin = new Thickness(0, 0, 0, _boreOpen ? 6 : 0);
+        }
+        head1.MouseLeftButtonUp += (_, _) => { open1 = !open1 || !table1; table1 = true; Show1(); };   // 표만 접힌 때 누르면 다 펼침
+        layerFold.MouseLeftButtonUp += (_, e) => { table1 = true; Show1(); e.Handled = true; };
+        head2.MouseLeftButtonUp += (_, _) => { _boreOpen = !_boreOpen; Show2(); _fitMin?.Invoke(); };
+        // 접기는 누름이 <b>끝난 뒤</b>(놓을 때 · 이미 처리된 것도) 한 박자 늦게 — 누르는 동안 ② 가 위로 올라가면 단추 누름 · 줄 고름이 엉뚱한 데로 감
+        void Working()
+        {
+            if (!_boreOpen || !open1 || !table1) return;
+            Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Background, new Action(() =>
+            {
+                if (!_boreOpen || !open1 || !table1) return;
+                table1 = false; Show1();
+            }));
+        }
+        bbtn.AddHandler(UIElement.MouseLeftButtonUpEvent, new System.Windows.Input.MouseButtonEventHandler((_, _) => Working()), true);
+        _gBore.AddHandler(UIElement.MouseLeftButtonUpEvent, new System.Windows.Input.MouseButtonEventHandler((_, _) => Working()), true);
+        _gBore.AddHandler(UIElement.PreviewTextInputEvent, new System.Windows.Input.TextCompositionEventHandler((_, _) => Working()), true);
+        Show1(); Show2();
 
         // ── 알림 줄 — 옅은 바탕에 담아 <b>말이 눈에 띄되 시끄럽지 않게</b>.
         _status.TextWrapping = TextWrapping.Wrap;
@@ -402,11 +454,14 @@ public sealed class StrataPanel : UserControl
         var fixedRows = new FrameworkElement[] { brandBar, demoBox, card1, sbox, ok };
         void FitMin()
         {
-            double h = pad.Padding.Top + pad.Padding.Bottom + BoreCardMin;
+            // ★[JACK 1124] ② 를 접으면 ② 칸은 제목 한 줄 — 그 키로(접힌 칸에 BoreCardMin을 두면 빈 자리가 남음)
+            double h = pad.Padding.Top + pad.Padding.Bottom + (_boreOpen ? BoreCardMin : card2.ActualHeight + card2.Margin.Top + card2.Margin.Bottom);
             foreach (var fe in fixedRows) h += fe.ActualHeight + fe.Margin.Top + fe.Margin.Bottom;
             pad.MinHeight = h;
         }
         foreach (var fe in fixedRows) fe.SizeChanged += (_, _) => FitMin();
+        card2.SizeChanged += (_, _) => FitMin();
+        _fitMin = FitMin;
 
         Background = Wall;
         Content = sv;
@@ -414,6 +469,22 @@ public sealed class StrataPanel : UserControl
 
     /// <summary>② 보링공 카드가 줄어들 수 있는 가장 낮은 키 — 제목 · 단추 줄 · 표 머리 + 두 줄 + 카드 여백.</summary>
     private const double BoreCardMin = 190;
+
+    /// <summary>★[JACK 1124] ② 보링공 펼침(처음 = 펼침).</summary>
+    private bool _boreOpen = true;
+    private Action? _fitMin;
+
+    /// <summary>★[JACK 1124 «① · ② 접었다 펴기»] 구역 제목 + 오른쪽 ▾/▸ — 제목 줄 어디를 눌러도 접기 · 펴기.</summary>
+    private static DockPanel FoldHead(StackPanel head, out TextBlock chev)
+    {
+        head.Margin = new Thickness(0);
+        chev = new TextBlock { Text = "▾", FontSize = 14, Foreground = Sub, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(6, 0, 2, 0) };
+        var d = new DockPanel { LastChildFill = true, Background = Brushes.Transparent, Cursor = System.Windows.Input.Cursors.Hand, ToolTip = "눌러서 접기 · 펴기" };
+        DockPanel.SetDock(chev, Dock.Right);
+        d.Children.Add(chev);
+        d.Children.Add(head);
+        return d;
+    }
 
     /// <summary>★[JACK 1119] 설명 칸 잇기 — 마우스 올림 = 그 장면 · 나감 = 끝 그림에서 멈춤.</summary>
     private void HookDemo(FrameworkElement fe, Func<string> key)

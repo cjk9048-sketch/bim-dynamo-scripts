@@ -117,6 +117,14 @@ internal sealed partial class FixDemoView : Border
         // ★[JACK 1117 «층따기 — 부지 · 진입도로 종횡단도 팝업 · 같은 장면 · 바탕만 다르게»] FixDemoBench.cs · 바탕 = BenchRoad
         ["benchChk"] = (6.6, "층따기 — 성토 아래 급한 원지반 → 계단 파기 → 잘라 낸 ㎡ → 수량표"),
         ["benchVal"] = (1.0, "층따기 — 칸 값대로 계단 · 높이 · 폭 · 기준 경사 · 배수 경사"),   // ★미리보기(StaticKeys) — BenchV
+        // ★[JACK 1124 «종단도 설정 · 횡단도 설정 — 축척 · 간격 · 원지반 굴곡 설명 누락»] 설정 칸 미리보기(StaticKeys · FixDemoSec.cs) — 값 = Sx…
+        ["secScale"] = (1.0, "종단도 축척 — H 가로(거리) · V 세로(높이) · H ÷ V = 세로 과장"),
+        ["secXi"] = (1.0, "측점 간격 — No.0 · No.1 … 사이 거리 → 측점마다 횡단도 · 꺾인 곳은 +측점"),
+        ["secGb"] = (1.0, "원지반 굴곡 — 원지반선이 실제 땅에서 벗어나도 되는 높이 → 작을수록 점 많음"),
+        ["secXs"] = (1.0, "횡단도 축척 — 자동 = 칸에 가장 크게 · 고정 = 그 크기(넘치면 빨강)"),
+        ["secLay"] = (1.0, "횡단도 배치 — A1 한 장에 몇 개 → 촘촘할수록 칸 · 그림 작아짐"),
+        ["secSl"] = (1.0, "검토선 축척 — 평면 검토선 측점 글씨 = 종이 2.5 mm × 축척"),
+        ["secWidth"] = (1.0, "검토선 폭 — 자동 = 사면 끝 + 여유 5 m · 수동 = 좌 · 우 길이"),
     };
 
     /// <summary>현재 장면 키.</summary>
@@ -126,7 +134,8 @@ internal sealed partial class FixDemoView : Border
     public bool Playing => _tm.IsEnabled || _held;   // ★[v117.18.1] 끝 그림에서 멈춘 터파기 장면도 «도는 중»(마우스가 칸 안에서 움직일 때 처음부터 다시 돌지 않게)
     bool _held;
     /// <summary>★[JACK 1116 «수치를 직접 기입하는 곳은 애니메이션이 아니라 미리보기 뷰»] 미리보기 장면 키 — Play(key)가 타이머 없이 완성 그림을 바로 그려 멈춤 · 값이 바뀌면 패널이 Redraw() 호출(장면은 지금 값을 읽어 그림). 새 수치 칸 장면은 여기에 키만 추가.</summary>
-    public static readonly HashSet<string> StaticKeys = new() { "blend", "roadAlign", "roadXsec", "roadPave", "roadSlope", "exSlopeVal", "profVal", "qtyDeep", "qtyDensity", "qtyDbh", "qtyRoot", "qtyHeight", "qtyConst", "qtyConst0", "qtyConst1", "qtyConst2", "qtyConst3", "qtyConst4", "qtyConst5", "benchVal" };
+    public static readonly HashSet<string> StaticKeys = new() { "blend", "roadAlign", "roadXsec", "roadPave", "roadSlope", "exSlopeVal", "profVal", "qtyDeep", "qtyDensity", "qtyDbh", "qtyRoot", "qtyHeight", "qtyConst", "qtyConst0", "qtyConst1", "qtyConst2", "qtyConst3", "qtyConst4", "qtyConst5", "benchVal",
+        "secScale", "secXi", "secGb", "secXs", "secLay", "secSl", "secWidth" };
     /// <summary>미리보기 장면이 떠 있으면 새 값으로 다시 그림(없으면 아무 일 없음).</summary>
     public void Redraw()
     {
@@ -385,6 +394,13 @@ internal sealed partial class FixDemoView : Border
             case "qtyConst4": QtyConst(4, t); break;
             case "qtyConst5": QtyConst(5, t); break;
             case "qtyMake": QtyMake(t); break;
+            case "secScale": SecScale(); break;
+            case "secXi": SecXi(); break;
+            case "secGb": SecGb(); break;
+            case "secXs": SecXs(); break;
+            case "secLay": SecLay(); break;
+            case "secSl": SecSl(); break;
+            case "secWidth": SecWidth(); break;
         }
     }
 

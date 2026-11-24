@@ -243,24 +243,38 @@ public sealed class RoadSmoothCommand
         if (FileForTest != null) return Source.File;
         if (SelfCheckLog.Headless) return Source.Cancel;
         var pick = Source.Cancel;
+        // ★[JACK 1124 «도로 다듬기 팝업 단추 통일 — 갑자기 퀄리티 떨어짐»] 맨 처음 뜨는 이 창만 기본 WPF 창 · 기본 회색 단추였다
+        //   → 다른 팝업과 같은 틀(DhBrand.Dress — 청록 띠 · 머리띠 · 바닥 [취소]) + 원지반 창 가져오기 단추와 같은 큰 동작 단추(DhAction · 이름 왼쪽 · › 오른쪽)
         var w = new System.Windows.Window
         {
-            Title = "도로 다듬기 — 도로선", SizeToContent = System.Windows.SizeToContent.WidthAndHeight, ResizeMode = System.Windows.ResizeMode.NoResize,
-            WindowStartupLocation = System.Windows.WindowStartupLocation.CenterScreen, Background = DhBrand.Wall, ShowInTaskbar = false,
+            Title = "도로 다듬기", Width = 400, SizeToContent = System.Windows.SizeToContent.Height, ResizeMode = System.Windows.ResizeMode.NoResize,
+            WindowStartupLocation = System.Windows.WindowStartupLocation.CenterScreen, ShowInTaskbar = false,
         };
-        var st = new System.Windows.Controls.StackPanel { Margin = new System.Windows.Thickness(16), Width = 340 };
-        st.Children.Add(new System.Windows.Controls.TextBlock { Text = "도로선을 어디서 가져올까요?", FontSize = 13, FontWeight = System.Windows.FontWeights.SemiBold, Foreground = DhBrand.Brand, Margin = new System.Windows.Thickness(0, 0, 0, 10) });
+        var st = new System.Windows.Controls.StackPanel();
+        st.Children.Add(new System.Windows.Controls.TextBlock { Text = "도로선을 어디서 가져올까요?", FontSize = 13, FontWeight = System.Windows.FontWeights.SemiBold, Foreground = DhBrand.Ink, Margin = new System.Windows.Thickness(0, 0, 0, 10) });
+        var sk = DhBrand.Skin;
         System.Windows.Controls.Button B(string text, Source s)
         {
-            var b = new System.Windows.Controls.Button { Content = text, Height = 36, FontSize = 13, Margin = new System.Windows.Thickness(0, 0, 0, 8) };
+            var arrow = new System.Windows.Controls.TextBlock { Text = "›", FontSize = 20, Opacity = 0.45, VerticalAlignment = System.Windows.VerticalAlignment.Center, Margin = new System.Windows.Thickness(8, -2, 0, 0) };
+            var body = new System.Windows.Controls.DockPanel { LastChildFill = true };
+            System.Windows.Controls.DockPanel.SetDock(arrow, System.Windows.Controls.Dock.Right);
+            body.Children.Add(arrow);
+            body.Children.Add(new System.Windows.Controls.TextBlock { Text = text, FontSize = 13, FontWeight = System.Windows.FontWeights.SemiBold, VerticalAlignment = System.Windows.VerticalAlignment.Center });
+            var b = new System.Windows.Controls.Button
+            {
+                Content = body, MinHeight = 38, Margin = new System.Windows.Thickness(0, 0, 0, 8), Padding = new System.Windows.Thickness(14, 6, 10, 6),
+                HorizontalContentAlignment = System.Windows.HorizontalAlignment.Left, VerticalContentAlignment = System.Windows.VerticalAlignment.Center,
+            };
+            if (sk != null) try { b.Style = (System.Windows.Style)sk["DhAction"]; b.Padding = new System.Windows.Thickness(14, 6, 10, 6); } catch { }
+            // 모양표가 알맹이를 가운데 두므로 알맹이 폭을 단추 폭에 맞춤(› 가 오른쪽 끝에 붙게) — 원지반 창과 같음
+            b.SizeChanged += (_, __) => { try { body.Width = System.Math.Max(0, b.ActualWidth - b.Padding.Left - b.Padding.Right - 4); } catch { } };
             b.Click += (_, __) => { pick = s; w.DialogResult = true; };
             return b;
         }
         st.Children.Add(B("VWorld에서 받기", Source.VWorld));
         st.Children.Add(B("파일 고르기 (수치지도 DXF · 측량도)", Source.File));
-        var cancel = new System.Windows.Controls.Button { Content = "취소", Height = 28, Width = 80, HorizontalAlignment = System.Windows.HorizontalAlignment.Right, IsCancel = true };
-        st.Children.Add(cancel);
-        w.Content = st;
+        var (_, cancel) = DhBrand.FooterButtons("");   // [취소] = IsCancel(Esc · 누르면 닫힘 → Cancel) — 원지반 삭제 창과 같음
+        DhBrand.Dress(w, "도로 다듬기", "도로선", st, cancel);
         try { if (AcadApp.ShowModalWindow(w) != true) return Source.Cancel; } catch { return Source.Cancel; }
         return pick;
     }

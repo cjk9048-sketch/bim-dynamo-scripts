@@ -2785,7 +2785,9 @@ public sealed class ProfileCommand
         bool hasStruct = StructImport.Any(db);
         var fo = new PromptPointOptions(hasStruct ? "\n[종단도] 노선 시작점 클릭 (Esc=취소)" : "\n[종단도] 노선 시작점 클릭 (Esc=취소): ");
         if (hasStruct) fo.Keywords.Add("T", "T", "구조물 축(T)");
-        var first = ed.GetPoint(fo);
+        // ★[JACK 1124 «종단도 생성 누르면 마우스에 ‘종단도 시점 지정’ 말상자 — 종단도 배치 때처럼»] 커서 이름표(화면 없는 Civil = 그냥 GetPoint)
+        //   ★[JACK 1124 «색만 바꿔 — 종단도 배치가 이어서 나올 때 알아보게»] 노선 찍기 = 파랑 카드 · 다음 단계(종단도 작성 위치) = 기본 청록
+        var first = CursorLabel.GetPoint(ed, fo, "종단도 시점 지정", hasStruct ? "T 구조물 축 · Esc 취소" : "Esc 취소", tone: CursorLabel.Tone.Blue);
         if (first.Status == PromptStatus.Keyword)
         {
             var axPts = ProfileStructAxis.Pick(db, ed, log);
@@ -2830,11 +2832,17 @@ public sealed class ProfileCommand
                 $"\n[종단도] 다음 점 클릭 [{pts.Count}점] (Enter=끝, U=마지막 점 취소): ")
             {
                 AllowNone = true,                       // Enter로 끝내기
-                UseBasePoint = true,
-                BasePoint = pts[pts.Count - 1],         // 고무줄선 — 지금 놓을 구간이 보인다
             };
             opt.Keywords.Add("U", "U", "취소(U)");
-            var pr = ed.GetPoint(opt);
+            // ★[JACK 1124] 다음 점도 커서 이름표(진입도로 경로 그리기와 같음) — 고무줄선은 지그가 그림(UseBasePoint면 이름표가 안 붙음 → 안 씀)
+            var lastW = pts[pts.Count - 1];
+            void Rubber(Autodesk.AutoCAD.GraphicsInterface.WorldDraw wd, Point3d cur, bool has)
+            {
+                if (!has) return;
+                wd.SubEntityTraits.Color = 2;
+                wd.Geometry.WorldLine(lastW, new Point3d(cur.X, cur.Y, lastW.Z));
+            }
+            var pr = CursorLabel.GetPoint(ed, opt, pts.Count < 2 ? "다음 점 클릭" : "다음 점 클릭 · Enter 끝", "U 마지막 점 취소 · Esc 취소", Rubber, tone: CursorLabel.Tone.Blue);
 
             if (pr.Status == PromptStatus.None) break;                       // Enter — 끝
             if (pr.Status == PromptStatus.Keyword)
@@ -3329,7 +3337,7 @@ public sealed class ProfileCommand
         }
         catch (System.Exception ex) { return "종단 막대 실패 — " + ex.Message; }
 
-        log?.AppendLine($"     옹벽 단면 {nSec}개(CALS CR-STRU-NEWC · 인출 CR-LEAL · CR-LEAT) · 인출 {nLab}(단 묶음마다 하나) · 기울기 글 {nSlope} · 막대 대신 {nRepl}" + (nSecSkip > 0 ? $" · 노선과 거의 나란해 뺀 것 {nSecSkip}" : "") + (secWhy.Length > 0 ? $" · {secWhy}" : ""));
+        log?.AppendLine($"     옹벽 단면 {nSec}개(CALS CR-STRU-NEWC · 인출 CR-LEAL · CR-LEAT) · 인출 {nLab}(단 묶음마다 하나) · 기울기 글 {nSlope} · 막대 대신 {nRepl} · 보강토 점선 {WallSectionDraw.TakeGrid()}줄" + (nSecSkip > 0 ? $" · 노선과 거의 나란해 뺀 것 {nSecSkip}" : "") + (secWhy.Length > 0 ? $" · {secWhy}" : ""));
         return (nSec > 0 ? $"옹벽 단면 {nSec}개(막대 대신 {nRepl})" + (nSecSkip > 0 ? $" · 노선과 거의 나란해 뺀 단면 {nSecSkip}" : "") + " · "
                          : secWhy == WallSectionDraw.WhyNone ? ""   // ★[v117.18.17] 터파기 꺼짐이어도 단면을 넣는다 — 줄 0 = 옹벽 없음(말 안 함)
                          : WallSectionDraw.IsOff(secWhy) ? "⚠옹벽 단면을 못 세움(로그 «옹벽 단면» 줄) · "
