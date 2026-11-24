@@ -357,6 +357,8 @@ public static class WallSection
         public double FaceBatter;
         /// <summary>★[v106 · 계획_v106.md 2.2] <b>보이는 부재 앞면</b> x(z) = FaceX0 + FaceN·z(z = 0 ~ 꼭대기) — 3D 무늬를 붙이는 면(벽체 · 블록 · 패널 · 돌 앞면). 수량 · 터파기는 안 쓴다.</summary>
         public double FaceX0, FaceN;
+        /// <summary>★[JACK 1124 «그리드는 보강토 블록 사이마다 가로로 · 블록 패턴»] 보강토만 — 보강재 수직간격 Sv · 보강재 길이 L(앞면에서) · 블록 깊이(그림 전용 · 수량 · 터파기는 안 씀). 다른 형식은 NaN.</summary>
+        public double GridSv = double.NaN, GridL = double.NaN, BlockD = double.NaN;
         /// <summary>벽 꼭대기 높이(앞 땅 기준) = 보이는 높이.</summary>
         public double ZTop => HTotal - Df;
         /// <summary>★[v106.0.1 · 검토 낮음 3] 얕은 복사 + 조각 목록만 새로(칸이 늘어도 빠지지 않게).</summary>
@@ -449,6 +451,7 @@ public static class WallSection
                 if (L > dB + wdd + 1e-9) Ring("보강토체", false, (x0 + dB + wdd, zb), (x0 + L, zb), (xT + L, zTop), (xT + dB + wdd, zTop));
                 s.XFront = x0 - pe; s.XBack = x0 + Math.Max(L, dB + pe); s.ZBottom = zb - pt; s.FaceBatter = nb;
                 s.FaceX0 = 0; s.FaceN = nb;
+                s.GridSv = V("Sv"); s.GridL = L; s.BlockD = dB;   // ★[JACK 1124] 종단 · 횡단 그림 — 보강재 가로 점선 · 블록 무늬
                 break;
             }
             case Kind.패널식:

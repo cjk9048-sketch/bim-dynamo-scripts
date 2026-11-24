@@ -153,7 +153,12 @@ public sealed class CropGroundCommand
 
                 // ── ③ 설계 자리 검사 → 대상 면 모두 네 띠 · 재작성 · 확인(어긋나면 통째로 물림) ─────
                 var box = new Core.GroundCrop.Box(x0, y0, x1, y1);
-                var res = GroundCropBuilder.Run(doc, box, gid);
+                // ★[JACK 1124 «원지형 자르기 했더니 이벤트 오류가 많이 뜸»] 재작성마다 원지반 원본 등고선(브레이크라인) 엇갈림 경고가 이벤트 뷰어 팝업으로 뜸 —
+                //   다른 원지반 · 정지 명령처럼 자동 팝업만 끔(기록은 남음 · EVENTVIEWER로 열람)
+                GroundCropBuilder.Result res;
+                var evPrev = EventViewerMute.Begin();
+                try { res = GroundCropBuilder.Run(doc, box, gid); }
+                finally { EventViewerMute.End(evPrev); }
                 if (res.Refused && res.Cover != null)
                 {
                     // ★[Q1 · JACK 1103 «설계된 자리를 자르면 거절»] 아무것도 안 바꿈 · 빨간 표시를 남긴 채 다시 묻기(Esc = 끝)
@@ -230,6 +235,7 @@ public sealed class CropGroundCommand
         if (doc == null) return;
         Editor ed = doc.Editor;
         Database db = doc.Database;
+        var evPrev = EventViewerMute.Begin();   // ★[JACK 1124] 재작성 경고 팝업만 끔(기록은 남음)
         try
         {
             ObjectId gid = FindGround(db, out string gname, out _);
@@ -284,6 +290,7 @@ public sealed class CropGroundCommand
         {
             ed.WriteMessage("\n[지표면 재작성 오류] " + ex.Message);
         }
+        finally { EventViewerMute.End(evPrev); }
     }
 
     /// <summary>★[v111.9 · V86 «(옛)» · V87] <b>자른 면을 붙여넣은 스냅샷 없는 면 · 체적면을 다시 짓는다</b> — DHCROP · DHGNDREBUILD <b>뒤</b> 명령으로 걸린다.
@@ -300,7 +307,9 @@ public sealed class CropGroundCommand
             ObjectId gid = FindGround(db, out _, out _);
             if (!gid.IsNull) seeds.Add(gid);
             string deps; List<ObjectId> built;
-            using (doc.LockDocument()) deps = GroundCropBuilder.RebuildDependents(db, seeds, out built);
+            var evPrev = EventViewerMute.Begin();   // ★[JACK 1124] 딸린 면 재작성 경고 팝업만 끔(기록은 남음)
+            try { using (doc.LockDocument()) deps = GroundCropBuilder.RebuildDependents(db, seeds, out built); }
+            finally { EventViewerMute.End(evPrev); }
             // ★[v111.9 · 설치 전 검토 M1] 끝 확인 — 자른 면 · 다시 지은 면이 아직 구식이면 ⚠(사슬이 끊겼거나 재작성 실패 — 말없이 남기지 않음)
             var left = GroundCropBuilder.StaleOf(db, seeds.Concat(built));
             string warn = left.Count > 0 ? " · ⚠아직 구식 " + string.Join(" · ", left) + " — 도구공간에서 [재작성]" : "";

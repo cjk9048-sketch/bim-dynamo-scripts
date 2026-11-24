@@ -3337,7 +3337,7 @@ public sealed class ProfileCommand
         }
         catch (System.Exception ex) { return "종단 막대 실패 — " + ex.Message; }
 
-        log?.AppendLine($"     옹벽 단면 {nSec}개(CALS CR-STRU-NEWC · 인출 CR-LEAL · CR-LEAT) · 인출 {nLab}(단 묶음마다 하나) · 기울기 글 {nSlope} · 막대 대신 {nRepl} · 보강토 점선 {WallSectionDraw.TakeGrid()}줄" + (nSecSkip > 0 ? $" · 노선과 거의 나란해 뺀 것 {nSecSkip}" : "") + (secWhy.Length > 0 ? $" · {secWhy}" : ""));
+        log?.AppendLine($"     옹벽 단면 {nSec}개(CALS CR-STRU-NEWC · 인출 CR-LEAL · CR-LEAT) · 인출 {nLab}(단 묶음마다 하나) · 기울기 글 {nSlope} · 막대 대신 {nRepl} · 보강토 점선 {WallSectionDraw.TakeGrid()}줄 · 블록 무늬 {WallSectionDraw.TakeBlockHatch()}" + (nSecSkip > 0 ? $" · 노선과 거의 나란해 뺀 것 {nSecSkip}" : "") + (secWhy.Length > 0 ? $" · {secWhy}" : ""));
         return (nSec > 0 ? $"옹벽 단면 {nSec}개(막대 대신 {nRepl})" + (nSecSkip > 0 ? $" · 노선과 거의 나란해 뺀 단면 {nSecSkip}" : "") + " · "
                          : secWhy == WallSectionDraw.WhyNone ? ""   // ★[v117.18.17] 터파기 꺼짐이어도 단면을 넣는다 — 줄 0 = 옹벽 없음(말 안 함)
                          : WallSectionDraw.IsOff(secWhy) ? "⚠옹벽 단면을 못 세움(로그 «옹벽 단면» 줄) · "

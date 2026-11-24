@@ -381,7 +381,9 @@ internal static class WallSectionDraw
             if ((ownLt || (dash && L.DashOurs)) && L.DashLts > 0) pl.LinetypeScale = L.DashLts;
             if (grid) pl.Color = Autodesk.AutoCAD.Colors.Color.FromColorIndex(Autodesk.AutoCAD.Colors.ColorMethod.ByAci, GridAci);
             Add(db, tr, ms, pl, kind, view); n++;
-            if (grid) GridLines(db, tr, ms, part.Ring, faceB, c, along0, map, L, kind, view);   // 세로 점선(개체 수 n에는 안 넣음 — 로그 · 시험 수 그대로)
+            // ★[JACK 1124] 보강재 가로 점선(Sv마다) · 블록 무늬 — 개체 수 n에는 안 넣음(로그 · 시험 수 그대로)
+            if (grid) GridLines(db, tr, ms, faceB, c, along0, map, L, kind, view);
+            if (part.Material == "블록") BlockHatch(db, tr, ms, pl, faceB, c, along0, map, L, kind, view);
         }
         if (!label) return n;
         // 인출 — 구조물 맨 위(같으면 가장 앞) 꼭짓점
@@ -494,58 +496,80 @@ internal static class WallSectionDraw
         return made;
     }
 
-    /// <summary>★[JACK 1124] 보강토체(보강재 구역) 회색 — ACI 8 · 세로 점선 간격(단면 m).</summary>
+    /// <summary>★[JACK 1124] 보강토 그림 회색 — ACI 8(보강재 가로 점선 · 보강토체 테두리 · 블록 무늬).</summary>
     internal const short GridAci = 8;
-    internal const double GridStep = 0.5;
-    static int _gridDrawn;
-    /// <summary>지난번 읽은 뒤 그린 보강토 세로 점선 수(읽으면 0으로) — 진단 로그 한 줄용.</summary>
+    /// <summary>블록 한 켜 높이(m) — 블록 무늬 줄눈 간격(그림 전용 · 표에 칸 없음 · 보통 블록 높이 0.2 m).</summary>
+    internal const double BlockCourse = 0.2;
+    static int _gridDrawn, _blockHatch;
+    /// <summary>지난번 읽은 뒤 그린 보강재 가로 점선 수(읽으면 0으로) — 진단 로그 한 줄용.</summary>
     internal static int TakeGrid() { int k = _gridDrawn; _gridDrawn = 0; return k; }
+    /// <summary>지난번 읽은 뒤 그린 블록 무늬(해치) 수(읽으면 0으로).</summary>
+    internal static int TakeBlockHatch() { int k = _blockHatch; _blockHatch = 0; return k; }
 
-    /// <summary>★[JACK 1124] 보강토체 안 세로 점선 — 도면에서 세로(블록 기울기 · 앞면 맞춤 전단을 뺀 가로 자리 h = X − faceB·Z가 같은 선)로 <see cref="GridStep"/>마다 ·
-    /// 구역 다각형과 만나는 토막만(위아래 테두리 사이). 테두리와 같은 레이어 · 회색 · 파선. 그린 수.</summary>
-    static int GridLines(Database db, Transaction tr, BlockTableRecord ms, IReadOnlyList<(double X, double Z)> ring, double faceB, WallExcav.CutSec c,
+    /// <summary>★[JACK 1124 «그리드는 보강토 블록 사이마다 가로로»] 보강재(지오그리드) — 블록 밑에서 <see cref="WallSection.Shape.GridSv"/>마다 가로 점선 ·
+    /// 블록 앞면 조금 안(블록 사이 줄눈에 물림)에서 보강재 끝(앞면에서 L)까지 · 블록 기울기 따라 앞뒤 끝이 같이 감. 회색 · 파선 · 그린 수.</summary>
+    static int GridLines(Database db, Transaction tr, BlockTableRecord ms, double faceB, WallExcav.CutSec c,
                          double along0, System.Func<double, double, Point2d> map, Layers L, string kind, string view)
     {
         int n = 0;
         try
         {
-            var q = ring.Select(p => (H: p.X - faceB * p.Z, p.Z)).ToList();
-            double h0 = q.Min(p => p.H), h1 = q.Max(p => p.H);
-            if (!(h1 - h0 > GridStep * 1.2)) return 0;   // 좁으면 테두리만
-            int k = (int)System.Math.Floor((h1 - h0) / GridStep);
-            double first = h0 + 0.5 * ((h1 - h0) - k * GridStep);   // 남는 폭을 양끝에 반씩
-            Point2d D(double h, double z) => map(along0 + c.Sign * h * c.Stretch, c.Toe + z);
-            for (int j = first <= h0 + 1e-6 ? 1 : 0; j <= k; j++)
+            var sh = c.Shape;
+            double sv = sh.GridSv, len = sh.GridL, nb = sh.FaceN;
+            var blk = sh.Parts.FirstOrDefault(p => p.Material == "블록");
+            if (blk == null || !(sv > 0.05) || !(len > 0)) return 0;
+            double zb = blk.Ring.Min(q => q.Z), zt = blk.Ring.Max(q => q.Z);
+            Point2d P(double X, double Z) => map(along0 + c.Sign * (X - faceB * Z) * c.Stretch, c.Toe + Z);
+            double embed = System.Math.Min(0.05, 0.25 * (double.IsNaN(sh.BlockD) ? 0.2 : sh.BlockD));   // 블록 앞면에서 조금 안(줄눈에 물림)
+            for (int k = 1; k < 400; k++)
             {
-                double h = first + j * GridStep;
-                if (h <= h0 + 1e-6 || h >= h1 - 1e-6) continue;
-                var zs = new List<double>();
-                for (int i = 0; i < q.Count; i++)
-                {
-                    var a = q[i]; var b = q[(i + 1) % q.Count];
-                    bool cross = (a.H <= h && h < b.H) || (b.H <= h && h < a.H);   // 반열린 구간 — 꼭짓점을 두 번 세지 않음
-                    if (!cross) continue;
-                    zs.Add(a.Z + (b.Z - a.Z) * (h - a.H) / (b.H - a.H));
-                }
-                zs.Sort();
-                for (int m = 0; m + 1 < zs.Count; m += 2)
-                {
-                    if (zs[m + 1] - zs[m] < 1e-6) continue;
-                    Point2d pa = D(h, zs[m]), pb = D(h, zs[m + 1]);
-                    var ln = new Autodesk.AutoCAD.DatabaseServices.Line(new Point3d(pa.X, pa.Y, 0), new Point3d(pb.X, pb.Y, 0));
-                    ln.SetDatabaseDefaults(db);
-                    ln.LayerId = L.Dash;
-                    bool ownLt = !L.DashByLayer && L.DashLt != null;
-                    if (ownLt) ln.Linetype = L.DashLt;
-                    if ((ownLt || L.DashOurs) && L.DashLts > 0) ln.LinetypeScale = L.DashLts;
-                    ln.Color = Autodesk.AutoCAD.Colors.Color.FromColorIndex(Autodesk.AutoCAD.Colors.ColorMethod.ByAci, GridAci);
-                    Add(db, tr, ms, ln, kind, view); n++;
-                }
+                double z = zb + k * sv;
+                if (z > zt - 0.05) break;   // 꼭대기 블록 위로는 안 냄
+                Point2d pa = P(nb * z + embed, z), pb = P(nb * z + len, z);
+                var ln = new Autodesk.AutoCAD.DatabaseServices.Line(new Point3d(pa.X, pa.Y, 0), new Point3d(pb.X, pb.Y, 0));
+                ln.SetDatabaseDefaults(db);
+                ln.LayerId = L.Dash;
+                bool ownLt = !L.DashByLayer && L.DashLt != null;
+                if (ownLt) ln.Linetype = L.DashLt;
+                if ((ownLt || L.DashOurs) && L.DashLts > 0) ln.LinetypeScale = L.DashLts;
+                ln.Color = Autodesk.AutoCAD.Colors.Color.FromColorIndex(Autodesk.AutoCAD.Colors.ColorMethod.ByAci, GridAci);
+                Add(db, tr, ms, ln, kind, view); n++;
             }
         }
         catch { }   // 꾸밈 — 실패해도 단면 · 테두리는 그대로
         _gridDrawn += n;
         return n;
+    }
+
+    /// <summary>★[JACK 1124 «보강토는 단면표처럼 블록 패턴»] 블록 조각 안 벽돌 줄쌓기 해치(BRICK) — 켜 높이 <see cref="BlockCourse"/> · 무늬 기준점 = 블록 밑 앞 모서리
+    /// (켜 줄눈이 보강재 높이와 맞게) · 회색 · 연결 안 함(테두리만 지워도 같이 지워지게 같은 표식). 못 하면 그냥 넘어감.</summary>
+    static void BlockHatch(Database db, Transaction tr, BlockTableRecord ms, Polyline outline, double faceB, WallExcav.CutSec c,
+                           double along0, System.Func<double, double, Point2d> map, Layers L, string kind, string view)
+    {
+        try
+        {
+            var blk = c.Shape.Parts.FirstOrDefault(p => p.Material == "블록");
+            if (blk == null) return;
+            double zb = blk.Ring.Min(q => q.Z), xb = blk.Ring.Where(q => q.Z <= zb + 1e-9).Min(q => q.X);
+            Point2d P(double X, double Z) => map(along0 + c.Sign * (X - faceB * Z) * c.Stretch, c.Toe + Z);
+            double vy = System.Math.Abs(P(xb, zb + 1).Y - P(xb, zb).Y);   // 도면 세로 1 m = 몇 단위(종단 세로 과장 포함)
+            if (!(vy > 0)) return;
+            double course = db.Measurement == MeasurementValue.Metric ? 6.35 : 0.25;   // BRICK 한 켜(acadiso · acad)
+            var h = new Hatch();
+            h.SetDatabaseDefaults(db);
+            h.LayerId = L.Line;
+            h.Color = Autodesk.AutoCAD.Colors.Color.FromColorIndex(Autodesk.AutoCAD.Colors.ColorMethod.ByAci, GridAci);
+            Add(db, tr, ms, h, kind, view);
+            h.PatternScale = BlockCourse * vy / course;
+            h.SetHatchPattern(HatchPatternType.PreDefined, "BRICK");
+            var o = P(xb, zb);
+            h.Origin = new Point2d(o.X, o.Y);
+            h.Associative = false;
+            h.AppendLoop(HatchLoopTypes.Outermost, new ObjectIdCollection { outline.ObjectId });
+            h.EvaluateHatch(true);
+            _blockHatch++;
+        }
+        catch { }   // 꾸밈 — 실패해도 블록 테두리는 그대로
     }
 
     static void Add(Database db, Transaction tr, BlockTableRecord ms, Entity e, string kind, string view)
