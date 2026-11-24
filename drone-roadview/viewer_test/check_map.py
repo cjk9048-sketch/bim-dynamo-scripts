@@ -205,6 +205,36 @@ def test_dots(ed, out_dir, shots_dir, shots):
     errs(ed, 'd')
 
 
+# ---------------------------------------------------------------- e  관로 고치기 중에도 사진 점 → 그 사진 (1124 JACK)
+def test_edit_dot(ed, out_dir, shots_dir, shots):
+    print('== e  관로 고치기 중 사진 점 누름')
+    load(ed, url(out_dir))
+    ed.js('localStorage.clear()')
+    load(ed, url(out_dir))
+    ed.js("document.getElementById('tgEdit').click()")
+    ed.frames(3)
+    on = ed.js("document.getElementById('edChip').classList.contains('show')")
+    report('관로 고치기 켜짐', on)
+    zoom_to(ed, 20)
+    mf = MapView(ed)
+    cur = cur_shot(ed)[0]
+    vis = [s for s in shots if abs(s['seq'] - cur) >= 3 and mf.l + 20 < mf.scr(s)[0] < mf.l + mf.w - 20 and mf.t + 20 < mf.scr(s)[1] < mf.t + mf.h - 20]
+    if not vis:
+        report('화면 안 다른 사진 점 있음', False)
+        return
+    target = vis[len(vis) // 2]
+    ce.Inp(ed).click(*mf.scr(target))
+    ed.wait_js(cv.READY, timeout=30)
+    ed.frames(3)
+    seq = cur_shot(ed)[0]
+    still = ed.js("document.getElementById('edChip').classList.contains('show')")
+    report('고치기 중 지도 사진 점 → 그 사진으로 (고치기는 그대로)', seq == target['seq'] and still,
+           '지금 %d · 누른 %d · 고치기 %s' % (seq, target['seq'], still))
+    ed.js("document.getElementById('tgEdit').click()")
+    ed.js('localStorage.clear()')
+    errs(ed, 'e')
+
+
 # ---------------------------------------------------------------- t  사진점 지우기
 def trim_chip(ed):
     return js_json(ed, "{show: document.getElementById('tmChip').classList.contains('show'), n: Number(document.getElementById('tmChip').dataset.n || 0),"
@@ -305,7 +335,7 @@ def main():
     t = orig.decode('utf-8')
     P = json.loads(t[t.index('{'):t.rindex('}') + 1])
     shots = many_shots()
-    only = set(args.only.split(',')) if args.only else set('dt')
+    only = set(args.only.split(',')) if args.only else set('det')
     try:
         with open(pj, 'w', encoding='utf-8', newline='\n') as f:
             f.write('window.RV_PROJECT = ' + json.dumps(dict(P, shots=shots, title='사진 많은 시험'), ensure_ascii=False) + ';\n')
@@ -314,6 +344,8 @@ def main():
             ed.net(block=ci.BLOCK)
             if 'd' in only:
                 test_dots(ed, out_dir, shots_dir, shots)
+            if 'e' in only:
+                test_edit_dot(ed, out_dir, shots_dir, shots)
             if 't' in only:
                 test_trim(ed, out_dir, shots_dir, shots)
         finally:

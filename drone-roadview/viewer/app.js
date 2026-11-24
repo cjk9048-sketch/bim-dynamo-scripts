@@ -2608,7 +2608,11 @@
     pinch: (sc) => { if (vStart) { S.fov = clamp(vStart.fov / sc, FOV_MIN, FOV_MAX); dirty(); } },
     tap: (x, y) => {
       flushView();
-      if (ED.on) { edTap('v', x, y); return; } // 관로 고치기 동안은 원판 눌러 옮겨 가지 않음
+      if (ED.on) { // 관로 고치기: 손잡이 · 꼭짓점이 먼저, 그다음 사진 원판(누르면 그 사진으로 · 1124 JACK), 그다음 관 고르기
+        if (handleAt('v', x, y) < 0 && !vtxAt('v', x, y)) { const m = markAt(x, y); if (m >= 0) { openShot(m); return; } }
+        edTap('v', x, y);
+        return;
+      }
       if (AL.on) { alPhoto(x, y); return; }
       if (SH.arm) { shTap('v', x, y); return; } // 가시설 찍는 동안은 원판 눌러 옮겨 가지 않음
       const i = markAt(x, y);
@@ -3721,7 +3725,11 @@
       mapDirty();
     },
     tap: (x, y) => {
-      if (ED.on) { edTap('m', x, y); return; } // 관로 고치기 동안은 사진 점 눌러 옮겨 가지 않음
+      if (ED.on) { // 관로 고치기: 손잡이 · 꼭짓점이 먼저, 그다음 사진 점(누르면 그 사진으로 · 1124 JACK), 그다음 관 고르기
+        if (handleAt('m', x, y) < 0 && !vtxAt('m', x, y)) { const s = shotAtMap(x, y); if (s >= 0) { openShot(s); return; } }
+        edTap('m', x, y);
+        return;
+      }
       if (AL.on && AL.pend) { alMap(x, y); return; }
       if (SH.arm) { shTap('m', x, y); return; }
       if (TM.on) { tmTap(x, y); return; } // 사진점 지우기: 점 둘
@@ -4447,8 +4455,11 @@
   }
   function edHover(view, x, y) {
     const el = view === 'v' ? ovc : mc, hi = handleAt(view, x, y), v = hi < 0 && vtxAt(view, x, y);
+    const shot = hi < 0 && !v ? (view === 'v' ? markAt(x, y) : shotAtMap(x, y)) : -1; // 사진 점도 눌러 옮겨 감
     el.classList.toggle('move', hi >= 0 || !!v);
-    el.classList.toggle('point', hi < 0 && !v && lineAt(view, x, y) >= 0);
+    el.classList.toggle('point', hi < 0 && !v && (shot >= 0 || lineAt(view, x, y) >= 0));
+    if (view === 'v' && shot !== S.hover) { S.hover = shot; needView = true; kick(); }
+    if (view === 'm' && shot !== M.hov) { M.hov = shot; mapDirty(); }
     if (hi !== ED.hov) { ED.hov = hi; dirty(); }
   }
   // 두 번 누르기: 고른 관의 그 마디에 꼭짓점 넣기
@@ -4775,7 +4786,13 @@
       box.appendChild(row);
     }
   }
-  $('tgShore').addEventListener('click', () => shOpen(shBox.hidden));
+  $('tgShore').addEventListener('click', () => {
+    shOpen(shBox.hidden);
+    // 좁은 화면(휴대폰)은 오른쪽 칸이 아래로 이어짐 → 연 가시설 칸이 보이게 내림 (1124 JACK)
+    if (!shBox.hidden && window.matchMedia('(max-width: 860px)').matches) {
+      try { shBox.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); } catch (e) { shBox.scrollIntoView(false); }
+    }
+  });
   document.querySelectorAll('#shTypes button').forEach((b) => b.addEventListener('click', () => (SH.arm === b.dataset.t ? shCancel() : shArm(b.dataset.t))));
   $('shCancel').addEventListener('click', shCancel);
 

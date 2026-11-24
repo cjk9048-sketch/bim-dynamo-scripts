@@ -215,7 +215,10 @@ class Session:
             time.sleep(2 * (attempt + 1))
 
     def delete(self, remote):
-        path = urllib.parse.quote(json.dumps([remote], ensure_ascii=False), safe="")
+        self.delete_many([remote])
+
+    def delete_many(self, remotes):
+        path = urllib.parse.quote(json.dumps(list(remotes), ensure_ascii=False), safe="")
         _call(_http(f"{self.base}/webapi/{self.del_path}?api=SYNO.FileStation.Delete&version={self.del_ver}"
                     f"&method=delete&path={path}&_sid={self.sid}"), "지우기")
 
@@ -403,6 +406,35 @@ def do_upload(cfg, folder, name, new):
     if failed:
         print("다시 실행하면 실패한 것만 이어서 올립니다")
         return 1
+    # PC 에서 없어진 파일(사진점 지우기 등)은 NAS 의 이 rv_ 폴더 안에서도 지운다 (1124 JACK «같이 지우기»)
+    local = {r for r, *_ in items}
+    stale = [r for r in sorted(done_files) if r not in local and r and not r.startswith("/")
+             and "\\" not in r and ".." not in r.split("/")]
+    if stale:
+        remote_root = cfg["Folder"].rstrip("/") + "/" + rn
+        s = Session(cfg)
+        gone = 0
+        try:
+            for i in range(0, len(stale), 40):
+                part = stale[i:i + 40]
+                try:
+                    s.delete_many([remote_root + "/" + r for r in part])
+                except NasError as e:
+                    if e.code != 408:            # 408 = 없는 파일이 섞임 → 하나씩 (없는 것은 지운 것으로 봄)
+                        raise
+                    for r in part:
+                        try:
+                            s.delete(remote_root + "/" + r)
+                        except NasError as e2:
+                            if e2.code != 408:
+                                raise
+                for r in part:
+                    done_files.pop(r, None)
+                gone += len(part)
+        finally:
+            save_manifest(m)
+            s.logout()
+        print(f"PC 에서 없어진 파일 {gone}개 NAS 에서도 지움", flush=True)
     bad = check_web(ent["url"])
     if bad:
         print("⚠ " + bad)

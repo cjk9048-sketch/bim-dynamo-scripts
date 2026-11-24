@@ -767,12 +767,16 @@ def run_pick(ed, out_dir, shots_dir, ground):
     s3 = next(q for q in js_json(ed, 'window.RV_PROJECT.shots') if q['id'] == '0003')
     mk = cam.proj(np.array([s3['e'], s3['n'], s3['groundZ']]))
     inp.click(*np.round(mk))
-    time.sleep(0.5)
+    # 1124 JACK: 관로 고치기 중에도 사진 원판을 누르면 그 사진으로 (고치기는 그대로)
+    moved = ed.wait_js("document.getElementById('shotNo').textContent === '3 / 4'", 10)
     n1 = ed.js("document.getElementById('shotNo').textContent")
+    inp.key('PageUp', 'PageUp', 33)  # 다시 2 번으로
+    back = ed.wait_js("document.getElementById('shotNo').textContent === '2 / 4'", 10)
     inp.key('ArrowUp', 'ArrowUp', 38)  # 동쪽을 보는 중 → 앞 = 3 번 (10, 0)
     ok = ed.wait_js("document.getElementById('shotNo').textContent === '3 / 4'", 10)
-    report('i 고치는 동안 원판 눌러도 그대로 · 화살표는 옮겨 감', n1 == '2 / 4' and ok and ed.js("document.getElementById('edChip').classList.contains('show')"),
-           '%s → %s' % (n1, ed.js("document.getElementById('shotNo').textContent")))
+    report('i 고치는 동안 원판 누름 → 그 사진 · 화살표도 옮겨 감 · 고치기 그대로',
+           moved and back and ok and ed.js("document.getElementById('edChip').classList.contains('show')"),
+           '원판 → %s · 화살표 → %s' % (n1, ed.js("document.getElementById('shotNo').textContent")))
     ed.js("document.getElementById('calHead').click()")
     ed.frames(2)
     inp.el_click('alGo')
