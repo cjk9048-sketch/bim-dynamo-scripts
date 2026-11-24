@@ -186,23 +186,56 @@ def _stitch_map(rig: Rig, R_world_cam, W, H, step, scale, blend_deg):
 
 
 def _stitch_cv2(cv2, img0, img1, m, g, W, H, step, strip=512):
-    """OpenCV 로 같은 계산 (성긴 격자 펼치기 · 어안에서 색 뽑기 = cv2.remap). numpy 판보다 10배쯤 빠름."""
+    """OpenCV 로 같은 계산 (성긴 격자 펼치기 · 어안에서 색 뽑기 = cv2.remap). numpy 판보다 10배쯤 빠름.
+
+    노출 맞춤(g)은 렌즈 그림에 먼저 곱하고(색표 LUT) 섞기는 cv2.blendLinear —
+    섞은 뒤 곱하던 것과 밝기 차 2/255 이하 · 꿰매기 4.3 → 2.0 초 (1124 0012 실측).
+    """
     out = np.empty((H, W, 3), np.uint8)
     m4 = np.ascontiguousarray(m[..., :4])
     mw = np.ascontiguousarray(m[..., 4])
     xs = (np.arange(W, dtype=np.float32) / step)[None, :]
     g = g.astype(np.float32)
+    lv = np.arange(256, dtype=np.float32)[:, None]
+    lut0 = np.clip(lv * g[None, :] + 0.5, 0, 255).astype(np.uint8).reshape(256, 1, 3)
+    lut1 = np.clip(lv / g[None, :] + 0.5, 0, 255).astype(np.uint8).reshape(256, 1, 3)
+    img0 = cv2.LUT(img0, lut0)
+    img1 = cv2.LUT(img1, lut1)
     for r0 in range(0, H, strip):
         r1 = min(H, r0 + strip)
         ys = (np.arange(r0, r1, dtype=np.float32) / step)[:, None]
         mx = np.ascontiguousarray(np.broadcast_to(xs, (r1 - r0, W)))
         my = np.ascontiguousarray(np.broadcast_to(ys, (r1 - r0, W)))
         uv = cv2.remap(m4, mx, my, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
-        w = cv2.remap(mw, mx, my, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)[..., None]
+        w = cv2.remap(mw, mx, my, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
         c0 = cv2.remap(img0, uv[..., 0], uv[..., 1], cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
         c1 = cv2.remap(img1, uv[..., 2], uv[..., 3], cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
-        o = (c1.astype(np.float32) / g) * w + (c0.astype(np.float32) * g) * (1.0 - w)
-        out[r0:r1] = np.clip(o + 0.5, 0, 255).astype(np.uint8)
+        out[r0:r1] = cv2.blendLinear(c1, c0, w, 1.0 - w)
+    return out
+
+
+def sharpen(img, radius=1.2, percent=60, threshold=2, strip=512):
+    """약한 선명화 (PIL UnsharpMask 와 같은 규칙: 차이가 threshold 이상인 곳만 percent % 더함).
+    OpenCV 로 띠마다 (메모리 아낌) · PIL 0.9 초 → 0.2 초쯤. OpenCV 가 없으면 PIL."""
+    try:
+        import cv2
+    except ImportError:
+        from PIL import Image, ImageFilter
+        return np.asarray(Image.fromarray(img).filter(
+            ImageFilter.UnsharpMask(radius=radius, percent=percent, threshold=threshold)))
+    H = img.shape[0]
+    pad = int(math.ceil(4 * radius)) + 1
+    out = np.empty_like(img)
+    a = percent / 100.0
+    for r0 in range(0, H, strip):
+        r1 = min(H, r0 + strip)
+        b0, b1 = max(0, r0 - pad), min(H, r1 + pad)
+        blk = np.ascontiguousarray(img[b0:b1])
+        bl = cv2.GaussianBlur(blk, (0, 0), radius, borderType=cv2.BORDER_REPLICATE)
+        sh = cv2.addWeighted(blk, 1.0 + a, bl, -a, 0)
+        keep = cv2.absdiff(blk, bl) < threshold
+        np.copyto(sh, blk, where=keep)
+        out[r0:r1] = sh[r0 - b0:r1 - b0]
     return out
 
 

@@ -5,15 +5,19 @@
 
   m  표현 넷 (매설 · 터파기 · 부분 개방 · 단면): 단추 하나만 켜짐 · 주소 ?mode= · 바꾸면 열린 곳 · 단면 칸 지움 ·
      표시 항목 이 브라우저 기억 (관로 본체는 안 기억) · «가시화 기본값» ↔ «직접 입력» · calib.js trench 에 prot (옛 파일 = 기본값)
-  c  관 정보 (매설): T1 누름 → 관경 · 토피 · 관 중심고 · 지반고 = 따로 셈 · Esc 닫기
-  p  부분 개방: T1 누름 → 측점 s · 길이 10 m → [s − 5, s + 5] · WebGL 만 (겹쳐 그림 숨김) 열기 전 ↔ 뒤 바뀐 화소 =
+  c  관 정보 (매설): T1 누름 → 관경 · 토피 · 관 중심고 · 지반고 = 따로 셈 · Esc 닫기 ·
+     매설 = 땅 속 관이 비침 (WebGL 만 관로 켬 ↔ 끔 바뀜)
+  p  부분 개방: 고르자마자 화면 가운데 가까운 관을 엶 (매설과 다른 그림) · 길이 바 → 바로 바뀜 · 사진 바뀜 → 다시 고름 ·
+     T1 누름 → 측점 s · 길이 10 m → [s − 5, s + 5] · WebGL 만 (겹쳐 그림 숨김) 매설 ↔ 연 뒤 바뀐 화소 =
      그 구간 구멍 (지표 ±wv · 2 px 넓힘) 안만 · 안 (2 px 좁힘) 은 90 % 이상 · 먼 끝 자른 면 층 경계
      (포장 복구 / 되메우기 = g − tp · 되메우기 / 보호층 = 관 윗면 + prot) ↔ 투영 (중앙 ≤ 1.5 px) · 폭 + 0.3 m → 넓힌 구멍 ·
      닫기 → 매설 · 화소 그대로 · 지도에서 관 누름 → 엶 · Esc → 매설
-  s  단면: U4 (비탈 · hasZ) · T1 누름 → 칸 숫자 (지반고 · 관 상단 · 중심 · 하단 · 토피 · 깊이 · 폭 위 / 아래 · 기초 · 보호층 · 측점)
+  s  단면: 고르자마자 가까운 관 단면 칸 (매설과 다른 그림) · U4 (비탈 · hasZ) · T1 누름 → 칸 숫자 (지반고 · 관 상단 · 중심 · 하단 · 토피 · 깊이 · 폭 위 / 아래 · 기초 · 보호층 · 측점)
      = 자료에서 따로 셈 (1 cm) · 설정 바꿈 → 다시 · 360 노란 선 ↔ 그 측점 가로선 투영 (중앙 ≤ 1.5 px)
   l  층 표시 (터파기): 기초 · 보호 / 되메우기 켜고 끄면 바뀐 화소가 구멍 안만 · 실제로 바뀜
   h  http 로 열어도 file:// 과 같은 그림 (부분 개방) · 프로그램 (hostmock): 그림 단추 · save_calib 에 prot
+  z  수치지형도 프로젝트 (project.terrain 에 «수치지도»): 맞춤 «높이» = «수치지형도로 맞춰짐» · 파일 dz 무시 (0) ·
+     [점 찍어 맞추기] 켜면 있던 짝으로 한 번 다시 맞춤 · 점 짝 3 개로 풀어도 dz 0 (동 · 북은 풀림) · 수치지도 아닌 프로젝트는 높이 칸 그대로
   모든 쪽 JS 오류 0
 """
 import argparse
@@ -257,6 +261,12 @@ def test_card(ed, out_dir, shots_dir):
     inp.click(p[0], p[1])
     inp.click(q[0], q[1])
     report('빈 땅 누름 → 닫힘', ed.js("document.getElementById('pipeCard').hidden"))
+    on = grab(ed, os.path.join(shots_dir, 'c_bury_gl.png'), True)
+    ed.js("document.getElementById('tgPipes').click()")
+    off = grab(ed, os.path.join(shots_dir, 'c_bury_gl_off.png'), True)
+    ed.js("document.getElementById('tgPipes').click()")
+    d = (np.abs(on - off).max(axis=2) > 12).sum()
+    report('매설: 땅 속 관 비침 (WebGL 만 관로 켬 ↔ 끔)', d > 300, '바뀐 %d px' % d)
     errs(ed, 'c')
 
 
@@ -327,12 +337,28 @@ def op_state(ed):
 def test_open(ed, out_dir, shots_dir, http_base=None):
     print('== p  부분 개방')
     ed.js('localStorage.clear()')
-    report('불러옴 (부분 개방)', load(ed, url(out_dir, V_OPEN, 'open')))
+    report('불러옴 (매설 · 같은 자리)', load(ed, url(out_dir, V_OPEN)))
     inp = ce.Inp(ed)
     cc, cam = cams(ed, V_OPEN)
-    st = js_json(ed, "{chip: document.getElementById('opChip').classList.contains('show'), tip: document.getElementById('opTip').textContent}")
-    report('안내 줄 «관 누르기»', st == {'chip': True, 'tip': '관 누르기'}, json.dumps(st, ensure_ascii=False))
-    A = grab(ed, os.path.join(shots_dir, 'p_before_gl.png'), True)
+    A = grab(ed, os.path.join(shots_dir, 'p_before_gl.png'), True)  # 열기 전 = 매설
+    ed.js("document.getElementById('mOpen').click()")
+    ed.frames(4)
+    st = op_state(ed)
+    ui = js_json(ed, "{chip: document.getElementById('opChip').classList.contains('show'), tip: document.getElementById('opTip').textContent}")
+    report('부분 개방 고름 → 바로 열림 (기본 20 m · «관 누르기» 없음)', st.get('src') is not None and abs(st.get('s1', 0) - st.get('s0', 0) - 20) < 1e-9
+           and ui == {'chip': True, 'tip': ''}, json.dumps(st) + ' ' + json.dumps(ui, ensure_ascii=False))
+    A1 = grab(ed, os.path.join(shots_dir, 'p_auto_gl.png'), True)
+    d = (np.abs(A1 - A).max(axis=2) > 20).sum()
+    report('매설 ↔ 부분 개방 그림 다름', d > 2000, '바뀐 %d px' % d)
+    ed.js("(function(){ const i = document.getElementById('opLen'); i.value = '40'; i.dispatchEvent(new Event('input', {bubbles: true})); })()")
+    ed.frames(4)
+    st2 = op_state(ed)
+    A2 = grab(ed, os.path.join(shots_dir, 'p_auto_len40_gl.png'), True)
+    d = (np.abs(A2 - A1).max(axis=2) > 20).sum()
+    report('길이 바 20 → 40 m → 열린 곳 바로 바뀜', st2.get('s1', 0) - st2.get('s0', 0) > 20 + 1e-6 and d > 500,
+           '%.1f m · 바뀐 %d px' % (st2.get('s1', 0) - st2.get('s0', 0), d))
+    ed.js("(function(){ const i = document.getElementById('opLen'); i.value = '20'; i.dispatchEvent(new Event('input', {bubbles: true})); })()")
+    ed.frames(2)
     p = cc.proj([CLICK_T1[0], CLICK_T1[1], GZ])
     inp.click(p[0], p[1])
     st = op_state(ed)
@@ -395,9 +421,20 @@ def test_open(ed, out_dir, shots_dir, http_base=None):
     D0 = grab(ed, os.path.join(shots_dir, 'p_closed_gl.png'), True)
     st = js_json(ed, "{m: document.getElementById('app').dataset.mode, chip: document.getElementById('opChip').classList.contains('show')}")
     report('닫기 → 매설 · 화소 그대로', st == {'m': 'bury', 'chip': False} and np.abs(D0 - A).max() <= 3, json.dumps(st) + ' 최대 차이 %d' % np.abs(D0 - A).max())
-    # 지도에서 관 누름 → 엶 · Esc → 매설
+    # 사진이 바뀌면 저절로 고른 곳은 새 자리 가운데로 다시 고름
     ed.js("document.getElementById('mOpen').click()")
-    ed.frames(2)
+    ed.frames(3)
+    s_a = op_state(ed)
+    ed.js("document.getElementById('next').click()")
+    ed.wait_js(cv.READY, timeout=30)
+    ed.frames(4)
+    s_b = op_state(ed)
+    report('사진 바뀜 → 저절로 고른 곳 다시 고름', s_b.get('src') is not None and (s_b.get('e'), s_b.get('n')) != (s_a.get('e'), s_a.get('n')),
+           '%s → %s' % (json.dumps(s_a), json.dumps(s_b)))
+    ed.js("document.getElementById('prev').click()")
+    ed.wait_js(cv.READY, timeout=30)
+    ed.frames(3)
+    # 지도에서 관 누름 → 엶 · Esc → 매설
     mt = ce.MapTf(ed)
     q = mt.en_scr(-20.0, 3.0)
     inp.click(q[0], q[1])
@@ -455,9 +492,16 @@ def yellow_line(img, cam, C, X, half):
 def test_sec(ed, out_dir, shots_dir):
     print('== s  단면')
     ed.js('localStorage.clear()')
+    load(ed, url(out_dir, V_SEC))
+    bury = grab(ed, os.path.join(shots_dir, 's_bury_full.png'))
     report('불러옴 (단면)', load(ed, url(out_dir, V_SEC, 'sec')))
     inp = ce.Inp(ed)
     cc, cam = cams(ed, V_SEC)
+    st = sec_read(ed)
+    auto = grab(ed, os.path.join(shots_dir, 's_auto_full.png'))
+    d = (np.abs(auto - bury).max(axis=2) > 20).sum()
+    report('단면 고름 → 바로 단면 칸 (가까운 관) · 매설과 다른 그림', st['shown'] and st['d'].get('src') is not None and d > 1500,
+           '%s · 바뀐 %d px' % (json.dumps(st['d']), d))
     g4 = U4['g'][1] + (U4['g'][2] - U4['g'][1]) * 0.5
     p = cc.proj([CLICK_U4[0], CLICK_U4[1], g4])
     inp.click(p[0], p[1])
@@ -524,6 +568,75 @@ def test_layers(ed, out_dir, shots_dir):
     errs(ed, 'l')
 
 
+# ---------------------------------------------------------------- z  수치지형도 프로젝트 → 높이 (dz) 잠금
+def test_dem(ed, out_dir, shots_dir):
+    print('== z  수치지형도 프로젝트: 맞춤 높이 잠금')
+    pj, cj = os.path.join(out_dir, 'data', 'project.js'), os.path.join(out_dir, 'data', 'calib.js')
+    orig = open(pj, encoding='utf-8').read()
+    P = json.loads(orig[orig.index('{'):orig.rindex('}') + 1])
+    s0 = P['shots'][0]
+    vid, cam = s0['video'], np.array([s0['e'], s0['n'], s0['z']])
+    # 짝 4 개: 사진 방향 = 땅 점 X 를 보는 방향 · 지도 점 = X 에서 (1.0, −0.5) m 민 곳 → 풀면 동 · 북이 바뀜 (높이는 잠금이면 0)
+    pairs = []
+    for de, dn in ((6, 0), (0, 6), (-6, 0), (0, -6)):
+        X = np.array([s0['e'] + de, s0['n'] + dn, s0['groundZ']])
+        p = (X - cam) / np.linalg.norm(X - cam)
+        pairs.append({'shot': s0['id'], 'p': [round(float(v), 7) for v in p], 'e': round(float(X[0] + 1.0), 3), 'n': round(float(X[1] - 0.5), 3)})
+    cal = {'videos': {vid: {'dx': 0, 'dy': 0, 'dz': 0.8, 'dyaw': 0, 'dpitch': 0, 'droll': 0, 'pairs': pairs}}}
+
+    def exported():
+        t = ed.js(EXPORT_JS, await_promise=True) or ''
+        try:
+            return json.loads(t[t.index('{'):t.rindex('}') + 1])['videos'][vid]
+        except (ValueError, KeyError):
+            return {}
+
+    def cal_open():
+        ed.js("if (!document.getElementById('calPane').classList.contains('open')) document.getElementById('calHead').click()")
+        ed.frames(3)
+    try:
+        P2 = dict(P, terrain='사내 수치지도 DB 등고선 3개')
+        with open(pj, 'w', encoding='utf-8', newline='\n') as f:
+            f.write('window.RV_PROJECT = ' + json.dumps(P2, ensure_ascii=False) + ';\n')
+        with open(cj, 'w', encoding='utf-8', newline='\n') as f:
+            f.write('window.RV_CALIB = ' + json.dumps(cal) + ';\n')
+        ed.js('localStorage.clear()')
+        report('불러옴 (수치지형도 프로젝트)', load(ed, url(out_dir, V_BURY)))
+        cal_open()
+        st = js_json(ed, "{t: (document.getElementById('calDzLock') || {}).textContent || '', w: (document.getElementById('calDzLock') || {offsetWidth: 0}).offsetWidth,"
+                         " n: document.querySelectorAll('#calRows input').length}")
+        ed.screenshot(os.path.join(shots_dir, 'z_dem_cal.png'))
+        report('높이 = «수치지형도로 맞춰짐» (칸 없음)', st['t'] == '수치지형도로 맞춰짐' and st['w'] > 0 and st['n'] == 5, json.dumps(st, ensure_ascii=False))
+        c0 = exported()
+        report('파일 dz 0.8 → 0 (수치지형도)', c0.get('dz') == 0, json.dumps({k: c0.get(k) for k in ('dx', 'dy', 'dz', 'dyaw')}))
+        ed.js("document.getElementById('alGo').click()")
+        ed.frames(3)
+        ce_ = exported()
+        al_on = ed.js("document.getElementById('alChip').classList.contains('show')")
+        report('점 찍어 맞추기 켬 → 있던 짝 4 개로 한 번 다시 맞춤 (dz 0)', al_on and ce_.get('dz') == 0 and abs(ce_.get('dx', 0) - 1.0) < 0.1 and abs(ce_.get('dy', 0) + 0.5) < 0.1,
+               json.dumps({k: ce_.get(k) for k in ('dx', 'dy', 'dz', 'dyaw')}))
+        ed.js("document.getElementById('alGo').click()")
+        ed.frames(2)
+        ed.js("document.querySelector('#alList .alRow .alDel').click()")
+        ed.frames(4)
+        c1 = exported()
+        report('짝 3 개로 풂 → dz 그대로 0 · 동 · 북 풀림', c1.get('dz') == 0 and abs(c1.get('dx', 0) - 1.0) < 0.2 and abs(c1.get('dy', 0) + 0.5) < 0.2
+               and len(c1.get('pairs', [])) == 3, json.dumps({k: c1.get(k) for k in ('dx', 'dy', 'dz', 'dyaw')}) + ' · 짝 %d' % len(c1.get('pairs', [])))
+        errs(ed, 'z')
+    finally:
+        with open(pj, 'w', encoding='utf-8', newline='\n') as f:
+            f.write(orig)
+        if os.path.exists(cj):
+            os.remove(cj)
+        ed.js('localStorage.clear()')
+    load(ed, url(out_dir, V_BURY))
+    cal_open()
+    st = js_json(ed, "{lock: !!document.getElementById('calDzLock'), n: document.querySelectorAll('#calRows input').length}")
+    report('수치지도 아닌 프로젝트 → 높이 칸 그대로', st == {'lock': False, 'n': 6}, json.dumps(st))
+    ed.js('localStorage.clear()')
+    errs(ed, 'z2')
+
+
 # ---------------------------------------------------------------- h  프로그램 (hostmock)
 def test_host(ed, out_dir, shots_dir):
     print('== h  프로그램 (hostmock)')
@@ -559,7 +672,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--out', required=True)
     ap.add_argument('--shots', default=None)
-    ap.add_argument('--only', default='', help='m,c,p,s,l,h 중 일부만')
+    ap.add_argument('--only', default='', help='m,c,p,s,l,h,z 중 일부만')
     args = ap.parse_args()
     try:
         sys.stdout.reconfigure(encoding='utf-8')
@@ -572,7 +685,7 @@ def main():
     if os.path.exists(cj):
         os.remove(cj)
     add_u4(out_dir)
-    only = set(args.only.split(',')) if args.only else set('mcpslh')
+    only = set(args.only.split(',')) if args.only else set('mcpslhz')
     srv = http.server.ThreadingHTTPServer(('127.0.0.1', 0), functools.partial(ci._Quiet, directory=out_dir))
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     base = 'http://127.0.0.1:%d/%s' % (srv.server_address[1], urllib.parse.quote('로드뷰.html'))
@@ -592,6 +705,8 @@ def main():
             test_layers(ed, out_dir, shots_dir)
         if 'h' in only:
             test_host(ed, out_dir, shots_dir)
+        if 'z' in only:
+            test_dem(ed, out_dir, shots_dir)
     finally:
         ed.__exit__(None, None, None)
         srv.shutdown()

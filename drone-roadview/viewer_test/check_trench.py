@@ -3,7 +3,7 @@
 
     python -I check_trench.py --out <make_synth --trench 폴더> [--shots <폴더>]
 
-  (a) 구멍 가장자리 = 겹쳐 그린 밝은 자른 선 ↔ 지표 ±wv 선 투영 (중앙 1 px 안)
+  (a) 구멍 가장자리 = 겹쳐 그린 가는 어두운 자른 선 (겹쳐 그림 켬 − 끔 의 덮임 비율) ↔ 지표 ±wv 선 투영 (중앙 1 px 안)
   (b) 스텐실: 깊이 방식 WebGL 만 (겹쳐 그림 숨김) − 관로 끔 = 구덩이 + 관 → 구멍 다각형 (2 px 넓힘) 밖 0 화소 ·
       안 (2 px 좁힘) 은 90 % 이상 바뀜
   (c) 보이는 바닥 (모래 윗면) 가장자리 ±ws · 벽의 포장/흙 경계 (±wv, g − tp) ↔ 투영 (중앙 1.5 px 안).
@@ -234,8 +234,37 @@ def screen_dir(cam, P, Q):
     return (p, d / n) if n > 1e-9 else (None, None)
 
 
-def measure_cut(img, cam, secs, skip=1.0, step=0.2):
-    """밝은 자른 선의 가운데 (밝은 화소 무게중심) − 투영한 ±wv 지표 선. 표본마다 부호 있는 px."""
+LINE_LUM = 11.5   # app.js 자른 선 색 rgba(14, 11, 8, …) 의 밝기
+
+
+def dark_line_at(full, gl, p0, nrm):
+    """겹쳐 그린 어두운 선의 가운데 (p0 에서 nrm 쪽 부호 있는 px) · 못 재면 None.
+    덮임 = (겹쳐 그림 끔 − 켬) / (끔 − 선 색) (바탕 밝기와 무관) → 절반 높이 위 무게중심."""
+    s = np.arange(-8, 8.001, 0.25)
+    pts = p0[None, :] + s[:, None] * nrm[None, :]
+    A, B = cv.bilinear(full, pts), cv.bilinear(gl, pts)
+    if not (np.isfinite(A).all() and np.isfinite(B).all()) or (A.max(axis=1) < 30).any():
+        return None  # 이름표 바탕이 걸침
+    la, lb = lum(A), lum(B)
+    cov = (lb - la) / np.maximum(lb - LINE_LUM, 1.0)
+    k = int(np.argmax(cov))
+    if cov[k] < 0.25 or lb[k] < 35:
+        return None
+    half = cov[k] / 2
+    i0 = k
+    while i0 > 0 and cov[i0 - 1] >= half:
+        i0 -= 1
+    i1 = k
+    while i1 + 1 < s.size and cov[i1 + 1] >= half:
+        i1 += 1
+    if (i1 - i0 + 1) * 0.25 > 3.5:
+        return None  # 선이 아님 (원판 · 글자)
+    wgt = cov[i0:i1 + 1] - half
+    return float((s[i0:i1 + 1] * wgt).sum() / wgt.sum()) if wgt.sum() > 0 else float(s[k])
+
+
+def measure_cut(img, gl, cam, secs, skip=1.0, step=0.2):
+    """어두운 자른 선의 가운데 − 투영한 ±wv 지표 선. 표본마다 부호 있는 px (img = 겹쳐 그림 포함 · gl = 겹쳐 그림 숨김)."""
     out = []
     for S in secs:
         for j in range(S['m'] - 1):
@@ -249,26 +278,9 @@ def measure_cut(img, cam, secs, skip=1.0, step=0.2):
                     p0, sd = screen_dir(cam, P, P + np.array([*(d * 0.3), 0.0]))
                     if p0 is None or not (12 < p0[0] < cam.w - 12 and 12 < p0[1] < cam.h - 12):
                         continue
-                    nrm = np.array([-sd[1], sd[0]])
-                    s = np.arange(-8, 8.001, 0.25)
-                    rgb = cv.bilinear(img, p0[None, :] + s[:, None] * nrm[None, :])
-                    if not np.isfinite(rgb).all() or (rgb.max(axis=1) < 30).any():
-                        continue  # 이름표 바탕이 걸침
-                    lv = lum(rgb)
-                    k = int(np.argmax(lv))
-                    if lv[k] < 200:
-                        continue
-                    base = lv[k] - 60
-                    i0 = k
-                    while i0 > 0 and lv[i0 - 1] >= base:
-                        i0 -= 1
-                    i1 = k
-                    while i1 + 1 < s.size and lv[i1 + 1] >= base:
-                        i1 += 1
-                    if (i1 - i0 + 1) * 0.25 > 3.5:
-                        continue  # 선이 아님 (원판 · 글자)
-                    wgt = lv[i0:i1 + 1] - base
-                    out.append(float((s[i0:i1 + 1] * wgt).sum() / wgt.sum()))
+                    x = dark_line_at(img, gl, p0, np.array([-sd[1], sd[0]]))
+                    if x is not None:
+                        out.append(x)
     return np.array(out)
 
 
@@ -365,6 +377,16 @@ def grab(ed, png):
     return a[y0:y1 + 1, x0:x1 + 1].astype(float), (x0, y0, x1, y1)
 
 
+def grab2(ed, png):
+    """겹쳐 그림 포함 · 숨김 두 장 (자른 선 재기)."""
+    full, rect = grab(ed, png)
+    set_ov(ed, False)
+    gl, _ = grab(ed, png.replace('.png', '_gl.png'))
+    set_ov(ed, True)
+    ed.frames(2)
+    return full, gl
+
+
 def set_ov(ed, on):
     ed.js("document.getElementById('ov').style.visibility = '%s'" % ('visible' if on else 'hidden'))
 
@@ -410,8 +432,8 @@ def report(name, ok, text):
     return bool(ok)
 
 
-def check_cut(full, cam, tr, label, need=40):
-    e = measure_cut(full, cam, all_sections(tr))
+def check_cut(full, gl, cam, tr, label, need=40):
+    e = measure_cut(full, gl, cam, all_sections(tr))
     m, p = stat(e)
     return report(label, e.size >= need and m <= 1.0, '표본 %4d · 중앙 %.2f px · 90%% %.2f px · 평균 %+.2f' % (e.size, m, p, np.mean(e) if e.size else 0))
 
@@ -461,7 +483,7 @@ def main():
             all_ok &= report('불러옴', ok, '')
             if name == 'v1_down_n':
                 gl_v1 = gl
-            e = measure_cut(full, cam, defsec)
+            e = measure_cut(full, gl, cam, defsec)
             m, p = stat(e)
             all_ok &= report('(a) 자른 선 ↔ ±wv 투영', e.size >= 30 and m <= 1.0, '표본 %4d · 중앙 %.2f px · 90%% %.2f px' % (e.size, m, p))
             mask = opening_mask(cam, defsec)
@@ -518,10 +540,10 @@ def main():
         print('== (d) 단면 창')
         for cfg, tag in ((CFG_B, 'd_cfgB'), (CFG_C, 'd_cfgC')):
             set_cfg(ed, cfg)
-            full, rect = grab(ed, os.path.join(shots_dir, tag + '_full.png'))
+            full, gl = grab2(ed, os.path.join(shots_dir, tag + '_full.png'))
             cam = Cam(v1, full.shape[1], full.shape[0])
             secs = all_sections(cfg)
-            all_ok &= check_cut(full, cam, cfg, '%s 자른 선 (T1 wv %.3f = 기본 %.3f 의 %.2f 배)' % (tag, secs[0]['wv'], defsec[0]['wv'], secs[0]['wv'] / defsec[0]['wv']))
+            all_ok &= check_cut(full, gl, cam, cfg, '%s 자른 선 (T1 wv %.3f = 기본 %.3f 의 %.2f 배)' % (tag, secs[0]['wv'], defsec[0]['wv'], secs[0]['wv'] / defsec[0]['wv']))
             st = json.loads(ed.js("JSON.stringify({dia: document.getElementById('secDia').value, svg: document.getElementById('secSvg').textContent,"
                                   " ls: localStorage.getItem('rv_trench:' + window.RV_PROJECT.title)})"))
             D = int(st['dia']) / 1000
@@ -540,8 +562,8 @@ def main():
         # 다시 열기 (같은 브라우저) → 저장된 값으로, 다른 자리
         v3 = VIEWS[2]
         load(ed, url_of(out_dir, v3))
-        full, _ = grab(ed, os.path.join(shots_dir, 'd_reopen_v3_full.png'))
-        all_ok &= check_cut(full, Cam(v3, full.shape[1], full.shape[0]), CFG_C, '다시 열기 v3 (저장 값 C)')
+        full, gl = grab2(ed, os.path.join(shots_dir, 'd_reopen_v3_full.png'))
+        all_ok &= check_cut(full, gl, Cam(v3, full.shape[1], full.shape[0]), CFG_C, '다시 열기 v3 (저장 값 C)')
         all_ok &= report('JS 오류', not errs(ed, 'd'), '')
 
         # ---- (e2) 파일 trench → 그대로 그림 · 단면 칸
@@ -549,8 +571,8 @@ def main():
             f.write('window.RV_CALIB = ' + json.dumps({'videos': {}, 'trench': dict(CFG_FILE, on=True)}) + ';\n')
         ed.js('localStorage.clear()')
         load(ed, url_of(out_dir, v1))
-        full, _ = grab(ed, os.path.join(shots_dir, 'e_file_full.png'))
-        all_ok &= check_cut(full, Cam(v1, full.shape[1], full.shape[0]), CFG_FILE, '파일 trench 로 그림')
+        full, gl = grab2(ed, os.path.join(shots_dir, 'e_file_full.png'))
+        all_ok &= check_cut(full, gl, Cam(v1, full.shape[1], full.shape[0]), CFG_FILE, '파일 trench 로 그림')
         ed.js("document.getElementById('tgSec').click()")
         vals = json.loads(ed.js("JSON.stringify(['tp','n','margin','bed'].map((k) => document.getElementById('sec_' + k).value).concat([document.getElementById('secOn').checked]))"))
         all_ok &= report('단면 칸 = 파일 값', vals == [str(CFG_FILE[k]) for k in ('tp', 'n', 'margin', 'bed')] + [True], json.dumps(vals))

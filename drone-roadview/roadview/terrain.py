@@ -142,6 +142,86 @@ class Dem:
         return np.ma.filled(v.astype(float), np.nan)
 
 
+class GridDem:
+    """높이 점 → 격자 DEM (cell m) · 가우스(sigma m)로 고르게 → 겹선형. 자료 밖은 NaN.
+
+    등고선 삼각망은 계단이 진다 — 같은 높이 등고선끼리 이은 평평한 삼각형 + 등고선을 넘는 곳 급경사
+    (0012 실측: 25.00 평지 134곳 · 5 m 사이 1.54 m). 관이 그대로 따라가면 «뚝 떨어짐».
+    평면 설계용(1124 JACK «DEM 으로 · 평균매설깊이만큼 내린 선») → 격자로 옮겨 고르게.
+    평평하거나 한쪽으로 기운 땅(도로 · 비탈)은 가우스로 바뀌지 않고 굽은 곳만 무뎌진다.
+    """
+
+    def __init__(self, pts, cell=5.0, sigma=20.0):
+        tin = Dem(pts)
+        self.n, self.bbox, self.cell = tin.n, tin.bbox, float(cell)
+        x0, y0, x1, y1 = tin.bbox
+        self.gx0 = math.floor(x0 / cell) * cell
+        self.gy0 = math.floor(y0 / cell) * cell
+        nx = int(math.ceil((x1 - self.gx0) / cell)) + 1
+        ny = int(math.ceil((y1 - self.gy0) / cell)) + 1
+        xs = self.gx0 + np.arange(nx) * cell
+        Z = np.empty((ny, nx))
+        for r in range(ny):                                   # 한 줄씩 (메모리)
+            Z[r] = tin(xs, np.full(nx, self.gy0 + r * cell))
+        M = np.isfinite(Z)
+        if sigma > 0:
+            rad = max(1, int(math.ceil(3 * sigma / cell)))
+            k = np.exp(-0.5 * (np.arange(-rad, rad + 1) * cell / sigma) ** 2)
+            k /= k.sum()
+
+            def blur(A):
+                A = np.array([np.convolve(row, k, mode='same') for row in A])
+                return np.array([np.convolve(col, k, mode='same') for col in A.T]).T
+
+            num = blur(np.where(M, Z, 0.0))
+            den = blur(M.astype(float))
+            with np.errstate(invalid='ignore', divide='ignore'):
+                Z = np.where(M & (den > 1e-6), num / np.maximum(den, 1e-12), np.nan)
+        self.Z = Z
+
+    def __call__(self, x, y):
+        x = np.asarray(x, float); y = np.asarray(y, float)
+        fx = (x - self.gx0) / self.cell
+        fy = (y - self.gy0) / self.cell
+        ny, nx = self.Z.shape
+        ok = (fx >= 0) & (fy >= 0) & (fx <= nx - 1) & (fy <= ny - 1)
+        c0 = np.clip(np.floor(fx).astype(int), 0, nx - 2)
+        r0 = np.clip(np.floor(fy).astype(int), 0, ny - 2)
+        tx = np.clip(fx - c0, 0, 1); ty = np.clip(fy - r0, 0, 1)
+        Z = self.Z
+        v = ((Z[r0, c0] * (1 - tx) + Z[r0, c0 + 1] * tx) * (1 - ty) +
+             (Z[r0 + 1, c0] * (1 - tx) + Z[r0 + 1, c0 + 1] * tx) * ty)
+        return np.where(ok, v, np.nan)
+
+
+def spot_heights_from_db(bbox, crs_epsg=5186, timeout=20):
+    """bbox 안 표고점 (수치지형도 1:5,000 · vworld.n3p_f0020000 · nume = 표고) → (N,3). 없거나 못 읽으면 빈 배열."""
+    import pg8000.native
+    g = _keys()
+    if not g:
+        return np.zeros((0, 3))
+    try:
+        con = pg8000.native.Connection(user=g['user'], password=g.get('password', ''), host=g['host'],
+                                       port=int(g.get('port', 5432)), database=g.get('database', 'postgres'),
+                                       timeout=timeout, ssl_context=None)
+    except Exception:
+        return np.zeros((0, 3))
+    try:
+        dbsrid = int(con.run('SELECT ST_SRID(geom) FROM vworld.n3p_f0020000 LIMIT 1')[0][0])
+        rows = con.run("""
+WITH b AS (SELECT ST_Transform(ST_MakeEnvelope(CAST(:x0 AS float8), CAST(:y0 AS float8), CAST(:x1 AS float8),
+                  CAST(:y1 AS float8), CAST(:srid AS integer)), CAST(:dbsrid AS integer)) AS g6)
+SELECT ST_X(ST_Transform(p.geom, CAST(:srid AS integer))), ST_Y(ST_Transform(p.geom, CAST(:srid AS integer))), p.nume
+FROM vworld.n3p_f0020000 p, b WHERE p.geom && b.g6""",
+                       x0=bbox[0], y0=bbox[1], x1=bbox[2], y1=bbox[3], srid=crs_epsg, dbsrid=dbsrid)
+    except Exception:
+        return np.zeros((0, 3))
+    finally:
+        con.close()
+    a = np.array([[float(x), float(y), float(z)] for x, y, z in rows if z is not None and float(z) > 0], float)
+    return a.reshape(-1, 3)
+
+
 def lines_to_points(lines, step=2.0):
     """등고선 선 → 점 (step m 간격으로 촘촘히 — 삼각형이 등고선을 가로지르지 않게)."""
     out = []

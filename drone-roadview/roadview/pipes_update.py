@@ -87,6 +87,37 @@ def update(out, path, dia_field=None, label_field=None, depth=None, layers=None,
     return len(pl), msg
 
 
+def reground(out, fn, var, dem=None):
+    """만들기를 다시 할 때 — 있던 관로 · 지장물(고친 것 포함)은 그대로 두고 땅 높이(g)만 새 촬영점 땅 높이로 (1124).
+    dem = 점마다 수치지도 높이 함수(절대 좌표 · 지형 그대로 모드) 또는 None.
+    → 줄 수 · 파일 없으면 0 · 원점이 달라 못 쓰면 None (그대로 두면 엉뚱한 곳에 그려진다)."""
+    import numpy as np
+    path = os.path.join(out, 'data', fn)
+    if not os.path.exists(path):
+        return 0
+    try:
+        P = _read_js(os.path.join(out, 'data', 'project.js'), 'RV_PROJECT')
+        D = _read_js(path, var)
+        E0, N0 = float(P['origin']['E']), float(P['origin']['N'])
+        o = D.get('origin') or {}
+        if abs(float(o['E']) - E0) > 1e-3 or abs(float(o['N']) - N0) > 1e-3:
+            return None
+    except (OSError, ValueError, KeyError, TypeError, IndexError):
+        return None
+    shots = P['shots']
+    sen = [(s['e'], s['n']) for s in shots]
+    sg = [s['groundZ'] for s in shots]
+    tmp = pipeload.ground_for([{'pts': ln['pts']} for ln in D.get('lines', [])], sen, sg)
+    for ln, t in zip(D.get('lines', []), tmp):
+        gs = t['g']
+        if dem is not None:
+            dz = dem([p[0] + E0 for p in ln['pts']], [p[1] + N0 for p in ln['pts']])
+            gs = [float(v) if np.isfinite(v) else x for v, x in zip(dz, gs)]
+        ln['g'] = [round(v, 3) if v is not None else None for v in gs]
+    _write_atomic(path, 'window.%s = ' % var + json.dumps(D, ensure_ascii=False) + ';\n')
+    return len(D.get('lines', []))
+
+
 # ---------------------------------------------------------------- 지장물
 
 OBST_COLORS = [  # (낱말들, 색) — 지하시설물 관례 색

@@ -89,7 +89,7 @@
     const j = (await call('job', job)) || { state: 'fail', line: '작업 상태를 못 읽음' };
     $('bar').style.width = (j.pct || 0) + '%';
     $('status').textContent = j.line || '';
-    $('jobPillText').textContent = Math.round(j.pct || 0) + '% · ' + (j.line || '만드는 중').slice(0, 40);
+    $('jobPillText').textContent = Math.round(j.pct || 0) + '% · ' + (j.pill || j.line || '만드는 중').slice(0, 40);
     const log = $('log');
     log.classList.remove('hide');
     log.textContent = (j.log || []).join('\n');

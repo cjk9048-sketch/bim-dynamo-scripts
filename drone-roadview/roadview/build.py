@@ -71,6 +71,93 @@ def log(msg, fp=None):
         fp.flush()
 
 
+class Eta:
+    """남은 시간 — 앱이 읽는 줄 «@진행 <퍼센트> <남은 초 | -1> <글>» (기록 파일에는 안 씀).
+
+    단계마다 잰 빠르기(한 곳 · 한 장에 걸린 벽시계 초)로 지금 단계를 셈하고,
+    아직 안 한 뒤 단계(360 사진 · 안 읽은 영상)는 잰 값에서 미루어 셈한다 (1124 JACK).
+    """
+    PANO_PER_HEIGHT = 0.95    # 360 사진 한 장 ≈ 땅 높이 한 곳 × 0.95 (1124 0012 실측 0.87 / 0.90 초 · 동시 6)
+    PANO_PRIOR = 5.2          # 아무것도 못 쟀을 때 한 장 · 일꾼 하나 (초 · 8192)
+    PHOTO_PRIOR = 1.5         # 사진 모드 JPG 한 장 · 일꾼 하나
+    TAIL = 5.0                # 마무리 (project.js · 높이 타일 · 보기 화면)
+
+    def __init__(self, workers, width, osv_bytes, n_jpg, h_per_pick):
+        self.t0 = time.time()
+        self.last = 0.0
+        self.workers = max(1, workers)
+        self.wscale = 0.5 + 0.5 * (width / 8192.0) ** 2   # 반은 풀기(크기 무관) · 반은 꿰매기(넓이 비례)
+        self.bytes_total = float(osv_bytes)
+        self.bytes_done = 0.0
+        self.read_s = 0.0          # 영상 기록 읽기에 쓴 초
+        self.picks = 0             # 지금까지 고른 촬영점 (영상)
+        self.hjobs = 0             # 지금까지 잰 땅 높이 곳 수
+        self.h_per_pick = h_per_pick
+        self.n_jpg = n_jpg
+        self.h_rate = None         # 땅 높이 한 곳 (벽시계 초)
+        self.p_rate = None         # 360 사진 한 장 (벽시계 초)
+        self._phase, self._marks = None, []
+
+    def pano_prior(self):
+        if self.p_rate:
+            return self.p_rate
+        if self.h_rate:
+            return self.PANO_PER_HEIGHT * self.h_rate * self.wscale
+        return self.PANO_PRIOR / self.workers * self.wscale
+
+    def video_read(self, nbytes, read_s, picks):
+        self.bytes_done += nbytes
+        self.read_s += read_s
+        self.picks += picks
+
+    def later(self, pano_left=None, unread=True):
+        """지금 단계 뒤에 남은 초. pano_left = 남은 360 사진 수 (모르면 고른 촬영점 + 미룬 값)."""
+        s = self.TAIL
+        left_b = max(0.0, self.bytes_total - self.bytes_done) if unread else 0.0
+        est_picks = 0.0
+        if left_b > 0 and self.bytes_done > 0:
+            est_picks = self.picks / self.bytes_done * left_b
+            s += self.read_s / self.bytes_done * left_b
+            hpp = self.hjobs / float(self.picks) if (self.hjobs and self.picks) else self.h_per_pick
+            s += est_picks * hpp * (self.h_rate or self.pano_prior() / self.PANO_PER_HEIGHT)
+        if pano_left is None:
+            pano_left = self.picks + est_picks
+            s += self.n_jpg * self.PHOTO_PRIOR / self.workers
+        return s + pano_left * self.pano_prior()
+
+    def known(self):
+        return self.bytes_done > 0 or self.bytes_total == 0
+
+    def show(self, label, remain, force=False):
+        now = time.time()
+        if not force and now - self.last < 2.0:
+            return
+        self.last = now
+        el = now - self.t0
+        if remain is None or not self.known():
+            pct, r = 1.0, -1
+        else:
+            pct, r = 100.0 * el / max(1e-6, el + remain), int(remain)
+        print('@진행 %.1f %d %s' % (min(pct, 99.0), r, label), flush=True)
+
+    def step(self, t_phase, done, prior):
+        """단계 안 빠르기 (하나 끝날 때마다 부름).
+
+        처음 (일꾼 수)개는 일꾼 띄우기 · 첫 읽기가 섞여 느리게 보인다 (1124 실측: 0.9 초 → 2.1 초로 보임)
+        → 그동안은 미룬 값, 그 뒤 최근 (일꾼 × 4)개 사이 간격으로 잰다 (첫 묶음은 빼고).
+        """
+        now = time.time()
+        if self._phase != t_phase:
+            self._phase, self._marks = t_phase, []
+        self._marks.append(now)
+        W = self.workers
+        n = len(self._marks)
+        if n <= 2 * W:
+            return prior
+        ref = max(W - 1, n - 1 - 4 * W)          # 기준 = 첫 묶음 끝 (또는 창 시작)
+        return (now - self._marks[ref]) / float(n - 1 - ref)
+
+
 def _write_atomic(path, data: bytes):
     tmp = path + '.tmp'
     with open(tmp, 'wb') as f:
@@ -127,7 +214,7 @@ def _height_job(args):
     return estimate_agl(A, B, rig, np.array(Ra), np.array(Rb), ea, eb, rel_a, rel_b, H0)
 
 
-def estimate_terrain(osv, frames, en, s, R_list, rig, ffmpeg, pool, step_m, seek_back, fp):
+def estimate_terrain(osv, frames, en, s, R_list, rig, ffmpeg, pool, step_m, seek_back, fp, eta=None):
     """진행 거리 step_m 마다 땅 높이 차 T(= 이륙점 기준 높이 − 땅 위 높이)를 잰다 → [(s, T)]."""
     jobs = []
     next_s = -1e9
@@ -156,8 +243,16 @@ def estimate_terrain(osv, frames, en, s, R_list, rig, ffmpeg, pool, step_m, seek
         next_s = s[i] + step_m
     out = []
     futs = {pool.submit(_height_job, a): i for i, a in jobs}
-    for fu in as_completed(futs):
+    t_h = time.time()
+    if eta:
+        eta.hjobs += len(jobs)
+        prior = eta.h_rate or eta.pano_prior() / Eta.PANO_PER_HEIGHT
+        eta.show('땅 높이 재기 0 / %d' % len(jobs), len(jobs) * prior + eta.later(), force=True)
+    for k, fu in enumerate(as_completed(futs), 1):
         i = futs[fu]
+        if eta:
+            eta.h_rate = eta.step(t_h, k, prior)
+            eta.show('땅 높이 재기 %d / %d' % (k, len(jobs)), (len(jobs) - k) * eta.h_rate + eta.later(), k == len(jobs))
         try:
             r = fu.result()
         except Exception as ex:
@@ -175,14 +270,70 @@ def estimate_terrain(osv, frames, en, s, R_list, rig, ffmpeg, pool, step_m, seek
     return out
 
 
-def terrain_at(samples, s_query, window=75.0):
+def terrain_profile(samples, near=150.0, lam=100.0, step=10.0):
+    """잰 땅 높이 차 [(s, T)] → 이어진 함수 T(s) · 잰 곳이 없으면 None.
+
+    옛 방식(±75 m 안 중앙값 · 2곳 미만이면 영상 전체 중앙값)은 계단처럼 튀었다 (1124 JACK «관이 뚝 떨어짐»):
+    0012 에서 재지 못한 246 m 구간 · 영상 끝이 전체 중앙값(3.8 m)으로 떨어져 땅 위 높이 19 m → 59 m (화면 속 거리 3배),
+    튀는 값 둘뿐인 곳은 평균 −61 m. 그래서
+      ① 이웃(150 m 안, 적어도 가까운 6곳)과 max(3 m, 3·MAD) 넘게 다른 값은 뺀다 (세 번까지 되풀이)
+      ② 10 m 격자 위 부드러운 곡선 (Whittaker: 잰 값과의 차² + λ·굽음² 최소) — 빈 구간은 곧게 이어지고
+         오르막 → 평지에서 넘치지 않는다 (국소 직선 맞춤은 0012 끝에서 3 m 넘침 · λ 100 = 5 m 마다 최대 0.6 m)
+      ③ 잰 구간 밖은 끝 값 그대로 (멀리 늘이지 않음)
+    """
     if not samples:
         return None
-    ss = np.array([a for a, _ in samples]); ts = np.array([b for _, b in samples])
-    sel = np.abs(ss - s_query) <= window
-    if sel.sum() >= 2:
-        return float(np.median(ts[sel]))
-    return float(np.median(ts))
+    ss = np.array([a for a, _ in samples], float)
+    ts = np.array([b for _, b in samples], float)
+    o = np.argsort(ss)
+    ss, ts = ss[o], ts[o]
+    keep = np.isfinite(ts)
+    for _ in range(3):
+        bad = np.zeros(len(ss), bool)
+        for i in np.where(keep)[0]:
+            idx = np.where(keep)[0]
+            idx = idx[idx != i]
+            if len(idx) < 3:
+                break
+            d = np.abs(ss[idx] - ss[i])
+            nb = idx[d <= near]
+            if len(nb) < 6:
+                nb = idx[np.argsort(d)[:6]]
+            v = ts[nb]
+            med = float(np.median(v))
+            mad = 1.4826 * float(np.median(np.abs(v - med)))
+            if abs(ts[i] - med) > max(3.0, 3.0 * mad):
+                bad[i] = True
+        if not bad.any():
+            break
+        keep &= ~bad
+    sk, tk = ss[keep], ts[keep]
+    if len(sk) == 0:
+        return None
+    lo, hi = float(sk[0]), float(sk[-1])
+    n = int(np.ceil((hi - lo) / step)) + 1
+    if len(sk) < 3 or n < 3:
+        z, g = np.full(2, float(np.median(tk))), np.array([lo, hi + 1e-6])
+    else:
+        g = lo + np.arange(n) * step
+        u = (sk - lo) / step
+        i0 = np.clip(np.floor(u).astype(int), 0, n - 2)
+        t = u - i0
+        A = np.zeros((n, n))
+        rhs = np.zeros(n)
+        for a, w in ((i0, 1.0 - t), (i0 + 1, t)):      # Bᵀ B · Bᵀ T (겹선형 몫)
+            np.add.at(rhs, a, w * tk)
+            for b, v in ((i0, 1.0 - t), (i0 + 1, t)):
+                np.add.at(A, (a, b), w * v)
+        D = np.diff(np.eye(n), 2, axis=0)
+        A += lam * (D.T @ D) + 1e-9 * np.eye(n)
+        z = np.linalg.solve(A, rhs)
+
+    def f(s):
+        return float(np.interp(min(max(float(s), lo), hi), g, z))
+
+    f.kept, f.dropped = int(keep.sum()), int((~keep).sum())
+    return f
 
 
 # ---------------------------------------------------------------- 360 사진
@@ -195,24 +346,29 @@ def _pano_job(args):
         cv2.setNumThreads(2)               # 일꾼 여럿이 스레드를 서로 다투지 않게
     except ImportError:
         pass
+    from .camera import sharpen
     if isinstance(osv, dict):                 # 사진 모드 JPG (카메라가 이미 꿰맴)
         from .photos import to_grid_north
-        im = Image.fromarray(to_grid_north(osv['path'], osv['heading'], osv['gamma'], width))
+        pano = np.ascontiguousarray(to_grid_north(osv['path'], osv['heading'], osv['gamma'], width))
     else:
         from .camera import Rig, stitch
         rig = Rig(**rig_dict)
         a, b = extract_pair(ffmpeg, osv, t)
         pano = stitch(a, b, rig, np.array(R), W=width)
-        im = Image.fromarray(pano)
     # 약한 선명화 — 겹선형 다시 뽑기로 무뎌진 가장자리만 살린다 (JACK 1123 화질 · 비교 그림으로 확인)
-    from PIL import ImageFilter
-    im = im.filter(ImageFilter.UnsharpMask(radius=1.2, percent=60, threshold=2))
+    pano = sharpen(pano, radius=1.2, percent=60, threshold=2)
+    im = Image.fromarray(pano)
     buf = io.BytesIO()
     im.save(buf, 'JPEG', quality=quality, optimize=True)
     b64 = base64.b64encode(buf.getvalue()).decode('ascii')
     _write_atomic(pano_js, ('RV_PANO_LOADED("%s","data:image/jpeg;base64,%s");\n' % (sid, b64)).encode('ascii'))
     tb = io.BytesIO()
-    im.resize((512, 256), Image.LANCZOS).save(tb, 'JPEG', quality=80)
+    try:
+        import cv2
+        small = Image.fromarray(cv2.resize(pano, (512, 256), interpolation=cv2.INTER_AREA))
+    except ImportError:
+        small = im.resize((512, 256), Image.LANCZOS)
+    small.save(tb, 'JPEG', quality=80)
     _write_atomic(thumb_jpg, tb.getvalue())
     return sid, len(b64)
 
@@ -247,9 +403,9 @@ def main(argv=None):
     ap.add_argument('--terrain', choices=['auto', 'db', 'none'], default='auto',
                     help='수치지도 표고: auto = 사내 DB 되면 씀 · db · none')
     ap.add_argument('--ngii', nargs='+', help='수치지도 DXF 파일 (주면 DB 대신 이것)')
-    ap.add_argument('--terrain-mode', choices=['datum', 'surface'], default='datum',
-                    help='datum = 수치지도로 표고 기준만 (촬영점 사이 높낮이는 영상 값 · 기본) · '
-                         'surface = 점마다 수치지도 높이 (표고점 촘촘한 1:1000 DXF 일 때)')
+    ap.add_argument('--terrain-mode', choices=['datum', 'surface'], default='surface',
+                    help='surface = 땅 높이는 점마다 수치지도 DEM (기본 · 1124 JACK: 평면 설계용 — 관 = DEM − 평균매설깊이) · '
+                         'datum = 수치지도로 표고 기준만 (촬영점 사이 높낮이는 영상 값)')
     ap.add_argument('--overwrite', action='store_true', help='다른 영상으로 만든 폴더라도 덮어 만듦')
     ap.add_argument('--normal-priority', action='store_true', help='보통 우선순위로 (기본은 낮음 — PC 쓰면서 돌려도 안 버벅이게)')
     a = ap.parse_args(argv)
@@ -306,6 +462,9 @@ def main(argv=None):
     rig = default_rig()
     rig_sig = json.dumps(rig.__dict__, sort_keys=True)
     workers = a.workers or max(2, min(6, (os.cpu_count() or 4) // 3))
+    eta = Eta(workers, a.width, sum(os.path.getsize(p) for p in osvs), len(jpgs),
+              0.0 if a.no_terrain else a.interval / 20.0)
+    eta.show('시작', None, force=True)
 
     # 관로
     layers, lines = [], []
@@ -337,14 +496,19 @@ def main(argv=None):
                 vid = (parts[1][-6:] + '_' + parts[2]) if len(parts) >= 3 else name
             used_vids.add(vid)
             log('영상 %s 읽는 중' % name, fp)
+            eta.show('영상 읽는 중', eta.later() if eta.known() else None, force=True)
+            t_read = time.time()
+            nbytes = os.path.getsize(osv)
             frames = read_meta(osv)
             frames = [f for f in frames if a.from_time <= f.time <= a.to_time]
             if not frames or not any(_has_gps(f) for f in frames):
                 log('  GPS 없음 → 건너뜀', fp)
+                eta.video_read(nbytes, time.time() - t_read, 0)
                 continue
             off = yaw_offsets(frames)
             if off is None:
                 log('  방향 기록 없음 → 건너뜀', fp)
+                eta.video_read(nbytes, time.time() - t_read, 0)
                 continue
             dt = float(np.median(np.diff([f.time for f in frames[:200]]))) if len(frames) > 2 else 1 / 30.0
             seek_back = SEEK_FRACTION * dt
@@ -357,6 +521,7 @@ def main(argv=None):
             if a.max_shots:
                 picks = picks[:a.max_shots]
             log('  장면 %d · 진행 %.0f m · 촬영점 %d' % (len(frames), s[-1], len(picks)), fp)
+            eta.video_read(nbytes, time.time() - t_read, len(picks))
             if not picks:
                 continue
             # 땅 높이
@@ -374,12 +539,15 @@ def main(argv=None):
                 else:
                     sub = [i for i in range(len(frames)) if s_lo <= s[i] <= s_hi]
                     samples = estimate_terrain(osv, [frames[i] for i in sub], en[sub], s[sub], [R_list[i] for i in sub],
-                                               rig, ffmpeg, pool, step_m, seek_back, fp)
+                                               rig, ffmpeg, pool, step_m, seek_back, fp, eta=eta)
             videos.append({'id': vid, 'name': name, 'key': key,
                            'terrain': [[round(x, 1), round(y, 2)] for x, y in samples]})
+            tprof = terrain_profile(samples)
+            if tprof is not None and tprof.dropped:
+                log('  땅 높이 튀는 값 %d곳 뺌 · %d곳으로 이음' % (tprof.dropped, tprof.kept), fp)
             for i in picks:
                 f = frames[i]
-                T = terrain_at(samples, s[i])
+                T = tprof(s[i]) if tprof is not None else None
                 agl = f.rel_alt - T if T is not None else f.rel_alt
                 if agl < 1.0:
                     agl = f.rel_alt
@@ -425,6 +593,7 @@ def main(argv=None):
         # 수치지도 땅 높이 (있으면 촬영점 · 관로 땅 높이를 이것으로 — 표고 EL)
         dem = None
         dem_note = ''
+        eta.show('수치지도 높이', eta.later(len(shots)), force=True)
         if a.terrain != 'none':
             from . import terrain
             es = np.array([sh['E'] for sh in shots]); ns = np.array([sh['N'] for sh in shots])
@@ -436,14 +605,19 @@ def main(argv=None):
                 elif a.terrain in ('auto', 'db') and terrain.db_available():
                     epsg = int(a.crs.split(':')[1])
                     cl = terrain.contours_from_db(bbox, epsg)
+                    sp = terrain.spot_heights_from_db(bbox, epsg)
                     pts = terrain.lines_to_points(cl, 2.0)
-                    dem_note = '사내 수치지도 DB 등고선 %d개' % len(cl)
+                    if len(sp):
+                        pts = np.vstack([pts, sp])
+                    dem_note = '사내 수치지도 DB 등고선 %d개 · 표고점 %d개' % (len(cl), len(sp))
                 else:
                     pts = None
                     if a.terrain == 'db':
                         log('수치지도: 사내 DB 접속 정보 없음 → 안 씀', fp)
                 if pts is not None and len(pts) >= 3:
-                    dem = terrain.Dem(pts)
+                    # 등고선 삼각망 그대로는 계단 → 5 m 격자 DEM · σ 15 m 로 고르게 (1124 JACK «DEM 으로»)
+                    dem = terrain.GridDem(pts, cell=5.0, sigma=15.0)
+                    dem_note += ' → 5 m DEM'
                     log('수치지도 땅 높이: %s · 점 %d' % (dem_note, dem.n), fp)
                 elif pts is not None:
                     log('수치지도: 이 범위에 높이 자료 없음 → 안 씀', fp)
@@ -538,6 +712,10 @@ def main(argv=None):
         total_b = 0
         failed = set()
         futs = {pool.submit(_pano_job, j): j[-1] for j in jobs}
+        t_p = time.time()
+        n_photo = sum(1 for j in jobs if isinstance(j[0], dict))
+        p_prior = ((len(jobs) - n_photo) * eta.pano_prior() + n_photo * Eta.PHOTO_PRIOR / workers) / max(1, len(jobs))
+        eta.show('360 사진 0 / %d' % len(jobs), len(jobs) * p_prior + Eta.TAIL, force=True)
         for fu in as_completed(futs):
             sid = futs[fu]
             try:
@@ -548,6 +726,9 @@ def main(argv=None):
                 failed.add(sid)
                 log('  사진 실패 %s → 뺌: %s' % (sid, str(ex)[:200]), fp)
             done += 1
+            eta.p_rate = eta.step(t_p, done, p_prior)
+            eta.show('360 사진 %d / %d' % (done, len(jobs)), (len(jobs) - done) * eta.p_rate + Eta.TAIL,
+                     done == len(jobs))
             if done % max(5, len(jobs) // 40) == 0 or done == len(jobs):
                 el = time.time() - t_start
                 log('  %d / %d  (%.0f MB · %.0f초)' % (done, len(jobs), total_b / 1e6, el), fp)
@@ -562,6 +743,7 @@ def main(argv=None):
                 if os.path.exists(tfn):
                     os.remove(tfn)
         shots = [sh for sh in shots if sh['id'] not in failed]
+        eta.show('마무리', Eta.TAIL, force=True)
 
     # project.js
     proj_shots = []
@@ -587,11 +769,24 @@ def main(argv=None):
     project = dict(version=1, title=a.title or os.path.basename(out), crs=a.crs, origin=dict(E=E0, N=N0),
                    depth=a.depth, cover=a.depth, homeZ=zhome, homeZByVideo=zhome_v, interval=a.interval, basemap=basemap,
                    terrain=(dem_note if dem is not None else '영상으로 잰 높이 (표고 아님)'),
+                   terrainMode=(a.terrain_mode if dem is not None else 'video'),
                    videos=[{'id': v['id'], 'name': v['name']} for v in videos], shots=proj_shots)
     _write_atomic(os.path.join(out, 'data', 'project.js'),
                   ('window.RV_PROJECT = ' + json.dumps(project, ensure_ascii=False, indent=1) + ';\n').encode('utf-8'))
 
-    # 관로 — 이번에 준 파일만 (안 주면 빈 파일: 원점이 바뀐 옛 관로가 엉뚱한 곳에 남지 않게)
+    # 관로 — 이번에 준 파일. 안 주면 있던 관로(관로 넣기 · 고친 것)를 그대로 두고 땅 높이만 새로 (1124).
+    # 원점이 바뀌어 옛 관로가 엉뚱한 곳에 그려질 때만 빈 파일.
+    from .pipes_update import reground
+    surf = dem if (dem is not None and a.terrain_mode == 'surface') else None
+    kept = None if lines else reground(out, 'pipes.js', 'RV_PIPES', surf)
+    if kept:
+        log('관로: 있던 %d줄 그대로 · 땅 높이만 새로' % kept, fp)
+    n_ob = reground(out, 'obstacles.js', 'RV_OBST', surf)
+    if n_ob:
+        log('지장물: 있던 %d줄 그대로 · 땅 높이만 새로' % n_ob, fp)
+    elif n_ob is None:
+        os.remove(os.path.join(out, 'data', 'obstacles.js'))
+        log('지장물: 원점이 바뀌어 뺌 → 다시 넣기', fp)
     pl = []
     if lines:
         from . import pipeload
@@ -613,9 +808,10 @@ def main(argv=None):
             pl.append(dict(layer=ln['layer'], label=ln['label'], dia=round(ln['dia'], 4), hasZ=bool(ln['hasZ']),
                            pts=pts, g=[round(v, 3) if v is not None else None for v in ln['g']], ll=ll,
                            ctrl=ln.get('ctrl') or list(range(len(pts)))))
-    _write_atomic(os.path.join(out, 'data', 'pipes.js'),
-                  ('window.RV_PIPES = ' + json.dumps({'layers': layers, 'lines': pl, 'origin': {'E': E0, 'N': N0}},
-                                                    ensure_ascii=False) + ';\n').encode('utf-8'))
+    if not kept:
+        _write_atomic(os.path.join(out, 'data', 'pipes.js'),
+                      ('window.RV_PIPES = ' + json.dumps({'layers': layers, 'lines': pl, 'origin': {'E': E0, 'N': N0}},
+                                                        ensure_ascii=False) + ';\n').encode('utf-8'))
     # 보기 화면용 높이 타일 (점 찍어 맞추기 · 지도 점의 땅 높이)
     dem_path = os.path.join(out, 'data', 'dem.js')
     if dem is not None:

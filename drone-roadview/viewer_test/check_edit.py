@@ -4,14 +4,16 @@
     python -I check_edit.py --out <make_synth --edit 폴더> [--legacy <make_synth --legacy-pipes 폴더>] [--shots <폴더>]
 
   file   (프로그램 없음 · file://)
-    a  지도에서 관 누름 → 고름 · 손잡이 끌기 → 꼭짓점 (e, n) = 마우스 만큼 (±5 cm) · 5 m 마다 다시 나눔 · g = 비탈 땅 · ll ↔ en (±0.2 m)
+    a  [관로 고치기] 켜자마자 (고르기 전) 지도에 모든 관 원래 꼭짓점 손잡이가 보임 ·
+       지도에서 관 누름 → 고름 · 손잡이 끌기 → 꼭짓점 (e, n) = 마우스 만큼 (±5 cm) · 5 m 마다 다시 나눔 · g = 비탈 땅 · ll ↔ en (±0.2 m)
        끄는 동안 그때그때 바뀜 (놓기 전) · 끄는 동안 다시 올린 WebGL 그물 = 고른 관 것 (관 · 구덩이) 뿐
     b  360 에서 손잡이를 칠한 네모 (사진에서 찾은 빨간 네모 가운데) 로 → 꼭짓점 = 네모 자리 (±10 cm)
     c  Shift + 끌기 (지도) → 꼭짓점 모두 같은 만큼 · d  두 번 누르기 → 그 마디 위에 꼭짓점 · e  손잡이 누르고 Delete → 넣기 전과 같음
     f  Ctrl+Z 다섯 번 → 한 단계씩 정확히 (JSON) · Ctrl+Y 다섯 번 → 다시
     g  노면 띠 가장자리 · 깊이 방식 터파기 자른 선 ↔ 고친 선의 따로 계산한 투영 (중앙 ≤ 1.5 px)
     h  다시 열기 → «고친 관로 불러옴» + [버리기] · 고친 그대로 → 버리기 → 파일 그대로 · 다시 열면 알림 없음
-    i  360 에서 관 누름 → 그 관 손잡이 (마우스 올리면 move) · 원판 눌러도 안 옮겨 감 · 화살표는 옮겨 감 · 점 찍어 맞추기와 하나만
+    i  360: 켜자마자 (고르기 전) 모든 관 꼭짓점 손잡이가 보임 · 마우스 올리면 move · 고르지 않은 관 꼭짓점 바로 끌기 → 그 관만 바뀜 ·
+       원판 눌러도 안 옮겨 감 · 화살표는 옮겨 감 · 점 찍어 맞추기와 하나만
   host   (hostmock · save_pipes · export_pipes_shp)
        끝난 고침마다 0.8 초 모아 save_pipes 한 번 (글 = 'window.RV_PIPES = ' + JSON + ';\\n', ctrl · edited) · 두 번 빨리 → 한 번 ·
        되돌리기도 저장 · [SHP로 내보내기] = 저장 먼저 → export_pipes_shp · 취소 · 못 씀 · «관로 넣기» 창 단추 · [처음] 전에 저장 · 이 브라우저 저장 안 함
@@ -292,6 +294,21 @@ def ctrl_pts(ln):
     return [ln['pts'][k] for k in (ln.get('ctrl') or range(len(ln['pts'])))]
 
 
+def changed_near(png_off, png_on, pts, box, r=6, thr=25):
+    """화면 점 (client) 마다 둘레 ±r px 에서 두 장이 thr 넘게 다른 화소 수 · box (l, t, w, h) 안 (12 px 여유) 의 점만."""
+    a = np.asarray(Image.open(png_off).convert('RGB')).astype(int)
+    b = np.asarray(Image.open(png_on).convert('RGB')).astype(int)
+    l, t, w, h = box
+    out = []
+    for q in pts:
+        if q is None or not (l + 12 < q[0] < l + w - 12 and t + 12 < q[1] < t + h - 12):
+            continue
+        x, y = int(round(q[0])), int(round(q[1]))
+        win = np.abs(a[y - r:y + r + 1, x - r:x + r + 1] - b[y - r:y + r + 1, x - r:x + r + 1]).max(axis=2)
+        out.append(int((win > thr).sum()))
+    return out
+
+
 def errs(ed, where):
     e = cv.errors(ed)
     for x in e:
@@ -398,8 +415,8 @@ def rim_edges(ln, tr, cover):
     return out
 
 
-def cut_measure(img, cam, edges, others, skip=0.3, step=0.2):
-    """밝은 자른 선 가운데 (밝은 화소 무게중심) − 투영한 가장자리 (check_trench.measure_cut 과 같은 재기, 높이는 꼭짓점마다)."""
+def cut_measure(img, gl, cam, edges, others, skip=0.3, step=0.2):
+    """어두운 자른 선 가운데 − 투영한 가장자리 (check_trench.measure_cut 과 같은 재기, 높이는 꼭짓점마다 · gl = 겹쳐 그림 숨김)."""
     out = []
     for EA, EB in edges:
         L = float(np.linalg.norm(EB[:2] - EA[:2]))
@@ -411,26 +428,9 @@ def cut_measure(img, cam, edges, others, skip=0.3, step=0.2):
             if p0 is None or q0 is None or not (12 < p0[0] < cam.w - 12 and 12 < p0[1] < cam.h - 12):
                 continue
             sd = (q0 - p0) / np.hypot(*(q0 - p0))
-            nrm = np.array([-sd[1], sd[0]])
-            s = np.arange(-8, 8.001, 0.25)
-            rgb = cv.bilinear(img, p0[None, :] + s[:, None] * nrm[None, :])
-            if not np.isfinite(rgb).all() or (rgb.max(axis=1) < 30).any():
-                continue
-            lv = ct.lum(rgb)
-            k = int(np.argmax(lv))
-            if lv[k] < 200:
-                continue
-            base = lv[k] - 60
-            i0 = k
-            while i0 > 0 and lv[i0 - 1] >= base:
-                i0 -= 1
-            i1 = k
-            while i1 + 1 < s.size and lv[i1 + 1] >= base:
-                i1 += 1
-            if (i1 - i0 + 1) * 0.25 > 3.5:
-                continue
-            w = lv[i0:i1 + 1] - base
-            out.append(float((s[i0:i1 + 1] * w).sum() / w.sum()))
+            x = ct.dark_line_at(img, gl, p0, np.array([-sd[1], sd[0]]))
+            if x is not None:
+                out.append(x)
     return np.array(out)
 
 
@@ -474,7 +474,16 @@ def run_file(ed, out_dir, shots_dir, ground, page='로드뷰.html', tag='file'):
     snaps = [lines_json(P0)]
     mp = MapTf(ed)
     print('== a  지도: 고르기 · 손잡이 끌기 (깊이 방식 · 터파기 켬)')
+    p_off = os.path.join(shots_dir, tag + '_a_edit_off.png')
+    ed.frames(3)
+    ed.screenshot(p_off)
     inp.el_click('tgEdit')
+    ed.frames(3)
+    p_on = os.path.join(shots_dir, tag + '_a_edit_on.png')
+    ed.screenshot(p_on)
+    vx = [mp.en_scr(q[0], q[1]) for ln in P0['lines'] for q in ctrl_pts(ln)]
+    cnt = changed_near(p_off, p_on, vx, (mp.l, mp.t, mp.w, mp.h))
+    report('켜자마자 (고르기 전) 지도에 모든 관 꼭짓점 손잡이', len(cnt) >= 5 and min(cnt) >= 8, '꼭짓점 %d 개 · 바뀐 화소 %s' % (len(cnt), cnt))
     st = js_json(ed, "{on: document.getElementById('tgEdit').classList.contains('on'), chip: document.getElementById('edChip').classList.contains('show'),"
                      " tip: document.getElementById('edTip').textContent, shp: document.getElementById('edShp').hidden, drop: document.getElementById('edDrop').hidden}")
     report('[관로 고치기] → 켜짐 · 안내 · SHP 단추 숨김 (프로그램 없음)', st['on'] and st['chip'] and st['shp'] and st['drop']
@@ -645,8 +654,14 @@ def run_file(ed, out_dir, shots_dir, ground, page='로드뷰.html', tag='file'):
     ed.frames(3)
     p_d = os.path.join(shots_dir, tag + '_g_trench.png')
     ed.screenshot(p_d)
+    ed.js("document.getElementById('ov').style.visibility = 'hidden'")
+    ed.frames(3)
+    p_dg = os.path.join(shots_dir, tag + '_g_trench_gl.png')
+    ed.screenshot(p_dg)
+    ed.js("document.getElementById('ov').style.visibility = ''")
+    ed.frames(2)
     cover = float(ed.js("Number(document.getElementById('cover').value)"))
-    e = cut_measure(view_img(p_d, cam), cam, rim_edges(E1, TR_DEF, cover), others)
+    e = cut_measure(view_img(p_d, cam), view_img(p_dg, cam), cam, rim_edges(E1, TR_DEF, cover), others)
     m, p = stat(e)
     report('g 터파기 자른 선 (고친 E1)', e.size >= 40 and m <= 1.5, '표본 %d · 중앙 %.2f px · 90%% %.2f px' % (e.size, m, p))
     errs(ed, tag + ' g')
@@ -686,32 +701,31 @@ def run_pick(ed, out_dir, shots_dir, ground):
     ed.js('localStorage.clear()')
     load(ed, url)
     cam = Cam(ed, VIEW_O)
-    inp.el_click('tgEdit')
-    P = pipes(ed)
     on_line = lambda e, n: cam.proj(np.array([e, n, ground.at(e, n)]))  # noqa: E731
     is_move = lambda: 'move' in js_json(ed, "[...document.getElementById('ov').classList]")  # noqa: E731
+    p_off = os.path.join(shots_dir, 'i_edit_off.png')
+    ed.frames(3)
+    ed.screenshot(p_off)
+    inp.el_click('tgEdit')
+    ed.frames(3)
+    p_on = os.path.join(shots_dir, 'i_edit_on.png')
+    ed.screenshot(p_on)
+    P = pipes(ed)
+    cnt = changed_near(p_off, p_on, [on_line(q[0], q[1]) for ln in P['lines'] for q in ctrl_pts(ln)], (cam.l, cam.t, cam.w, cam.h))
+    report('i 켜자마자 (고르기 전) 360 에 모든 관 꼭짓점 손잡이', len(cnt) >= 3 and min(cnt) >= 8, '보이는 꼭짓점 %d 개 · 바뀐 화소 %s' % (len(cnt), cnt))
     v1 = on_line(15.0, 5.0)
     v2 = on_line(22.0, 0.0)
-    inp.click(*np.round(on_line(12.5, 5.0)))
     inp.move(*np.round(v1))
     m1 = is_move()
-    ed.screenshot(os.path.join(shots_dir, 'i_pick_E1_hover.png'))
     inp.move(*np.round(v2))
     m2 = is_move()
-    report('i 360 에서 E1 띠 누름 → E1 손잡이만', m1 and not m2, 'E1 꼭짓점 %s · E2 꼭짓점 %s' % (m1, m2))
-    inp.click(*np.round(on_line(22.0, -3.0)))
-    inp.move(*np.round(v2))
-    m2 = is_move()
-    ed.screenshot(os.path.join(shots_dir, 'i_pick_E2_hover.png'))
-    inp.move(*np.round(v1))
-    m1 = is_move()
-    report('i 360 에서 E2 띠 누름 → E2 손잡이만', m2 and not m1, 'E2 꼭짓점 %s · E1 꼭짓점 %s' % (m2, m1))
-    inp.move(*np.round(v2))
+    ed.screenshot(os.path.join(shots_dir, 'i_hover_E2.png'))
+    report('i 고르기 전 꼭짓점 마우스 올림 → move (E1 · E2)', m1 and m2, 'E1 꼭짓점 %s · E2 꼭짓점 %s' % (m1, m2))
     a = np.round(v2)
     inp.drag(a, a + np.array([0, -25]))
     P2 = pipes(ed)
     cp = ctrl_pts(P2['lines'][1])
-    report('i E2 (hasZ) 끌기 → 관 중심 표고 그대로 · 다른 관 그대로', len(cp) == 3 and [round(q[2], 3) for q in cp] == [47.0, 47.5, 48.5]
+    report('i 고르지 않은 E2 (hasZ) 꼭짓점 바로 끌기 → 관 중심 표고 그대로 · 다른 관 그대로', len(cp) == 3 and [round(q[2], 3) for q in cp] == [47.0, 47.5, 48.5]
            and math.hypot(cp[1][0] - 22.0, cp[1][1]) > 0.5 and lines_json(P2)[0] == lines_json(P)[0] and lines_json(P2)[2] == lines_json(P)[2],
            ' · '.join('(%.2f, %.2f, %.2f)' % tuple(q) for q in cp))
     check_line('i E2', P2['lines'][1], ground)

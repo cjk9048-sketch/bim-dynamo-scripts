@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import shutil
@@ -19,7 +20,7 @@ import uuid
 from pathlib import Path
 
 APP_NAME = '드론 로드뷰'
-APP_VERSION = '1.0.6'
+APP_VERSION = '1.0.7'
 FROZEN = getattr(sys, 'frozen', False)
 BASE = Path(sys._MEIPASS) if FROZEN else Path(__file__).resolve().parent.parent      # noqa: SLF001
 HOME_HTML = (BASE / 'roadview' / 'app_home' / 'index.html') if not FROZEN else (BASE / 'app_home' / 'index.html')
@@ -67,6 +68,8 @@ class Job:
         self.lines = []
         self.total = 0
         self.t0 = time.time()
+        self.label = ''          # 만들기가 알려 준 지금 단계 (@진행 줄)
+        self.eta_at = None       # 끝날 시각 (time.time 기준) · 모르면 None
         env = dict(os.environ, PYTHONIOENCODING='utf-8')
         self.proc = subprocess.Popen(args, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                      creationflags=NO_WINDOW, env=env)
@@ -75,6 +78,9 @@ class Job:
     def _read(self):
         for raw in iter(self.proc.stdout.readline, b''):
             s = raw.decode('utf-8', errors='replace').rstrip()
+            if s.startswith('@진행 '):
+                self._progress(s)
+                continue
             self.lines.append(s)
             if len(self.lines) > 400:
                 self.lines = self.lines[-300:]
@@ -86,6 +92,27 @@ class Job:
                 self.pct = 100.0
             elif not self.line.startswith('멈춤'):
                 self.line = '실패 · ' + (self.lines[-1] if self.lines else '')
+
+    def _progress(self, s):
+        """«@진행 <퍼센트> <남은 초 | -1> <글>» — 만들기가 단계마다 잰 빠르기로 셈한 값."""
+        try:
+            _, pct, left, label = s.split(' ', 3)
+            self.pct = max(self.pct, float(pct))
+            left = int(left)
+            self.eta_at = time.time() + left if left >= 0 else None
+            self.label = label.strip()
+        except ValueError:
+            pass
+
+    def _left_text(self):
+        if self.eta_at is None:
+            return '남은 시간 재는 중'
+        r = self.eta_at - time.time()
+        if r < 60:
+            return '곧 끝'
+        m = int(math.ceil(r / 60.0))
+        hm = ('%d시간 %d분' % divmod(m, 60)) if m >= 60 else ('%d분' % m)
+        return '남은 약 %s · %s 끝' % (hm, time.strftime('%H:%M', time.localtime(self.eta_at)))
 
     def _parse(self, s):
         el = time.time() - self.t0
@@ -104,9 +131,9 @@ class Job:
         m = re.match(r'^\S+\s+(\d+) / (\d+)\s+\(', s)
         if m and self.total:
             done, tot = int(m.group(1)), int(m.group(2))
-            self.pct = 5 + 95.0 * done / max(1, tot)
-            left = el / max(1, done) * (tot - done)
-            self.line = '360 사진 %d / %d · 남은 시간 약 %d분' % (done, tot, left / 60 + 1)
+            if not self.label:                 # 옛 만들기 (@진행 줄 없음)
+                self.pct = 5 + 95.0 * done / max(1, tot)
+            self.line = '360 사진 %d / %d' % (done, tot)
         elif '높이 ' in s and '초:' in s:
             self.line = '땅 높이 재는 중 · %d초' % el
         elif '읽는 중' in s:
@@ -122,7 +149,11 @@ class Job:
             self.line = '멈춤 · 다시 [만들기] 누르면 만든 사진은 그대로 쓰고 이어 함'
 
     def info(self):
-        return {'id': self.id, 'state': self.state, 'pct': round(self.pct, 1), 'line': self.line,
+        line, pill = self.line, ''
+        if self.state == 'run' and self.label:
+            pill = self._left_text()
+            line = self.label + ' · ' + pill
+        return {'id': self.id, 'state': self.state, 'pct': round(self.pct, 1), 'line': line, 'pill': pill,
                 'url': self.url, 'out': self.out, 'log': self.lines[-12:]}
 
 
