@@ -97,6 +97,68 @@
         <Command Global="DHWALLCOMP" Local="DHWALLCOMP" />
         <Command Global="DHUNDOCLR" Local="DHUNDOCLR" />
         <Command Global="DHABOUT" Local="DHABOUT" />
+        <!-- ★[JACK 0915 배포판] 코드의 [CommandMethod]를 전부 싣는다 —
+             자동 로드라 없어도 돌긴 하지만, 매니페스트가 실제와 어긋나 있으면
+             "이 명령이 있는지" 확인할 길이 도면 쪽에 남지 않는다. -->
+        <Command Global="DHALT" Local="DHALT" />
+        <Command Global="DHCROPDEPS" Local="DHCROPDEPS" />
+        <Command Global="DHEXCAVRESET" Local="DHEXCAVRESET" />
+        <Command Global="DHEXCAVUPDATE" Local="DHEXCAVUPDATE" />
+        <Command Global="DHEXCAVWALLALL" Local="DHEXCAVWALLALL" />
+        <Command Global="DHGNDCONTOUR" Local="DHGNDCONTOUR" />
+        <Command Global="DHGROUNDOFF" Local="DHGROUNDOFF" />
+        <Command Global="DHGROUNDPANEL" Local="DHGROUNDPANEL" />
+        <Command Global="DHPROFILEREV" Local="DHPROFILEREV" />
+        <Command Global="DHQTYXLSX" Local="DHQTYXLSX" />
+        <Command Global="DHQTYXLSXMAKE" Local="DHQTYXLSXMAKE" />
+        <Command Global="DHROAD" Local="DHROAD" />
+        <Command Global="DHROADDITCH" Local="DHROADDITCH" />
+        <Command Global="DHROADDRAW" Local="DHROADDRAW" />
+        <Command Global="DHROADENDS" Local="DHROADENDS" />
+        <Command Global="DHROADGROUND" Local="DHROADGROUND" />
+        <Command Global="DHROADOFF" Local="DHROADOFF" />
+        <Command Global="DHROADPANEL" Local="DHROADPANEL" />
+        <Command Global="DHROADPVIADD" Local="DHROADPVIADD" />
+        <Command Global="DHROADPVIDEL" Local="DHROADPVIDEL" />
+        <Command Global="DHROADPVIDRAW" Local="DHROADPVIDRAW" />
+        <Command Global="DHROADREDRAFT" Local="DHROADREDRAFT" />
+        <Command Global="DHROADREV" Local="DHROADREV" />
+        <Command Global="DHROADSECPANEL" Local="DHROADSECPANEL" />
+        <Command Global="DHROADSHEET" Local="DHROADSHEET" />
+        <Command Global="DHROADSLOPECONV" Local="DHROADSLOPECONV" />
+        <Command Global="DHROADSMOOTH" Local="DHROADSMOOTH" />
+        <Command Global="DHROADUPDATE" Local="DHROADUPDATE" />
+        <Command Global="DHROADWALL" Local="DHROADWALL" />
+        <Command Global="DHROADWALLADD" Local="DHROADWALLADD" />
+        <Command Global="DHROADWALLCONV" Local="DHROADWALLCONV" />
+        <Command Global="DHROADWALLDEL" Local="DHROADWALLDEL" />
+        <Command Global="DHROADXSEC" Local="DHROADXSEC" />
+        <Command Global="DHSECPANEL" Local="DHSECPANEL" />
+        <Command Global="DHSECSHEETAPPLY" Local="DHSECSHEETAPPLY" />
+        <Command Global="DHSHEETFRAMEADD" Local="DHSHEETFRAMEADD" />
+        <Command Global="DHSHEETPLAN" Local="DHSHEETPLAN" />
+        <Command Global="DHSTRUCTBOX" Local="DHSTRUCTBOX" />
+        <Command Global="DHSTRUCTBOXADD" Local="DHSTRUCTBOXADD" />
+        <Command Global="DHSTRUCTBOXEDIT" Local="DHSTRUCTBOXEDIT" />
+        <Command Global="DHSURVEYFIX" Local="DHSURVEYFIX" />
+        <Command Global="DHTUTORIAL" Local="DHTUTORIAL" />
+        <Command Global="DHUDITCHAREA" Local="DHUDITCHAREA" />
+        <Command Global="DHUDITCHBUILD" Local="DHUDITCHBUILD" />
+        <Command Global="DHUDITCHCATCH" Local="DHUDITCHCATCH" />
+        <Command Global="DHUDITCHCATCHVIS" Local="DHUDITCHCATCHVIS" />
+        <Command Global="DHUDITCHDEL" Local="DHUDITCHDEL" />
+        <Command Global="DHUDITCHDRAW" Local="DHUDITCHDRAW" />
+        <Command Global="DHUDITCHEDGE" Local="DHUDITCHEDGE" />
+        <Command Global="DHUDITCHFIT" Local="DHUDITCHFIT" />
+        <Command Global="DHUDITCHPICK" Local="DHUDITCHPICK" />
+        <Command Global="DHUDITCHUSCALE" Local="DHUDITCHUSCALE" />
+        <Command Global="DHUDITCHZOOM" Local="DHUDITCHZOOM" />
+        <Command Global="DHWALLADD" Local="DHWALLADD" />
+        <Command Global="DHWALLMIGRATE" Local="DHWALLMIGRATE" />
+        <Command Global="DHWALLREVERT" Local="DHWALLREVERT" />
+        <Command Global="DHWALLSET" Local="DHWALLSET" />
+        <Command Global="DHWALLSETAPPLY" Local="DHWALLSETAPPLY" />
+        <Command Global="DHWALLSETROAD" Local="DHWALLSETROAD" />
       </Commands>
     </ComponentEntry>
     <!-- [JACK 0731] 3D 뷰 전환 단축 LISP(v1~v4·vv1~vv3) — 애드인과 함께 항상 자동 로드(설치 안 돼 있으면 이걸로 대체).
