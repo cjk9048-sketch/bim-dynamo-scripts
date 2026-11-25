@@ -26,7 +26,10 @@
 <main>
   <!-- 홈 -->
   <section id="pageHome">
-    <button id="bCreate" class="create"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M12 8v8M8 12h8" stroke="#1b1b1b" stroke-width="2.2"/></svg>프로젝트 생성</button>
+    <div class="creates">
+      <button id="bCreate" class="create"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M12 8v8M8 12h8" stroke="#1b1b1b" stroke-width="2.2"/></svg>프로젝트 생성 <span class="cs">360 영상</span></button>
+      <button id="bMapping" class="create"><svg viewBox="0 0 24 24"><path d="M12 2 3 7v10l9 5 9-5V7zm0 2.3 6.6 3.7L12 11.7 5.4 8zM5 9.7l6 3.4v6.6l-6-3.4zm8 10V13.1l6-3.4v6.6z"/></svg>3D 매핑 <span class="cs">경사촬영 사진</span></button>
+    </div>
     <div class="bar">
       <div class="h">최근 프로젝트 <span id="cnt"></span></div>
       <div class="tools"><button id="bOpen" class="mini">폴더 열기</button></div>
@@ -133,7 +136,38 @@
     </div>
   </section>
 </div>
+<!-- 3D 매핑 만들기 (JACK 1125 · 경사촬영 사진 → 3D 모델 · 정사 · DSM) -->
+<div id="mp" class="mp hide">
+  <header class="etop">
+    <button id="mBack" class="ib" title="처음 화면"><svg viewBox="0 0 24 24"><path d="M15 5 8 12l7 7" fill="none" stroke="currentColor" stroke-width="2.2"/></svg></button>
+    <b class="etitle">3D 매핑</b>
+    <input id="mTitle" class="tname" type="text" placeholder="이름">
+    <div id="mQ" class="seg"><button data-q="fast" title="사진 1/4 크기">빠르게</button><button data-q="normal" class="on" title="사진 1/2 크기">보통</button><button data-q="fine" title="원본 크기">정밀</button></div>
+    <div class="sp"></div>
+    <span id="mEst" class="est"></span>
+    <button id="mBuild" class="pri">만들기</button>
+  </header>
+  <section class="mmap"><div id="mMap" class="map"><div class="tiles"></div><svg class="ov"></svg><div id="mBox" class="mbox hide"></div></div></section>
+  <aside class="eside">
+    <div class="mgrp">
+      <button id="mPick" class="imp"><b>+</b> 사진 폴더</button>
+      <div id="mInfo" class="sub"></div>
+    </div>
+    <div class="mgrp">
+      <div class="row"><button id="mAll" class="mini" title="모든 사진">전체</button><button id="mArea" class="mini" title="지도에서 끌어 범위 고르기 (사진이 바라보는 곳)">범위 그리기</button><button id="mNone" class="mini">비우기</button></div>
+      <div id="mSel" class="sub"></div>
+    </div>
+    <div class="form">
+      <label>결과 폴더</label><div class="row"><input id="mOut" type="text"><button id="mOutB" class="mini">바꾸기</button></div>
+    </div>
+    <div class="prog"><div id="mBar"></div></div>
+    <div id="mStatus" class="sub"></div>
+    <pre id="mLog" class="hide"></pre>
+    <div class="dfoot"><button id="mStop" class="mini" disabled>멈추기</button></div>
+  </aside>
+</div>
 <div id="toast"></div>
+<script src="mapping.js"></script>
 <script src="edit.js"></script>
 <script src="home.js"></script>
 </body>

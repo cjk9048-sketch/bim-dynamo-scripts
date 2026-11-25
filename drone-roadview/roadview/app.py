@@ -45,7 +45,7 @@ def _cli(cmd, args):
         cand = py[:-len('pythonw.exe')] + 'python.exe'
         if os.path.exists(cand):
             py = cand
-    mod = {'build': 'roadview.build', 'share': 'roadview.share'}[cmd]
+    mod = {'build': 'roadview.build', 'share': 'roadview.share', 'map': 'roadview.mapping'}[cmd]
     return [py, '-u', '-m', mod] + args, str(BASE)
 
 
@@ -117,6 +117,9 @@ class Job:
 
     def _parse(self, s):
         el = time.time() - self.t0
+        if self.kind == 'map':                      # 진행 · 남은 시간은 «@진행» 줄 (mapping.Eta)
+            self.line = s.split(' ', 1)[-1].strip()[:100]
+            return
         if self.kind == 'share':
             m = re.search(r'(\d+)\s*/\s*(\d+)', s)
             if m and int(m.group(2)) > 0:
@@ -206,6 +209,16 @@ class Api:
     def _remember(self, folder):
         folder = str(Path(folder).resolve())
         info = {'path': folder, 'title': Path(folder).name, 'shots': 0, 'updated': time.strftime('%Y-%m-%d %H:%M')}
+        mp = Path(folder) / 'data' / 'mapping.js'
+        if mp.exists():                                 # 3D 매핑 프로젝트: 썸네일 = 정사영상 미리보기
+            try:
+                M = json.loads(mp.read_text(encoding='utf-8').split('=', 1)[1].strip().rstrip(';'))
+                info.update(title=M.get('title') or info['title'], shots=M.get('photos', 0), kind='mapping')
+                t = Path(folder) / '결과물' / '정사영상_미리보기.png'
+                if t.exists():
+                    info['thumb'] = str(t)
+            except Exception:
+                pass
         try:
             s = (Path(folder) / 'data' / 'project.js').read_text(encoding='utf-8')
             P = json.loads(s.split('=', 1)[1].strip().rstrip(';'))
@@ -273,6 +286,8 @@ class Api:
         dst = Path(folder)
         pairs = [(src / 'app.js', dst / 'viewer' / 'app.js'), (src / 'style.css', dst / 'viewer' / 'style.css'),
                  (src / 'index.html', dst / 'index.html'), (src / 'index.html', dst / '로드뷰.html')]
+        if (dst / 'data' / 'mapping.js').exists():      # 3D 매핑 프로젝트 = 3D 보기 화면
+            pairs = [(src / 'map3d.js', dst / 'viewer' / 'map3d.js'), (src / 'map3d.html', dst / 'index.html')]
         for a, b in pairs:
             try:
                 if not b.exists() or a.read_bytes() != b.read_bytes():
@@ -513,6 +528,8 @@ class Api:
         if not self._project:
             return {'ok': False, 'msg': '열린 프로젝트 없음'}
         from .pipes_update import update
+        if (Path(self._project) / 'data' / 'mapping.js').exists():     # 3D 매핑 프로젝트: 땅 높이 = DSM
+            from .mapping import import_pipes as update
         try:
             depth = p.get('depth')
             n, msg = update(self._project, p['path'], p.get('dia_field') or None,
@@ -522,6 +539,50 @@ class Api:
             return {'ok': True, 'lines': n, 'note': msg}
         except Exception as ex:
             return {'ok': False, 'msg': str(ex)[:200]}
+
+    def open_results(self):
+        """3D 매핑 결과물 폴더 (정사영상 · DSM · 지표면) 를 탐색기로."""
+        if not self._project:
+            return {'ok': False}
+        d = Path(self._project) / '결과물'
+        if d.exists():
+            os.startfile(str(d))       # noqa: S606 — 사용자 PC 탐색기
+        return {'ok': d.exists()}
+
+    # ---------------------------------------------------------------- 3D 매핑 만들기 (JACK 1125)
+    def scan_mapping(self, folder):
+        """폴더의 매핑 사진(위치 XMP · 360 아님) → 지도 · 범위 고르기용 목록."""
+        from .mapping import scan_folder
+        try:
+            ps = scan_folder(folder)
+        except Exception as ex:
+            return {'ok': False, 'msg': str(ex)[:160]}
+        return {'ok': True, 'folder': folder, 'photos': ps,
+                'out': os.path.join(os.path.dirname(folder.rstrip('\\/')), '매핑_' + os.path.basename(folder.rstrip('\\/')))}
+
+    def pick_mapping_folder(self):
+        d = self.pick_folder()
+        return self.scan_mapping(d) if d else None
+
+    def start_mapping(self, p):
+        folder, out = p.get('folder'), (p.get('out') or '').strip()
+        names = [n for n in (p.get('names') or []) if n]
+        if not folder or not out:
+            return {'ok': False, 'msg': '사진 폴더 · 결과 폴더 확인'}
+        if len(names) < 3:
+            return {'ok': False, 'msg': '사진 3장 이상 고르기'}
+        q = p.get('quality') if p.get('quality') in ('fast', 'normal', 'fine') else 'normal'
+        if (Path(out) / 'data' / 'project.js').exists():
+            return {'ok': False, 'msg': '로드뷰 폴더 → 다른 결과 폴더'}
+        work = Path(out) / 'work'
+        work.mkdir(parents=True, exist_ok=True)
+        lst = work / 'pick.txt'
+        lst.write_text('\n'.join(names) + '\n', encoding='utf-8')
+        args = [folder, '--out', out, '--quality', q, '--names', str(lst), '--title', p.get('title') or Path(out).name]
+        cmd, cwd = _cli('map', args)
+        j = Job('map', cmd, cwd, out=out)
+        self._jobs[j.id] = j
+        return {'ok': True, 'job': j.id}
 
     def save_pipes(self, text):
         """보기 화면에서 고친 관로 (window.RV_PIPES = ...;) → data/pipes.js · 처음 한 번 원본을 pipes_orig.js 로 남김."""

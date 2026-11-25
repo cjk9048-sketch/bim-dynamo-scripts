@@ -3,6 +3,7 @@
     rv_cli build 영상폴더 --out 결과폴더 --interval 5 ...
     rv_cli share 결과폴더
     rv_cli pipes 결과폴더 관로.shp --dia-field 관경
+    rv_cli map 사진폴더 --out 결과폴더 --quality normal   (3D 매핑)
 """
 import multiprocessing
 import sys
@@ -18,6 +19,8 @@ def main():
         from roadview.share import main as m
     elif cmd == 'pipes':
         from roadview.pipes_update import main as m
+    elif cmd == 'map':
+        from roadview.mapping import main as m
     else:
         print(__doc__)
         return 2

@@ -16,19 +16,21 @@ shutil.copy2(imageio_ffmpeg.get_ffmpeg_exe(), FF)          # 이름을 ffmpeg.ex
 import subprocess
 SNAP = os.path.join(WORK, 'viewer')
 os.makedirs(SNAP, exist_ok=True)
-for fn in ('index.html', 'app.js', 'style.css'):
+for fn in ('index.html', 'app.js', 'style.css', 'map3d.html', 'map3d.js'):
     data = subprocess.run(['git', 'show', 'HEAD:drone-roadview/viewer/' + fn], cwd=ROOT, capture_output=True, check=True).stdout
     open(os.path.join(SNAP, fn), 'wb').write(data)
 datas = [
     (os.path.join(SNAP, 'index.html'), 'viewer'),
     (os.path.join(SNAP, 'app.js'), 'viewer'),
     (os.path.join(SNAP, 'style.css'), 'viewer'),
+    (os.path.join(SNAP, 'map3d.html'), 'viewer'),
+    (os.path.join(SNAP, 'map3d.js'), 'viewer'),
     (os.path.join(ROOT, 'roadview', 'app_home'), 'app_home'),
     (os.path.join(ROOT, 'roadview', 'rig_avata360.json'), 'roadview'),
     (FF, 'ffmpeg'),
 ]
 hidden = ['roadview.build', 'roadview.share', 'roadview.pipes_update', 'roadview.terrain', 'roadview.photos',
-          'roadview.keys', 'roadview.media', 'roadview.shp', 'roadview.pipeload', 'roadview.pipes', 'roadview.height',
+          'roadview.keys', 'roadview.media', 'roadview.mapping', 'roadview.shp', 'roadview.pipeload', 'roadview.pipes', 'roadview.height',
           'matplotlib.tri', 'pg8000', 'pg8000.native', 'ezdxf', 'pyproj', 'webview', 'clr', 'cv2']
 excludes = ['tkinter', 'roadview.gui', 'IPython', 'pytest']
 

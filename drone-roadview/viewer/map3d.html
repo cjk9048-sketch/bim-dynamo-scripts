@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>3D 매핑 · 드론 로드뷰</title>
+<style>
+html, body { margin:0; height:100%; background:#1b1f26; overflow:hidden; font:12.5px 'Malgun Gothic','Segoe UI',sans-serif; color:#e6e6e6; }
+canvas { position:absolute; inset:0; width:100%; height:100%; display:block; cursor:grab; touch-action:none; }
+canvas.drag { cursor:grabbing; }
+#top { position:absolute; left:10px; top:10px; right:10px; display:flex; gap:6px; align-items:center; pointer-events:none; }
+#top > * { pointer-events:auto; }
+.ib { height:32px; min-width:32px; padding:0 10px; border:0; border-radius:8px; background:#0b0f15cc; color:#ddd; display:inline-flex; align-items:center; gap:6px; cursor:pointer; font:inherit; }
+.ib:hover { background:#20262fcc; color:#fff; }
+.ib.on { background:#2f81f7; color:#fff; }
+.ib svg { width:17px; height:17px; fill:currentColor; }
+.sp { flex:1; }
+#title { font-weight:600; background:#0b0f15cc; padding:7px 12px; border-radius:8px; }
+#info { position:absolute; left:10px; bottom:10px; background:#0b0f15cc; padding:5px 10px; border-radius:8px; color:#aab; font-size:11.5px; }
+#load { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); background:#0b0f15ee; padding:12px 18px; border-radius:10px; }
+#pick { position:absolute; display:none; background:#0b0f15ee; border:1px solid #2f81f7; padding:6px 10px; border-radius:8px; font-size:12px; pointer-events:none; white-space:nowrap; }
+#toast { position:fixed; left:50%; bottom:26px; transform:translateX(-50%); background:#0b0b0bee; border:1px solid #3a3a3a; padding:8px 14px; border-radius:8px; opacity:0; transition:opacity .25s; pointer-events:none; }
+#toast.show { opacity:1; }
+#dlg { position:absolute; right:10px; top:52px; width:300px; background:#12161dee; border:1px solid #2a303a; border-radius:10px; padding:12px; display:none; }
+#dlg label { display:block; color:#8b93a1; margin:8px 0 3px; }
+#dlg select, #dlg input { width:100%; box-sizing:border-box; background:#0b0f15; color:#e6e6e6; border:1px solid #333a45; border-radius:6px; padding:6px 8px; font:inherit; }
+#dlg .row { display:flex; gap:6px; justify-content:flex-end; margin-top:12px; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="top">
+  <button class="ib" id="bHome" title="처음 화면"><svg viewBox="0 0 24 24"><path d="M3 11.5 12 4l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg></button>
+  <span id="title">3D 매핑</span>
+  <div class="sp"></div>
+  <button class="ib" id="bPipes" title="관로 넣기 (SHP · DXF)"><svg viewBox="0 0 24 24"><path d="M2 10h14v4H2zM16 7h3v10h-3zM19 10h3v4h-3z"/></svg>관로 넣기</button>
+  <button class="ib on" id="bXray" title="관로를 땅 너머로 비춰 보기">투시</button>
+  <button class="ib" id="bFiles" title="결과물 폴더 (정사영상 · DSM · 지표면)"><svg viewBox="0 0 24 24"><path d="M4 6h5l2 2h9v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/></svg>결과물</button>
+  <button class="ib" id="bTop" title="위에서 보기"><svg viewBox="0 0 24 24"><path d="M12 3 4 8l8 5 8-5zM4 12l8 5 8-5M4 16l8 5 8-5" fill="none" stroke="currentColor" stroke-width="1.8"/></svg></button>
+</div>
+<div id="dlg">
+  <b id="dName">관로</b>
+  <label>관경 항목 (mm)</label><select id="dDia"></select>
+  <label>이름표 항목</label><select id="dLabel"></select>
+  <label>평균매설깊이 (땅 → 관 윗면, m)</label><input id="dDepth" type="number" step="0.1" value="1.2">
+  <div class="row"><button class="ib" id="dCancel">닫기</button><button class="ib on" id="dOk">넣기</button></div>
+</div>
+<div id="load">불러오는 중…</div>
+<div id="pick"></div>
+<div id="info"></div>
+<div id="toast"></div>
+<script src="data/mapping.js" onerror="void 0"></script>
+<script src="data/pipes.js" onerror="void 0"></script>
+<script src="viewer/map3d.js"></script>
+</body>
+</html>

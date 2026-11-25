@@ -87,7 +87,11 @@
     showPage('home');
     $('bOpen').addEventListener('click', async () => { const r = await call('pick_open'); if (r && !r.ok) toast(r.msg); });
     $('bCreate').addEventListener('click', () => window.RVEdit && window.RVEdit.open());
-    $('jobPill').addEventListener('click', () => window.RVEdit && window.RVEdit.open());
+    $('jobPill').addEventListener('click', () => {
+      if (window.RVMap && window.RVMap._S.job) window.RVMap.open(); else if (window.RVEdit) window.RVEdit.open();
+    });
+    $('bMapping').addEventListener('click', () => window.RVMap && window.RVMap.open());
     if (window.RVEdit) window.RVEdit.init(info);
+    if (window.RVMap) window.RVMap.init(info);
   });
 })();

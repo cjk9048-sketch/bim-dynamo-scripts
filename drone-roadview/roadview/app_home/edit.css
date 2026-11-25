@@ -116,3 +116,21 @@
 .ph i { position:absolute; left:-6px; top:0; width:13px; height:14px; background:#fff; clip-path:polygon(0 0,100% 0,100% 60%,50% 100%,0 60%); }
 .drop { position:absolute; inset:24px 0 0; display:flex; align-items:center; justify-content:center; color:#9fb6d8; background:#2f81f71a; border:1px dashed #2f81f7aa; pointer-events:none; }
 .ins { position:absolute; top:46px; height:74px; width:3px; margin-left:-1px; background:#ff4d5e; z-index:4; pointer-events:none; }
+
+/* 처음 화면: 만들기 단추 둘 */
+.creates { display:flex; gap:12px; }
+.creates .create { flex:1; }
+.create .cs { color:#8b8b8b; font-size:12px; margin-left:4px; }
+/* 3D 매핑 만들기 */
+.mp { position:fixed; inset:0; z-index:8; background:#141414; display:grid; grid-template-columns:1fr 330px; grid-template-rows:46px minmax(0,1fr); grid-template-areas:"top top" "map side"; }
+.mp .etop { grid-area:top; }
+.mp .eside { grid-area:side; }
+.mmap { grid-area:map; position:relative; min-width:0; min-height:0; }
+.mmap .map { position:absolute; inset:0; height:auto; border-radius:0; }
+.mmap .map.area { cursor:crosshair; }
+.mbox { position:absolute; border:1.5px dashed #ffb020; background:#ffb0201f; pointer-events:none; }
+.mgrp { background:#222; border-radius:8px; padding:10px; margin-bottom:10px; }
+.mgrp .row { gap:6px; }
+#mArea.on { background:#ffb020; color:#111; }
+#mBar { height:100%; width:0; background:linear-gradient(90deg,#2f81f7,#22d3ee); transition:width .4s; }
+pre#mLog { background:#141414; border-radius:6px; padding:8px 10px; color:#9a9a9a; font:11px/1.4 Consolas,monospace; max-height:220px; overflow:auto; margin:8px 0 0; white-space:pre-wrap; }
