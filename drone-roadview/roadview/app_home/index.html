@@ -65,7 +65,10 @@
 
   <section class="eview">
     <div id="stage" class="stage">
-      <div id="lens" class="lens down"><video id="vid" muted playsinline preload="auto"></video><img id="still" class="hide" alt=""></div>
+      <canvas id="fv" class="fv" title="끌기 = 둘러보기 · 휠 = 확대 · 두 번 누르기 = 앞"></canvas>
+      <canvas id="fvo" class="fvo"></canvas>
+      <div id="gHint" class="ghint hide"></div>
+      <div id="lens" class="lens free"><video id="vid" muted playsinline preload="auto"></video><img id="still" class="hide" alt=""></div>
       <div id="noclip" class="noclip">영상을 아래 타임라인으로 끌어 놓기</div>
     </div>
     <div class="ctl">
@@ -75,12 +78,19 @@
         <button id="bPlay" class="ib big" title="재생 (Space)"><svg id="icPlay" viewBox="0 0 24 24"><path d="M7 4v16l13-8z"/></svg><svg id="icPause" class="hide" viewBox="0 0 24 24"><path d="M6 4h4v16H6zM14 4h4v16h-4z"/></svg></button>
         <button id="bNextF" class="ib" title="다음 프레임 (→)"><svg viewBox="0 0 24 24"><path d="M16 5h2v14h-2zM6 5v14l9-7z"/></svg></button>
       </div>
-      <div id="lensSel" class="seg"><button data-l="down" class="on" title="아래 렌즈">아래</button><button data-l="up" title="위 렌즈">위</button><button data-l="both" title="두 렌즈">둘</button></div>
+      <div id="lensSel" class="seg"><button data-l="free" class="on" title="끌어서 둘러보기">프리 뷰</button><button data-l="down" title="아래 렌즈 어안">아래</button><button data-l="both" title="두 렌즈 어안">둘</button></div>
     </div>
   </section>
 
   <aside class="eside">
     <div id="map" class="map"><div class="tiles"></div><svg class="ov"></svg><div class="mapnote hide" id="mapNote">지도 키 없음</div></div>
+    <div class="gcp">
+      <div class="gh"><b>좌표 보정 · GCP</b><div class="sp"></div>
+        <button id="gLoad" class="mini" title="GCP 파일 (이름, X, Y, 표고)">불러오기</button>
+        <button id="gMap" class="mini" title="위성지도에서 점 찍어 GCP 더하기">지도에 점</button></div>
+      <div id="gList" class="glist"></div>
+      <div id="gRes" class="gres"></div>
+    </div>
     <div class="form">
       <label>간격 (m)</label><input id="gap" type="number" min="0.5" max="500" step="0.5" value="5">
       <label>결과 폴더</label><div class="row"><input id="out" type="text"><button id="bOut" class="mini">바꾸기</button></div>

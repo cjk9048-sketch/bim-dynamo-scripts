@@ -123,6 +123,12 @@
     if (!e.clips.every((c) => { const i = idx(c.path); return i >= 0 && S.media[i].dur > 0; })) return;
     S.clips = e.clips.map((c) => ({ m: idx(c.path), a: +c.a, b: +c.b }));
     if (e.interval) $('gap').value = e.interval;
+    if (e.gcp && Array.isArray(e.gcp.pts)) {
+      G.pts = e.gcp.pts; G.pairs = (e.gcp.pairs || []).filter((q) => idx(q.path) >= 0);
+      G.seq = G.pts.reduce((s, g) => Math.max(s, +String(g.id).slice(1) || 0), 0);
+      if (S.media.every((m) => m.ready)) gSolveAll();
+      gRender();
+    }
     S.restored = true;
     S.pendingEdit = null;
     toast('지난번 편집 불러옴 · 토막 ' + S.clips.length);
@@ -148,7 +154,12 @@
         if (r.state !== 'run') { md.state = r.state === 'done' ? 'done' : 'fail'; changed = true; if (r.state === 'fail') toast(md.name + ' · ' + r.line); }
       }
       renderBin();
-      if (changed) { tryRestore(); refresh(true); if (S.curM < 0) showAt(S.T); }
+      if (changed) {
+        tryRestore(); refresh(true); if (S.curM < 0) showAt(S.T);
+        for (const md of busy) if (md.ready) await ensureZt0(md);
+        if (G.pairs.length) { gSolveAll(); gRender(); mapDraw(); }
+        FV.dirty = true;
+      }
       pollMedia();
     }, 400);
   }
@@ -403,8 +414,412 @@
     showAt(S.T); placePH(true);
   }
   function setLens(l) {
+    FV.mode = l;
     $('lens').className = 'lens ' + l;
+    $('stage').classList.toggle('free', l === 'free');
     document.querySelectorAll('#lensSel button').forEach((b) => b.classList.toggle('on', b.dataset.l === l));
+    FV.dirty = true;
+  }
+
+  // ------------------------------------------------------------ 프리 뷰 (JACK 1125: 마우스로 돌려 보기)
+  // LRF 한 장(왼쪽 위 렌즈 | 오른쪽 아래 렌즈)을 셰이더에서 원근 화면으로. 렌즈 값 = 사진 꿰매기와 같음(rig · 3840 기준).
+  // 수평은 장면마다 카메라 방향(rot: 아래 렌즈 → ENU)으로 맞추고, 보는 방향은 드론 앞 + 끈 만큼.
+  const FV = { mode: 'free', gl: null, prog: null, tex: null, u: {}, yaw: 0, pitch: -25, fov: 90, dirty: true, hasTex: false, texKey: '' };
+  const FV_VS = 'attribute vec2 a; varying vec2 p; void main(){ p = a; gl_Position = vec4(a, 0.0, 1.0); }';
+  const FV_FS = [
+    'precision highp float;',
+    'uniform sampler2D tex; uniform mat3 Rcw; uniform mat3 R01; uniform vec3 vf; uniform vec3 vr; uniform vec3 vu;',
+    'uniform float th; uniform float asp; uniform vec4 L0; uniform vec4 L1; uniform float seam; uniform float blend;',
+    'varying vec2 p;',
+    'vec2 lens(vec3 d, float f, float cx, float cy, float s){ float t = acos(clamp(d.z,-1.0,1.0)); float a = atan(d.y, d.x);',
+    '  float r = f*t; return vec2((cx + r*cos(a) + 0.5)/s, (cy + r*sin(a) + 0.5)/s); }',
+    'void main(){',
+    '  vec3 dw = normalize(vf + p.x*asp*th*vr + p.y*th*vu);',
+    '  vec3 d1 = Rcw*dw; vec3 d0 = R01*d1;',
+    '  float t1 = acos(clamp(d1.z,-1.0,1.0)); float t0 = acos(clamp(d0.z,-1.0,1.0));',
+    '  float w1 = clamp((seam + blend - degrees(t1))/(2.0*blend), 0.0, 1.0);',
+    '  if (L1.x*t1 >= L0.w) w1 = 0.0; if (L0.x*t0 >= L0.w) w1 = 1.0;',
+    '  vec2 u1 = lens(d1, L1.x, L1.y, L1.z, L1.w); u1.x = 0.5 + 0.5*u1.x;',
+    '  vec2 u0 = lens(d0, L0.x, L0.y, L0.z, L1.w); u0.x = 0.5*u0.x;',
+    '  gl_FragColor = vec4(mix(texture2D(tex,u0).rgb, texture2D(tex,u1).rgb, w1), 1.0);',
+    '}'].join('\n');
+  function fvInit() {
+    const cv = $('fv');
+    const gl = cv.getContext('webgl', { antialias: false, preserveDrawingBuffer: true });
+    if (!gl) return;
+    const sh = (type, src) => { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
+      if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s)); return s; };
+    const pr = gl.createProgram();
+    gl.attachShader(pr, sh(gl.VERTEX_SHADER, FV_VS)); gl.attachShader(pr, sh(gl.FRAGMENT_SHADER, FV_FS));
+    gl.linkProgram(pr); gl.useProgram(pr);
+    const buf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+    const loc = gl.getAttribLocation(pr, 'a'); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+    const tex = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    for (const n of ['tex', 'Rcw', 'R01', 'vf', 'vr', 'vu', 'th', 'asp', 'L0', 'L1', 'seam', 'blend']) FV.u[n] = gl.getUniformLocation(pr, n);
+    Object.assign(FV, { gl, prog: pr, tex });
+    // 끌기 = 둘러보기 · 휠 = 확대 · 두 번 = 앞으로
+    let down = null;
+    cv.addEventListener('pointerdown', (e) => { down = { x: e.clientX, y: e.clientY, yaw: FV.yaw, pitch: FV.pitch, moved: false }; cv.setPointerCapture(e.pointerId); });
+    cv.addEventListener('pointermove', (e) => {
+      if (!down) return;
+      const dx = e.clientX - down.x, dy = e.clientY - down.y;
+      if (!down.moved && dx * dx + dy * dy < 16) return;
+      down.moved = true; cv.classList.add('drag');
+      const k = FV.fov / Math.max(100, cv.clientHeight);
+      FV.yaw = down.yaw - dx * k; FV.pitch = Math.max(-89, Math.min(89, down.pitch + dy * k)); FV.dirty = true;
+    });
+    cv.addEventListener('pointerup', (e) => {
+      cv.classList.remove('drag');
+      if (down && !down.moved && window.RVAlign) window.RVAlign.viewClick(e);
+      down = null;
+    });
+    cv.addEventListener('wheel', (e) => { e.preventDefault(); FV.fov = Math.max(25, Math.min(120, FV.fov * (e.deltaY > 0 ? 1.1 : 1 / 1.1))); FV.dirty = true; }, { passive: false });
+    cv.addEventListener('dblclick', () => { FV.yaw = 0; FV.pitch = -25; FV.fov = 90; FV.dirty = true; });
+    const v = vid();
+    if (v.requestVideoFrameCallback) { const cb = () => { FV.dirty = true; v.requestVideoFrameCallback(cb); }; v.requestVideoFrameCallback(cb); }
+    v.addEventListener('seeked', () => { FV.dirty = true; });
+    v.addEventListener('loadeddata', () => { FV.dirty = true; });
+    requestAnimationFrame(fvLoop);
+  }
+  function rotAt(md, t) {               // 원본 초 → {R: 아래 렌즈→ENU 행렬(행 순서 9), yaw: 드론 방향 °}
+    const r = md && md.rot;
+    if (!r || !r.length) return { R: [1, 0, 0, 0, -1, 0, 0, 0, -1], yaw: 0 };
+    let lo = 0, hi = r.length - 1;
+    if (t <= r[0][0]) hi = 0; else if (t >= r[hi][0]) lo = hi;
+    else while (hi - lo > 1) { const m = (lo + hi) >> 1; if (r[m][0] <= t) lo = m; else hi = m; }
+    const A = r[lo], B = r[hi], u = hi === lo ? 0 : (t - A[0]) / Math.max(1e-6, B[0] - A[0]);
+    const R = []; for (let i = 0; i < 9; i++) R.push(A[2 + i] + (B[2 + i] - A[2 + i]) * u);
+    let dy = ((B[1] - A[1] + 540) % 360) - 180;
+    return { R, yaw: A[1] + dy * u };
+  }
+  function fvView(md, t) {              // 지금 보는 방향 (ENU) — 드론 앞 + 끈 만큼
+    const ro = rotAt(md, t);
+    const y = (ro.yaw + FV.yaw) * Math.PI / 180, p = FV.pitch * Math.PI / 180;
+    const f = [Math.cos(p) * Math.sin(y), Math.cos(p) * Math.cos(y), Math.sin(p)];
+    const r = [Math.cos(y), -Math.sin(y), 0];
+    const u = [r[1] * f[2] - r[2] * f[1], r[2] * f[0] - r[0] * f[2], r[0] * f[1] - r[1] * f[0]];
+    return { f, r, u, R: ro.R, yaw: ro.yaw };
+  }
+  function fvSrc() {                    // 지금 그릴 장면 → {md, t, el}
+    const L = locate(S.T);
+    if (!L) return null;
+    const md = S.media[L.m];
+    if (md.novid || !md.lrf_url) {
+      const st = $('still');
+      return st.classList.contains('full') && st.complete && st.naturalWidth ? { md, t: L.t, el: st, key: st.src } : { md, t: L.t, el: null };
+    }
+    const v = vid();
+    const t = S.curM === L.m && v.readyState >= 2 ? v.currentTime : L.t;
+    return { md, t, el: S.curM === L.m && v.readyState >= 2 ? v : null, key: 'v' };
+  }
+  function fvLoop() {
+    requestAnimationFrame(fvLoop);
+    if (FV.mode !== 'free' || !isOpen() || !FV.gl) return;
+    const cv = $('fv'), gl = FV.gl;
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const W = Math.round(cv.clientWidth * dpr), H = Math.round(cv.clientHeight * dpr);
+    if (cv.width !== W || cv.height !== H) { cv.width = W; cv.height = H; FV.dirty = true; }
+    if (!FV.dirty && !S.playing) return;
+    FV.dirty = false;
+    const src = fvSrc();
+    gl.viewport(0, 0, W, H);
+    if (!src || !src.md.rig) { gl.clearColor(0, 0, 0, 1); gl.clear(gl.COLOR_BUFFER_BIT); return; }
+    if (src.el && (src.key === 'v' || src.key !== FV.texKey)) {
+      try { gl.bindTexture(gl.TEXTURE_2D, FV.tex); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, gl.RGB, gl.UNSIGNED_BYTE, src.el); FV.hasTex = true; FV.texKey = src.key; } catch (e) { FV.hasTex = false; }
+    }
+    if (!FV.hasTex) { gl.clearColor(0, 0, 0, 1); gl.clear(gl.COLOR_BUFFER_BIT); return; }
+    const rg = src.md.rig, V = fvView(src.md, src.t);
+    const R01 = rg.R01;            // 행 순서 → GLSL 은 열 순서라 전치해서 넘김
+    gl.uniformMatrix3fv(FV.u.Rcw, false, new Float32Array(V.R));        // 행 순서 Rwc 를 열 순서로 = Rcwᵀ… = Rcw
+    gl.uniformMatrix3fv(FV.u.R01, false, new Float32Array([R01[0], R01[3], R01[6], R01[1], R01[4], R01[7], R01[2], R01[5], R01[8]]));
+    gl.uniform3fv(FV.u.vf, V.f); gl.uniform3fv(FV.u.vr, V.r); gl.uniform3fv(FV.u.vu, V.u);
+    gl.uniform1f(FV.u.th, Math.tan(FV.fov * Math.PI / 360)); gl.uniform1f(FV.u.asp, W / Math.max(1, H));
+    gl.uniform4f(FV.u.L0, rg.f0, rg.c0x, rg.c0y, rg.rmax); gl.uniform4f(FV.u.L1, rg.f1, rg.c1x, rg.c1y, rg.size);
+    const lim1 = rg.rmax / rg.f1 * 180 / Math.PI, lim0 = rg.rmax / rg.f0 * 180 / Math.PI;
+    gl.uniform1f(FV.u.seam, 0.5 * (lim1 + (180 - lim0))); gl.uniform1f(FV.u.blend, 3.0);
+    gl.uniform1i(FV.u.tex, 0);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    gcpOverlay(src, V, W, H);
+  }
+
+  // ------------------------------------------------------------ 좌표 보정 · GCP (JACK 1125: 이 단계에서 · GCP 점으로)
+  // GCP = {id, name, E, N (EPSG:5186), z: 측량 표고 | null, zd: 수치지도 표고 | null, lat, lon}
+  // 짝  = {g: GCP id, path: 영상, t: 원본 초, p: 맞춤 전 방향 (격자 ENU 단위 벡터)} — 프리 뷰에서 그 점을 누른 것
+  // 맞춤 (영상마다 · 보기 화면 calib 과 같은 뜻): 카메라 = (E + dx, N + dy, zt + 이륙점 기준 높이), 방향 w = R·p,
+  //   R = Rz(dyaw)·Rx(dpitch)·Ry(droll). 짝마다 광선이 GCP 표고 면에 닿는 곳 − GCP (m) 를 최소로 (Levenberg–Marquardt).
+  //   짝 1 → 동 · 북 · 2 → + 방향 · 3 이상 → + 높이(zt) · 먼 점(40 m 넘게)이 있고 넉넉하면 + 남북 · 동서 기울기.
+  //   표고 없는 점(지도에서 찍고 수치지도도 없음)은 이륙점 높이의 평평한 땅으로 본다.
+  const G = { pts: [], pairs: [], active: -1, mapAdd: false, cal: {}, res: {}, seq: 0 };
+  const GA_FAR = 40, GA_TILT = 5;
+  function rot64(c) {                   // 보기 화면 app.js rot64 와 같음 (행 순서)
+    const a = (c.dyaw || 0) * Math.PI / 180, b = (c.dpitch || 0) * Math.PI / 180, g = (c.droll || 0) * Math.PI / 180;
+    const ca = Math.cos(a), sa = Math.sin(a), cb = Math.cos(b), sb = Math.sin(b), cg = Math.cos(g), sg = Math.sin(g);
+    const m = (A, B) => { const C = []; for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) C.push(A[i * 3] * B[j] + A[i * 3 + 1] * B[3 + j] + A[i * 3 + 2] * B[6 + j]); return C; };
+    return m(m([ca, sa, 0, -sa, ca, 0, 0, 0, 1], [1, 0, 0, 0, cb, -sb, 0, sb, cb]), [cg, 0, sg, 0, 1, 0, -sg, 0, cg]);
+  }
+  const mv = (R, p) => [R[0] * p[0] + R[1] * p[1] + R[2] * p[2], R[3] * p[0] + R[4] * p[1] + R[5] * p[2], R[6] * p[0] + R[7] * p[1] + R[8] * p[2]];
+  const mtv = (R, p) => [R[0] * p[0] + R[3] * p[1] + R[6] * p[2], R[1] * p[0] + R[4] * p[1] + R[7] * p[2], R[2] * p[0] + R[5] * p[1] + R[8] * p[2]];
+  const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  function posAt(md, t) {               // 원본 초 → {E, N, rel} (경로 0.5 초 사이 직선)
+    const tr = md.track;
+    if (!tr || !tr.length || tr[0].length < 7) return null;
+    let lo = 0, hi = tr.length - 1;
+    if (t <= tr[0][0]) hi = 0; else if (t >= tr[hi][0]) lo = hi;
+    else while (hi - lo > 1) { const m = (lo + hi) >> 1; if (tr[m][0] <= t) lo = m; else hi = m; }
+    const A = tr[lo], B = tr[hi], u = hi === lo ? 0 : (t - A[0]) / Math.max(1e-6, B[0] - A[0]);
+    const lerp = (i) => (A[i] == null || B[i] == null ? (A[i] ?? B[i] ?? 0) : A[i] + (B[i] - A[i]) * u);
+    return { E: lerp(5), N: lerp(6), rel: lerp(4) };
+  }
+  const gById = (id) => G.pts.find((g) => g.id === id);
+  const mByPath = (p) => S.media.findIndex((m) => m.path.toLowerCase() === String(p).toLowerCase());
+  function calOf(md) {
+    if (!G.cal[md.path]) G.cal[md.path] = { dx: 0, dy: 0, dyaw: 0, dpitch: 0, droll: 0, zt: md.zt0 ?? 0, zt0: md.zt0 ?? 0, st: 'none' };
+    return G.cal[md.path];
+  }
+  function gZ(g, c) { return g.z != null ? g.z : g.zd != null ? g.zd : c.zt0; }       // 그 점 표고 (없으면 이륙점 높이 평면)
+  function gHit(md, c, R, q) {          // 짝 q 의 광선이 GCP 표고 면에 닿는 곳 [E, N] · 못 닿으면 null
+    const ps = posAt(md, q.t), g = gById(q.g);
+    if (!ps || !g) return null;
+    const w = mv(R, q.p);
+    if (w[2] > -0.02) return null;
+    const cz = c.zt + ps.rel, s = (gZ(g, c) - cz) / w[2];
+    if (!(s > 0)) return null;
+    return [ps.E + c.dx + s * w[0], ps.N + c.dy + s * w[1], s];
+  }
+  function gSolve(path) {               // → 'ok' · 'bad' · 'none' (보기 화면 alSolve 와 같은 차례)
+    const m = mByPath(path); if (m < 0) return 'none';
+    const md = S.media[m], c0 = calOf(md), use = G.pairs.filter((q) => q.path === path && gById(q.g));
+    if (md.ztSrc !== 'dem') {            // 수치지도가 없으면 이륙점 높이 = 짝 GCP 표고 가운데값 (처음 값 · 평면 땅 높이)
+      const zs = use.map((q) => gById(q.g)).filter((g) => g.z != null || g.zd != null).map((g) => (g.z != null ? g.z : g.zd)).sort((a, b) => a - b);
+      if (zs.length) { const zm = zs[zs.length >> 1]; if (c0.zt0 !== zm) { c0.zt0 = zm; if (!(c0.keys || []).includes('zt')) c0.zt = zm; } }
+    }
+    if (!use.length) { Object.assign(c0, { dx: 0, dy: 0, dyaw: 0, dpitch: 0, droll: 0, zt: c0.zt0, st: 'none' }); G.res[path] = []; return 'none'; }
+    const keys = use.length === 1 ? ['dx', 'dy'] : use.length === 2 ? ['dx', 'dy', 'dyaw'] : ['dx', 'dy', 'dyaw', 'zt'];
+    const base = Object.assign({}, c0, { dpitch: 0, droll: 0 });
+    keys.forEach((k) => { if (!Number.isFinite(base[k])) base[k] = 0; });
+    const h0 = use.map((q) => gHit(md, base, rot64(base), q));
+    const far = h0.some((h, i) => { const ps = posAt(md, use[i].t); return h && ps && Math.hypot(h[0] - ps.E - base.dx, h[1] - ps.N - base.dy) > GA_FAR; });
+    if (use.length >= 3 && far && keys.length + 2 <= use.length * 2) keys.push('dpitch', 'droll');
+    const cOf = (x) => { const c = Object.assign({}, base); keys.forEach((k, i) => { c[k] = x[i]; }); return c; };
+    const res = (x) => {
+      const c = cOf(x), R = rot64(c), out = [];
+      for (const q of use) { const h = gHit(md, c, R, q); if (!h) return null; const g = gById(q.g); out.push(h[0] - g.E, h[1] - g.N); }
+      return out;
+    };
+    const cost = (r) => r.reduce((a, v) => a + v * v, 0);
+    let x = keys.map((k) => base[k]), r = res(x), lam = 1e-3;
+    if (!r) { // 처음 값으로 안 닿음 (먼 짝 · 큰 어긋남) → 0 에서 다시
+      x = keys.map((k) => (k === 'zt' ? c0.zt0 : 0)); r = res(x);
+      if (!r) { c0.st = 'bad'; return 'bad'; }
+    }
+    let f = cost(r);
+    for (let it = 0; it < 40; it++) {
+      const J = [];
+      for (let j = 0; j < keys.length; j++) {
+        const xp = x.slice(), xm = x.slice(); xp[j] += 1e-4; xm[j] -= 1e-4;
+        const rp = res(xp), rm = res(xm); if (!rp || !rm) { c0.st = 'bad'; return 'bad'; }
+        J.push(rp.map((v, i) => (v - rm[i]) / 2e-4));
+      }
+      const A = J.map((a) => J.map((b) => a.reduce((s, v, i) => s + v * b[i], 0)));
+      const gr = J.map((a) => -a.reduce((s, v, i) => s + v * r[i], 0));
+      let step = -1;
+      for (let k = 0; k < 10 && step < 0; k++) {
+        const d = solveLin(A.map((row, i) => row.map((v, j) => (i === j ? v * (1 + lam) + 1e-12 : v))), gr);
+        const xn = d && x.map((v, i) => v + d[i]), rn = xn && res(xn);
+        if (rn && cost(rn) < f) { step = Math.max(...d.map(Math.abs)); x = xn; r = rn; f = cost(rn); lam = Math.max(lam / 10, 1e-9); } else lam *= 10;
+      }
+      if (step < 1e-7) break;
+    }
+    const c = cOf(x);
+    if (!x.every(Number.isFinite) || Math.abs(c.dyaw) > 30 || Math.abs(c.dpitch) > GA_TILT || Math.abs(c.droll) > GA_TILT ||
+        Math.abs(c.zt - c0.zt0) > 40 || Math.hypot(c.dx, c.dy) > 60) { c0.st = 'bad'; return 'bad'; }
+    Object.assign(c0, c, { st: 'ok', keys: keys.slice() });
+    G.res[path] = use.map((q, i) => ({ q, r: Math.hypot(r[2 * i], r[2 * i + 1]) }));
+    return 'ok';
+  }
+  function solveLin(A, b) {
+    const n = b.length, M = A.map((row, i) => row.concat([b[i]]));
+    for (let i = 0; i < n; i++) {
+      let p = i; for (let k = i + 1; k < n; k++) if (Math.abs(M[k][i]) > Math.abs(M[p][i])) p = k;
+      if (!(Math.abs(M[p][i]) > 1e-300)) return null;
+      [M[i], M[p]] = [M[p], M[i]];
+      for (let k = i + 1; k < n; k++) { const f = M[k][i] / M[i][i]; for (let j = i; j <= n; j++) M[k][j] -= f * M[i][j]; }
+    }
+    const x = new Array(n);
+    for (let i = n - 1; i >= 0; i--) { let s = M[i][n]; for (let j = i + 1; j < n; j++) s -= M[i][j] * x[j]; x[i] = s / M[i][i]; }
+    return x.every(Number.isFinite) ? x : null;
+  }
+  function gSolveAll() { [...new Set(G.pairs.map((q) => q.path))].forEach(gSolve); Object.keys(G.cal).forEach((p) => { if (!G.pairs.some((q) => q.path === p)) gSolve(p); }); }
+  async function ensureZt0(md) {         // 이륙점(경로 첫 점) 땅 표고 — 수치지도, 없으면 0 (평평한 땅)
+    if (md.zt0 !== undefined || !md.track || !md.track.length || md.track[0].length < 7) return;
+    md.zt0 = 0;
+    const z = await call('ground_z', [[md.track[0][5], md.track[0][6]]]);
+    if (z && z[0] != null) { md.zt0 = z[0]; md.ztSrc = 'dem'; }
+    const c = G.cal[md.path]; if (c && c.st === 'none') { c.zt = c.zt0 = md.zt0; }
+  }
+  async function gAddPoints(list) {      // [{name, E, N, z, lat, lon}] → 수치지도 표고(zd) 채워 넣기
+    const need = list.filter((g) => g.z == null);
+    if (need.length) {
+      const z = await call('ground_z', need.map((g) => [g.E, g.N]));
+      if (z) need.forEach((g, i) => { g.zd = z[i]; });
+    }
+    for (const g of list) { g.id = 'g' + (++G.seq); G.pts.push(g); }
+    gRender(); mapDraw(); FV.dirty = true;
+  }
+  async function gLoad() {
+    const r = await call('gcp_pick');
+    if (!r) return;
+    if (!r.ok) { toast(r.msg); return; }
+    // 두 좌표 순서 (X=동 · X=북) 중 비행 경로에 가까운 쪽 (한국 측량 = X 북 · Y 동)
+    const tr = []; S.media.forEach((md) => (md.track || []).forEach((p) => { if (p.length >= 7) tr.push([p[5], p[6]]); }));
+    const near = (c) => { if (!tr.length) return 0; let b = Infinity; for (let i = 0; i < tr.length; i += 4) b = Math.min(b, Math.hypot(tr[i][0] - c.E, tr[i][1] - c.N)); return b; };
+    let pick = 1;
+    if (r.points[0].cand.length > 1) {
+      const med = (k) => { const d = r.points.map((p) => near(p.cand[k])).sort((a, b) => a - b); return d[d.length >> 1]; };
+      pick = tr.length ? (med(0) < med(1) ? 0 : 1) : 1;
+    }
+    const list = r.points.map((p) => { const c = p.cand[Math.min(pick, p.cand.length - 1)]; return { name: p.name, E: c.E, N: c.N, lat: c.lat, lon: c.lon, z: p.z, zd: null }; });
+    const far = list.filter((g) => tr.length && near(g) > 3000).length;
+    await gAddPoints(list);
+    toast('GCP ' + list.length + '개' + (r.points[0].cand.length > 1 ? ' · ' + (pick ? 'X = 북' : 'X = 동') : '') + (far ? ' · 경로에서 3 km 넘는 점 ' + far : ''));
+    MAP.fitted = false; mapDraw();
+  }
+  async function gMapAdd(lat, lon) {
+    const en = await call('gcp_en', lat, lon);
+    if (!en) return;
+    let k = 1; while (G.pts.some((g) => g.name === 'M' + k)) k++;
+    const g = { name: 'M' + k, E: en[0], N: en[1], lat, lon, z: null, zd: null };
+    await gAddPoints([g]);
+    G.active = g.id; gRender();
+  }
+  function gDel(id) {
+    const paths = new Set(G.pairs.filter((q) => q.g === id).map((q) => q.path));
+    G.pts = G.pts.filter((g) => g.id !== id); G.pairs = G.pairs.filter((q) => q.g !== id);
+    if (G.active === id) G.active = -1;
+    paths.forEach(gSolve); gRender(); mapDraw(); FV.dirty = true;
+  }
+  function gDelPair(q) { G.pairs = G.pairs.filter((x) => x !== q); gSolve(q.path); gRender(); mapDraw(); FV.dirty = true; }
+  function viewClick(e) {                // 프리 뷰를 눌렀다 (끌지 않고)
+    if (G.active === -1) { if (G.pts.length) toast('GCP 를 고른 뒤 그 점을 누르세요'); return; }
+    const src = fvSrc(); if (!src || !src.md.rot || !src.md.rot.length) { toast('이 영상은 방향 기록이 없음'); return; }
+    const cv = $('fv'), rc = cv.getBoundingClientRect();
+    const px = (e.clientX - rc.left) / rc.width * 2 - 1, py = 1 - (e.clientY - rc.top) / rc.height * 2;
+    const V = fvView(src.md, src.t), th = Math.tan(FV.fov * Math.PI / 360), asp = rc.width / Math.max(1, rc.height);
+    const d = [0, 1, 2].map((i) => V.f[i] + px * asp * th * V.r[i] + py * th * V.u[i]);
+    const n = Math.hypot(d[0], d[1], d[2]);
+    if (d[2] / n > -0.02) { toast('땅을 눌러 주세요 (수평선 위)'); return; }
+    G.pairs = G.pairs.filter((q) => !(q.g === G.active && q.path === src.md.path && Math.abs(q.t - src.t) < 0.05));
+    G.pairs.push({ g: G.active, path: src.md.path, t: +src.t.toFixed(3), p: d.map((v) => +(v / n).toFixed(7)) });
+    const st = gSolve(src.md.path);
+    if (st === 'bad') toast('풀리지 않음 · 점을 다시 확인 (× 로 지우기)');
+    gRender(); mapDraw(); FV.dirty = true;
+  }
+  window.RVAlign = { viewClick };
+  function gRender() {
+    const box = $('gList'); box.textContent = '';
+    for (const g of G.pts) {
+      const n = G.pairs.filter((q) => q.g === g.id);
+      const rs = []; Object.values(G.res).forEach((L) => L.forEach((o) => { if (o.q.g === g.id) rs.push(o.r); }));
+      const d = document.createElement('div');
+      d.className = 'gi' + (G.active === g.id ? ' on' : '');
+      d.innerHTML = '<i class="tri"></i><span class="nm"></span><span class="z"></span><span class="pc"></span><button class="x ib" title="지우기">×</button>';
+      d.querySelector('.nm').textContent = g.name;
+      d.querySelector('.z').textContent = g.z != null ? 'Z ' + g.z.toFixed(2) : g.zd != null ? 'Z≈' + g.zd.toFixed(1) : 'Z -';
+      d.querySelector('.z').title = g.z != null ? '측량 표고' : g.zd != null ? '수치지도 표고' : '표고 없음 · 이륙점 높이 평면';
+      d.querySelector('.pc').textContent = n.length ? (rs.length ? Math.max(...rs).toFixed(2) + ' m' : '짝 ' + n.length) : '';
+      d.querySelector('.pc').title = n.length ? '짝 ' + n.length + ' · 가장 큰 어긋남' : '';
+      d.addEventListener('click', (e) => {
+        if (e.target.classList.contains('x')) { gDel(g.id); return; }
+        G.active = G.active === g.id ? -1 : g.id; gRender(); mapDraw(); FV.dirty = true;
+      });
+      box.appendChild(d);
+      if (G.active === g.id) {
+        for (const q of n) {
+          const md = S.media[mByPath(q.path)];
+          const o = (G.res[q.path] || []).find((x) => x.q === q);
+          const e = document.createElement('div');
+          e.className = 'gi'; e.style.paddingLeft = '22px';
+          e.innerHTML = '<span class="nm"></span><span class="pc"></span><button class="x ib" title="이 짝 지우기">×</button>';
+          e.querySelector('.nm').textContent = (md ? shortName(md.name).split(' · ')[0] : '?') + ' · ' + tc(q.t, md ? md.fps : 29.97);
+          e.querySelector('.pc').textContent = o ? o.r.toFixed(2) + ' m' : '';
+          e.addEventListener('click', (ev) => {
+            if (ev.target.classList.contains('x')) { gDelPair(q); return; }
+            const k = S.clips.findIndex((c) => S.media[c.m].path === q.path && q.t >= c.a && q.t <= c.b);
+            if (k < 0) { toast('지운 구간'); return; }
+            pause(); S.T = starts()[k] + q.t - S.clips[k].a; showAt(S.T); placePH(true);
+          });
+          box.appendChild(e);
+        }
+      }
+    }
+    const hint = $('gHint'), act = gById(G.active);
+    hint.classList.toggle('hide', !act || FV.mode !== 'free');
+    if (act) hint.textContent = '«' + act.name + '» 을 화면에서 누르기';
+    // 결과: 영상마다
+    const lines = [];
+    for (const md of S.media) {
+      const c = G.cal[md.path]; const n = G.pairs.filter((q) => q.path === md.path).length;
+      if (!c || !n) continue;
+      const nm = shortName(md.name).split(' · ')[0];
+      if (c.st !== 'ok') { lines.push('<span class="bad">' + nm + ' · 풀리지 않음 (짝 ' + n + ')</span>'); continue; }
+      const L = G.res[md.path] || [], rms = Math.sqrt(L.reduce((s, o) => s + o.r * o.r, 0) / Math.max(1, L.length));
+      const sg = (v, d) => (v >= 0 ? '+' : '') + v.toFixed(d);
+      let s = '<b>' + nm + '</b> 동 ' + sg(c.dx, 2) + ' · 북 ' + sg(c.dy, 2) + ' m';
+      if ((c.keys || []).includes('dyaw')) s += ' · 방향 ' + sg(c.dyaw, 2) + '°';
+      if ((c.keys || []).includes('zt')) s += ' · 높이 ' + sg(c.zt - c.zt0, 1) + ' m';
+      if ((c.keys || []).includes('dpitch')) s += ' · 기울기 ' + sg(c.dpitch, 2) + '/' + sg(c.droll, 2) + '°';
+      s += ' · 어긋남 ' + rms.toFixed(2) + ' m (짝 ' + n + (n < 3 ? ' · 3곳 이상 권장' : '') + ')';
+      lines.push(s);
+    }
+    $('gRes').innerHTML = lines.join('<br>') || (G.pts.length ? 'GCP 를 고르고 화면에서 그 점 누르기' : '');
+  }
+  function gcpOverlay(src, V, W, H) {   // 프리 뷰 위 GCP 표시 (맞춤 반영 · 맞으면 화면의 그 점 위에 옴)
+    const cv = $('fvo');
+    if (cv.width !== W || cv.height !== H) { cv.width = W; cv.height = H; }
+    const g2 = cv.getContext('2d');
+    g2.clearRect(0, 0, W, H);
+    if (!G.pts.length || !src) return;
+    const md = src.md, c = calOf(md), ps = posAt(md, src.t);
+    if (!ps) return;
+    const R = rot64(c), th = Math.tan(FV.fov * Math.PI / 360), asp = W / Math.max(1, H);
+    const dpr = W / Math.max(1, $('fv').clientWidth);
+    const proj = (p) => { const z = dot(p, V.f); if (z <= 0.01) return null; return [((dot(p, V.r) / z) / (asp * th) + 1) / 2 * W, (1 - (dot(p, V.u) / z) / th) / 2 * H]; };
+    g2.font = (12 * dpr) + 'px Malgun Gothic, sans-serif'; g2.lineWidth = 2 * dpr;
+    for (const g of G.pts) {
+      const v = [g.E - (ps.E + c.dx), g.N - (ps.N + c.dy), gZ(g, c) - (c.zt + ps.rel)];
+      const dist = Math.hypot(v[0], v[1]);
+      if (dist > 400) continue;
+      const s = proj(mtv(R, v)); if (!s) continue;
+      const on = G.active === g.id, r = (on ? 9 : 6) * dpr;
+      g2.strokeStyle = on ? '#ff9a1f' : '#ffd166'; g2.fillStyle = '#000a';
+      g2.beginPath(); g2.arc(s[0], s[1], r, 0, Math.PI * 2); g2.stroke();
+      g2.beginPath(); g2.moveTo(s[0] - r * 1.8, s[1]); g2.lineTo(s[0] + r * 1.8, s[1]); g2.moveTo(s[0], s[1] - r * 1.8); g2.lineTo(s[0], s[1] + r * 1.8); g2.stroke();
+      const label = g.name + ' · ' + dist.toFixed(0) + ' m';
+      const tw = g2.measureText(label).width;
+      g2.fillRect(s[0] + r + 3 * dpr, s[1] - 9 * dpr, tw + 8 * dpr, 17 * dpr);
+      g2.fillStyle = on ? '#ffb86b' : '#ffe2a0'; g2.fillText(label, s[0] + r + 7 * dpr, s[1] + 4 * dpr);
+    }
+    // 이 장면 근처에서 누른 자리 (하늘색 ×)
+    g2.strokeStyle = '#22d3ee';
+    for (const q of G.pairs) {
+      if (q.path !== md.path || Math.abs(q.t - src.t) > 0.6) continue;
+      const s = proj(q.p); if (!s) continue;
+      const k = 5 * dpr;
+      g2.beginPath(); g2.moveTo(s[0] - k, s[1] - k); g2.lineTo(s[0] + k, s[1] + k); g2.moveTo(s[0] + k, s[1] - k); g2.lineTo(s[0] - k, s[1] + k); g2.stroke();
+    }
+  }
+  function vidOf(paths) {                // 만들기(build)와 같은 영상 번호 규칙 → {경로: 번호}
+    const out = {}, used = new Set();
+    [...paths].sort((a, b) => a.toLowerCase() < b.toLowerCase() ? -1 : 1).forEach((p) => {
+      const name = p.split(/[\\/]/).pop().replace(/\.[^.]+$/, ''), parts = name.split('_');
+      let v = parts.length >= 3 ? parts[2] : name.slice(-4);
+      if (used.has(v)) v = parts.length >= 3 ? parts[1].slice(-6) + '_' + parts[2] : name;
+      used.add(v); out[p] = v;
+    });
+    return out;
   }
 
   // ------------------------------------------------------------ 지도 (위성 · 비행 경로 · 지금 위치)
@@ -459,27 +874,38 @@
     const P = (la, lo) => { const p = wpx(la, lo, z); return (p[0] - x0).toFixed(1) + ',' + (p[1] - y0).toFixed(1); };
     const line = (pts, col, wd, dash) => pts.length > 1 ? '<polyline points="' + pts.join(' ') + '" fill="none" stroke="' + col +
       '" stroke-width="' + wd + '" stroke-linejoin="round" stroke-linecap="round"' + (dash ? ' stroke-dasharray="4 4"' : '') + '/>' : '';
+    // 좌표 보정을 푼 영상은 경로를 그만큼 옮겨 그림 (동 · 북 m → 위경도)
+    const Pm = (md, la, lo) => {
+      const c = G.cal[md.path];
+      if (c && c.st === 'ok') { la += c.dy / 111320; lo += c.dx / (111320 * Math.cos(la * Math.PI / 180)); }
+      return P(la, lo);
+    };
     let svg = '';
     const used = new Set(S.clips.map((c) => c.m));
     S.media.forEach((md, i) => {
       if (!md.track || !md.track.length) return;
-      svg += line(md.track.map((p) => P(p[1], p[2])), used.has(i) ? '#ffffff55' : '#ffffff30', 2, !used.has(i));
+      svg += line(md.track.map((p) => Pm(md, p[1], p[2])), used.has(i) ? '#ffffff55' : '#ffffff30', 2, !used.has(i));
     });
     S.clips.forEach((c, k) => {
       const md = S.media[c.m];
       if (!md.track || !md.track.length) return;
       const pts = [];
       const A = trackAt(md, c.a), B = trackAt(md, c.b);
-      if (A) pts.push(P(A[0], A[1]));
-      for (const p of md.track) if (p[0] > c.a && p[0] < c.b) pts.push(P(p[1], p[2]));
-      if (B) pts.push(P(B[0], B[1]));
+      if (A) pts.push(Pm(md, A[0], A[1]));
+      for (const p of md.track) if (p[0] > c.a && p[0] < c.b) pts.push(Pm(md, p[1], p[2]));
+      if (B) pts.push(Pm(md, B[0], B[1]));
       if (k === S.sel) svg += line(pts, '#ffffff', 6);
       svg += line(pts, md.color, 3.5);
     });
+    for (const g of G.pts) {             // GCP ▲
+      const [x, y] = P(g.lat, g.lon).split(',').map(Number), on = G.active === g.id, s = on ? 8 : 5.5;
+      svg += '<path d="M' + x + ',' + (y - s) + 'L' + (x + s) + ',' + (y + s * 0.8) + 'L' + (x - s) + ',' + (y + s * 0.8) + 'Z" fill="' + (on ? '#ff9a1f' : '#ffd166') + '" stroke="#000" stroke-width="1"/>';
+      if (on || MAP.z >= 17) svg += '<text x="' + (x + s + 2) + '" y="' + (y + 4) + '" fill="#fff" stroke="#000" stroke-width="3" paint-order="stroke" font-size="11">' + g.name.replace(/[<&]/g, '') + '</text>';
+    }
     const L = locate(S.T);
     if (L) {
-      const q = trackAt(S.media[L.m], L.t);
-      if (q) { const [x, y] = P(q[0], q[1]).split(','); svg += '<circle cx="' + x + '" cy="' + y + '" r="6" fill="#ff4d5e" stroke="#fff" stroke-width="2"/>'; }
+      const md = S.media[L.m], q = trackAt(md, L.t);
+      if (q) { const [x, y] = Pm(md, q[0], q[1]).split(','); svg += '<circle cx="' + x + '" cy="' + y + '" r="6" fill="#ff4d5e" stroke="#fff" stroke-width="2"/>'; }
     }
     ov.innerHTML = svg;
   }
@@ -516,7 +942,15 @@
       if (!down) return;
       el.classList.remove('drag');
       const r = el.getBoundingClientRect();
-      if (!down.moved) mapPick(e.clientX - r.left, e.clientY - r.top);
+      if (!down.moved) {
+        const mx = e.clientX - r.left, my = e.clientY - r.top;
+        if (G.mapAdd) {                  // 지도에 점: 누른 곳 → GCP
+          const [w, h] = mapSize(), s = 256 * Math.pow(2, MAP.z);
+          const wx = MAP.cx - w / 2 + mx, wy = MAP.cy - h / 2 + my;
+          const lon = wx / s * 360 - 180, lat = Math.atan(Math.sinh(Math.PI * (1 - 2 * wy / s))) * 180 / Math.PI;
+          gMapAdd(lat, lon);
+        } else mapPick(mx, my);
+      }
       down = null;
     });
     el.addEventListener('wheel', (e) => {
@@ -600,10 +1034,24 @@
       const whole = segs.length === 1 && segs[0][0] <= 0.05 && segs[0][1] >= md.dur - 0.1;
       if (!whole) keep[md.name] = segs.map((s) => [+s[0].toFixed(3), +s[1].toFixed(3)]);
     }
-    const edit = { version: 1, clips: S.clips.map((c) => ({ path: S.media[c.m].path, a: c.a, b: c.b })), interval: Number($('gap').value) };
+    const edit = { version: 1, clips: S.clips.map((c) => ({ path: S.media[c.m].path, a: c.a, b: c.b })), interval: Number($('gap').value),
+                   gcp: { pts: G.pts, pairs: G.pairs } };
+    // 좌표 보정 → 만든 프로젝트의 맞춤 값 (calib.js · 영상 번호는 build 규칙)
+    const vids = vidOf(used.map((i) => S.media[i].path)), calib = {};
+    for (const i of used) {
+      const c = G.cal[S.media[i].path];
+      if (c && c.st === 'ok') calib[vids[S.media[i].path]] = { dx: +c.dx.toFixed(4), dy: +c.dy.toFixed(4), dyaw: +c.dyaw.toFixed(4), dpitch: +c.dpitch.toFixed(4), droll: +c.droll.toFixed(4) };
+    }
+    if (Object.keys(calib).length) {     // 보기 화면이 이 PC 에 따로 기억한 옛 맞춤 값이 새 값을 가리지 않게
+      const ttl = $('title').value || String($('out').value).split(/[\\/]/).pop();
+      try {
+        const k = 'rv_calib:' + ttl, o = JSON.parse(localStorage.getItem(k) || 'null');
+        if (o && o.videos) { Object.keys(calib).forEach((v) => { delete o.videos[v]; }); localStorage.setItem(k, JSON.stringify(o)); }
+      } catch (e) { /* 없어도 됨 */ }
+    }
     const r = await call('start_build', {
       files: used.map((i) => S.media[i].path).concat(S.jpgs), out: $('out').value, interval: Number($('gap').value),
-      title: $('title').value, width: Number($('width').value), dem: $('dem').checked, sat: $('sat').checked, keep, edit,
+      title: $('title').value, width: Number($('width').value), dem: $('dem').checked, sat: $('sat').checked, keep, edit, calib,
     });
     if (!r || !r.ok) { if (r) toast(r.msg); return; }
     S.job = r.job; setBusy(true); $('bar').style.width = '0%'; poll();
@@ -679,7 +1127,12 @@
     $('bPlay').addEventListener('click', () => (S.playing ? pause() : play()));
     $('bPrevF').addEventListener('click', () => stepFrames(-1));
     $('bNextF').addEventListener('click', () => stepFrames(1));
-    document.querySelectorAll('#lensSel button').forEach((b) => b.addEventListener('click', () => setLens(b.dataset.l)));
+    document.querySelectorAll('#lensSel button').forEach((b) => b.addEventListener('click', () => { setLens(b.dataset.l); gRender(); }));
+    $('gLoad').addEventListener('click', gLoad);
+    $('gMap').addEventListener('click', () => {
+      G.mapAdd = !G.mapAdd; $('gMap').classList.toggle('on', G.mapAdd);
+      if (G.mapAdd) toast('위성지도에서 GCP 자리 누르기 · 다시 누르면 끝');
+    });
     $('tUndo').addEventListener('click', undo);
     $('tRedo').addEventListener('click', redo);
     $('tSplit').addEventListener('click', split);
@@ -700,8 +1153,10 @@
     window.addEventListener('resize', () => { if (isOpen()) { refresh(true); } });
     mapInit();
     tlInit();
-    setLens('down');
+    try { fvInit(); } catch (e) { toast('프리 뷰 못 씀 · ' + String(e.message || e).slice(0, 60)); }
+    setLens(FV.gl ? 'free' : 'down');
+    gRender();
   }
 
-  window.RVEdit = { init, open, close, _S: S, _map: MAP, _api: { addClip, split, delSel, delSide, undo, redo, locate, total, build, showAt, mergeSegs } };
+  window.RVEdit = { init, open, close, _S: S, _map: MAP, _G: G, _FV: FV, _api: { addClip, split, delSel, delSide, undo, redo, locate, total, build, showAt, mergeSegs, gSolve, gAddPoints, viewClick, posAt, rotAt, fvView, rot64, vidOf, ensureZt0 } };
 })();

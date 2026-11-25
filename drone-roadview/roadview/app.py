@@ -20,7 +20,7 @@ import uuid
 from pathlib import Path
 
 APP_NAME = '드론 로드뷰'
-APP_VERSION = '1.0.11'
+APP_VERSION = '1.0.12'
 FROZEN = getattr(sys, 'frozen', False)
 BASE = Path(sys._MEIPASS) if FROZEN else Path(__file__).resolve().parent.parent      # noqa: SLF001
 HOME_HTML = (BASE / 'roadview' / 'app_home' / 'index.html') if not FROZEN else (BASE / 'app_home' / 'index.html')
@@ -32,6 +32,7 @@ FILTER_INPUTS = ('DJI 360 영상 사진 (*.osv;*.OSV;*.jpg;*.JPG)', '모든 파�
 FILTER_PIPES = ('관로 SHP DXF (*.shp;*.SHP;*.dxf;*.DXF)', '모든 파일 (*.*)')
 FILTER_OBST = ('지장물 SHP (*.shp;*.SHP)', '모든 파일 (*.*)')
 FILTER_SHP_SAVE = ('SHP (*.shp)',)
+FILTER_GCP = ('GCP CSV TXT (*.csv;*.CSV;*.txt;*.TXT)', '모든 파일 (*.*)')
 
 
 def _cli(cmd, args):
@@ -352,6 +353,61 @@ class Api:
         except Exception:
             return ''
 
+    # 좌표 보정 (GCP · JACK 1125)
+    def gcp_pick(self):
+        """GCP 파일 고르기 → 점 목록 (이름 · 표고 · 좌표 후보)."""
+        import webview
+        r = self._window.create_file_dialog(webview.FileDialog.OPEN, file_types=FILTER_GCP)
+        if not r:
+            return None
+        path = r[0] if isinstance(r, (list, tuple)) else r
+        from .media import parse_gcp
+        try:
+            pts = parse_gcp(path)
+        except Exception as ex:
+            return {'ok': False, 'msg': 'GCP 파일 못 읽음 · ' + str(ex)[:120]}
+        if not pts:
+            return {'ok': False, 'msg': 'GCP 없음 · 한 줄 = 이름, X, Y, 표고'}
+        return {'ok': True, 'name': os.path.basename(path), 'points': pts}
+
+    def gcp_en(self, lat, lon):
+        """지도에서 찍은 점 위경도 → 도면 좌표 (EPSG:5186)."""
+        from .geo import Geo
+        from .media import CRS
+        e, n = Geo(CRS).ll_to_en(float(lat), float(lon))
+        return [e, n]
+
+    def ground_z(self, pts):
+        """[[E, N], …] → 땅 표고 (사내 수치지도 등고선 · 표고점 5 m DEM, 만들기와 같은 셈) · 못 쓰면 None."""
+        try:
+            pts = [(float(p[0]), float(p[1])) for p in pts or []]
+        except (TypeError, ValueError, IndexError):
+            return None
+        if not pts:
+            return []
+        es = [p[0] for p in pts]; ns = [p[1] for p in pts]
+        box = getattr(self, '_dem_box', None)
+        if not (box and min(es) >= box[0] and min(ns) >= box[1] and max(es) <= box[2] and max(ns) <= box[3]):
+            try:
+                import numpy as np
+                from . import terrain
+                if not terrain.db_available():
+                    return None
+                bbox = (min(es) - 1500, min(ns) - 1500, max(es) + 1500, max(ns) + 1500)
+                cl = terrain.contours_from_db(bbox, 5186)
+                sp = terrain.spot_heights_from_db(bbox, 5186)
+                P = terrain.lines_to_points(cl, 2.0)
+                if len(sp):
+                    P = np.vstack([P, sp])
+                if len(P) < 3:
+                    return None
+                self._dem = terrain.GridDem(P, cell=5.0, sigma=15.0)
+                self._dem_box = (bbox[0] + 300, bbox[1] + 300, bbox[2] - 300, bbox[3] - 300)
+            except Exception:
+                return None
+        z = self._dem(es, ns)
+        return [float(v) if v == v else None for v in z]
+
     def load_edit(self, out):
         """그 결과 폴더에 지난번 편집(타임라인)이 있으면 돌려줌."""
         try:
@@ -403,6 +459,12 @@ class Api:
                 (d / 'edit.json').write_text(json.dumps(p['edit'], ensure_ascii=False), encoding='utf-8')
             except OSError:
                 pass
+        cal = p.get('calib') or {}
+        if cal:                                    # 편집 화면 GCP 보정 → 맞춤 값 (build 는 calib.js 를 안 덮음)
+            try:
+                self._merge_calib(out, cal)
+            except Exception as ex:
+                return {'ok': False, 'msg': '맞춤 값 저장 못 함 · ' + str(ex)[:120]}
         if not p.get('dem', True):
             args += ['--terrain', 'none']
         if not p.get('sat', True):
@@ -411,6 +473,28 @@ class Api:
         j = Job('build', cmd, cwd, out=out)
         self._jobs[j.id] = j
         return {'ok': True, 'job': j.id}
+
+    @staticmethod
+    def _merge_calib(out, cal):
+        """data/calib.js 의 videos[영상] 에 dx · dy · dyaw · dpitch · droll 을 넣는다 (나머지 · 터파기 설정 · 다른 영상은 그대로).
+        높이(dz)는 넣지 않음 — 수치지도 프로젝트는 보기 화면이 0 으로 묶고, 편집 화면의 높이는 뜻이 다르다."""
+        d = Path(out) / 'data'
+        d.mkdir(parents=True, exist_ok=True)
+        p = d / 'calib.js'
+        C = {'videos': {}}
+        if p.exists():
+            s = p.read_text(encoding='utf-8')
+            C = json.loads(s.split('=', 1)[1].strip().rstrip(';'))
+            C.setdefault('videos', {})
+        for vid, v in cal.items():
+            e = C['videos'].setdefault(str(vid), {})
+            for k in ('dx', 'dy', 'dyaw', 'dpitch', 'droll'):
+                if isinstance(v.get(k), (int, float)) and math.isfinite(v[k]):
+                    e[k] = round(float(v[k]), 4)
+            e['src'] = 'gcp'
+        tmp = p.with_suffix('.js.tmp')
+        tmp.write_text('window.RV_CALIB = ' + json.dumps(C, ensure_ascii=False, indent=2) + ';\n', encoding='utf-8')
+        os.replace(tmp, p)
 
     # ------------------------------------------------------------ 프로젝트 안 (보기 화면에서 부름)
     def pick_pipes(self):
@@ -559,7 +643,7 @@ def _selftest(api, w, out_path, project):
     res = {}
     try:
         from webview.util import parse_file_type
-        res['filters_ok'] = all(parse_file_type(f) for f in FILTER_INPUTS + FILTER_PIPES + FILTER_OBST + FILTER_SHP_SAVE)
+        res['filters_ok'] = all(parse_file_type(f) for f in FILTER_INPUTS + FILTER_PIPES + FILTER_OBST + FILTER_SHP_SAVE + FILTER_GCP)
         time.sleep(4)
         res['home_title'] = w.evaluate_js('document.title')
         res['home_has_api'] = w.evaluate_js('!!(window.pywebview && window.pywebview.api)')

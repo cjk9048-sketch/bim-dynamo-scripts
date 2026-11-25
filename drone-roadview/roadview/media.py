@@ -17,7 +17,7 @@ import threading
 from pathlib import Path
 
 NO_WINDOW = 0x08000000 if os.name == 'nt' else 0
-CACHE_VERSION = 1
+CACHE_VERSION = 3          # 2 = 카메라 방향(rot) · 3 = 격자 좌표 · γ (GCP 보정 · 1125)
 
 
 def lrf_of(path: str) -> str | None:
@@ -46,10 +46,59 @@ def quick_info(path: str) -> dict:
             'dur': dur, 'size_gb': round(os.path.getsize(path) / 1e9, 2)}
 
 
-def _track(src: str) -> list:
-    """[[t, 위도, 경도, 진행 m, 이륙점 기준 높이]] 0.5 초마다 (GPS 없는 장면은 뺌)."""
+CRS = 'EPSG:5186'           # 만들기 기본 (build --crs) 과 같게
+
+
+def _rot(frames, gamma) -> list:
+    """프리 뷰 · GCP 보정용 — 0.2 초마다 [t, 드론 방향(격자 북 °), 카메라(아래 렌즈)→격자 ENU 행렬 9개(행 순서)].
+    사진 꿰매기와 같은 셈(pose.R_world_cam · γ 포함) — 그래서 여기서 푼 맞춤 값을 만든 뒤 보기 화면에 그대로 쓴다."""
+    from .camera import default_rig
+    from .pose import R_world_cam, yaw_offsets
+    off = yaw_offsets(frames)
+    if off is None:
+        return []
+    rig = default_rig()
+    out = []
+    last_t = -1e9
+    for i, f in enumerate(frames):
+        if f.q_body is None or f.lat is None or f.time - last_t < 0.2:
+            continue
+        R = R_world_cam(f, off[i], rig, gamma)
+        out.append([round(f.time, 3), round(f.raw_extra.get('a3', 0) / 10.0 - gamma, 2)] + [round(float(x), 6) for x in R.reshape(-1)])
+        last_t = f.time
+    return out
+
+
+def rig_for_view() -> dict:
+    """보기 화면 셰이더용 렌즈 값 (3840 기준 · LRF 는 같은 그림을 1/4 로 줄인 것 — 1125 상관 0.98 · 밀림 0 px)."""
+    from .camera import default_rig
+    r = default_rig()
+    return {'f0': r.f0, 'f1': r.f1, 'c0x': r.c0x, 'c0y': r.c0y, 'c1x': r.c1x, 'c1y': r.c1y, 'rmax': r.rmax,
+            'size': r.size, 'R01': [round(float(x), 6) for x in r.R01().reshape(-1)]}
+
+
+def _track(src: str):
+    """([[t, 위도, 경도, 진행 m, 이륙점 기준 높이, 격자 E, 격자 N]] 0.5 초마다 (GPS 없는 장면은 뺌), 카메라 방향 _rot)."""
+    from .geo import Geo
     from .osv import read_meta
     frames = read_meta(src)
+    geo = Geo(CRS)
+    f0 = next((f for f in frames if f.lat is not None and f.lon is not None), None)
+    gamma = geo.convergence(f0.lat, f0.lon) if f0 else 0.0
+    try:
+        rot = _rot(frames, gamma)
+    except Exception:          # noqa: BLE001 — 방향이 없어도 경로 · 썸네일은 씀
+        rot = []
+    out = _track_pts(frames)
+    if out:
+        import numpy as np
+        e, n = geo.fwd.transform(np.array([p[2] for p in out]), np.array([p[1] for p in out]))
+        for p, ee, nn in zip(out, e, n):
+            p += [round(float(ee), 3), round(float(nn), 3)]
+    return out, rot
+
+
+def _track_pts(frames):
     out = []
     last_t = -1e9
     prev = None
@@ -72,6 +121,52 @@ def _track(src: str) -> list:
         out.append([round(prev.time, 3), round(prev.lat, 7), round(prev.lon, 7), round(dist, 1),
                     round(prev.rel_alt, 1) if prev.rel_alt is not None else None])
     return out
+
+
+# ---------------------------------------------------------------- GCP (측량 기준점) 파일
+def parse_gcp(path: str) -> list:
+    """GCP 파일(CSV · TXT · 쉼표 · 탭 · 빈칸) → [{name, z, cand: [{E, N, lat, lon}, …]}].
+
+    한 줄 = 이름, 좌표1, 좌표2[, 표고]  (이름이 없으면 번호). 머리줄 · 빈 줄 · 숫자가 모자란 줄은 건너뜀.
+    위경도(33~39, 124~132)면 그것으로, 아니면 EPSG:5186 미터 — 한국 측량은 X = 북 · Y = 동 이라 두 순서를 다 돌려주고
+    보기 화면이 비행 경로에 가까운 쪽을 고른다."""
+    import re
+    from .geo import Geo
+    geo = Geo(CRS)
+    raw = Path(path).read_bytes()
+    for enc in ('utf-8-sig', 'cp949', 'latin-1'):
+        try:
+            text = raw.decode(enc)
+            break
+        except UnicodeDecodeError:
+            continue
+    pts = []
+    for k, line in enumerate(text.splitlines()):
+        cells = [c.strip().strip('"') for c in re.split(r'[,\t;]|\s{1,}', line.strip()) if c.strip()]
+        nums, name = [], None
+        for c in cells:
+            try:
+                nums.append(float(c))
+            except ValueError:
+                if name is None and not nums:
+                    name = c
+        if len(nums) < 2:
+            continue
+        if name is None and len(nums) >= 4:          # 번호, X, Y, Z
+            name, nums = ('%g' % nums[0]), nums[1:]
+        a, b = nums[0], nums[1]
+        z = nums[2] if len(nums) >= 3 else None
+        cand = []
+        if 33 <= a <= 39 and 124 <= b <= 132:
+            e, n = geo.ll_to_en(a, b); cand.append({'E': e, 'N': n, 'lat': a, 'lon': b})
+        elif 33 <= b <= 39 and 124 <= a <= 132:
+            e, n = geo.ll_to_en(b, a); cand.append({'E': e, 'N': n, 'lat': b, 'lon': a})
+        else:
+            for e, n in ((a, b), (b, a)):
+                lat, lon = geo.en_to_ll(e, n)
+                cand.append({'E': e, 'N': n, 'lat': lat, 'lon': lon})
+        pts.append({'name': name or 'P%d' % (len(pts) + 1), 'z': z, 'cand': cand})
+    return pts
 
 
 def _thumbs(ffmpeg: str, src: str, is_lrf: bool, dur: float, out: Path) -> float:
@@ -145,11 +240,11 @@ class MediaLoad:
             t = threading.Thread(target=th, daemon=True)
             t.start()
             self.line = '경로 읽는 중'
-            track = _track(src)
+            track, rot = _track(src)
             self.line = '썸네일 만드는 중'
             t.join()
             n = len(list((self.dir / 'th').glob('t_*.jpg')))
-            m = {'version': CACHE_VERSION, 'track': track, 'thumbs': n, 'thumb_step': got.get('step', 2.0)}
+            m = {'version': CACHE_VERSION, 'track': track, 'rot': rot, 'thumbs': n, 'thumb_step': got.get('step', 2.0)}
             self.dir.mkdir(parents=True, exist_ok=True)
             tmp = meta.with_suffix('.tmp')
             tmp.write_text(json.dumps(m), encoding='utf-8')
@@ -163,6 +258,8 @@ class MediaLoad:
     def _finish(self, info, m):
         r = dict(info)
         r['track'] = m['track']
+        r['rot'] = m.get('rot') or []
+        r['rig'] = rig_for_view()
         r['thumb_step'] = m['thumb_step']
         base = (self.dir / 'th').resolve().as_uri()
         r['thumb_base'] = base + '/t_'

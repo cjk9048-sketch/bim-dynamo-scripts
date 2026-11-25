@@ -44,6 +44,33 @@
 .lens img { width:100%; left:0; object-fit:contain; image-rendering:auto; }
 .lens.down img.full { width:200%; left:-100%; }
 .lens.up img.full { width:200%; left:0; }
+/* 프리 뷰: 캔버스가 칸을 채우고, 영상은 보이지 않게 계속 풀림 (텍스처 원본) */
+.fv { position:absolute; inset:0; width:100%; height:100%; cursor:grab; display:none; touch-action:none; }
+.fv.drag { cursor:grabbing; }
+.stage.free .fv { display:block; }
+.lens.free { position:absolute; left:0; top:0; width:4px; height:4px; aspect-ratio:auto; opacity:0; pointer-events:none; }
+.lens.free video, .lens.free img { width:4px; height:4px; left:0; }
+.fvo { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; display:none; }
+.stage.free .fvo { display:block; }
+.ghint { position:absolute; left:50%; top:12px; transform:translateX(-50%); background:#000b; border:1px solid #ff9a1f; color:#ffd9a8; padding:5px 12px; border-radius:14px; font-size:12px; pointer-events:none; }
+/* GCP 좌표 보정 */
+.gcp { margin-top:10px; background:#222; border-radius:8px; padding:8px 10px; }
+.gh { display:flex; align-items:center; gap:6px; font-size:12.5px; }
+.gh b { color:#ffb86b; font-weight:600; }
+.glist { margin-top:6px; max-height:180px; overflow:auto; }
+.gi { display:flex; align-items:center; gap:6px; padding:4px 6px; border-radius:5px; font-size:12px; cursor:pointer; color:#ccc; }
+.gi:hover { background:#2c2c2c; }
+.gi.on { background:#3a2a14; color:#fff; outline:1px solid #ff9a1f; }
+.gi .tri { width:0; height:0; border-left:5px solid transparent; border-right:5px solid transparent; border-bottom:9px solid #ff9a1f; flex:none; }
+.gi .nm { flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.gi .z { color:#8b8b8b; font-size:11px; }
+.gi .pc { color:#9fb6d8; font-size:11px; min-width:36px; text-align:right; }
+.gi .x { font-size:14px; padding:0 3px; color:#888; }
+.gi .x:hover { color:#ff6b78; }
+.gres { margin-top:6px; font-size:11.5px; color:#9aa4b2; line-height:1.5; }
+.gres b { color:#e8e8e8; font-weight:600; }
+.gres .bad { color:#ff8a8a; }
+#gMap.on { background:#ff9a1f; color:#111; }
 .noclip { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color:#666; font-size:13px; pointer-events:none; }
 .ctl { height:46px; display:flex; align-items:center; padding:0 12px; gap:10px; border-top:1px solid #222; }
 .tc { font:12px Consolas,monospace; color:#ddd; min-width:200px; }

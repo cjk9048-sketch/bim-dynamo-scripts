@@ -67,6 +67,19 @@ def run(w):
     ok('미리보기 10초로', wait('(() => { const v = document.getElementById("vid"); return v.readyState >= 2 && !RVEdit._S.seekBusy && Math.abs(v.currentTime - 10) < 0.05; })()', 20),
        J('[document.getElementById("vid").currentTime, document.getElementById("vid").readyState, document.getElementById("vid").videoWidth]'))
     ok('영상 재생 가능 (썸네일 대체 아님)', not J('!!RVEdit._S.media[0].novid'))
+    # 프리 뷰 (기본) · 영상 텍스처 · 방향 기록
+    ok('프리 뷰 기본 · WebGL', J('RVEdit._FV.mode') == 'free' and J('!!RVEdit._FV.gl'))
+    J('RVEdit._FV.dirty = true')
+    ok('프리 뷰에 영상 그려짐', wait('RVEdit._FV.hasTex', 10), J('[RVEdit._FV.hasTex, RVEdit._S.media[0].rot.length]'))
+    # GCP: 카메라 앞 땅 점 하나 → 화면 가운데 아래를 누름 → 짝 · 풀림
+    J('''(() => { const A = RVEdit._api, md = RVEdit._S.media[0], ps = A.posAt(md, 10.01);
+          RVEdit._api.gAddPoints([{ name: 'T1', E: ps.E + 3, N: ps.N + 3, z: (md.zt0 || 0), zd: null, lat: md.track[0][1], lon: md.track[0][2] }]); })()''')
+    wait('RVEdit._G.pts.length === 1', 10)
+    J('RVEdit._G.active = RVEdit._G.pts[0].id; RVEdit._FV.pitch = -60;')
+    r = J('(() => { const c = document.getElementById("fv").getBoundingClientRect(); RVAlign.viewClick({ clientX: c.left + c.width / 2, clientY: c.top + c.height * 0.6 }); return JSON.stringify([RVEdit._G.pairs.length, (RVEdit._G.cal[RVEdit._S.media[0].path] || {}).st]); })()')
+    ok('GCP 짝 · 풀이', json.loads(r)[0] == 1 and json.loads(r)[1] in ('ok', 'bad'), r)
+    ok('GCP 목록 · 결과 표시', J('document.querySelectorAll("#gList .gi").length') >= 1 and len(J('document.getElementById("gRes").textContent')) > 0,
+       J('document.getElementById("gRes").textContent'))
     # 자르기 → 앞 토막 지우기
     J('RVEdit._api.split()')
     n = J('RVEdit._S.clips.length')
@@ -117,6 +130,8 @@ def run(w):
         ok('통째로 쓴 영상은 keep 없음 (땅 높이 기록 그대로 쓰게)', name1 not in keep)
     ok('만들기 files', len(p.get('files', [])) == len(FILES), p.get('files'))
     ok('편집 기록 넘김', bool(p.get('edit', {}).get('clips')), len(p.get('edit', {}).get('clips', [])))
+    ok('GCP 기록 넘김', len(p.get('edit', {}).get('gcp', {}).get('pts', [])) == 1)
+    ok('맞춤 값 넘김 (풀렸으면)', ('calib' in p), p.get('calib'))
     ok('화면 오류 없음', True)
     w.destroy()
 
