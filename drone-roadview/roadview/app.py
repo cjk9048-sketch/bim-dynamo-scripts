@@ -20,7 +20,7 @@ import uuid
 from pathlib import Path
 
 APP_NAME = '드론 로드뷰'
-APP_VERSION = '1.0.10'
+APP_VERSION = '1.0.11'
 FROZEN = getattr(sys, 'frozen', False)
 BASE = Path(sys._MEIPASS) if FROZEN else Path(__file__).resolve().parent.parent      # noqa: SLF001
 HOME_HTML = (BASE / 'roadview' / 'app_home' / 'index.html') if not FROZEN else (BASE / 'app_home' / 'index.html')
@@ -162,10 +162,17 @@ class Api:
         self._window = None
         self._project = None
         self._jobs = {}
+        self._media = {}
 
     # ------------------------------------------------------------ 공통
     def app_info(self):
-        return {'name': APP_NAME, 'version': APP_VERSION}
+        key = ''
+        try:
+            from .keys import vworld_key
+            key = vworld_key()[0] or ''
+        except Exception:
+            pass
+        return {'name': APP_NAME, 'version': APP_VERSION, 'vworld': key}
 
     def copy_text(self, text):
         try:
@@ -303,17 +310,54 @@ class Api:
             return None
         files = list(r)
         size = sum(os.path.getsize(f) for f in files if os.path.exists(f)) / 1e9
-        # 기본 결과 폴더 = 로드뷰_<영상 번호…> (다른 영상으로 만든 «로드뷰» 폴더를 덮지 않게 · 1123)
+        return {'files': files, 'size_gb': round(size, 1), 'dir': os.path.dirname(files[0]),
+                'osv': sum(f.lower().endswith('.osv') for f in files),
+                'jpg': sum(f.lower().endswith(('.jpg', '.jpeg')) for f in files),
+                'out': self.default_out(files)}
+
+    def default_out(self, files):
+        """기본 결과 폴더 = 로드뷰_<영상 번호…> (다른 영상으로 만든 «로드뷰» 폴더를 덮지 않게 · 1123)."""
+        files = [f for f in (files or []) if f]
+        if not files:
+            return ''
         nums = []
         for f in files:
             parts = Path(f).stem.split('_')
             nums.append(parts[2] if len(parts) >= 3 and parts[2].isdigit() else Path(f).stem[:12])
+        nums = sorted(set(nums))
         tag = nums[0] if len(nums) == 1 else ('%s-%s' % (min(nums), max(nums)) if all(n.isdigit() for n in nums) else nums[0] + '외')
-        base = os.path.join(os.path.dirname(files[0]), '로드뷰_' + tag)
-        return {'files': files, 'size_gb': round(size, 1), 'dir': os.path.dirname(files[0]),
-                'osv': sum(f.lower().endswith('.osv') for f in files),
-                'jpg': sum(f.lower().endswith(('.jpg', '.jpeg')) for f in files),
-                'out': base}
+        return os.path.join(os.path.dirname(files[0]), '로드뷰_' + tag)
+
+    # 편집 화면 (JACK 1125: DJI Studio 처럼 불러와 타임라인에서 잘라 지우기)
+    def media_load(self, path):
+        """영상 한 개 미리보기 자료(경로 · 썸네일) 만들기 시작 → id. 결과는 media_state(id)."""
+        from .media import MediaLoad
+        if not path or not os.path.isfile(path):
+            return {'ok': False, 'msg': '파일 없음'}
+        m = MediaLoad(CFG_DIR / 'media', path)
+        mid = uuid.uuid4().hex[:10]
+        self._media[mid] = m
+        return {'ok': True, 'id': mid}
+
+    def media_state(self, mid):
+        m = self._media.get(mid)
+        return m.info() if m else {'state': 'fail', 'line': '없음'}
+
+    def frame_at(self, path, t):
+        """미리보기 영상을 못 트는 PC 용 한 장면 (위 | 아래 렌즈) → file:// 주소."""
+        from .media import frame_at
+        try:
+            p = frame_at(CFG_DIR / 'media', path, float(t))
+            return Path(p).resolve().as_uri() if p else ''
+        except Exception:
+            return ''
+
+    def load_edit(self, out):
+        """그 결과 폴더에 지난번 편집(타임라인)이 있으면 돌려줌."""
+        try:
+            return json.loads((Path(out) / 'data' / 'edit.json').read_text(encoding='utf-8'))
+        except Exception:
+            return None
 
     def pick_folder(self):
         import webview
@@ -335,6 +379,30 @@ class Api:
             return {'ok': False, 'msg': '간격(m) 숫자 확인 (0.5 ~ 500)'}
         args = list(files) + ['--out', out, '--interval', '%g' % gap,
                               '--width', str(int(p.get('width', 8192))), '--title', p.get('title') or Path(out).name]
+        # 편집 화면에서 남긴 토막 {영상 이름: [[시작초, 끝초], …]}
+        for name, segs in (p.get('keep') or {}).items():
+            for s in segs or []:
+                try:
+                    t0, t1 = float(s[0]), float(s[1])
+                except (TypeError, ValueError, IndexError):
+                    continue
+                if t1 > t0:
+                    args += ['--keep', '%s=%.3f:%.3f' % (name, t0, t1)]
+        try:                                       # 다른 영상으로 만든 폴더면 여기서 막음 (build 도 막지만 edit.json 을 덮기 전에)
+            s = (Path(out) / 'data' / 'project.js').read_text(encoding='utf-8')
+            old = {v.get('name') for v in json.loads(s.split('=', 1)[1].strip().rstrip(';')).get('videos', [])}
+            new = {Path(f).stem for f in files if f.lower().endswith('.osv')}
+            if old and new and not (old & new):
+                return {'ok': False, 'msg': '다른 영상으로 만든 폴더 → 결과 폴더 바꾸기'}
+        except (OSError, ValueError, IndexError, AttributeError):
+            pass
+        if p.get('edit') is not None:              # 다음에 같은 폴더로 열면 타임라인 되살림
+            try:
+                d = Path(out) / 'data'
+                d.mkdir(parents=True, exist_ok=True)
+                (d / 'edit.json').write_text(json.dumps(p['edit'], ensure_ascii=False), encoding='utf-8')
+            except OSError:
+                pass
         if not p.get('dem', True):
             args += ['--terrain', 'none']
         if not p.get('sat', True):

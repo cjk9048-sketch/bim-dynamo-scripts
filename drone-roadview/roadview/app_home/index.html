@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>드론 로드뷰</title>
 <link rel="stylesheet" href="home.css">
+<link rel="stylesheet" href="edit.css">
 </head>
 <body>
 <aside id="side">
@@ -45,37 +46,85 @@
 <!-- 작업 표시 (만드는 중) -->
 <button id="jobPill" class="pill hide"><span class="spin"></span><span id="jobPillText">만드는 중</span></button>
 
-<!-- 새 프로젝트 -->
-<div id="dlg" class="dlgwrap hide">
-  <div class="dlg">
-    <div class="dh">프로젝트 생성 <button class="x" id="bClose" title="닫기">×</button></div>
-    <div class="pick" id="bPick">
-      <svg viewBox="0 0 24 24"><path d="M4 6h5l2 2h9v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/></svg>
-      <div><b>영상 · 사진 고르기</b><br><span id="pickInfo">DJI 360 영상(OSV) · 360 사진(JPG)</span></div>
+<!-- 프로젝트 생성 = 편집 화면 (JACK 1125 · DJI Studio 처럼: 가져오기 → 타임라인에 끌어 놓기 → 프레임 단위로 잘라 지우기) -->
+<div id="ed" class="ed hide">
+  <header class="etop">
+    <button id="eBack" class="ib" title="처음 화면 (편집은 남음)"><svg viewBox="0 0 24 24"><path d="M15 5 8 12l7 7" fill="none" stroke="currentColor" stroke-width="2.2"/></svg></button>
+    <b class="etitle">프로젝트 생성</b>
+    <input id="title" class="tname" type="text" placeholder="이름">
+    <div class="sp"></div>
+    <span id="est" class="est"></span>
+    <button id="bBuild" class="pri">만들기</button>
+  </header>
+
+  <section class="ebin">
+    <div class="binbar"><button id="bPick" class="imp"><b>+</b> 가져오기</button></div>
+    <div id="bin" class="bin"></div>
+    <div id="binEmpty" class="binempty">OSV 영상</div>
+  </section>
+
+  <section class="eview">
+    <div id="stage" class="stage">
+      <div id="lens" class="lens down"><video id="vid" muted playsinline preload="auto"></video><img id="still" class="hide" alt=""></div>
+      <div id="noclip" class="noclip">영상을 아래 타임라인으로 끌어 놓기</div>
     </div>
+    <div class="ctl">
+      <span id="tc" class="tc">00:00:00:00 <i>/ 00:00:00:00</i></span>
+      <div class="mid">
+        <button id="bPrevF" class="ib" title="앞 프레임 (←)"><svg viewBox="0 0 24 24"><path d="M6 5h2v14H6zM18 5v14L9 12z"/></svg></button>
+        <button id="bPlay" class="ib big" title="재생 (Space)"><svg id="icPlay" viewBox="0 0 24 24"><path d="M7 4v16l13-8z"/></svg><svg id="icPause" class="hide" viewBox="0 0 24 24"><path d="M6 4h4v16H6zM14 4h4v16h-4z"/></svg></button>
+        <button id="bNextF" class="ib" title="다음 프레임 (→)"><svg viewBox="0 0 24 24"><path d="M16 5h2v14h-2zM6 5v14l9-7z"/></svg></button>
+      </div>
+      <div id="lensSel" class="seg"><button data-l="down" class="on" title="아래 렌즈">아래</button><button data-l="up" title="위 렌즈">위</button><button data-l="both" title="두 렌즈">둘</button></div>
+    </div>
+  </section>
+
+  <aside class="eside">
+    <div id="map" class="map"><div class="tiles"></div><svg class="ov"></svg><div class="mapnote hide" id="mapNote">지도 키 없음</div></div>
     <div class="form">
-      <label>이름</label><input id="title" type="text" placeholder="예: 조치원 0012">
       <label>간격 (m)</label><input id="gap" type="number" min="0.5" max="500" step="0.5" value="5">
       <label>결과 폴더</label><div class="row"><input id="out" type="text"><button id="bOut" class="mini">바꾸기</button></div>
       <label>사진 크기</label>
       <select id="width"><option value="8192">8192 · 선명하게</option><option value="6144">6144 · 보통</option><option value="4096">4096 · 가볍게</option></select>
       <label></label>
       <div class="checks">
-        <label><input id="dem" type="checkbox" checked> 수치지도 표고 (회사 DB)</label>
+        <label><input id="dem" type="checkbox" checked> 수치지도 표고</label>
         <label><input id="sat" type="checkbox" checked> 위성 지도</label>
       </div>
     </div>
     <div class="prog"><div id="bar"></div></div>
-    <div id="status" class="sub">영상을 고르세요</div>
+    <div id="status" class="sub"></div>
     <pre id="log" class="hide"></pre>
-    <div class="dfoot">
-      <button id="bHide" class="mini hide">숨기기</button>
-      <button id="bStop" class="mini" disabled>멈추기</button>
-      <button id="bBuild" class="pri">만들기</button>
+    <div class="dfoot"><button id="bStop" class="mini" disabled>멈추기</button></div>
+  </aside>
+
+  <section class="etl">
+    <div class="tlbar">
+      <button id="tUndo" class="ib" title="되돌리기 (Ctrl+Z)"><svg viewBox="0 0 24 24"><path d="M9 7H4v5M4.5 11.5A8 8 0 1 1 7 18" fill="none" stroke="currentColor" stroke-width="2"/></svg></button>
+      <button id="tRedo" class="ib" title="다시 (Ctrl+Y)"><svg viewBox="0 0 24 24"><path d="M15 7h5v5M19.5 11.5A8 8 0 1 0 17 18" fill="none" stroke="currentColor" stroke-width="2"/></svg></button>
+      <i class="vl"></i>
+      <button id="tSplit" class="ib" title="자르기 (S)"><svg viewBox="0 0 24 24"><path d="M11 2h2v20h-2z"/><path d="M3 7h6v10H3zM15 7h6v10h-6z" opacity=".55"/></svg></button>
+      <button id="tDelL" class="ib" title="앞부분 지우기 (Q)"><svg viewBox="0 0 24 24"><path d="M3 7h8v10H3z" opacity=".35"/><path d="M12 3h2v18h-2zM16 7h5v10h-5z"/></svg></button>
+      <button id="tDelR" class="ib" title="뒷부분 지우기 (W)"><svg viewBox="0 0 24 24"><path d="M13 7h8v10h-8z" opacity=".35"/><path d="M10 3h2v18h-2zM3 7h5v10H3z"/></svg></button>
+      <button id="tDel" class="ib" title="고른 토막 지우기 (Delete)"><svg viewBox="0 0 24 24"><path d="M6 7h12l-1 14H7zM9 4h6l1 2H8z"/></svg></button>
+      <div class="sp"></div>
+      <span id="tlInfo" class="tlinfo"></span>
+      <button id="zOut" class="ib" title="줄이기"><svg viewBox="0 0 24 24"><path d="M5 11h14v2H5z"/></svg></button>
+      <input id="zoom" type="range" min="0" max="100" value="30">
+      <button id="zIn" class="ib" title="키우기"><svg viewBox="0 0 24 24"><path d="M11 5h2v14h-2zM5 11h14v2H5z"/></svg></button>
     </div>
-  </div>
+    <div id="tl" class="tl">
+      <div id="tlIn" class="tlin">
+        <div id="ruler" class="ruler"></div>
+        <div id="track" class="track"></div>
+        <div id="ph" class="ph"><i></i></div>
+      </div>
+      <div id="drop" class="drop hide">여기로 끌어 놓기</div>
+    </div>
+  </section>
 </div>
 <div id="toast"></div>
+<script src="edit.js"></script>
 <script src="home.js"></script>
 </body>
 </html>

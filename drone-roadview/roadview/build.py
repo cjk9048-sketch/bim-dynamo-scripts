@@ -399,6 +399,8 @@ def main(argv=None):
     ap.add_argument('--max-shots', type=int, default=0, help='영상마다 최대 촬영점 수 (시험용)')
     ap.add_argument('--from-time', type=float, default=0.0, help='시험용: 이 초부터')
     ap.add_argument('--to-time', type=float, default=1e9, help='시험용: 이 초까지')
+    ap.add_argument('--keep', action='append', default=[], metavar='영상이름=시작초:끝초',
+                    help='쓸 구간 (여러 번 가능 · 같은 영상에 여러 토막) — 프로그램 편집 화면에서 자르고 남긴 것. 없으면 영상 전체')
     ap.add_argument('--no-terrain', action='store_true', help='땅 높이 자동 재기 끄기 (이륙점 높이 그대로)')
     ap.add_argument('--terrain', choices=['auto', 'db', 'none'], default='auto',
                     help='수치지도 표고: auto = 사내 DB 되면 씀 · db · none')
@@ -415,6 +417,18 @@ def main(argv=None):
         pass
     if not a.normal_priority:
         _low_priority()
+    keep = {}
+    for k in a.keep:
+        name, _, rng = str(k).rpartition('=')
+        try:
+            t0, t1 = (float(x) for x in rng.split(':'))
+        except ValueError:
+            print('--keep 형식: 영상이름=시작초:끝초 (%s)' % k)
+            return 2
+        if name and t1 > t0:
+            keep.setdefault(name, []).append((t0, t1))
+    for v in keep.values():
+        v.sort()
 
     osvs = []
     jpgs = []
@@ -446,7 +460,8 @@ def main(argv=None):
         new_names = {os.path.splitext(os.path.basename(p))[0] for p in osvs}
         if jpgs:
             new_names |= {n for n in old_names if str(n).startswith('360 사진')}
-        if old_names and old_names != new_names and not a.overwrite:
+        # 겹치는 영상이 하나라도 있으면 같은 프로젝트 (편집 화면에서 영상을 빼거나 더해 다시 만들기 · 1125)
+        if old_names and not (old_names & new_names) and not a.overwrite:
             print('이 폴더에는 다른 영상으로 만든 로드뷰가 있음 → 다른 결과 폴더를 고르세요 (%s)' % out)
             return 3
     except (OSError, ValueError, KeyError, IndexError):
@@ -503,6 +518,10 @@ def main(argv=None):
             nbytes = os.path.getsize(osv)
             frames = read_meta(osv)
             frames = [f for f in frames if a.from_time <= f.time <= a.to_time]
+            segs = keep.get(name)
+            if segs:                                    # 편집 화면에서 남긴 토막만 (1125)
+                frames = [f for f in frames if any(t0 <= f.time <= t1 for t0, t1 in segs)]
+                log('  쓸 구간 %d토막 · %.0f초' % (len(segs), sum(t1 - t0 for t0, t1 in segs)), fp)
             if not frames or not any(_has_gps(f) for f in frames):
                 log('  GPS 없음 → 건너뜀', fp)
                 eta.video_read(nbytes, time.time() - t_read, 0)
@@ -539,6 +558,8 @@ def main(argv=None):
                 s_lo, s_hi = s[picks_all[0]] - step_m, s[picks_all[-1]] + step_m
                 key = [name, round(a.from_time, 2), min(a.to_time, 1e6), step_m, round(s_lo), round(s_hi),
                        TERRAIN_VERSION, hashlib.md5(rig_sig.encode()).hexdigest()[:10], a.crs]
+                if segs:
+                    key.append([[round(t0, 2), round(t1, 2)] for t0, t1 in segs])
                 hit = next((v for v in old_terrain if v.get('key') == key), None)
                 if hit:
                     samples = [tuple(x) for x in hit['terrain']]
@@ -549,6 +570,8 @@ def main(argv=None):
                                                rig, ffmpeg, pool, step_m, seek_back, fp, eta=eta)
             videos.append({'id': vid, 'name': name, 'key': key,
                            'terrain': [[round(x, 1), round(y, 2)] for x, y in samples]})
+            if segs:
+                videos[-1]['keep'] = [[round(t0, 3), round(t1, 3)] for t0, t1 in segs]
             tprof = terrain_profile(samples)
             if tprof is not None and tprof.dropped:
                 log('  땅 높이 튀는 값 %d곳 뺌 · %d곳으로 이음' % (tprof.dropped, tprof.kept), fp)

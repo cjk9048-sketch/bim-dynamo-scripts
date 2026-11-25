@@ -1,8 +1,8 @@
-/* 드론 로드뷰 — 첫 화면 (홈 · 웹 공유 · 프로젝트 생성). 파이썬 쪽 = window.pywebview.api */
+/* 드론 로드뷰 — 첫 화면 (홈 · 웹 공유). 프로젝트 생성 = 편집 화면(edit.js). 파이썬 쪽 = window.pywebview.api */
 (function () {
   'use strict';
   const $ = (id) => document.getElementById(id);
-  let api = null, files = [], job = null, timer = 0;
+  let api = null;
 
   function toast(t) { const e = $('toast'); e.textContent = t; e.classList.add('show'); clearTimeout(e._t); e._t = setTimeout(() => e.classList.remove('show'), 2600); }
   // 파이썬 쪽에서 오류가 나면 조용히 멈추지 않고 알림으로 (1123: 파일 창이 «아무 반응 없음»이었음)
@@ -14,6 +14,7 @@
     window.addEventListener('pywebviewready', fn, { once: true });
   }
   const fmtDate = (s) => (s || '').replace(/^\d{4}-/, '').replace('-', '.');
+  window.RV = { call, toast, $ };
 
   // ------------------------------------------------------------ 메뉴
   function showPage(p) {
@@ -78,63 +79,15 @@
     }
   }
 
-  // ------------------------------------------------------------ 프로젝트 생성
-  function openDlg() { $('dlg').classList.remove('hide'); }
-  function setBusy(b) {
-    $('bBuild').disabled = b; $('bStop').disabled = !b; $('bPick').style.pointerEvents = b ? 'none' : '';
-    $('bHide').classList.toggle('hide', !b);
-  }
-  async function poll() {
-    if (!job) return;
-    const j = (await call('job', job)) || { state: 'fail', line: '작업 상태를 못 읽음' };
-    $('bar').style.width = (j.pct || 0) + '%';
-    $('status').textContent = j.line || '';
-    $('jobPillText').textContent = Math.round(j.pct || 0) + '% · ' + (j.pill || j.line || '만드는 중').slice(0, 40);
-    const log = $('log');
-    log.classList.remove('hide');
-    log.textContent = (j.log || []).join('\n');
-    log.scrollTop = log.scrollHeight;
-    if (j.state === 'run') { timer = setTimeout(poll, 700); return; }
-    setBusy(false);
-    $('jobPill').classList.add('hide');
-    if (j.state === 'done') {
-      $('status').textContent = '끝 · 여는 중…';
-      const r = await call('open_project', j.out);
-      if (r && !r.ok) toast(r.msg);
-    }
-    job = null;
-  }
-
   ready(async () => {
     api = window.pywebview.api;
     const info = (await call('app_info')) || {};
     $('ver').textContent = 'v' + (info.version || '');
     document.querySelectorAll('.nav').forEach((a) => a.addEventListener('click', () => showPage(a.dataset.page)));
     showPage('home');
-
-    $('bCreate').addEventListener('click', openDlg);
-    $('bClose').addEventListener('click', () => { $('dlg').classList.add('hide'); if (job) $('jobPill').classList.remove('hide'); });
-    $('bHide').addEventListener('click', () => { $('dlg').classList.add('hide'); $('jobPill').classList.remove('hide'); });
-    $('jobPill').addEventListener('click', () => { $('jobPill').classList.add('hide'); openDlg(); });
     $('bOpen').addEventListener('click', async () => { const r = await call('pick_open'); if (r && !r.ok) toast(r.msg); });
-    $('bPick').addEventListener('click', async () => {
-      const r = await call('pick_inputs');
-      if (!r) return;
-      files = r.files;
-      $('pickInfo').textContent = (r.osv ? '영상 ' + r.osv + '개' : '') + (r.osv && r.jpg ? ' · ' : '') + (r.jpg ? '사진 ' + r.jpg + '장' : '') + ' · ' + r.size_gb + ' GB · ' + r.dir;
-      $('out').value = r.out;
-      if (!$('title').value) $('title').value = r.out.split(/[\\/]/).pop().replace(/^로드뷰_/, '');
-      $('status').textContent = '간격을 넣고 [만들기]';
-    });
-    $('bOut').addEventListener('click', async () => { const d = await call('pick_folder'); if (d) $('out').value = d; });
-    $('bBuild').addEventListener('click', async () => {
-      if (!files.length) { toast('영상을 고르세요'); return; }
-      const r = await call('start_build', { files, out: $('out').value, interval: Number($('gap').value), title: $('title').value,
-        width: Number($('width').value), dem: $('dem').checked, sat: $('sat').checked });
-      if (!r || !r.ok) { if (r) toast(r.msg); return; }
-      job = r.job; setBusy(true); $('bar').style.width = '0%'; poll();
-    });
-    $('bStop').addEventListener('click', async () => { if (job) await call('stop_job', job); });
-    document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('dlg').classList.contains('hide') && !job) $('dlg').classList.add('hide'); });
+    $('bCreate').addEventListener('click', () => window.RVEdit && window.RVEdit.open());
+    $('jobPill').addEventListener('click', () => window.RVEdit && window.RVEdit.open());
+    if (window.RVEdit) window.RVEdit.init(info);
   });
 })();

@@ -28,7 +28,7 @@ datas = [
     (FF, 'ffmpeg'),
 ]
 hidden = ['roadview.build', 'roadview.share', 'roadview.pipes_update', 'roadview.terrain', 'roadview.photos',
-          'roadview.keys', 'roadview.shp', 'roadview.pipeload', 'roadview.pipes', 'roadview.height',
+          'roadview.keys', 'roadview.media', 'roadview.shp', 'roadview.pipeload', 'roadview.pipes', 'roadview.height',
           'matplotlib.tri', 'pg8000', 'pg8000.native', 'ezdxf', 'pyproj', 'webview', 'clr', 'cv2']
 excludes = ['tkinter', 'roadview.gui', 'IPython', 'pytest']
 
