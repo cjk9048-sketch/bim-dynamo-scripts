@@ -20,7 +20,7 @@ import uuid
 from pathlib import Path
 
 APP_NAME = '드론 로드뷰'
-APP_VERSION = '1.0.14'
+APP_VERSION = '1.0.15'
 FROZEN = getattr(sys, 'frozen', False)
 BASE = Path(sys._MEIPASS) if FROZEN else Path(__file__).resolve().parent.parent      # noqa: SLF001
 HOME_HTML = (BASE / 'roadview' / 'app_home' / 'index.html') if not FROZEN else (BASE / 'app_home' / 'index.html')
@@ -214,9 +214,10 @@ class Api:
             try:
                 M = json.loads(mp.read_text(encoding='utf-8').split('=', 1)[1].strip().rstrip(';'))
                 info.update(title=M.get('title') or info['title'], shots=M.get('photos', 0), kind='mapping')
-                t = Path(folder) / '결과물' / '정사영상_미리보기.png'
-                if t.exists():
-                    info['thumb'] = str(t)
+                for t in (Path(folder) / 'data' / '미리보기.png', Path(folder) / '결과물' / '정사영상_미리보기.png'):
+                    if t.exists():
+                        info['thumb'] = str(t)
+                        break
             except Exception:
                 pass
         try:
@@ -626,6 +627,10 @@ class Api:
         args = [folder, '--out', out, '--quality', q, '--names', str(lst), '--title', p.get('title') or Path(out).name]
         if p.get('crs') in ('EPSG:5186', 'EPSG:5185', 'EPSG:5187', 'EPSG:5188', 'EPSG:5179'):
             args += ['--crs', p['crs']]
+        outs = [o for o in (p.get('outputs') or ['mesh']) if o in ('mesh', 'ortho', 'dsm', 'dtm', 'las')]
+        if not outs:
+            return {'ok': False, 'msg': '만들 것 고르기'}
+        args += ['--outputs', ','.join(outs)]
         cmd, cwd = _cli('map', args)
         j = Job('map', cmd, cwd, out=out)
         self._jobs[j.id] = j

@@ -6,9 +6,22 @@
   const $ = (id) => document.getElementById(id);
   const call = (...a) => window.RV.call(...a);
   const toast = (t) => window.RV.toast(t);
-  // 사진 한 장 처리 시간 어림 (초) — 1125 실측: 빠르게 80장 266초(3.3) · 보통 394장 약 12초/장(전역 카메라 · 면 한도 반영) · 정밀은 어림
-  const SEC = { fast: 4, normal: 12, fine: 35 };
-  const S = { info: {}, folder: '', photos: [], sel: new Set(), q: 'normal', area: false, job: null, outTouched: false };
+  // 사진 한 장 처리 시간 어림 (초) — 단계별 · 1125 실측 (보통 394장 · 보통 80장 3D만 / 전부 · 정밀 80장 · 빠르게 80장)
+  //   base = 특징점 · 맞추기 · 카메라 · 왜곡 펴기 (많을수록 늘어 394장 기준) · pts / mesh = 점구름 (측량용 / 3D 만)
+  //   mP / mM = 3D 면 (측량용 점구름 / 3D 만 점구름) · tex = 질감 · out = 정사 · DSM · DTM (3D 만이면 거의 0)
+  const SEC = {
+    fast: { base: 1.5, pts: 1.6, mesh: 1.6, mP: 0.4, mM: 0.4, tex: 0.15, out: 0.1 },
+    normal: { base: 2.8, pts: 7.1, mesh: 1.7, mP: 3.4, mM: 1.0, tex: 0.8, out: 0.35 },
+    fine: { base: 3.0, pts: 29.7, mesh: 7.1, mP: 15.6, mM: 3.6, tex: 4.8, out: 1.2 },
+  };
+  const OUTK = 'rv.map.outputs';
+  const S = { info: {}, folder: '', photos: [], sel: new Set(), q: 'normal', area: false, job: null, outTouched: false,
+    outs: new Set((localStorage.getItem(OUTK) || 'mesh').split(',').filter(Boolean)) };
+  const perPhoto = () => {
+    const k = SEC[S.q], pts = ['ortho', 'dsm', 'dtm', 'las'].some((o) => S.outs.has(o)), mesh = S.outs.has('mesh');
+    return k.base + (pts ? k.pts : k.mesh) + (mesh ? (pts ? k.mP : k.mM) + k.tex : 0) + (pts ? k.out : 0.05);
+  };
+  function outsUi() { document.querySelectorAll('#mOuts button').forEach((b) => b.classList.toggle('on', S.outs.has(b.dataset.o))); }
   const MAP = { z: 15, cx: 0, cy: 0, imgs: new Map(), fitted: false, key: '' };
   const wpx = (lat, lon, z) => { const s = 256 * Math.pow(2, z), r = lat * Math.PI / 180; return [(lon + 180) / 360 * s, (1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2 * s]; };
   const mapEl = () => $('mMap');
@@ -56,7 +69,8 @@
   function est() {
     const n = S.sel.size;
     $('mSel').textContent = S.photos.length ? '고름 ' + n + ' / ' + S.photos.length + '장' : '';
-    $('mEst').textContent = n ? '사진 ' + n + '장 · 약 ' + Math.max(1, Math.round(n * SEC[S.q] / 60)) + '분 (' + { fast: '빠르게', normal: '보통', fine: '정밀' }[S.q] + ')' : '';
+    const m = Math.max(1, Math.round(n * perPhoto() / 60));
+    $('mEst').textContent = n ? '사진 ' + n + '장 · 약 ' + (m >= 90 ? (m / 60).toFixed(1) + '시간' : m + '분') + ' (' + { fast: '빠르게', normal: '보통', fine: '정밀' }[S.q] + ')' : '';
   }
   async function pick() {
     const r = await call('pick_mapping_folder');
@@ -101,7 +115,8 @@
   }
   async function build() {
     if (S.sel.size < 3) { toast('사진 3장 이상 고르기'); return; }
-    const r = await call('start_mapping', { folder: S.folder, out: $('mOut').value, names: [...S.sel], quality: S.q, title: $('mTitle').value, crs: $('mCrs').value });
+    if (!S.outs.size) { toast('만들 것 고르기'); return; }
+    const r = await call('start_mapping', { folder: S.folder, out: $('mOut').value, names: [...S.sel], quality: S.q, title: $('mTitle').value, crs: $('mCrs').value, outputs: [...S.outs] });
     if (!r || !r.ok) { if (r) toast(r.msg); return; }
     S.job = r.job; $('mBuild').disabled = true; $('mStop').disabled = false; $('mBar').style.width = '0%'; poll();
   }
@@ -130,6 +145,11 @@
     $('mOutB').addEventListener('click', async () => { const d = await call('pick_folder'); if (d) { $('mOut').value = d; S.outTouched = true; } });
     $('mOut').addEventListener('input', () => { S.outTouched = true; });
     document.querySelectorAll('#mQ button').forEach((b) => b.addEventListener('click', () => { S.q = b.dataset.q; document.querySelectorAll('#mQ button').forEach((x) => x.classList.toggle('on', x === b)); est(); }));
+    document.querySelectorAll('#mOuts button').forEach((b) => b.addEventListener('click', () => {
+      const o = b.dataset.o; if (S.outs.has(o)) S.outs.delete(o); else S.outs.add(o);
+      localStorage.setItem(OUTK, [...S.outs].join(',')); outsUi(); est();
+    }));
+    outsUi();
     mapInit();
   }
   window.RVMap = { init, open, close, _S: S, _test: { setPhotos: (folder, photos, out) => { S.folder = folder; S.photos = photos; S.sel = new Set(photos.map((p) => p.name)); $('mOut').value = out || ''; MAP.fitted = false; draw(); est(); }, build, draw } };

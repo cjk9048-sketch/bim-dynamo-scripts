@@ -128,6 +128,9 @@
 .mmap { grid-area:map; position:relative; min-width:0; min-height:0; }
 .mmap .map { position:absolute; inset:0; height:auto; border-radius:0; }
 .mmap .map.area { cursor:crosshair; }
+.chips { display:flex; flex-wrap:wrap; gap:5px; margin-bottom:4px; }
+.chips button { background:#222; border:1px solid #333; border-radius:12px; padding:3px 10px; font-size:11.5px; color:#999; }
+.chips button.on { background:#16405f; border-color:#2c7fb8; color:#fff; }
 .mbox { position:absolute; border:1.5px dashed #ffb020; background:#ffb0201f; pointer-events:none; }
 .mgrp { background:#222; border-radius:8px; padding:10px; margin-bottom:10px; }
 .mgrp .row { gap:6px; }

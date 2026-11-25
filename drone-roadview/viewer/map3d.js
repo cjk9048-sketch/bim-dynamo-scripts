@@ -350,6 +350,18 @@
   });
   $('dCancel').addEventListener('click', () => { $('dlg').style.display = 'none'; });
 
+  // 3D 를 안 만든 프로젝트 (결과물 고르기 · 1.0.15) → 위에서 본 미리보기 그림 + 만든 것 · [결과물]
+  if (Array.isArray(P.outputs) && !P.outputs.includes('mesh')) {
+    const NM = { ortho: '정사영상', dsm: 'DSM', dtm: 'DTM', las: '점구름 LAS' };
+    ['bPipes', 'bXray', 'bCheck', 'bTop'].forEach((id) => { $(id).style.display = 'none'; });
+    cv.style.display = 'none'; $('load').style.display = 'none';
+    const f = document.createElement('div'); f.id = 'flat';
+    f.innerHTML = '<img src="data/미리보기.png" alt=""><div class="fl">3D 모델 없음 · 만든 것: ' + P.outputs.map((k) => NM[k] || k).join(' · ') + '</div>';
+    document.body.appendChild(f);
+    $('info').textContent = '사진 ' + (P.registered || '?') + '/' + (P.photos || '?') + '장 · RTK 어긋남 ' + (P.rtk_rms != null ? P.rtk_rms.toFixed(2) + ' m' : '-') + ' · ' + (P.crs || 'EPSG:5186') + ' + ' + (P.height || 'EGM2008');
+    window.__map3d = { flat: true };
+    return;
+  }
   loadMesh().then(() => {
     buildPipes();
     $('load').style.display = 'none';

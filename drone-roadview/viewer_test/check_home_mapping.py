@@ -58,6 +58,22 @@ def run(w, api):
     n_sel = J('RVMap._S.sel.size')
     ok('범위로 고름 (전체보다 적고 3장 이상)', 3 <= n_sel <= n_all, [n_sel, n_all])
     ok('예상 시간 글', '분' in (J('document.getElementById("mEst").textContent') or ''), J('document.getElementById("mEst").textContent'))
+    # 만들 것 고르기 (1.0.15): 3D 만 → 예상 시간 짧음 · 시험은 3D + 정사 + DSM
+    setc = lambda o, on: J('(() => { const b = document.querySelector("#mOuts button[data-o=%s]"); if (b.classList.contains("on") !== %s) b.click(); return b.classList.contains("on"); })()' % (o, 'true' if on else 'false'))   # noqa: E731
+    for o in ('ortho', 'dsm', 'dtm', 'las'):
+        setc(o, False)
+    setc('mesh', True)
+    J('RVMap._S.sel = new Set(RVMap._S.photos.map(p => p.name)); RVMap._test.draw();')
+    J('RVMap._S.sel = new Set(RVMap._S.photos.concat(RVMap._S.photos, RVMap._S.photos, RVMap._S.photos, RVMap._S.photos).map((p, i) => p.name + "#" + i)); RVMap._test.draw();')
+    J('document.querySelector("#mQ button[data-q=normal]").click()')     # 견줌은 보통 100장 (빠르게는 점구름이 같아 거의 같음) · 누르면 예상 다시 셈
+    e1 = J('document.getElementById("mEst").textContent')
+    setc('ortho', True); setc('dsm', True); setc('dtm', True)
+    e2 = J('document.getElementById("mEst").textContent')
+    J('document.querySelector("#mQ button[data-q=%s]").click()' % Q)
+    num = lambda t: float(__import__('re').search(r'약 ([\d.]+)', t).group(1)) * (60 if '시간' in t else 1)   # noqa: E731
+    ok('3D 만 예상이 더 짧음', num(e1) < num(e2), [e1, e2])
+    setc('dtm', False)
+    ok('고른 것', J('JSON.stringify([...RVMap._S.outs].sort())') == '["dsm","mesh","ortho"]', J('JSON.stringify([...RVMap._S.outs])'))
     J('RVMap._S.sel = new Set(RVMap._S.photos.map(p => p.name)); RVMap._test.draw();')     # 시험은 전체로 (작은 폴더)
     J('document.getElementById("mBuild").click()')
     ok('만들기 시작', wait('!!RVMap._S.job', 15))
@@ -80,6 +96,8 @@ def run(w, api):
     ok('3D 그려짐', wait('window.__drawn > 0 || !!window.__err', 120), J('JSON.stringify([window.__mesh, window.__err || null])'))
     ok('정보 줄', '세모' in (J('document.getElementById("info").textContent') or ''), J('document.getElementById("info").textContent'))
     ok('결과물 파일', all(os.path.exists(os.path.join(OUT, '결과물', f)) for f in ('정사영상.tif', 'DSM.tif', '지표면_DSM.xml')))
+    ok('안 고른 것은 안 만듦 (DTM · LAS)', not any(os.path.exists(os.path.join(OUT, '결과물', f)) for f in ('DTM.tif', '점구름.las')))
+    ok('땅 높이 · 미리보기', all(os.path.exists(os.path.join(OUT, 'data', f)) for f in ('지면.tif', '미리보기.png')))
     w.destroy()
 
 
