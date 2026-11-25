@@ -21,8 +21,8 @@ public static class CoordSysInstaller
         _done = true;
         try
         {
-            string? asmDir = System.IO.Path.GetDirectoryName(typeof(CoordSysInstaller).Assembly.Location);
-            if (asmDir == null) return;
+            string asmDir = BundleContents.Root;
+            if (asmDir.Length == 0) return;
             string bundleCs = System.IO.Path.Combine(asmDir, "coordsys");
             string srcCoord = System.IO.Path.Combine(bundleCs, "Coordsys.CSD");
             string srcCat = System.IO.Path.Combine(bundleCs, "Category.CSD");

@@ -54,7 +54,7 @@ internal static class Web3DShare
     {
         try
         {
-            string dir = System.IO.Path.GetDirectoryName(typeof(Web3DShare).Assembly.Location) ?? "";
+            string dir = BundleContents.Root;
             string p = System.IO.Path.Combine(dir, "share3d.default.json");
             if (!System.IO.File.Exists(p)) return null;
             using var doc = JsonDocument.Parse(System.IO.File.ReadAllText(p));

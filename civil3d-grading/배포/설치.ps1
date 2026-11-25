@@ -37,7 +37,19 @@ try {
         $c26 += [pscustomobject]@{ Name = (Get-ItemProperty $k.PSPath).ProductName; Ver = [version]("{0}.{1}.{2}.{3}" -f $fv.FileMajorPart, $fv.FileMinorPart, $fv.FileBuildPart, $fv.FilePrivatePart) }
     }
 } catch { }
-if ($c26.Count -gt 0 -and -not ($c26 | Where-Object { $_.Ver -ge $minAecc })) {
+# ★[1125 · Civil 3D 2027] 같은 묶음이 2027(R26.0)도 받는다 — 업데이트 검사는 2026에만 · 2027도 있으면 막지 않고 깐다(아래 ④에서 알림)
+function Test-Civil([string]$series) {
+    try {
+        foreach ($k in Get-ChildItem "HKLM:\SOFTWARE\Autodesk\AutoCAD\$series" -ErrorAction Stop) {
+            $loc = (Get-ItemProperty $k.PSPath -ErrorAction SilentlyContinue).AcadLocation
+            if ($loc -and (Test-Path -LiteralPath (Join-Path $loc 'C3D\AeccDbMgd.dll'))) { return $true }
+        }
+    } catch { }
+    return $false
+}
+$has27 = Test-Civil 'R26.0'
+$old26 = $c26.Count -gt 0 -and -not ($c26 | Where-Object { $_.Ver -ge $minAecc })
+if ($old26 -and -not $has27) {
     Say "! Civil 3D 2026 업데이트가 필요합니다." 'Red'
     foreach ($c in $c26) { Say ("  이 PC: {0} · Civil 판 {1}" -f $c.Name, $c.Ver) 'Yellow' }
     Say "  필요: Civil 3D 2026.1 업데이트 이상(Civil 판 $minAecc 이상)" 'Yellow'
@@ -132,6 +144,12 @@ elseif (-not $frameSrc) {
         if ($h2 -eq $frameSha) { Say "기본 도곽(K-water) 복사 완료" 'Green' } else { Say "! 기본 도곽 복사 뒤 해시가 다름 — 다시 설치하세요." 'Red' }
     }
 }
+
+# ── ④ [1125] Civil 3D 판 — 2026(R25.1) · 2027(R26.0) 둘 다 받는다(설치 exe ③과 같음) ──
+$has26 = $c26.Count -gt 0
+if ($has26) { if ($old26) { Say "Civil 3D 2026 있음 — ! 2026.1 업데이트 뒤에 뜹니다(Autodesk Access → 업데이트)" 'Yellow' } else { Say "Civil 3D 2026 있음" 'Green' } }
+if ($has27) { Say "Civil 3D 2027 있음" 'Green' }
+if (-not $has26 -and -not $has27) { Say "! Civil 3D 2026 · 2027을 못 찾았습니다 — 이 애드인은 Civil 3D 2026 · 2027용입니다(리본이 안 뜹니다)." 'Yellow' }
 
 Say "==== 설치 종료 ====" 'Cyan'
 Say "Civil3D를 실행하면 'DH 정지' 리본이 로드됩니다." 'Gray'

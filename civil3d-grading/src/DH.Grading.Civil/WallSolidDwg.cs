@@ -1,4 +1,4 @@
-using Autodesk.AutoCAD.Colors;
+﻿using Autodesk.AutoCAD.Colors;
 using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.Geometry;
 using DH.Grading.Core;
@@ -301,7 +301,7 @@ internal static class WallSolidDwg
                 var a = verts[f[0]]; var b = verts[f[i]]; var c = verts[f[i + 1]];
                 vol += a.X * (b.Y * c.Z - b.Z * c.Y) - a.Y * (b.X * c.Z - b.Z * c.X) + a.Z * (b.X * c.Y - b.Y * c.X);
             }
-        if (vol < 0) faces = faces.Select(f => f.Reverse().ToArray()).ToList();
+        if (vol < 0) faces = faces.Select(f => Enumerable.Reverse(f).ToArray()).ToList();
         if (Math.Abs(vol) / 6 < 1e-9) { st.Fails++; if (st.FirstFail.Length == 0) st.FirstFail = $"{layName} 부피 0"; return; }
         var fc = new Int32Collection();
         foreach (var f in faces) { fc.Add(f.Length); foreach (int v in f) fc.Add(v); }

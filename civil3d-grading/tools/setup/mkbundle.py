@@ -6,6 +6,7 @@
 """
 import io
 import os
+import re
 import zipfile
 import hashlib
 import sys
@@ -57,6 +58,11 @@ must = ["PackageContents.xml", "Contents/DH.Grading.Civil.dll", "Contents/DH.Gra
         #   ★이 묶음(EXE · ZIP)에는 비밀값이 들어간다 — 사내 배포만(공개 저장소 릴리스 · 공개 NAS 금지).
         "Contents/dh.keys.json"]
 have = {r for _, r in files}
+# ★[1125 · Civil 3D 2027] 매니페스트가 2027 묶음(Contents/2027/)을 가리키면 그 DLL도 꼭 있어야 한다(빌드: dotnet build -c Release -p:CivilYear=2027)
+_pc = io.open(os.path.join(SRC, "PackageContents.xml"), encoding="utf-8-sig").read()
+has27 = "./Contents/2027/DH.Grading.Civil.dll" in _pc
+if has27:
+    must += ["Contents/2027/DH.Grading.Civil.dll", "Contents/2027/DH.Grading.Core.dll", "Contents/2027/NetTopologySuite.dll"]
 missing = [m for m in must if m not in have]
 print("MISSING:", missing if missing else "none")
 if missing:
@@ -64,3 +70,21 @@ if missing:
 
 d = io.open(os.path.join(SRC, "Contents", "DH.Grading.Civil.dll"), "rb").read()
 print("dll sha256 =", hashlib.sha256(d).hexdigest()[:16])
+
+# ★[1125] 2027 DLL이 옛것이면 멈춘다 — 2026만 다시 빌드하고 2027을 잊으면 2027 사용자에게 옛 판이 깔린다.
+#   ① Core는 두 판이 같은 net8.0 빌드 → 바이트가 같아야 한다  ② 두 Civil DLL 모두 지금 판 문자열(GradingSettings.Version)을 품어야 한다
+if has27:
+    d27 = io.open(os.path.join(SRC, "Contents", "2027", "DH.Grading.Civil.dll"), "rb").read()
+    print("dll 2027 sha256 =", hashlib.sha256(d27).hexdigest()[:16])
+    core = [io.open(os.path.join(SRC, "Contents", *sub, "DH.Grading.Core.dll"), "rb").read() for sub in ((), ("2027",))]
+    _v = re.search(r'Version = "(v[0-9.]+)', io.open("src/DH.Grading.Civil/GradingSettings.cs", encoding="utf-8-sig").read()).group(1)
+    stale = []
+    if core[0] != core[1]:
+        stale.append("Core.dll 두 판이 다름")
+    for nm, blob in (("2026", d), ("2027", d27)):
+        if _v.encode("utf-16-le") not in blob:
+            stale.append(f"{nm} Civil DLL에 {_v} 없음")
+    if stale:
+        raise SystemExit("2026 · 2027 DLL이 같은 판이 아닙니다(%s) — 두 판을 다 빌드하세요: "
+                         "dotnet build -c Release  ·  dotnet build -c Release -p:CivilYear=2027" % " · ".join(stale))
+    print("2026 · 2027 같은 판:", _v)

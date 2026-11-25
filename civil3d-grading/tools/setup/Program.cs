@@ -34,10 +34,14 @@ try
     //    애드인은 2026.1(AeccDbMgd 13.8.946)로 빌드 — Civil DLL의 어셈블리 판에 업데이트 번호까지 들어 있어
     //    업데이트 안 한 2026(첫 판)에서는 .NET이 낮은 판을 거부해 애드인이 안 열릴 수 있다 → 깔기 전에 막고 안내(아무것도 안 바꿈).
     //    2026이 아예 없으면 예전처럼 설치 뒤 ③에서 알림만. 시험 인자(--target)일 때는 건너뜀.
+    //    ★[1125 · Civil 3D 2027] 이 검사는 2026에만 — 2027(R26.0)도 있으면 막지 않고 깐다(2027은 바로 됨 · 2026은 업데이트 뒤 뜬다고 알림).
+    bool old2026 = false;
     if (!testMode && OperatingSystem.IsWindows())
     {
-        var c26 = FindCivilVersions().Where(c => c.Series == "R25.1").ToList();
-        if (c26.Count > 0 && c26.All(c => c.Aecc < MinAecc2026()))
+        var cv = FindCivilVersions();
+        var c26 = cv.Where(c => c.Series == "R25.1").ToList();
+        old2026 = c26.Count > 0 && c26.All(c => c.Aecc < MinAecc2026());
+        if (old2026 && !cv.Exists(c => c.Series == "R26.0"))
         {
             Console.WriteLine("! Civil 3D 2026 업데이트가 필요합니다.");
             foreach (var c in c26) Console.WriteLine($"   이 PC: {c.Name} · Civil 판 {c.Aecc}");
@@ -126,12 +130,15 @@ try
             int a = x.IndexOf("AppVersion=\"", StringComparison.Ordinal);
             if (a >= 0) { a += 12; int b = x.IndexOf('"', a); if (b > a) ver = x.Substring(a, b - a); }
         }
-        string dll = Path.Combine(pluginDir, "Contents", "DH.Grading.Civil.dll");
-        string fp = "?";
-        if (File.Exists(dll))
-            using (var sha = System.Security.Cryptography.SHA256.Create())
-                fp = Convert.ToHexString(sha.ComputeHash(File.ReadAllBytes(dll))).Substring(0, 12).ToLowerInvariant();
-        Console.WriteLine($"   버전 {ver} · 지문 {fp}");
+        static string Fp(string dll)
+        {
+            if (!File.Exists(dll)) return "?";
+            using var sha = System.Security.Cryptography.SHA256.Create();
+            return Convert.ToHexString(sha.ComputeHash(File.ReadAllBytes(dll))).Substring(0, 12).ToLowerInvariant();
+        }
+        string fp = Fp(Path.Combine(pluginDir, "Contents", "DH.Grading.Civil.dll"));
+        string dll27 = Path.Combine(pluginDir, "Contents", "2027", "DH.Grading.Civil.dll");
+        Console.WriteLine($"   버전 {ver} · 지문 {fp}" + (File.Exists(dll27) ? $" · 2027 지문 {Fp(dll27)}" : ""));
     }
     catch { }
     Console.WriteLine();
@@ -170,13 +177,15 @@ try
 
     // ── ③ [배포 점검 1123] Civil 3D 판 — 매니페스트는 R25.1(2026)만 받고 DLL은 2026.1 것으로 빌드한다(★1125 R25.0 뺌).
     //    다른 판만 있는 PC는 설치는 «완료»인데 리본이 안 뜬다 → 여기서 미리 알린다(설치는 그대로 · 알림만).
+    //    ★[1125] 2027(R26.0)도 받는다 — 매니페스트 둘째 묶음 · Contents\2027\ DLL.
     Console.WriteLine("③ Civil 3D 판 확인");
     var civ = OperatingSystem.IsWindows() ? FindCivil() : new List<(string Series, string Name)>();
-    if (civ.Exists(c => c.Series == "R25.1"))
-        Console.WriteLine("   Civil 3D 2026 있음");
-    else
+    bool has26 = civ.Exists(c => c.Series == "R25.1"), has27 = civ.Exists(c => c.Series == "R26.0");
+    if (has26) Console.WriteLine("   Civil 3D 2026 있음" + (old2026 ? " — ! 2026.1 업데이트 뒤에 뜹니다(Autodesk Access → 업데이트)" : ""));
+    if (has27) Console.WriteLine("   Civil 3D 2027 있음");
+    if (!has26 && !has27)
     {
-        Console.WriteLine("   ! Civil 3D 2026을 못 찾았습니다 — 이 애드인은 Civil 3D 2026용입니다.");
+        Console.WriteLine("   ! Civil 3D 2026 · 2027을 못 찾았습니다 — 이 애드인은 Civil 3D 2026 · 2027용입니다.");
         foreach (var c in civ)
             Console.WriteLine("     이 PC: " + c.Name + " — 리본이 안 뜹니다");
     }

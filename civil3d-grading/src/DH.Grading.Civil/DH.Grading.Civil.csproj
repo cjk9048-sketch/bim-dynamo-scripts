@@ -20,9 +20,24 @@
     실행은 설치된 Civil3D 2026이 자기 DLL을 로드한다.
     설치 경로가 다르면 아래 AcadDir 한 줄만 바꾸면 된다.
   -->
+  <!--
+    ★[1125 · Civil 3D 2027] 같은 소스로 2027 판도 짓는다 — dotnet build -c Release -p:CivilYear=2027
+      2027 = AutoCAD R26.0 · .NET 10 → net10.0-windows · AutoCAD 2027 DLL 참조 · CIVIL2027 기호(판 차이는 #if CIVIL2027).
+      출력은 TFM이 달라 저절로 갈린다(bin\Release\net10.0-windows) · 번들은 Contents\2027\ (아래 CopyToBundle).
+      기본(값 없음) = 2026 — 지금까지와 같다.
+  -->
+  <PropertyGroup>
+    <CivilYear Condition="'$(CivilYear)' == ''">2026</CivilYear>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(CivilYear)' == '2027'">
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <DefineConstants>$(DefineConstants);CIVIL2027</DefineConstants>
+    <_BundleSub>\2027</_BundleSub>
+  </PropertyGroup>
+
   <PropertyGroup>
     <!-- AutoCAD 기본 DLL은 설치 루트, Civil3D DLL은 그 아래 C3D 폴더에 있다. -->
-    <AcadDir Condition="'$(AcadDir)' == ''">C:\Program Files\Autodesk\AutoCAD 2026\</AcadDir>
+    <AcadDir Condition="'$(AcadDir)' == ''">C:\Program Files\Autodesk\AutoCAD $(CivilYear)\</AcadDir>
     <CivilDir Condition="'$(CivilDir)' == ''">$(AcadDir)C3D\</CivilDir>
     <AcaDir Condition="'$(AcaDir)' == ''">$(AcadDir)ACA\</AcaDir>
   </PropertyGroup>
@@ -131,10 +146,12 @@
       <_BundlePayload Include="$(OutDir)*.dll" />
       <_BundlePayload Include="$(OutDir)DH.Grading.*.pdb" />
     </ItemGroup>
+    <!-- ★[1125] 2027 판은 Contents\2027\ — DLL 묶음만(Civil · Core · NuGet · WebView2Loader). 공유 자료(coordsys · Tutorial · Frames · LSP · 키 파일 …)는
+         Contents\ 한 벌만 두고 코드가 BundleContents.Root 로 찾는다. -->
     <Copy SourceFiles="@(_BundlePayload)"
-          DestinationFolder="$(MSBuildProjectDirectory)\DH.Grading.bundle\Contents"
+          DestinationFolder="$(MSBuildProjectDirectory)\DH.Grading.bundle\Contents$(_BundleSub)"
           SkipUnchangedFiles="true" />
-    <Message Importance="high" Text="번들 갱신 — 구성 $(Configuration)" />
+    <Message Importance="high" Text="번들 갱신 — 구성 $(Configuration) · Civil $(CivilYear) → Contents$(_BundleSub)" />
   </Target>
 
 </Project>

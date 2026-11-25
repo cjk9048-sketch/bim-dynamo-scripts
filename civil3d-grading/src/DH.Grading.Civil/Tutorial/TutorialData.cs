@@ -16,8 +16,7 @@ internal static class TutorialData
     internal static string Home => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "DHGrading", "tutorial");
 
-    static string BundleDir => Path.Combine(
-        Path.GetDirectoryName(typeof(TutorialData).Assembly.Location) ?? "", "Tutorial");
+    static string BundleDir => Path.Combine(BundleContents.Root, "Tutorial");
 
     /// <summary>기본 자료 파일 — 없으면 null. LOCALAPPDATA\…\data가 먼저 · 다음 번들.</summary>
     internal static string? DataFile(string name)

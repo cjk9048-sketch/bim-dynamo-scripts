@@ -25,7 +25,7 @@ public sealed class RevitAddinCommand
     static readonly string[] Dlls = { "DH.CivilCoord.Revit.dll", "DH.CivilCoord.Core.dll" };
     const string Manifest = "DH.CivilCoord.addin";
 
-    static string SourceDir => SourceDirForTest ?? Path.Combine(Path.GetDirectoryName(typeof(RevitAddinCommand).Assembly.Location) ?? "", "RevitAddin");
+    static string SourceDir => SourceDirForTest ?? Path.Combine(BundleContents.Root, "RevitAddin");
     static string ProgramDataRoot => ProgramDataRootForTest ?? Path.Combine(System.Environment.GetFolderPath(System.Environment.SpecialFolder.CommonApplicationData), @"Autodesk\Revit\Addins\2026");
     static string AppDataRoot => AppDataRootForTest ?? Path.Combine(System.Environment.GetFolderPath(System.Environment.SpecialFolder.ApplicationData), @"Autodesk\Revit\Addins\2026");
     static string BackupRoot => BackupRootForTest ?? Path.Combine(System.Environment.GetFolderPath(System.Environment.SpecialFolder.ApplicationData), @"DH.CivilCoord\backup");

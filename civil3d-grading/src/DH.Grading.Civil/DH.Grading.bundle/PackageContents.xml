@@ -4,9 +4,10 @@
   이 .bundle 폴더 전체를 아래 위치에 복사하면 Civil3D 시작 시 자동 로드된다:
     %APPDATA%\Autodesk\ApplicationPlugins\DH.Grading.bundle
   Contents 폴더에 빌드 산출물(DH.Grading.Civil.dll, DH.Grading.Core.dll)과 뷰 LISP를 넣을 것.
+  ★[1125] Civil 3D 2027(R26.0) = 둘째 <Components>(DLL은 Contents/2027/) — tools/setup/pkg.py 가 2026 묶음을 베껴 다시 만든다(손으로 고치지 말 것).
 -->
 <ApplicationPackage SchemaVersion="1.0"
-                    AppVersion="117.41.1"
+                    AppVersion="117.42.0"
                     ProductType="Application"
                     Name="DH 정지(절성토)"
                     Description="계단식 정지 비탈면 자동 생성 (distance-field)">
@@ -15,6 +16,163 @@
     <RuntimeRequirements OS="Win64" Platform="AutoCAD*" SeriesMin="R25.1" SeriesMax="R25.1" />
     <ComponentEntry AppName="DH.Grading"
                     ModuleName="./Contents/DH.Grading.Civil.dll"
+                    LoadOnAutoCADStartup="True"
+                    PerDocument="False">
+      <Commands GroupName="DH_GRADING">
+        <Command Global="DHGRADE" Local="DHGRADE" />
+        <Command Global="DHWALL" Local="DHWALL" />
+        <Command Global="DHSLOPE" Local="DHSLOPE" />
+        <Command Global="DHNORI" Local="DHNORI" />
+        <Command Global="DHINFRA" Local="DHINFRA" />
+        <Command Global="DH3D" Local="DH3D" />
+        <Command Global="DH3DGO" Local="DH3DGO" />
+        <Command Global="DH3DXSEC" Local="DH3DXSEC" />
+        <Command Global="DHRESET" Local="DHRESET" />
+        <Command Global="DHGRADERESET" Local="DHGRADERESET" />
+        <Command Global="DHROADRESET" Local="DHROADRESET" />
+        <Command Global="DHMAP" Local="DHMAP" />
+        <Command Global="DHMAPOFF" Local="DHMAPOFF" />
+        <Command Global="DHCONTOUR" Local="DHCONTOUR" />
+        <Command Global="DHPARCEL" Local="DHPARCEL" />
+        <Command Global="DHGRADESET" Local="DHGRADESET" />
+        <Command Global="DHXSEC" Local="DHXSEC" />
+        <Command Global="DHSLOPELINE" Local="DHSLOPELINE" />
+        <Command Global="DHCS" Local="DHCS" />
+        <!-- ★[JACK 0915 배포판] 코드의 [CommandMethod]를 전부 싣는다 —
+             자동 로드라 없어도 돌긴 하지만, 매니페스트가 실제와 어긋나 있으면
+             도면 쪽에서 "이 명령이 있는지" 확인할 길이 남지 않는다. -->
+        <Command Global="DHBANDCHK" Local="DHBANDCHK" />
+        <Command Global="DHBANDINFO" Local="DHBANDINFO" />
+        <Command Global="DHCONTOURBOX" Local="DHCONTOURBOX" />
+        <Command Global="DHCONTOURWEB" Local="DHCONTOURWEB" />
+        <Command Global="DHCROP" Local="DHCROP" />
+        <Command Global="DHSELFCHECK" Local="DHSELFCHECK" />
+        <Command Global="DHEXCAV" Local="DHEXCAV" />
+        <Command Global="DHEXCAVPANEL" Local="DHEXCAVPANEL" />
+        <Command Global="DHEXCAVSLOPE" Local="DHEXCAVSLOPE" />
+        <Command Global="DHEXCAVWALL" Local="DHEXCAVWALL" />
+        <Command Global="DHEXCAVWALLCLEAR" Local="DHEXCAVWALLCLEAR" />
+        <Command Global="DHGNDREBUILD" Local="DHGNDREBUILD" />
+        <Command Global="DHGRADEPANEL" Local="DHGRADEPANEL" />
+        <Command Global="DHMAPPICK" Local="DHMAPPICK" />
+        <Command Global="DHMISCSET" Local="DHMISCSET" />
+        <Command Global="DHNGII" Local="DHNGII" />
+        <Command Global="DHPARCELOFF" Local="DHPARCELOFF" />
+        <Command Global="DHSTRUCT" Local="DHSTRUCT" />
+        <Command Global="DHSTRUCTPTS" Local="DHSTRUCTPTS" />
+        <Command Global="DHSTRUCTOFF" Local="DHSTRUCTOFF" />
+        <Command Global="DHSTRUCTPANEL" Local="DHSTRUCTPANEL" />
+        <Command Global="DHREVITADDIN" Local="DHREVITADDIN" />
+        <Command Global="DHUDITCH" Local="DHUDITCH" />
+        <Command Global="DHLANDBOUND" Local="DHLANDBOUND" />
+        <Command Global="DHPICKCLEAR" Local="DHPICKCLEAR" />
+        <Command Global="DHPICKSTATUS" Local="DHPICKSTATUS" />
+        <Command Global="DHPROFILE" Local="DHPROFILE" />
+        <Command Global="DHSAMPLE" Local="DHSAMPLE" />
+        <Command Global="DHSECTION" Local="DHSECTION" />
+        <Command Global="DHSHEET" Local="DHSHEET" />
+        <Command Global="DHSHEETSET" Local="DHSHEETSET" />
+        <Command Global="DHSHEETBOOK" Local="DHSHEETBOOK" />
+        <Command Global="DHSHEETMAKE" Local="DHSHEETMAKE" />
+        <Command Global="DHSTATION" Local="DHSTATION" />
+        <Command Global="DHSTATIONDEL" Local="DHSTATIONDEL" />
+        <Command Global="DHSTATIONFB" Local="DHSTATIONFB" />
+        <Command Global="DHSTRATA" Local="DHSTRATA" />
+        <Command Global="DHSTRATAPICK" Local="DHSTRATAPICK" />
+        <Command Global="DHTICKCHK" Local="DHTICKCHK" />
+        <Command Global="DHTICKDIAG" Local="DHTICKDIAG" />
+        <Command Global="DHTICKSET" Local="DHTICKSET" />
+        <Command Global="DHVIEW" Local="DHVIEW" />
+        <Command Global="DHVIEWALL" Local="DHVIEWALL" />
+        <Command Global="DHVIEWE" Local="DHVIEWE" />
+        <Command Global="DHVIEWR" Local="DHVIEWR" />
+        <Command Global="DHVIEWF" Local="DHVIEWF" />
+        <Command Global="DHVIEWSTN" Local="DHVIEWSTN" />
+        <Command Global="DHROADNEW" Local="DHROADNEW" />
+        <Command Global="DHVIEWG" Local="DHVIEWG" />
+        <Command Global="DHVIEWP" Local="DHVIEWP" />
+        <Command Global="DHXVIEW" Local="DHXVIEW" />
+        <!-- ★[JACK 0915 배포판] 코드의 [CommandMethod]를 전부 싣는다 —
+             자동 로드라 없어도 돌긴 하지만, 매니페스트가 실제와 어긋나 있으면
+             "이 명령이 있는지" 확인할 길이 도면 쪽에 남지 않는다. -->
+        <Command Global="DHWALLCOMP" Local="DHWALLCOMP" />
+        <Command Global="DHUNDOCLR" Local="DHUNDOCLR" />
+        <Command Global="DHABOUT" Local="DHABOUT" />
+        <!-- ★[JACK 0915 배포판] 코드의 [CommandMethod]를 전부 싣는다 —
+             자동 로드라 없어도 돌긴 하지만, 매니페스트가 실제와 어긋나 있으면
+             "이 명령이 있는지" 확인할 길이 도면 쪽에 남지 않는다. -->
+        <Command Global="DHALT" Local="DHALT" />
+        <Command Global="DHCROPDEPS" Local="DHCROPDEPS" />
+        <Command Global="DHEXCAVRESET" Local="DHEXCAVRESET" />
+        <Command Global="DHEXCAVUPDATE" Local="DHEXCAVUPDATE" />
+        <Command Global="DHEXCAVWALLALL" Local="DHEXCAVWALLALL" />
+        <Command Global="DHGNDCONTOUR" Local="DHGNDCONTOUR" />
+        <Command Global="DHGROUNDOFF" Local="DHGROUNDOFF" />
+        <Command Global="DHGROUNDPANEL" Local="DHGROUNDPANEL" />
+        <Command Global="DHPROFILEREV" Local="DHPROFILEREV" />
+        <Command Global="DHQTYXLSX" Local="DHQTYXLSX" />
+        <Command Global="DHQTYXLSXMAKE" Local="DHQTYXLSXMAKE" />
+        <Command Global="DHROAD" Local="DHROAD" />
+        <Command Global="DHROADDITCH" Local="DHROADDITCH" />
+        <Command Global="DHROADDRAW" Local="DHROADDRAW" />
+        <Command Global="DHROADENDS" Local="DHROADENDS" />
+        <Command Global="DHROADGROUND" Local="DHROADGROUND" />
+        <Command Global="DHROADOFF" Local="DHROADOFF" />
+        <Command Global="DHROADPANEL" Local="DHROADPANEL" />
+        <Command Global="DHROADPVIADD" Local="DHROADPVIADD" />
+        <Command Global="DHROADPVIDEL" Local="DHROADPVIDEL" />
+        <Command Global="DHROADPVIDRAW" Local="DHROADPVIDRAW" />
+        <Command Global="DHROADREDRAFT" Local="DHROADREDRAFT" />
+        <Command Global="DHROADREV" Local="DHROADREV" />
+        <Command Global="DHROADSECPANEL" Local="DHROADSECPANEL" />
+        <Command Global="DHROADSHEET" Local="DHROADSHEET" />
+        <Command Global="DHROADSLOPECONV" Local="DHROADSLOPECONV" />
+        <Command Global="DHROADSMOOTH" Local="DHROADSMOOTH" />
+        <Command Global="DHROADUPDATE" Local="DHROADUPDATE" />
+        <Command Global="DHROADWALL" Local="DHROADWALL" />
+        <Command Global="DHROADWALLADD" Local="DHROADWALLADD" />
+        <Command Global="DHROADWALLCONV" Local="DHROADWALLCONV" />
+        <Command Global="DHROADWALLDEL" Local="DHROADWALLDEL" />
+        <Command Global="DHROADXSEC" Local="DHROADXSEC" />
+        <Command Global="DHSECPANEL" Local="DHSECPANEL" />
+        <Command Global="DHSECSHEETAPPLY" Local="DHSECSHEETAPPLY" />
+        <Command Global="DHSHEETFRAMEADD" Local="DHSHEETFRAMEADD" />
+        <Command Global="DHSHEETPLAN" Local="DHSHEETPLAN" />
+        <Command Global="DHSTRUCTBOX" Local="DHSTRUCTBOX" />
+        <Command Global="DHSTRUCTBOXADD" Local="DHSTRUCTBOXADD" />
+        <Command Global="DHSTRUCTBOXEDIT" Local="DHSTRUCTBOXEDIT" />
+        <Command Global="DHSURVEYFIX" Local="DHSURVEYFIX" />
+        <Command Global="DHTUTORIAL" Local="DHTUTORIAL" />
+        <Command Global="DHUDITCHAREA" Local="DHUDITCHAREA" />
+        <Command Global="DHUDITCHBUILD" Local="DHUDITCHBUILD" />
+        <Command Global="DHUDITCHCATCH" Local="DHUDITCHCATCH" />
+        <Command Global="DHUDITCHCATCHVIS" Local="DHUDITCHCATCHVIS" />
+        <Command Global="DHUDITCHDEL" Local="DHUDITCHDEL" />
+        <Command Global="DHUDITCHDRAW" Local="DHUDITCHDRAW" />
+        <Command Global="DHUDITCHEDGE" Local="DHUDITCHEDGE" />
+        <Command Global="DHUDITCHFIT" Local="DHUDITCHFIT" />
+        <Command Global="DHUDITCHPICK" Local="DHUDITCHPICK" />
+        <Command Global="DHUDITCHUSCALE" Local="DHUDITCHUSCALE" />
+        <Command Global="DHUDITCHZOOM" Local="DHUDITCHZOOM" />
+        <Command Global="DHWALLADD" Local="DHWALLADD" />
+        <Command Global="DHWALLMIGRATE" Local="DHWALLMIGRATE" />
+        <Command Global="DHWALLREVERT" Local="DHWALLREVERT" />
+        <Command Global="DHWALLSET" Local="DHWALLSET" />
+        <Command Global="DHWALLSETAPPLY" Local="DHWALLSETAPPLY" />
+        <Command Global="DHWALLSETROAD" Local="DHWALLSETROAD" />
+      </Commands>
+    </ComponentEntry>
+    <!-- [JACK 0731] 3D 뷰 전환 단축 LISP(v1~v4·vv1~vv3) — 애드인과 함께 항상 자동 로드(설치 안 돼 있으면 이걸로 대체).
+         LISP는 문서별로 c: 명령을 정의하므로 PerDocument=True. 경로 공백 함정 회피 위해 파일명은 공백 없이. -->
+    <ComponentEntry AppName="DH.ViewShortcuts"
+                    ModuleName="./Contents/3D_VIEW_LOCATION.LSP"
+                    LoadOnAutoCADStartup="True"
+                    PerDocument="True" />
+  </Components>
+  <Components Description="DH Grading 2027">
+    <RuntimeRequirements OS="Win64" Platform="AutoCAD*" SeriesMin="R26.0" SeriesMax="R26.0" />
+    <ComponentEntry AppName="DH.Grading"
+                    ModuleName="./Contents/2027/DH.Grading.Civil.dll"
                     LoadOnAutoCADStartup="True"
                     PerDocument="False">
       <Commands GroupName="DH_GRADING">

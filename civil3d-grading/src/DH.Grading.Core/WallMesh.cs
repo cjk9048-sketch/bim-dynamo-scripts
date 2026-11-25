@@ -1,4 +1,4 @@
-namespace DH.Grading.Core;
+﻿namespace DH.Grading.Core;
 
 /// <summary>★★★[v107 · 계획_v107.md 1.2 · JACK 1027 «인프라웍스 내보내기를 3D 웹뷰로»] <b>옹벽 세모 메시</b> — [3D 보기]가 그리는 옹벽(몸통 · 모서리 메움 · 무늬 조각).
 /// <para>옹벽3D.dwg와 <b>같은 점</b>: 덩어리 링 점은 <see cref="LoftRings"/> 하나를 DWG(<c>WallSolidDwg.Loft</c>)와 함께 쓴다 · 모서리 메움은 DWG의 회전(ACIS)을 5° 이하 조각으로 · 무늬 조각은 같은 판 틀(u, v, w)의 프리즘.</para>
@@ -274,7 +274,7 @@ public static class WallMesh
         for (int i = 0; i < n; i++) { bot[i] = mesh.Add(At(poly[i].U, poly[i].V, -pc.Embed)); top[i] = mesh.Add(At(poly[i].U, poly[i].V, pc.Relief)); }
         var uv = poly.Select(q => (q.U, q.V)).ToList();
         mesh.Poly(top, uv);                                                               // 겉
-        mesh.Poly(bot.Reverse().ToList(), uv.AsEnumerable().Reverse().ToList());        // 묻힌 밑
+        mesh.Poly(Enumerable.Reverse(bot).ToList(), uv.AsEnumerable().Reverse().ToList());        // 묻힌 밑
         for (int i = 0; i < n; i++) mesh.Quad(bot[i], bot[(i + 1) % n], top[(i + 1) % n], top[i]);
         mesh.Orient();
         return mesh;

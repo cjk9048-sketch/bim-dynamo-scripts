@@ -31,7 +31,7 @@ internal static class DhKeys
     internal static string? TestDir =>
         System.Environment.GetEnvironmentVariable("DH_GRADING_KEYS_DIR") is { Length: > 0 } d ? d : null;
 
-    static string InstallDir => TestDir ?? System.IO.Path.GetDirectoryName(typeof(DhKeys).Assembly.Location) ?? "";
+    static string InstallDir => TestDir ?? BundleContents.Root;
 
     static readonly System.Lazy<Bundle> _b = new(Load);
     internal static Bundle Installed => _b.Value;

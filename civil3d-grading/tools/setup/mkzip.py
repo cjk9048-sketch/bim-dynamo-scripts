@@ -44,6 +44,10 @@ for root, dirs, names in os.walk(SRC):
 # ★[v109 · 설치 전 검토 중간 ②] 내장 VWorld 키 · 사내 DB 접속 정보(설치 전용 · git에 없음)가 빠지면 멈춘다 — 이 ZIP은 사내 배포만
 if not os.path.isfile(os.path.join(dstb, "Contents", "dh.keys.json")):
     raise SystemExit("Contents/dh.keys.json 이 없습니다 — 수동 설치 ZIP을 만들지 않습니다")
+# ★[1125 · Civil 3D 2027] 매니페스트가 2027 묶음을 가리키는데 Contents/2027 DLL이 없으면 멈춘다(빌드: dotnet build -c Release -p:CivilYear=2027)
+if "./Contents/2027/DH.Grading.Civil.dll" in io.open(os.path.join(dstb, "PackageContents.xml"), encoding="utf-8-sig").read() \
+        and not os.path.isfile(os.path.join(dstb, "Contents", "2027", "DH.Grading.Civil.dll")):
+    raise SystemExit("Contents/2027/DH.Grading.Civil.dll 이 없습니다 — 2027 판을 빌드하세요(-p:CivilYear=2027)")
 _k = os.path.join(dstb, "Contents", "dh.keys.json")   # 스테이징 사본만 고친다(원본 그대로)
 _d = updloc.merged_keys(_k, updloc.locations())
 io.open(_k, "wb").write(_d)
@@ -55,7 +59,7 @@ io.open(readme, "w", encoding="utf-8-sig", newline="\r\n").write(
     "DH 정지(부지정지) 플러그인 — 수동 설치\r\n"
     "=" * 44 + "\r\n\r\n"
     "버전 : " + v + "\r\n"
-    "대상 : Autodesk Civil 3D 2026 (2026.1 업데이트 이상) · Windows 64비트\r\n\r\n"
+    "대상 : Autodesk Civil 3D 2026 (2026.1 업데이트 이상) · Civil 3D 2027 · Windows 64비트\r\n\r\n"
     "설치 방법\r\n"
     "  1) Civil 3D 를 <완전히> 닫습니다. (켜져 있으면 파일이 잠겨 설치가 중단됩니다)\r\n"
     "  2) 이 폴더의 '설치.bat' 을 더블클릭합니다.\r\n"
@@ -70,7 +74,8 @@ io.open(readme, "w", encoding="utf-8-sig", newline="\r\n").write(
     "  · '실행 중입니다' 가 뜨면 작업관리자에서 acad.exe 가 남아 있는지 보세요.\r\n"
     "  · 회사 보안정책으로 exe 가 막히면 이 ZIP 판을 쓰시면 됩니다(같은 내용입니다).\r\n"
     "  · 그래도 안 뜨면 Civil 3D 명령창에 NETLOAD 를 치고 위 폴더의\r\n"
-    "    Contents\\DH.Grading.Civil.dll 을 직접 지정해 보세요.\r\n")
+    "    Contents\\DH.Grading.Civil.dll 을 직접 지정해 보세요.\r\n"
+    "    (Civil 3D 2027 은 Contents\\2027\\DH.Grading.Civil.dll)\r\n")
 
 # ③ zip
 out = "배포/DH정지플러그인_" + v + "_수동설치.zip"

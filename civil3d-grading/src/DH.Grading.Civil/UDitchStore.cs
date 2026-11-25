@@ -27,7 +27,7 @@ internal static class UDitchStore
         why = ""; from = "기본값";
         string app = Path.Combine(System.Environment.GetFolderPath(System.Environment.SpecialFolder.ApplicationData), "DH.Grading", SettingsFile);
         string dll = "";
-        try { dll = Path.Combine(Path.GetDirectoryName(typeof(UDitchStore).Assembly.Location) ?? "", SettingsFile); } catch { }
+        try { dll = Path.Combine(BundleContents.Root, SettingsFile); } catch { }
         foreach (string p in new[] { app, dll })
             try
             {

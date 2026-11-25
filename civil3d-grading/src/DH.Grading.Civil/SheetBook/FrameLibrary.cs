@@ -39,7 +39,7 @@ internal static class FrameLibrary
         Environment.GetEnvironmentVariable("DH_GRADING_FRAMES_DIR") is { Length: > 0 } d ? d
         : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "DH.Grading", "도곽");
 
-    internal static string BundleDir => Path.Combine(Path.GetDirectoryName(typeof(FrameLibrary).Assembly.Location) ?? "", "Frames");
+    internal static string BundleDir => Path.Combine(BundleContents.Root, "Frames");
 
     internal static string Sha(string path)
     {

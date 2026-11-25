@@ -1,4 +1,4 @@
-using System.Globalization;
+﻿using System.Globalization;
 using NetTopologySuite.Geometries;
 using NetTopologySuite.Index.Strtree;
 using NetTopologySuite.Operation.Buffer;
@@ -782,7 +782,7 @@ public static partial class WallByLine
             {
                 cs = ps[0].Coordinates;
                 bool f0 = OnEA(cs[0]) && OnEB(cs[^1]), f1 = OnEB(cs[0]) && OnEA(cs[^1]);
-                if (f1 && !f0) cs = cs.Reverse().ToArray(); else if (!f0) cs = null;
+                if (f1 && !f0) cs = Enumerable.Reverse(cs).ToArray(); else if (!f0) cs = null;
             }
             if (cs == null)
             {
