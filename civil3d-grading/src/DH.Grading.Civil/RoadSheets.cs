@@ -80,14 +80,64 @@ internal static class RoadSheets
         return (p, true, ProfileScaleFit.Key(vh.H, vh.V), note, site);
     }
 
-    /// <summary>★[v113.1] 놓을 자리 짐작용 H · 수직과장 — 고정이면 그 값 · 자동 H = 1:1000(가장 넓게 잡음) · 자동 V = 0(그래프는 도곽 안에 맞춰짐).</summary>
-    internal static (double H, double Ve) PlannedScale(Database db, double drawnH = 0)
+    /// <summary>★[v113.1] 놓을 자리 짐작용 H · 수직과장 — 고정이면 그 값 · 자동 V = 0(그래프는 도곽 안에 맞춰짐).
+    /// <para>★★[lane_po · JACK 1125 «진입도로 초기화하고 다시 짓고 나서 종단도가 빈 자리인데도 겹친다고 안 됨»] 자동 H = 종전엔 늘 1:1000(가장 넓게)이라
+    /// 이 도로 종단도가 아직 없으면(새 도로 · 초기화 뒤) 짐작 사각형이 A1 1:1000(약 980 × 1,200 m)이 되어 수백 m 떨어진 부지 종단도에 걸렸다(실측 po1125: 131 m 도로 = 실제 1:200 · 짐작 1:1000).
+    /// 이제 <paramref name="aid"/>가 있으면 그릴 때와 같은 Core 고르기(<see cref="ProfileScaleFit.Pick"/> — 측점 범위 · 표고 범위 · 같은 사다리 · 한도 1:1000 · 장 나누기)로 짐작한다.
+    /// 짐작보다 크게 그려지면 그린 뒤 <see cref="PlacedOverlap"/>가 잡는다.</para></summary>
+    internal static (double H, double Ve) PlannedScale(Database db, double drawnH = 0, ObjectId aid = default)
     {
         var (p, v2, _, _, _) = Setting(db, "", drawnH);
         if (!v2) return (p.PinH, SheetCommand.PlannedExaggeration());
-        double h = p.PinH > 0 ? p.PinH : ProfileScaleFit.AutoHMax;
+        double h = p.PinH > 0 ? p.PinH : AutoH(db, aid, p);
         double ve = p.PinV > 0 ? h / p.PinV : p.PinV < 0 ? 1 : 0;
         return (h, ve);
+    }
+
+    /// <summary>★[lane_po 1125] 자동 H 짐작 — 필요 폭(측점 범위 ÷ 축 자리 뺀 종이 폭) · 필요 세로(표고 범위를 눈금으로 올림 + 한 칸 ÷ 그래프 자리) → Core 고르기. 못 읽으면 1:1000(종전).</summary>
+    static double AutoH(Database db, ObjectId aid, ProfilePlan p)
+    {
+        if (aid.IsNull) return ProfileScaleFit.AutoHMax;
+        try
+        {
+            double a, b, zLo, zHi;
+            using (var tr = db.TransactionManager.StartTransaction())
+            {
+                var al = (CivilDb.Alignment)tr.GetObject(aid, OpenMode.ForRead);
+                a = al.StartingStation; b = al.EndingStation;
+                (zLo, zHi) = ZRange(tr, aid);
+                tr.Commit();
+            }
+            if (!(b > a)) return ProfileScaleFit.AutoHMax;
+            double needW = (b - a) * 1000.0 / SheetCommand.PlanUsableWMm;
+            double needV = zHi >= zLo ? ProfileSheetRules.GraphHeight(zLo, zHi, SheetCommand.ElevStepM, 1) * 1000.0 / SheetCommand.PlanGraphMm : 0;
+            double iv = GradingSettings.XsecInterval;
+            var pk = ProfileScaleFit.Pick(needW, needV, SheetCommand.Scales, 0, p.PinV, p.HMax, h => SheetCommand.SplitPlan(a, b, h, iv, null).Count);
+            return pk.H > 0 ? pk.H : ProfileScaleFit.AutoHMax;
+        }
+        catch { return ProfileScaleFit.AutoHMax; }
+    }
+
+    /// <summary>이 노선 종단들의 표고 범위(지층 · 지하수위 종단은 뷰 범위에 안 끼므로 뺌 · 빈 종단 뺌) — 없으면 (MaxValue, MinValue).</summary>
+    static (double Lo, double Hi) ZRange(Transaction tr, ObjectId aid)
+    {
+        double zLo = double.MaxValue, zHi = double.MinValue;
+        try
+        {
+            var al = (CivilDb.Alignment)tr.GetObject(aid, OpenMode.ForRead);
+            foreach (ObjectId pid in al.GetProfileIds())
+                try
+                {
+                    if (pid.IsErased || tr.GetObject(pid, OpenMode.ForRead) is not CivilDb.Profile p) continue;
+                    if (p.Name == StrataDraw.WaterSurfName || p.Name.StartsWith(StrataDraw.SurfPrefix, StringComparison.Ordinal)) continue;
+                    if (!SheetCommand.ProfileHasData(p)) continue;   // ★[v113.1] 빈 종단(표고 0~0)은 뺀다
+                    double a = p.ElevationMin, b = p.ElevationMax;
+                    if (double.IsFinite(a) && double.IsFinite(b) && b >= a) { zLo = Math.Min(zLo, a); zHi = Math.Max(zHi, b); }
+                }
+                catch { }
+        }
+        catch { }
+        return (zLo, zHi);
     }
 
     /// <summary>이 축척에서 장 수(부지와 같은 장 나누기 — 측점 간격의 배수로 끊음).</summary>
@@ -122,22 +172,7 @@ internal static class RoadSheets
             using var tr = db.TransactionManager.StartTransaction();
             double mm = (scale > 0 ? scale : ProfileSheetRules.DefaultScale) / 1000.0, m = PlaceMarginMm * mm;
             // 그래프 높이 — 이 노선 종단들의 표고 범위(지층 · 지하수위 종단은 뷰 범위에 안 끼므로 뺌) · 못 읽으면 0(도곽 한 장 높이만)
-            double zLo = double.MaxValue, zHi = double.MinValue;
-            try
-            {
-                var al = (CivilDb.Alignment)tr.GetObject(aid, OpenMode.ForRead);
-                foreach (ObjectId pid in al.GetProfileIds())
-                    try
-                    {
-                        if (pid.IsErased || tr.GetObject(pid, OpenMode.ForRead) is not CivilDb.Profile p) continue;
-                        if (p.Name == StrataDraw.WaterSurfName || p.Name.StartsWith(StrataDraw.SurfPrefix, StringComparison.Ordinal)) continue;
-                        if (!SheetCommand.ProfileHasData(p)) continue;   // ★[v113.1] 빈 종단(표고 0~0)은 뺀다
-                        double a = p.ElevationMin, b = p.ElevationMax;
-                        if (double.IsFinite(a) && double.IsFinite(b) && b >= a) { zLo = Math.Min(zLo, a); zHi = Math.Max(zHi, b); }
-                    }
-                    catch { }
-            }
-            catch { }
+            var (zLo, zHi) = ZRange(tr, aid);
             // ★[v113.1] 자동 V(ve 0) = 그래프가 도곽 안에 맞춰짐 — 도곽 한 장 높이만
             double graphH = zHi >= zLo && ve > 0 ? ProfileSheetRules.GraphHeight(zLo, zHi, SheetCommand.ElevStepM, ve) : 0;
             var box = ProfileSheetRules.RoadSheetsBox(at.X, at.Y, scale, sheets, graphH, PlaceMarginMm);
@@ -147,8 +182,13 @@ internal static class RoadSheets
                 double y0 = own.Min(r => r.Y0) - o.Y, y1 = own.Max(r => r.Y1) - o.Y;
                 box = new ProfileSheetRules.Rect(box.X0, at.Y + y0 - m, box.X1, at.Y + Math.Max(y1, graphH) + m);
             }
-            foreach (var (r, name) in OtherRects(tr, db, aid, me, mm))
-                if (ProfileSheetRules.RectsOverlap(box, r)) return name;
+            foreach (var (r, name, why) in OtherRects(tr, db, aid, me, mm))
+                if (ProfileSheetRules.RectsOverlap(box, r))
+                {
+                    // ★[lane_po · JACK 1125] 거절마다 진단 한 줄 — 걸린 것(핸들 · 레이어 · 노선) · 그 사각형 · 새 사각형 · 짐작 축척
+                    try { DiagLog.Append($"\n[진입도로] 종단도 자리 겹침 — {name} · {why} · 그 사각형 {RectText(r)} · 새 사각형 {RectText(box)} · 자리 ({at.X:F1}, {at.Y:F1}) · 짐작 1:{scale:0} · {sheets}장 · 그래프 {graphH:F1} m · 이 도로 것 {own.Count}"); } catch { }
+                    return name;
+                }
             tr.Commit();
         }
         catch { }
@@ -169,7 +209,12 @@ internal static class RoadSheets
             foreach (var a in own)
             {
                 var g = new ProfileSheetRules.Rect(a.X0 - m, a.Y0 - m, a.X1 + m, a.Y1 + m);
-                foreach (var (r, name) in others) if (ProfileSheetRules.RectsOverlap(g, r)) return name;
+                foreach (var (r, name, why) in others)
+                    if (ProfileSheetRules.RectsOverlap(g, r))
+                    {
+                        try { DiagLog.Append($"\n[진입도로] 그린 종단도 겹침 — {name} · {why} · 그 사각형 {RectText(r)} · 이 도로 것 {RectText(g)} · 1:{scale:0}"); } catch { }
+                        return name;
+                    }
             }
             tr.Commit();
         }
@@ -189,10 +234,12 @@ internal static class RoadSheets
         return new ProfileSheetRules.Rect(ex.MinPoint.X, ex.MinPoint.Y - dn, ex.MaxPoint.X, ex.MaxPoint.Y + dt);
     }
 
-    /// <summary>남의 것 — 이 도로 표식이 없는 모형 도곽 사각형 · 다른 노선의 종단뷰(밴드 포함) · 이름.</summary>
-    static List<(ProfileSheetRules.Rect R, string Name)> OtherRects(Transaction tr, Database db, ObjectId aid, string me, double mm)
+    static string RectText(ProfileSheetRules.Rect r) => $"({r.X0:F1}, {r.Y0:F1})~({r.X1:F1}, {r.Y1:F1})";
+
+    /// <summary>남의 것 — 이 도로 표식이 없는 모형 도곽 사각형 · 다른 노선의 종단뷰(밴드 포함) · 이름 · 진단 글(핸들 · 레이어 · 노선).</summary>
+    static List<(ProfileSheetRules.Rect R, string Name, string Why)> OtherRects(Transaction tr, Database db, ObjectId aid, string me, double mm)
     {
-        var l = new List<(ProfileSheetRules.Rect, string)>();
+        var l = new List<(ProfileSheetRules.Rect, string, string)>();
         var ms = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForRead);
         foreach (ObjectId id in ms)
         {
@@ -201,11 +248,18 @@ internal static class RoadSheets
                 var o = tr.GetObject(id, OpenMode.ForRead);
                 if (o is Polyline pl && pl.Closed && string.Equals(pl.Layer, SheetCommand.LayFrameModel, StringComparison.OrdinalIgnoreCase))
                 {
-                    if (SheetTag.Of(pl, out string r, out _, out _) && string.Equals(r, me, StringComparison.OrdinalIgnoreCase)) continue;
+                    bool tagged = SheetTag.Of(pl, out string r, out _, out string k);
+                    if (tagged && string.Equals(r, me, StringComparison.OrdinalIgnoreCase)) continue;
                     var ex = pl.GeometricExtents;
-                    l.Add((new ProfileSheetRules.Rect(ex.MinPoint.X, ex.MinPoint.Y, ex.MaxPoint.X, ex.MaxPoint.Y), "다른 종단도의 도곽"));
+                    l.Add((new ProfileSheetRules.Rect(ex.MinPoint.X, ex.MinPoint.Y, ex.MaxPoint.X, ex.MaxPoint.Y), "다른 종단도의 도곽",
+                           $"도곽 h {id.Handle} · 레이어 {pl.Layer} · 표식 {(tagged ? r + "/" + k : "없음(부지)")}"));
                 }
-                else if (o is CivilDb.ProfileView pv && pv.AlignmentId != aid) l.Add((ViewRect(pv, mm), $"종단도 «{pv.Name}»"));
+                else if (o is CivilDb.ProfileView pv && pv.AlignmentId != aid)
+                {
+                    string own = "?";
+                    try { own = pv.AlignmentId.IsNull ? "없음" : pv.AlignmentId.IsErased ? $"지워짐 {pv.AlignmentId.Handle}" : $"«{((CivilDb.Alignment)tr.GetObject(pv.AlignmentId, OpenMode.ForRead)).Name}» {pv.AlignmentId.Handle}"; } catch { }
+                    l.Add((ViewRect(pv, mm), $"종단도 «{pv.Name}»", $"종단뷰 h {id.Handle} · 레이어 {pv.Layer} · 노선 {own}"));
+                }
             }
             catch { }
         }

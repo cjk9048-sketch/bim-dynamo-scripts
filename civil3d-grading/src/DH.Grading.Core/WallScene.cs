@@ -29,6 +29,8 @@ public static class WallScene
         public readonly List<Pat> Pats = new();
         /// <summary>3D 옹벽 발자국(도면 좌표 · 단면 줄 + 단면 폭) — 지형 «옹벽 면»을 숨겨도 되는 자리.</summary>
         public Geometry? Foot;
+        /// <summary>★[JACK 1125] 옛 발자국(줄 끝 둥근 · <see cref="Foot"/> ⊆ 이것) — 몸통 끝 너머 가파른 지형은 «옹벽 자리»(보임) · 수목 뺄 자리.</summary>
+        public Geometry? Near;
         public int Lines, Runs, Corners, Fails, CornerFails, Pieces, PieceFails, PatLineFails, FanFallback, OpenEdges, NegVolume;
         public long Tris;
         public string FirstFail = "";
@@ -69,7 +71,7 @@ public static class WallScene
     {
         var r = new Result();
         var gf = NtsSupport.Factory();
-        var foots = new List<Geometry>();
+        var foots = new List<Geometry>(); var nears = new List<Geometry>();
         var sw = System.Diagnostics.Stopwatch.StartNew();
         int id = 0;
         foreach (var ln in lines)
@@ -95,7 +97,11 @@ public static class WallScene
             try
             {
                 var ls = gf.CreateLineString(ln.Pts.Select(p => new Coordinate(p.X, p.Y)).ToArray());
-                foots.Add(ls.Buffer(reach + 0.3));
+                // ★[JACK 1125 «옹벽끼리 붙은 곳에 빵꾸가 뚫려서 안에 비쳐 보여»] 숨김 발자국 = 그린 몸통 — 열린 줄 끝은 평평하게(몸통 끝 단면 자리).
+                //   둥근 끝은 몸통 끝 너머 reach + 0.3 m까지 지형 «옹벽 면»을 숨겨, 진입도로 자리에서 잘린 부지 옹벽 끝(지형 단차가 이어지는 곳)에 하늘이 비쳤다 · 닫힌 줄은 끝이 없어 그대로.
+                //   둥근 끝(옛 발자국)은 <see cref="Result.Near"/>로 남긴다 — 그 안 가파른 세모는 «옹벽 자리»로 보인다(숨기지 않음)
+                foots.Add(ls.IsClosed ? ls.Buffer(reach + 0.3) : ls.Buffer(reach + 0.3, NetTopologySuite.Operation.Buffer.EndCapStyle.Flat));
+                nears.Add(ls.Buffer(reach + 0.3));
             }
             catch { }
 
@@ -177,6 +183,8 @@ public static class WallScene
         {
             try { r.Foot = NetTopologySuite.Operation.Union.CascadedPolygonUnion.Union(foots); }
             catch { r.Foot = gf.BuildGeometry(foots).Buffer(0); }
+            try { r.Near = NetTopologySuite.Operation.Union.CascadedPolygonUnion.Union(nears); }
+            catch { r.Near = gf.BuildGeometry(nears).Buffer(0); }
         }
         return r;
     }

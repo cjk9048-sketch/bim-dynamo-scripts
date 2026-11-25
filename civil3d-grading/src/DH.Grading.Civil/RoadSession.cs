@@ -532,7 +532,7 @@ internal sealed class RoadSession
     internal string SheetOverlap(Point3d at)
     {
         var db = _doc.Database;
-        var (scale, ve) = RoadSheets.PlannedScale(db, Design.SheetScale);   // ★[v113.1] 도면설정 H · V(자동 H = 1:1000으로 넓게 짐작 · 자동 V = 도곽 안) · ★[v117.5.1] 옛 설정 = 그린 H
+        var (scale, ve) = RoadSheets.PlannedScale(db, Design.SheetScale, AlignId);   // ★[lane_po 1125] 자동 H = 이 노선으로 짐작(종전 1:1000) · ★[v113.1] 도면설정 H · V(자동 H = 1:1000으로 넓게 짐작 · 자동 V = 도곽 안) · ★[v117.5.1] 옛 설정 = 그린 H
         return RoadSheets.Overlap(db, AlignId, at, scale, RoadSheets.SheetCount(db, AlignId, scale), ve);
     }
 

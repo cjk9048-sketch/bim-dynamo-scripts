@@ -150,7 +150,7 @@ internal static class Web3DBuilder
             SlopeCut = Union(c.Strips.TryGetValue("사면_절토", out var sc0) ? sc0 : Enumerable.Empty<IReadOnlyList<IReadOnlyList<Point3>>>(), gf),
             SlopeFill = Union(c.Strips.TryGetValue("사면_성토", out var sf0) ? sf0 : Enumerable.Empty<IReadOnlyList<IReadOnlyList<Point3>>>(), gf),
             WallMask = c.WallMask,
-            WallFoot = walls?.Foot,
+            WallFoot = walls?.Foot, WallNear = walls?.Near,
             // ★[v111.8 · 계획 6장] 진입도로 자리 · 포장 · 차로 · 정지면 높이(도로가 지형에 들었을 때만 — 아니면 null = 옛 규칙)
             RoadArea = c.RoadArea, RoadPave = c.RoadPave, RoadLane = c.RoadLane, RoadLaneConc = c.RoadLaneConc, RoadBench = c.RoadBench,
             BaseZ = c.BaseZ == null ? null : (x, y) => c.BaseZ.TryGetElevation(x, y, out double z) ? z : null,
@@ -518,7 +518,7 @@ internal static class Web3DBuilder
         {
             try { c.Crop = GroundCropBuilder.ReadBox(db); } catch { }
             var ft = new Web3DForest.Terrain(inp.X, inp.Y, inp.Z, inp.F, tm.TriCls, mnx, mny, mxx, mxy, tm.CMinX, tm.CMinY, tm.CMaxX, tm.CMaxY);
-            forestHead = Web3DForest.Build(c, ft, new[] { inp.Plan, inp.Bench, inp.SlopeCut, inp.SlopeFill, inp.WallMask, inp.WallFoot, inp.RoadArea }, bldgItems, SurfZ, ox, oy, sc, log);
+            forestHead = Web3DForest.Build(c, ft, new[] { inp.Plan, inp.Bench, inp.SlopeCut, inp.SlopeFill, inp.WallMask, inp.WallNear, inp.RoadArea }, bldgItems, SurfZ, ox, oy, sc, log);
         }
         catch (System.Exception fex) { log.AppendLine("  수목: 실패 — " + fex); forestHead = new Dictionary<string, object> { ["missing"] = "수목을 넣지 못했습니다(진단 로그 참고)" }; }
         if (forestOn) Lap("수목", skipSat ? null : "위성사진 받는 중");

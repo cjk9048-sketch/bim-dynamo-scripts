@@ -26,6 +26,9 @@ public static class TerrainMesh
         /// <summary>원지반 높이(없으면 null).</summary>
         public Func<double, double, double?>? GroundZ;
         public Geometry? Plan, Bench, SlopeCut, SlopeFill, WallMask, WallFoot;
+        /// <summary>★[JACK 1125 «옹벽끼리 붙은 곳에 빵꾸»] 3D 옹벽 둘레(<see cref="WallScene.Result.Near"/> — 줄 끝 둥근 · <see cref="WallFoot"/> ⊆ 이것).
+        /// 발자국(숨김) 밖 · 이 안 가파른 세모 = «옹벽 자리»(보임). null = 옛 규칙.</summary>
+        public Geometry? WallNear;
         public double Tol = 0.01;
         /// <summary>가파름 — 세모 법선 |nz|가 이보다 작으면(약 65° 넘게 섬) 옹벽 면 후보.</summary>
         public double SteepNz = 0.42;
@@ -137,7 +140,7 @@ public static class TerrainMesh
             if (!g.HasValue) o.NoGround++;
         }
         IPreparedGeometry? P(Geometry? g) => g == null || g.IsEmpty ? null : PreparedGeometryFactory.Prepare(g);
-        var pMask = P(inp.WallMask); var pFoot = P(inp.WallFoot); var pBench = P(inp.Bench);
+        var pMask = P(inp.WallMask); var pFoot = P(inp.WallFoot); var pNear = P(inp.WallNear); var pBench = P(inp.Bench);
         var pCut = P(inp.SlopeCut); var pFill = P(inp.SlopeFill); var pPlan = P(inp.Plan);
         var pRoad = P(inp.RoadArea); var pPave = P(inp.RoadPave); var pLane = P(inp.RoadLane); var pLaneC = P(inp.RoadLaneConc);
         var pRBench = P(inp.RoadBench);
@@ -193,6 +196,7 @@ public static class TerrainMesh
             double nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx, nl = Math.Sqrt(nx * nx + ny * ny + nz * nz);
             bool steep = nl > 0 && Math.Abs(nz) / nl < inp.SteepNz;
             if (steep && pFoot != null && pFoot.Contains(pt)) k = Cls.WallFace;
+            else if (steep && pNear != null && pNear.Contains(pt)) k = Cls.WallZone;   // ★[JACK 1125] 몸통 끝 너머(잘린 옹벽 끝 · 진입도로 옹벽 맞닿음) 단차 — 숨기면 하늘 구멍 · «옹벽 자리»로 보임
             else if (pMask != null && pMask.Contains(pt)) k = steep ? Cls.WallFace : Cls.WallZone;
             else if (pBench != null && pBench.Contains(pt)) k = Cls.Bench;
             else if (pCut != null && pCut.Contains(pt)) k = Cls.SlopeCut;

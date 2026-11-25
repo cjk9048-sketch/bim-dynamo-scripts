@@ -142,6 +142,10 @@ public static class SheetCommand
     /// 실측(1:100에서 50mm)에 맞춰 잡는다 — <b>모형이 아니라 종이에서 재는 것</b>이 요점이다.</para></summary>
     private const double AxisRoomMm = 50.0;
 
+    /// <summary>★[lane_po 1125] 진입도로 놓을 자리 짐작(<see cref="RoadSheets.PlannedScale"/>)의 자동 H — 축척 고르기와 같은 종이 폭(축 자리 뺀 안쪽) · 그래프 자리(밴드 몫 뺀 기준 높이 · 실제 밴드가 이보다 작으면 짐작이 한 단계 넉넉).</summary>
+    internal static double PlanUsableWMm => System.Math.Max(50.0, InnerW - AxisRoomMm);
+    internal static double PlanGraphMm => GraphH;
+
 
     /// <summary>★★[v32.31 · JACK 0813] 좌측 아래 정렬에서 <b>도곽 선과 도면 사이를 띄우는 양</b>(종이 mm).
     /// <i>"너무 딱 붙여서 축척 화살표가 너무 좌측벽과 아래에 너무 붙지 않게 해줘."</i>

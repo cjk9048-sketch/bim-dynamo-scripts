@@ -321,8 +321,8 @@ public partial class RoadCommand
             GradingSettings.SyncToDocument(doc);   // ★[설치 전 검토 · 낮음] 겹침 검사(축척 · 장 수)도 이 도면 설정으로
             double[] last = s.Fresh().SheetAt;
             bool hasLast = again && !mustMove && last.Length >= 2 && double.IsFinite(last[0]) && double.IsFinite(last[1]);
-            // ★[v113.1] 도면설정 «2. 진입도로» H · V(판 2 — 자동 H는 1:1000으로 넓게 짐작 · 실제는 그릴 때 정함) · 옛 설정 = 옛 규칙
-            var (scale, veP) = RoadSheets.PlannedScale(db, s.Design.SheetScale);   // ★[v117.5.1] 옛 설정 — 그린 H 그대로
+            // ★[v113.1] 도면설정 «2. 진입도로» H · V(판 2 — 자동 H는 이 노선 측점 · 표고 범위로 짐작(★lane_po 1125 · 종전 1:1000) · 실제는 그릴 때 정함) · 옛 설정 = 옛 규칙
+            var (scale, veP) = RoadSheets.PlannedScale(db, s.Design.SheetScale, s.AlignId);   // ★[v117.5.1] 옛 설정 — 그린 H 그대로 · ★[lane_po 1125] 자동 H = 이 노선으로 짐작
             string scNote = RoadSheets.Setting(db, "", s.Design.SheetScale).Note;
             int n = RoadSheets.SheetCount(db, s.AlignId, scale);
             ed.WriteMessage($"\n[진입도로] 종단도 1:{scale:0} · {n}장 — {scNote}");
