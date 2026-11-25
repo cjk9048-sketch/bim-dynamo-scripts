@@ -627,7 +627,8 @@ class Api:
         args = [folder, '--out', out, '--quality', q, '--names', str(lst), '--title', p.get('title') or Path(out).name]
         if p.get('crs') in ('EPSG:5186', 'EPSG:5185', 'EPSG:5187', 'EPSG:5188', 'EPSG:5179'):
             args += ['--crs', p['crs']]
-        outs = [o for o in (p.get('outputs') or ['mesh']) if o in ('mesh', 'ortho', 'dsm', 'dtm', 'las')]
+        sel = p.get('outputs')
+        outs = [o for o in (['mesh'] if sel is None else sel) if o in ('mesh', 'ortho', 'dsm', 'dtm', 'las')]
         if not outs:
             return {'ok': False, 'msg': '만들 것 고르기'}
         args += ['--outputs', ','.join(outs)]

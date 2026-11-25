@@ -755,8 +755,10 @@ class Eta:
 
     def start(self, name):
         el = time.time() - self.t0
-        pct = min(99.0, 100.0 * self.done / self.total)
-        left = int(el / max(1e-6, self.done / self.total) - el) if self.done > 0 else -1
+        frac = min(1.0, self.done / max(1e-6, self.total))
+        pct = max(getattr(self, 'last', 0.0), min(99.0, 100.0 * frac))     # 다시 계획해도 뒤로 안 감
+        self.last = pct
+        left = max(0, int(el / max(1e-6, frac) - el)) if self.done > 0 else -1
         print('@진행 %.1f %d %s' % (pct, left, name), flush=True)
 
     def finish(self, name):
@@ -874,7 +876,7 @@ def main(argv=None):
                 shutil.rmtree(q, ignore_errors=True)
             elif os.path.exists(q):
                 os.remove(q)
-        stages = {'sig': sig, 'done': []}
+        stages = {'sig': sig, 'done': [], 'stale_outputs': True}    # 결과물을 새로 쓸 때까지 옛 결과물은 믿지 않음
     for p in ('sparse', 'sparse_txt', 'dense', 'tex_colmap'):
         os.makedirs(os.path.join(ws, p), exist_ok=True)
 
@@ -1008,12 +1010,18 @@ def main(argv=None):
         im = os.path.join(dense, 'images')
         if not (os.path.isdir(im) and os.listdir(im)):
             log('  왜곡 편 사진 다시 만들기', fp)
-            run([colmap, 'image_undistorter', '--image_path', a.photos, '--input_path', model, '--output_path', dense,
-                 '--output_type', 'COLMAP', '--max_image_size', str(res_tex)], os.path.join(ws, '4b_왜곡펴기_다시.log'))
+            rc = run([colmap, 'image_undistorter', '--image_path', a.photos, '--input_path', model, '--output_path', dense,
+                      '--output_type', 'COLMAP', '--max_image_size', str(res_tex)], os.path.join(ws, '4b_왜곡펴기_다시.log'))
+            if rc != 0 or not (os.path.isdir(im) and len(os.listdir(im)) >= nreg):   # 반만 찬 폴더를 다음에 통과시키지 않게
+                shutil.rmtree(im, ignore_errors=True)
+                log('  왜곡 편 사진 다시 만들기 실패 (4b_왜곡펴기_다시.log)', fp)
+                return False
+        return True
 
     def densify(name, px, outname, chk):
         if not reuse(name, chk):
-            ensure_images()
+            if not ensure_images():
+                return False
             for f in glob.glob(os.path.join(dense, '*.dmap')):   # 다른 해상도 깊이 지도를 다시 읽지 않게
                 os.remove(f)
         lvl = max(0, int(round(math.log2(max(1.0, res_tex / px)))))
@@ -1022,7 +1030,7 @@ def main(argv=None):
                     '5_%s.log' % name.replace(' ', ''), cwd=dense, check=chk)
 
     if ok and not reuse('점구름 준비', lambda: has('dense', 'scene.mvs')):
-        ensure_images()
+        ok = ensure_images()
     ok = ok and step('점구름 준비', [os.path.join(mvs, 'InterfaceCOLMAP.exe'), '-i', '.', '-o', 'scene.mvs', '--image-folder', 'images', '-w', '.'],
                      '5a_넘기기.log', cwd=dense, check=lambda: has('dense', 'scene.mvs'))
     if ok and not reuse('점구름', cloud_ok):
@@ -1041,7 +1049,9 @@ def main(argv=None):
             return None
     if ok and want_mesh:
         prm['faces'] = TARGET_FACES[a.quality]
-        ok = step('3D 면', [os.path.join(mvs, 'ReconstructMesh.exe'), 'scene_cpu.mvs', '-o', 'scene_cpu_mesh.mvs'] + mvs_cuda_opt(mvs) +
+        if not reuse('3D 면', lambda: has('dense', 'scene_cpu_mesh.ply')):   # 정사만 만든 뒤 3D 를 더할 때 (사진 머리말을 읽음)
+            ok = ensure_images()
+        ok = ok and step('3D 면', [os.path.join(mvs, 'ReconstructMesh.exe'), 'scene_cpu.mvs', '-o', 'scene_cpu_mesh.mvs'] + mvs_cuda_opt(mvs) +
                   ['--target-face-num', str(TARGET_FACES[a.quality]), '-w', '.'], '6_면.log', cwd=dense,
                   check=lambda: has('dense', 'scene_cpu_mesh.ply'))
         # 질감 = 조각마다 (한 장이면 32768 폭까지 커져 그래픽 한도 16384 로 줄어 흐려짐 · 1125 394장)
@@ -1050,9 +1060,11 @@ def main(argv=None):
         elif ok:
             drop_from('질감'); save_stages()
             eta.start('질감'); t2 = time.time()
-            ensure_images()
-            shutil.rmtree(tex_root, ignore_errors=True); os.makedirs(tex_root, exist_ok=True)
-            tiles = split_mesh_tiles(os.path.join(dense, 'scene_cpu_mesh.ply'), os.path.join(ws, 'mesh_tiles'))
+            ok = ensure_images()
+            tiles = []
+            if ok:
+                shutil.rmtree(tex_root, ignore_errors=True); os.makedirs(tex_root, exist_ok=True)
+                tiles = split_mesh_tiles(os.path.join(dense, 'scene_cpu_mesh.ply'), os.path.join(ws, 'mesh_tiles'))
             for k, (p, nf) in enumerate(tiles):
                 d = os.path.join(tex_root, 't%02d' % k); os.makedirs(d, exist_ok=True)
                 rc = run([colmap, 'mesh_texturer', '--workspace_path', dense, '--input_path', p, '--output_path', d], os.path.join(ws, '7_질감_t%02d.log' % k))
@@ -1072,19 +1084,26 @@ def main(argv=None):
     t1 = time.time()
     outs = os.path.join(out, '결과물'); os.makedirs(outs, exist_ok=True)
     data_dir = os.path.join(out, 'data'); os.makedirs(data_dir, exist_ok=True)
-    if fresh:                                    # 사진 · 품질이 바뀌어 처음부터 → 옛 결과물은 다른 모델이라 지움 (검사점 보고서 · 정보는 둠)
+    try:
+        P_old = _read_js(os.path.join(data_dir, 'mapping.js'), 'RV_MAPPING')
+    except (OSError, ValueError, IndexError):
+        P_old = {}
+    # 옛 결과물이 지금 모델 · 좌표계와 다르면 지움 (검사점 보고서 · 정보는 둠) — 처음부터 다시 · 그 판이 결과물 전에 끊김
+    #   (stages 의 stale_outputs) · 좌표계를 바꿈 (원점 · 관로 좌표도 옛 좌표계 → 관로는 다시 넣기) — 1125 검토
+    crs_changed = P_old.get('crs') not in (None, CRS)
+    if fresh or stages.get('stale_outputs') or crs_changed:
         for f in glob.glob(os.path.join(outs, '*')):
             if os.path.basename(f).startswith(('정사영상', 'DSM', 'DTM', '지표면_', '점구름')):
                 os.remove(f)
-        for f in ('mesh.json', 'mesh.bin', 'tex.jpg', '지면.tif', '지면.tfw', '지면.prj', '미리보기.png'):
+        for f in ('mesh.json', 'mesh.bin', 'tex.jpg', '지면.tif', '지면.tfw', '지면.prj', '미리보기.png') + (('pipes.js', 'pipes_orig.js') if crs_changed else ()):
             if os.path.exists(os.path.join(data_dir, f)):
                 os.remove(os.path.join(data_dir, f))
         shutil.rmtree(os.path.join(data_dir, 'tiles'), ignore_errors=True)
-    try:
-        P_old = _read_js(os.path.join(data_dir, 'mapping.js'), 'RV_MAPPING') if not fresh else {}
-    except (OSError, ValueError, IndexError):
-        P_old = {}
-    xyz, rgb = read_openmvs_ply(os.path.join(dense, 'scene_srv.ply' if need_srv else 'scene_cpu.ply'))
+        if crs_changed:
+            log('  좌표계 %s → %s · 옛 결과물 · 관로 지움 (관로는 다시 넣기)' % (P_old.get('crs'), CRS), fp)
+        P_old = {k: v for k, v in P_old.items() if k == 'cover' and not crs_changed}
+    use_srv = need_srv or reuse('측량 점구름', srv_ok)     # 측량용 점구름이 있으면 늘 그것으로 (지면 · 미리보기도)
+    xyz, rgb = read_openmvs_ply(os.path.join(dense, 'scene_srv.ply' if use_srv else 'scene_cpu.ply'))
     E, N, H = to_5186_h(s * (xyz.astype(np.float64) @ R.T) + t)
     good = np.isfinite(E) & np.isfinite(H)
     E, N, H, rgb = E[good], N[good], H[good], rgb[good]
@@ -1142,6 +1161,7 @@ def main(argv=None):
             proj[k] = P_old[k]
     with open(os.path.join(data_dir, 'mapping.js'), 'w', encoding='utf-8') as f3:
         f3.write('window.RV_MAPPING = ' + json.dumps(proj, ensure_ascii=False, indent=1) + ';\n')
+    stages.pop('stale_outputs', None); save_stages()
     write_info(outs, proj, photos, a, cam, rms, s, npt, ntri, colmap, mvs, dtm_info=dtm_info,
                tiles=len(meta['tiles']) if meta and 'tiles' in meta else 0, px=(dense_px, px_srv if need_srv else 0))
     log('결과물 %d초 · 이번에 %s%s' % (time.time() - t1, ' · '.join(OUTPUT_NAME[k] for k in OUTPUTS if k in outs_sel),
