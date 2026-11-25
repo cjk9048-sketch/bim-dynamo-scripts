@@ -6,8 +6,8 @@
   const $ = (id) => document.getElementById(id);
   const call = (...a) => window.RV.call(...a);
   const toast = (t) => window.RV.toast(t);
-  // 사진 한 장 처리 시간 어림 (초) — 1125 80장 보통 실측 ≈ 7.7 초/장 · 빠르게 · 정밀은 어림 (실측 뒤 고침)
-  const SEC = { fast: 3.5, normal: 7.7, fine: 25 };
+  // 사진 한 장 처리 시간 어림 (초) — 1125 실측: 빠르게 80장 266초(3.3) · 보통 394장 약 12초/장(전역 카메라 · 면 한도 반영) · 정밀은 어림
+  const SEC = { fast: 4, normal: 12, fine: 35 };
   const S = { info: {}, folder: '', photos: [], sel: new Set(), q: 'normal', area: false, job: null, outTouched: false };
   const MAP = { z: 15, cx: 0, cy: 0, imgs: new Map(), fitted: false, key: '' };
   const wpx = (lat, lon, z) => { const s = 256 * Math.pow(2, z), r = lat * Math.PI / 180; return [(lon + 180) / 360 * s, (1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2 * s]; };

@@ -29,12 +29,13 @@ import numpy as np
 
 NO_WINDOW = 0x08000000 if os.name == 'nt' else 0
 CRS = 'EPSG:5186'
-PIPELINE_VERSION = '2'      # 2 = 3D 면 세모 한도      # 차례 · 옵션을 바꾸면 올림 → 지난번 중간 자료를 다시 쓰지 않음
+PIPELINE_VERSION = '3'      # 2 = 3D 면 세모 한도 · 3 = 사진 많으면 전역 카메라 풀기      # 차례 · 옵션을 바꾸면 올림 → 지난번 중간 자료를 다시 쓰지 않음
 # 품질: 질감용 사진 크기 · 특징점 사진 크기 (점구름은 질감용의 절반 · normal = 1125 80장 시험 값)
 QUALITY = {'fast': (1320, 2000), 'normal': (2640, 3200), 'fine': (5280, 4000)}
 QUALITY_NAME = {'fast': '빠르게', 'normal': '보통', 'fine': '정밀'}
 # 3D 보기 면 세모 수 한도 (보기 전용 · 정사 · DSM · 지표면은 점구름 그대로라 정확도는 안 바뀜 — 설계서 10.4)
 TARGET_FACES = {'fast': 1000000, 'normal': 3000000, 'fine': 6000000}
+GLOBAL_MIN = 50            # 이 장수 이상이면 전역 카메라 풀기 (1125: 394장 26분 → 10분 · 80장 209 → 53초 · RTK 어긋남 같음)
 ENGINE_DIRS = [Path(os.environ.get('LOCALAPPDATA', str(Path.home()))) / 'DH.Roadview' / 'engines', Path(r'D:\매핑시험\engines')]
 ENGINE_URLS = {
     'colmap': 'https://github.com/colmap/colmap/releases/download/4.2.1/colmap-x64-windows-cuda.zip',
@@ -453,6 +454,8 @@ def main(argv=None):
     ap.add_argument('--cell', type=float, default=0.0, help='정사 · DSM 격자 m (0 = 품질에 맞춰)')
     ap.add_argument('--title', help='제목')
     ap.add_argument('--keep-work', action='store_true', help='중간 자료(점 깊이 · 왜곡 편 사진) 남기기')
+    ap.add_argument('--mapper', choices=['auto', 'global', 'prior'], default='auto',
+                    help='카메라 풀기: auto = %d장 이상이면 전역 · global · prior(한 장씩)' % GLOBAL_MIN)
     a = ap.parse_args(argv)
     try:
         sys.stdout.reconfigure(encoding='utf-8')
@@ -547,11 +550,52 @@ def main(argv=None):
               check=lambda: has('db.db'))
     ok = ok and step('맞추기', [colmap, 'spatial_matcher', '--database_path', db, '--SpatialMatching.max_num_neighbors', '40',
                                 '--SpatialMatching.max_distance', '300', '--FeatureMatching.use_gpu', '1'], '2_맞추기.log')
-    ok = ok and step('카메라 풀기', [colmap, 'pose_prior_mapper', '--database_path', db, '--image_path', a.photos,
-                                    '--output_path', os.path.join(ws, 'sparse'), '--overwrite_priors_covariance', '1',
-                                    '--prior_position_std_x', '0.05', '--prior_position_std_y', '0.05', '--prior_position_std_z', '0.1',
-                                    '--use_robust_loss_on_prior_position', '1'], '3_카메라풀기.log',
-                     check=lambda: bool(glob.glob(os.path.join(ws, 'sparse', '*', 'images.bin'))))
+    # 카메라 풀기: 사진이 많으면 전역(global_mapper · 394장 26분 → 10분 · RTK 어긋남 같음) → RTK 위치로 동 · 북 · 위(m) 맞춤
+    #   (전역 결과는 배율 · 방향이 제멋대로라 뒤 단계가 미터 틀에서 돌게) · 실패하거나 90 % 못 붙이면 한 장씩(pose_prior_mapper)
+    use_global = a.mapper == 'global' or (a.mapper == 'auto' and len(photos) >= GLOBAL_MIN)
+    prior_cmd = [colmap, 'pose_prior_mapper', '--database_path', db, '--image_path', a.photos,
+                 '--output_path', os.path.join(ws, 'sparse'), '--overwrite_priors_covariance', '1',
+                 '--prior_position_std_x', '0.05', '--prior_position_std_y', '0.05', '--prior_position_std_z', '0.1',
+                 '--use_robust_loss_on_prior_position', '1']
+    sparse_ok = lambda: bool(glob.glob(os.path.join(ws, 'sparse', '*', 'images.bin')))     # noqa: E731
+    if ok and use_global:
+        raw = os.path.join(ws, 'sparse_global')
+        aligned = os.path.join(ws, 'sparse', '0')
+        if '카메라 풀기' in stages['done'] and sparse_ok():
+            log('카메라 풀기 · 지난번 것 씀', fp); eta.finish('카메라 풀기'); ok = True
+        else:
+            stages['done'] = [d for d in stages['done'] if ORDER.index(d) < ORDER.index('카메라 풀기')]; save_stages()
+            shutil.rmtree(raw, ignore_errors=True); os.makedirs(raw, exist_ok=True)
+            eta.start('카메라 풀기'); t = time.time()
+            rc = run([colmap, 'global_mapper', '--database_path', db, '--image_path', a.photos, '--output_path', raw],
+                     os.path.join(ws, '3_카메라풀기_전역.log'))
+            gm = sorted(glob.glob(os.path.join(raw, '*', 'images.bin')))
+            rc2 = 1
+            if rc == 0 and gm:
+                shutil.rmtree(os.path.join(ws, 'sparse'), ignore_errors=True); os.makedirs(aligned, exist_ok=True)
+                rc2 = run([colmap, 'model_aligner', '--input_path', os.path.dirname(max(gm, key=os.path.getsize)), '--output_path', aligned,
+                           '--database_path', db, '--ref_is_gps', '1', '--alignment_type', 'enu', '--alignment_max_error', '3'],
+                          os.path.join(ws, '3b_미터맞춤.log'))
+            nreg_g = 0
+            if rc2 == 0 and sparse_ok():
+                r = subprocess.run([colmap, 'model_analyzer', '--path', aligned], capture_output=True, text=True,
+                                   encoding='utf-8', errors='replace', creationflags=NO_WINDOW)
+                m = re.search(r'Registered images:\s*(\d+)', r.stdout + r.stderr)
+                nreg_g = int(m.group(1)) if m else 0
+            log('카메라 풀기 (전역) %d초 · 등록 %d / %d장' % (time.time() - t, nreg_g, len(photos)), fp)
+            if nreg_g >= 0.9 * len(photos):
+                ok = True
+            else:
+                log('  전역으로 부족 → 한 장씩 풀기로 다시', fp)
+                shutil.rmtree(os.path.join(ws, 'sparse'), ignore_errors=True); os.makedirs(os.path.join(ws, 'sparse'), exist_ok=True)
+                t = time.time()
+                ok = run(prior_cmd, os.path.join(ws, '3_카메라풀기.log')) == 0 and sparse_ok()
+                log('카메라 풀기 (한 장씩) %d초%s' % (time.time() - t, '' if ok else ' · 실패'), fp)
+            eta.finish('카메라 풀기')
+            if ok:
+                stages['done'].append('카메라 풀기'); save_stages()
+    else:
+        ok = ok and step('카메라 풀기', prior_cmd, '3_카메라풀기.log', check=sparse_ok)
     models = sorted(glob.glob(os.path.join(ws, 'sparse', '*', 'images.bin')))
     if not ok or not models:
         log('카메라 풀기 실패 → 사진 겹침 · 위치 확인', fp); return 3
