@@ -83,24 +83,28 @@ def install_engines(progress=print):
     dst.mkdir(parents=True, exist_ok=True)
     for name, url in ENGINE_URLS.items():
         tgt = dst / name
-        if tgt.exists() and any(tgt.iterdir()):
+        key = {'colmap': 'colmap.exe', 'openmvs': 'DensifyPointCloud.exe'}[name]
+        done = (tgt / 'bin' / key) if name == 'colmap' else (tgt / key)
+        if done.exists():                          # 실행 파일이 있어야 다 된 것 (풀다 끊긴 폴더는 다시 · 1125 검토)
             continue
         z = dst / (name + '.zip')
+        tmp = dst / (name + '.tmp')
+        shutil.rmtree(tmp, ignore_errors=True)
         progress('엔진 내려받기 · %s' % name)
         with urllib.request.urlopen(url, timeout=60) as r, open(z, 'wb') as fp:
             shutil.copyfileobj(r, fp, 1 << 20)
         progress('엔진 풀기 · %s' % name)
         with zipfile.ZipFile(z) as zf:
-            zf.extractall(tgt)
+            zf.extractall(tmp)
         z.unlink()
         # 실행 파일이 든 폴더를 끌어올림 (OpenMVS zip = vc17\x64\Release\*.exe · COLMAP zip = bin\colmap.exe 가 바로)
-        key = {'colmap': 'colmap.exe', 'openmvs': 'DensifyPointCloud.exe'}[name]
-        hit = next(iter(tgt.rglob(key)), None)
-        if hit is not None:
-            src = hit.parent.parent if name == 'colmap' else hit.parent     # colmap 은 bin 의 위
-            if src != tgt:
-                for p in list(src.iterdir()):
-                    shutil.move(str(p), str(tgt / p.name))
+        hit = next(iter(tmp.rglob(key)), None)
+        if hit is None:
+            raise RuntimeError('엔진 zip 안에 %s 없음' % key)
+        src = hit.parent.parent if name == 'colmap' else hit.parent     # colmap 은 bin 의 위
+        shutil.rmtree(tgt, ignore_errors=True)
+        shutil.move(str(src), str(tgt))            # 다 푼 뒤 한 번에 제자리로
+        shutil.rmtree(tmp, ignore_errors=True)
     return find_engines()
 
 
@@ -199,9 +203,9 @@ def model_to_ecef(ws):
     cams = {}
     L = [l for l in open(os.path.join(ws, 'sparse_txt', 'images.txt'), encoding='utf-8') if not l.startswith('#')]
     for l in L[0::2]:
-        p = l.split()
+        p = l.split(None, 9)                       # 사진 이름에 빈칸이 있어도 (예: «DJI_0001 - 복사본.JPG»)
         if len(p) >= 10:
-            cams[p[9]] = -_qrot(*map(float, p[1:5])).T @ np.array(list(map(float, p[5:8])))
+            cams[p[9].rstrip('\r\n')] = -_qrot(*map(float, p[1:5])).T @ np.array(list(map(float, p[5:8])))
     db = sqlite3.connect(os.path.join(ws, 'db.db'))
     names = {r[0]: r[1] for r in db.execute('select image_id, name from images')}
     tr = pyproj.Transformer.from_crs('EPSG:4979', 'EPSG:4978', always_xy=True)
@@ -329,8 +333,11 @@ def landxml_from_dsm(dsm, filled, x0, y1, cell, out, step_m=1.0, name='DSM'):
 def fill_pull_push(Z, mask):
     """빈칸(mask False) 메우기 — 거친 단계로 평균 내려가며(pull) 다시 올라오며 채움(push). 넓은 빈칸도 부드럽게."""
     import cv2
-    levels = [(Z.astype(np.float32) * mask, mask.astype(np.float32))]
-    while min(levels[-1][0].shape) > 2:
+    if not mask.any():
+        return Z.astype(np.float32)
+    levels = [(np.where(mask, Z, 0).astype(np.float32), mask.astype(np.float32))]
+    # 1×1 까지 줄여야 맨 위 칸 = 전체 평균 (2×N 에서 멈추면 빈 칸이 NaN 으로 남아 번짐 — 1125 검토: 비스듬한 회랑에서 나무 23 % 가 땅으로)
+    while max(levels[-1][0].shape) > 1:
         v, w = levels[-1]
         h2, w2 = (v.shape[0] + 1) // 2, (v.shape[1] + 1) // 2
         vp = np.zeros((h2 * 2, w2 * 2), np.float32); wp = np.zeros_like(vp)
@@ -340,8 +347,8 @@ def fill_pull_push(Z, mask):
     est = None
     for v, w in reversed(levels):
         cur = np.where(w > 0, v / np.maximum(w, 1e-9), np.nan).astype(np.float32)
-        if est is not None:
-            up = cv2.resize(est, (cur.shape[1], cur.shape[0]), interpolation=cv2.INTER_LINEAR)
+        if est is not None:                      # 정확히 2배로 키운 뒤 잘라 맞춤 (홀수 크기에서 반 칸 밀림 막기)
+            up = cv2.resize(est, (est.shape[1] * 2, est.shape[0] * 2), interpolation=cv2.INTER_LINEAR)[:cur.shape[0], :cur.shape[1]]
             cur = np.where(np.isfinite(cur), cur, up)
         est = cur
     return np.where(mask, Z, est).astype(np.float32)
@@ -367,8 +374,8 @@ def dtm_from_points(E, N, H, cell=0.5, max_win_m=33.0, slope=0.25, dh0=0.3, dhma
     surf = Z0.copy(); flag = np.zeros(Z0.shape, bool); w_prev = 1
     k = 1
     while True:
-        w = 2 * (2 ** k) + 1                                   # 5, 9, 17, 33, 65 … 칸
-        if w * cell > max_win_m * 2 + cell:
+        w = 2 * (2 ** k) + 1                                   # 5, 9, 17, 33, 65 칸 (0.5 m 격자 = 최대 32.5 m)
+        if w * cell > max_win_m + cell:                        # 넓은 성토 도로 · 둑(> 창)이 깎이지 않게 창 상한 (1125 검토)
             break
         opened = cv2.morphologyEx(surf, cv2.MORPH_OPEN, np.ones((w, w), np.uint8))
         dh = min(dhmax, dh0 + slope * (w - w_prev) * cell)
@@ -454,7 +461,7 @@ def split_mesh_tiles(mesh_ply, out_dir, max_faces=TILE_FACES):
     tiles = []
     for t in range(nx * ny):
         sel = np.nonzero(tid == t)[0]
-        if len(sel) < 50:
+        if not len(sel):                               # 작은 조각도 버리지 않음 (3D 보기 구멍 · 면 전체가 작을 때 0 조각 막기)
             continue
         f = F[sel]
         u, inv = np.unique(f.reshape(-1), return_inverse=True)
@@ -727,8 +734,10 @@ def mvs_cuda_opt(mvs):
         import tempfile
         d = tempfile.mkdtemp(prefix='rv_mvs_')
         try:
-            subprocess.run([os.path.join(mvs, 'DensifyPointCloud.exe'), '--help'], cwd=d, capture_output=True, timeout=60, creationflags=NO_WINDOW)
-            txt = ''.join(open(f, encoding='utf-8', errors='replace').read() for f in glob.glob(os.path.join(d, '*.log')))
+            r = subprocess.run([os.path.join(mvs, 'DensifyPointCloud.exe'), '--help'], cwd=d, capture_output=True, timeout=60,
+                               creationflags=NO_WINDOW, text=True, encoding='utf-8', errors='replace')
+            txt = (r.stdout or '') + (r.stderr or '') + ''.join(open(f, encoding='utf-8', errors='replace').read()
+                                                              for f in glob.glob(os.path.join(d, '*.log')))
             _MVS_CUDA[mvs] = ['--cuda-device', '-2'] if 'cuda-device' in txt else []
         except Exception:                          # noqa: BLE001
             _MVS_CUDA[mvs] = []
@@ -800,8 +809,10 @@ def main(argv=None):
     # 끝난 단계는 다시 쓰기 (설계서 원칙 6 · 10.5): 같은 사진 · 품질 · 카메라 값 · 차례 판일 때만
     import hashlib
     ORDER = ['특징점', '맞추기', '카메라 풀기', '왜곡 펴기', '점구름 준비', '점구름', '3D 면', '질감']
-    sig = hashlib.md5(json.dumps({'v': PIPELINE_VERSION, 'q': a.quality, 'names': sorted(n.lower() for n in names), 'cam': cam},
-                                 ensure_ascii=False).encode('utf-8')).hexdigest()
+    sigd = {'v': PIPELINE_VERSION, 'q': a.quality, 'names': sorted(n.lower() for n in names), 'cam': cam}
+    if a.mapper != 'auto':                       # 카메라 풀기 방식을 굳이 고르면 서명에 (auto 는 옛 서명 그대로)
+        sigd['mapper'] = a.mapper
+    sig = hashlib.md5(json.dumps(sigd, ensure_ascii=False).encode('utf-8')).hexdigest()
     stf = os.path.join(ws, 'stages.json')
     try:
         stages = json.load(open(stf, encoding='utf-8'))
@@ -905,6 +916,8 @@ def main(argv=None):
             if ok:
                 stages['done'].append('카메라 풀기'); save_stages()
     else:
+        if ok and not ('카메라 풀기' in stages['done'] and sparse_ok()):     # 남은 옛 덩어리(sparse/N)가 섞이지 않게
+            shutil.rmtree(os.path.join(ws, 'sparse'), ignore_errors=True); os.makedirs(os.path.join(ws, 'sparse'), exist_ok=True)
         ok = ok and step('카메라 풀기', prior_cmd, '3_카메라풀기.log', check=sparse_ok)
     models = sorted(glob.glob(os.path.join(ws, 'sparse', '*', 'images.bin')))
     if not ok or not models:
@@ -928,28 +941,33 @@ def main(argv=None):
     # 질감 = 조각마다 (한 장이면 32768 폭까지 커져 그래픽 한도 16384 로 줄어 흐려짐 · 1125 394장)
     tex_root = os.path.join(ws, 'tex_tiles'); tl_json = os.path.join(tex_root, 'tiles.json')
 
-    def tex_done():
+    def tex_list():                              # tiles.json = 조각 폴더 이름만 (결과 폴더를 옮겨도 · 1125 검토)
         try:
-            L = json.load(open(tl_json, encoding='utf-8'))
-            return bool(L) and all(os.path.exists(os.path.join(d, 'mesh.ply')) for d in L)
+            L = [os.path.join(tex_root, os.path.basename(str(d).rstrip('/\\'))) for d in json.load(open(tl_json, encoding='utf-8'))]
+            return L if L and all(os.path.exists(os.path.join(d, 'mesh.ply')) for d in L) else None
         except (OSError, ValueError):
-            return False
+            return None
     tex_dirs = []
-    if ok and '질감' in stages['done'] and tex_done():
-        log('질감 · 지난번 것 씀', fp); eta.finish('질감'); tex_dirs = json.load(open(tl_json, encoding='utf-8'))
+    if ok and '질감' in stages['done'] and tex_list():
+        log('질감 · 지난번 것 씀', fp); eta.finish('질감'); tex_dirs = tex_list()
     elif ok:
         stages['done'] = [d for d in stages['done'] if ORDER.index(d) < ORDER.index('질감')]; save_stages()
         eta.start('질감'); t2 = time.time()
-        shutil.rmtree(tex_root, ignore_errors=True); os.makedirs(tex_root)
+        if not (os.path.isdir(os.path.join(dense, 'images')) and os.listdir(os.path.join(dense, 'images'))):
+            # 지난번 끝에서 지운 왜곡 편 사진만 다시 (점구름 · 면은 그대로 · 뒤 단계 안 지움)
+            log('  질감용 사진 다시 펴기', fp)
+            run([colmap, 'image_undistorter', '--image_path', a.photos, '--input_path', model, '--output_path', dense,
+                 '--output_type', 'COLMAP', '--max_image_size', str(res_tex)], os.path.join(ws, '4b_왜곡펴기_질감.log'))
+        shutil.rmtree(tex_root, ignore_errors=True); os.makedirs(tex_root, exist_ok=True)
         tiles = split_mesh_tiles(os.path.join(dense, 'scene_cpu_mesh.ply'), os.path.join(ws, 'mesh_tiles'))
         for k, (p, nf) in enumerate(tiles):
-            d = os.path.join(tex_root, 't%02d' % k); os.makedirs(d)
+            d = os.path.join(tex_root, 't%02d' % k); os.makedirs(d, exist_ok=True)
             rc = run([colmap, 'mesh_texturer', '--workspace_path', dense, '--input_path', p, '--output_path', d], os.path.join(ws, '7_질감_t%02d.log' % k))
             if rc != 0 or not os.path.exists(os.path.join(d, 'mesh.ply')):
                 ok = False; log('  조각 %d 질감 실패 (7_질감_t%02d.log)' % (k, k), fp); break
             tex_dirs.append(d)
         if ok:
-            json.dump(tex_dirs, open(tl_json, 'w', encoding='utf-8'))
+            json.dump([os.path.basename(d) for d in tex_dirs], open(tl_json, 'w', encoding='utf-8'))
             stages['done'].append('질감'); save_stages()
         log('질감 %d초 · 조각 %d개' % (time.time() - t2, len(tex_dirs)), fp)
         eta.finish('질감')
