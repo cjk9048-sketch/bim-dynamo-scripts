@@ -1,35 +1,41 @@
-# 드론 경사촬영 3D 매핑 (DJI Terra 대체 · 시험 단계)
+# 드론 경사촬영 3D 매핑 (DJI Terra 대체)
 
-DJI Matrice 4E 영역 경로 경사촬영 원본 사진 → 3D 모델 · 점구름 · (정사영상 · DSM) → 관로 얹기.
-Terra 라이선스 만료로 공개 엔진을 쓴다. 지금은 **엔진 시험** 단계 — 프로그램 화면은 아직 없음.
+DJI Matrice 4E 영역 경로 경사촬영 원본 사진 → 3D 모델 · 정사영상 · DSM → 관로 얹기.
+JACK 1125 결정: **드론 로드뷰 안에** 넣음 · 결과물 = 3D 모델 + 관로 얹기 · 정사영상(GeoTIFF) · DSM · Civil 3D 지표면 · 품질 = 빠르게 / 보통 / 정밀 고르기.
 
 ## 엔진 (내려받아 `D:\매핑시험\engines` 에 풂 · 저장소에는 넣지 않음)
 
 | 엔진 | 판 | 라이선스 | 쓰는 곳 |
 |---|---|---|---|
-| COLMAP (Windows · CUDA) | 4.2.1 | BSD | 특징점 · GPS 이웃 맞추기 · RTK 위치를 쓰는 카메라 풀기(`pose_prior_mapper`) · 왜곡 펴기 |
-| OpenMVS (Windows · CUDA) | 2.4.0 | AGPL | 촘촘한 점구름 · 3D 면 · 질감 |
+| COLMAP (Windows · CUDA) | 4.2.1 | BSD | 특징점 · GPS 이웃 맞추기 · RTK 위치 카메라 풀기(`pose_prior_mapper`) · 왜곡 펴기 · **질감(`mesh_texturer`)** |
+| OpenMVS (Windows) | 2.4.0 | AGPL | 촘촘한 점구름 · 3D 면 (**CPU**) |
 
-내려받기: `github.com/colmap/colmap/releases` · `github.com/cdcseacave/openMVS/releases` (회사망 GitHub API 는 한도에 걸림 → 릴리스 페이지에서 주소)
+## 차례 (`tools/run_all.sh 작업폴더 사진폴더 [fast|normal|fine]`)
 
-## 순서
+특징점(GPU) → 맞추기(GPU) → 카메라 풀기 → 왜곡 펴기 → 점구름(OpenMVS CPU) → 3D 면(OpenMVS CPU) → 질감(COLMAP)
+→ `tools/map_outputs.py` 정사 · DSM · `tools/colmap_tex_to_web.py` 보기용 3D → `viewer/mesh.html`
 
-```
-bash run_sparse.sh 작업폴더 사진폴더          # 특징점 → 맞추기 → 카메라 풀기 (시간.txt 에 단계별 초)
-bash run_dense.sh  작업폴더 사진폴더 [2640]   # 왜곡 펴기 → 점구름 → 면 → 질감 (OBJ)
-```
+## 잰 사실 (1125 · 80장 시험 = 바라보는 곳 반경 55 m · 네 방향 고르게, `tools/pick_subset.py`)
 
-## 잰 사실 (1125)
+| 단계 | 시간 | 결과 |
+|---|---|---|
+| 특징점 · 맞추기 · 카메라 풀기 | 14 + 16 + 209 초 | 80/80 등록 · 점 59,540 · 재투영 1.24 px |
+| 점구름 (OpenMVS CPU · 1320 px) | 231 초 | 230만 점 |
+| 3D 면 | 84 초 | 세모 183만 |
+| 질감 (COLMAP) | 38 초 | 16384×4615 · 질감 좌표 99.9 % 사진 위 |
+| 정사 · DSM (5 cm) | 12 초 | GeoTIFF + tfw + prj |
 
-- 시험 PC: RTX 5070 Ti 16 GB · Core Ultra 7 265K 20코어 · RAM 63 GB — COLMAP 4.2.1 CUDA 가 뜸.
-- M4E 사진: 5280×3956 · 짐벌 −57° 경사 · XMP 에 RTK 위치(RtkFlag 50 = 고정해 · 표준편차 수 mm~1 cm) · AbsoluteAltitude(타원체고로 보임 — 지오이드 보정 필요 확인) · DewarpData · CalibratedFocalLength 3725 px.
-  임무 폴더에 MRK · NAV · OBS · RTK 파일도 있음 (PPK 용).
-- Terra 결과 형식(비교용): 3D Tiles 점구름(pnts) · FBX/PLY 질감 면 64조각 · LAS · DEM · 정사 GeoTIFF — 좌표계 EPSG:5186 + KNGeoid18 표고.
-- OpenMVS 는 도움말 · 진행을 화면이 아니라 실행 폴더의 `*.log` 에 쓴다.
+- **좌표**: 카메라 풀기 결과 = 동 · 북 · 위(m) 지역 틀 (회전 0.001° · 배율 0.99977). 카메라 ↔ RTK 닮음 맞춤 어긋남 평면 0.12 · 높이 0.06 m (GCP 없이).
+- **표고**: M4E AbsoluteAltitude = 타원체고. EGM2008 로 표고 (PROJ 망 · 이 지역 지오이드 24.57 m). KNGeoid18 은 PROJ 공개 파일이 없음(국토지리정보원 배포).
+  **한 번에 4978 → 5186+3855 변환하면 지오이드를 건너뛴다** → 위경도 · 타원체고로 바꾼 뒤 평면 · 높이 따로. 사내 수치지도 DEM 과 견줌: 가운데값 −0.12 m (사분위 −0.84 ~ 0.36).
+- **안 된 것**: OpenMVS CUDA 판 = RTX 50(연산 능력 12.0) 커널 없음 → «named symbol not found» → CPU 로. COLMAP 점 깊이(GPU)는 되지만 80장 51분(이웃 사진 읽기가 병목) → OpenMVS CPU 가 13배 빠름.
+  OpenMVS 질감은 이 판에서 질감 좌표가 그림과 어긋남(8가지 뒤집기 모두 ≤ 53 %) → COLMAP 질감. OpenMVS 는 도움말 · 진행을 실행 폴더 `*.log` 에 씀.
+- 시험 PC: RTX 5070 Ti 16 GB · Core Ultra 7 265K 20코어 · RAM 63 GB.
+- Terra 결과 형식(견줌용): 3D Tiles(pnts) · FBX/PLY 64조각 · LAS · DEM · 정사 — EPSG:5186 + KNGeoid18.
 
 ## 다음
 
-1. 394장 전체로 `run_sparse.sh` → 시간 · 등록 사진 수 · 재투영 오차.
-2. `run_dense.sh` → 시간 · 모습 · Terra 결과와 견줌.
-3. 좌표: 카메라 풀기 결과를 EPSG:5186 + 지오이드 표고로 (Terra 와 같게).
-4. 결과가 쓸 만하면 계획 → 프로그램(사진 폴더 → 버튼 하나 → 3D · 정사 · DSM → 관로 얹기).
+1. 394장 전체 실측 시간 (진행 중).
+2. 드론 로드뷰 안: [프로젝트 생성] 에서 매핑 사진 고르기 · 지도에서 범위 · 품질 → 만들기 (엔진은 rv_cli 처럼 뒤에서 · 남은 시간).
+3. 3D 보기 화면에 관로 · 터파기 얹기 (기존 관로 넣기 · SHP) · 정사 · DSM · LandXML 내보내기.
+4. 큰 모델: 조각(타일) · 단계별 상세(LOD) — 394장이면 세모 수백만.
