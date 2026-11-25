@@ -29,10 +29,12 @@ import numpy as np
 
 NO_WINDOW = 0x08000000 if os.name == 'nt' else 0
 CRS = 'EPSG:5186'
-PIPELINE_VERSION = '1'      # 차례 · 옵션을 바꾸면 올림 → 지난번 중간 자료를 다시 쓰지 않음
+PIPELINE_VERSION = '2'      # 2 = 3D 면 세모 한도      # 차례 · 옵션을 바꾸면 올림 → 지난번 중간 자료를 다시 쓰지 않음
 # 품질: 질감용 사진 크기 · 특징점 사진 크기 (점구름은 질감용의 절반 · normal = 1125 80장 시험 값)
 QUALITY = {'fast': (1320, 2000), 'normal': (2640, 3200), 'fine': (5280, 4000)}
 QUALITY_NAME = {'fast': '빠르게', 'normal': '보통', 'fine': '정밀'}
+# 3D 보기 면 세모 수 한도 (보기 전용 · 정사 · DSM · 지표면은 점구름 그대로라 정확도는 안 바뀜 — 설계서 10.4)
+TARGET_FACES = {'fast': 1000000, 'normal': 3000000, 'fine': 6000000}
 ENGINE_DIRS = [Path(os.environ.get('LOCALAPPDATA', str(Path.home()))) / 'DH.Roadview' / 'engines', Path(r'D:\매핑시험\engines')]
 ENGINE_URLS = {
     'colmap': 'https://github.com/colmap/colmap/releases/download/4.2.1/colmap-x64-windows-cuda.zip',
@@ -308,11 +310,11 @@ def landxml_from_dsm(dsm, filled, x0, y1, cell, out, step_m=1.0, name='DSM'):
     return int(ok.sum()), int(m1.sum() + m2.sum())
 
 
-def textured_mesh_to_web(ws, s, R, t, out):
+def textured_mesh_to_web(ws, s, R, t, out, td=None):
     """COLMAP mesh_texturer (mesh.ply + texture.png) → 보기 자료 data/mesh.bin · mesh.json · tex.jpg (원점 빼고 float32)."""
     from PIL import Image
     Image.MAX_IMAGE_PIXELS = None
-    td = os.path.join(ws, 'tex_colmap')
+    td = td or os.path.join(ws, 'tex_colmap')
     b = open(os.path.join(td, 'mesh.ply'), 'rb').read()
     i = b.find(b'end_header'); h = b.index(b'\n', i) + 1
     head = [l.strip() for l in b[:h].decode('latin1').splitlines()]
@@ -567,7 +569,8 @@ def main(argv=None):
                        '--max-resolution', str(res_tex), '--cuda-device', '-2', '-w', '.'], '5_점구름.log', cwd=dense,
              check=lambda: has('dense', 'scene_cpu.ply'))
     ok = ok and step('3D 면', [os.path.join(mvs, 'ReconstructMesh.exe'), 'scene_cpu.mvs', '-o', 'scene_cpu_mesh.mvs', '--cuda-device', '-2',
-                               '-w', '.'], '6_면.log', cwd=dense, check=lambda: has('dense', 'scene_cpu_mesh.ply'))
+                               '--target-face-num', str(TARGET_FACES[a.quality]), '-w', '.'], '6_면.log', cwd=dense,
+                     check=lambda: has('dense', 'scene_cpu_mesh.ply'))
     ok = ok and step('질감', [colmap, 'mesh_texturer', '--workspace_path', dense, '--input_path', os.path.join(dense, 'scene_cpu_mesh.ply'),
                              '--output_path', os.path.join(ws, 'tex_colmap')], '7_질감.log', check=lambda: has('tex_colmap', 'mesh.ply'))
     if not ok:
