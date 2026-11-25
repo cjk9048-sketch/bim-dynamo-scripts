@@ -23,6 +23,29 @@ if (Get-Process -Name acad -ErrorAction SilentlyContinue) {
     exit 1
 }
 
+# ── ⓪ [JACK 1125] Civil 3D 2026은 2026.1 업데이트 이상이어야 한다(애드인을 2026.1로 빌드 — 첫 판에서는 안 열릴 수 있음)
+#    2026이 있는데 모두 2026.1 미만이면 아무것도 안 바꾸고 멈춘다 · 2026이 아예 없으면 그대로 진행(설치 exe와 같음)
+$minAecc = [version]'13.8.946.0'
+$c26 = @()
+try {
+    foreach ($k in Get-ChildItem 'HKLM:\SOFTWARE\Autodesk\AutoCAD\R25.1' -ErrorAction Stop) {
+        $loc = (Get-ItemProperty $k.PSPath -ErrorAction SilentlyContinue).AcadLocation
+        if (-not $loc) { continue }
+        $dll = Join-Path $loc 'C3D\AeccDbMgd.dll'
+        if (-not (Test-Path -LiteralPath $dll)) { continue }
+        $fv = (Get-Item -LiteralPath $dll).VersionInfo
+        $c26 += [pscustomobject]@{ Name = (Get-ItemProperty $k.PSPath).ProductName; Ver = [version]("{0}.{1}.{2}.{3}" -f $fv.FileMajorPart, $fv.FileMinorPart, $fv.FileBuildPart, $fv.FilePrivatePart) }
+    }
+} catch { }
+if ($c26.Count -gt 0 -and -not ($c26 | Where-Object { $_.Ver -ge $minAecc })) {
+    Say "! Civil 3D 2026 업데이트가 필요합니다." 'Red'
+    foreach ($c in $c26) { Say ("  이 PC: {0} · Civil 판 {1}" -f $c.Name, $c.Ver) 'Yellow' }
+    Say "  필요: Civil 3D 2026.1 업데이트 이상(Civil 판 $minAecc 이상)" 'Yellow'
+    Say "  Civil 3D를 닫고 Autodesk Access → 업데이트에서 «Civil 3D 2026.1 Update»를 설치한 뒤 다시 실행하세요." 'Yellow'
+    Say "  설치 중단(아무것도 변경하지 않았습니다)." 'Yellow'
+    exit 1
+}
+
 # ── ① 번들 복사 ──────────────────────────────────────────────
 $candidates = @(
     (Join-Path $scriptDir 'DH.Grading.bundle'),

@@ -55,7 +55,7 @@ io.open(readme, "w", encoding="utf-8-sig", newline="\r\n").write(
     "DH 정지(부지정지) 플러그인 — 수동 설치\r\n"
     "=" * 44 + "\r\n\r\n"
     "버전 : " + v + "\r\n"
-    "대상 : AutoCAD Civil 3D 2025 ~ 2026 (R25.0 ~ R25.1) · Windows 64비트\r\n\r\n"
+    "대상 : Autodesk Civil 3D 2026 (2026.1 업데이트 이상) · Windows 64비트\r\n\r\n"
     "설치 방법\r\n"
     "  1) Civil 3D 를 <완전히> 닫습니다. (켜져 있으면 파일이 잠겨 설치가 중단됩니다)\r\n"
     "  2) 이 폴더의 '설치.bat' 을 더블클릭합니다.\r\n"

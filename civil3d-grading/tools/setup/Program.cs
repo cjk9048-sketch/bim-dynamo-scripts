@@ -1,4 +1,4 @@
-using System.IO.Compression;
+﻿using System.IO.Compression;
 using System.Reflection;
 
 // DH.Grading 단일 exe 설치 프로그램(JACK 0728) — 설치.ps1과 동일한 일을 한다:
@@ -28,6 +28,28 @@ try
         try { key = Console.ReadKey().Key; Console.WriteLine(); }
         catch { key = ConsoleKey.Escape; }   // 입력 불가 환경(리다이렉트)이면 안전하게 중단
         if (key != ConsoleKey.Y) { Pause("중단했습니다. Civil3D를 닫고 다시 실행해 주세요."); return; }
+    }
+
+    // ── ⓪ [JACK 1125 «설치할 때 업데이트 후 설치되게»] Civil 3D 2026은 2026.1 업데이트 이상이어야 한다.
+    //    애드인은 2026.1(AeccDbMgd 13.8.946)로 빌드 — Civil DLL의 어셈블리 판에 업데이트 번호까지 들어 있어
+    //    업데이트 안 한 2026(첫 판)에서는 .NET이 낮은 판을 거부해 애드인이 안 열릴 수 있다 → 깔기 전에 막고 안내(아무것도 안 바꿈).
+    //    2026이 아예 없으면 예전처럼 설치 뒤 ③에서 알림만. 시험 인자(--target)일 때는 건너뜀.
+    if (!testMode && OperatingSystem.IsWindows())
+    {
+        var c26 = FindCivilVersions().Where(c => c.Series == "R25.1").ToList();
+        if (c26.Count > 0 && c26.All(c => c.Aecc < MinAecc2026()))
+        {
+            Console.WriteLine("! Civil 3D 2026 업데이트가 필요합니다.");
+            foreach (var c in c26) Console.WriteLine($"   이 PC: {c.Name} · Civil 판 {c.Aecc}");
+            Console.WriteLine($"   필요: Civil 3D 2026.1 업데이트 이상(Civil 판 {MinAecc2026()} 이상)");
+            Console.WriteLine();
+            Console.WriteLine("   1) Civil 3D를 닫습니다.");
+            Console.WriteLine("   2) Autodesk Access(작업 표시줄 오른쪽 Autodesk 아이콘) → 업데이트에서");
+            Console.WriteLine("      «Civil 3D 2026.1 Update»(또는 그 뒤 업데이트)를 설치합니다.");
+            Console.WriteLine("   3) 이 설치 파일을 다시 실행합니다.");
+            Pause("설치 중단(아무것도 변경하지 않았습니다).");
+            return;
+        }
     }
 
     // ── ① 번들 설치 — 부분 설치 방지: 임시폴더 전량 추출 → 잠김 사전검사 → 일괄 반영 ──
@@ -146,7 +168,7 @@ try
 
     Console.WriteLine();
 
-    // ── ③ [배포 점검 1123] Civil 3D 판 — 매니페스트는 R25.0~R25.1만 받고 DLL은 2026 것으로 빌드한다.
+    // ── ③ [배포 점검 1123] Civil 3D 판 — 매니페스트는 R25.1(2026)만 받고 DLL은 2026.1 것으로 빌드한다(★1125 R25.0 뺌).
     //    다른 판만 있는 PC는 설치는 «완료»인데 리본이 안 뜬다 → 여기서 미리 알린다(설치는 그대로 · 알림만).
     Console.WriteLine("③ Civil 3D 판 확인");
     var civ = OperatingSystem.IsWindows() ? FindCivil() : new List<(string Series, string Name)>();
@@ -156,7 +178,7 @@ try
     {
         Console.WriteLine("   ! Civil 3D 2026을 못 찾았습니다 — 이 애드인은 Civil 3D 2026용입니다.");
         foreach (var c in civ)
-            Console.WriteLine("     이 PC: " + c.Name + (c.Series == "R25.0" ? " — 확인 안 된 판" : " — 리본이 안 뜹니다"));
+            Console.WriteLine("     이 PC: " + c.Name + " — 리본이 안 뜹니다");
     }
     Console.WriteLine();
     Pause("==== 설치 완료 ==== Civil3D를 실행하면 'DH 정지' 리본이 나타납니다.");
@@ -194,6 +216,38 @@ static List<(string Series, string Name)> FindCivil()
                 string loc = p?.GetValue("AcadLocation") as string ?? "";
                 if (loc.Length > 0 && File.Exists(Path.Combine(loc, "C3D", "AeccDbMgd.dll")))
                     list.Add((series, p?.GetValue("ProductName") as string ?? series));
+            }
+        }
+    }
+    catch { }
+    return list;
+}
+
+// ★[JACK 1125] 애드인을 빌드한 Civil 3D 2026.1의 AeccDbMgd 파일 판 — 이보다 낮으면 설치를 막는다(⓪)
+static Version MinAecc2026() => new Version(13, 8, 946, 0);
+
+// 설치된 Civil 3D마다 AeccDbMgd.dll 파일 판(업데이트를 반영) — 읽기만 한다.
+[System.Runtime.Versioning.SupportedOSPlatform("windows")]
+static List<(string Series, string Name, Version Aecc)> FindCivilVersions()
+{
+    var list = new List<(string Series, string Name, Version Aecc)>();
+    try
+    {
+        using var root = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Autodesk\AutoCAD");
+        if (root == null) return list;
+        foreach (var series in root.GetSubKeyNames())
+        {
+            using var s = root.OpenSubKey(series);
+            if (s == null) continue;
+            foreach (var prod in s.GetSubKeyNames())
+            {
+                using var p = s.OpenSubKey(prod);
+                string loc = p?.GetValue("AcadLocation") as string ?? "";
+                string dll = loc.Length > 0 ? Path.Combine(loc, "C3D", "AeccDbMgd.dll") : "";
+                if (dll.Length == 0 || !File.Exists(dll)) continue;
+                var fv = System.Diagnostics.FileVersionInfo.GetVersionInfo(dll);
+                var v = new Version(fv.FileMajorPart, fv.FileMinorPart, fv.FileBuildPart, fv.FilePrivatePart);
+                list.Add((series, p?.GetValue("ProductName") as string ?? series, v));
             }
         }
     }

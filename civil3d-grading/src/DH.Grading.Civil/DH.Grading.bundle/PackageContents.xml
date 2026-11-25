@@ -12,7 +12,7 @@
                     Description="계단식 정지 비탈면 자동 생성 (distance-field)">
   <CompanyDetails Name="도화엔지니어링 상하수도부" />
   <Components Description="DH Grading">
-    <RuntimeRequirements OS="Win64" Platform="AutoCAD*" SeriesMin="R25.0" SeriesMax="R25.1" />
+    <RuntimeRequirements OS="Win64" Platform="AutoCAD*" SeriesMin="R25.1" SeriesMax="R25.1" />
     <ComponentEntry AppName="DH.Grading"
                     ModuleName="./Contents/DH.Grading.Civil.dll"
                     LoadOnAutoCADStartup="True"
