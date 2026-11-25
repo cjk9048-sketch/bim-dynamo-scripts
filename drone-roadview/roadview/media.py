@@ -124,7 +124,7 @@ def _track_pts(frames):
 
 
 # ---------------------------------------------------------------- GCP (측량 기준점) 파일
-def parse_gcp(path: str) -> list:
+def parse_gcp(path: str, crs: str = None) -> list:
     """GCP 파일(CSV · TXT · 쉼표 · 탭 · 빈칸) → [{name, z, cand: [{E, N, lat, lon}, …]}].
 
     한 줄 = 이름, 좌표1, 좌표2[, 표고]  (이름이 없으면 번호). 머리줄 · 빈 줄 · 숫자가 모자란 줄은 건너뜀.
@@ -132,7 +132,7 @@ def parse_gcp(path: str) -> list:
     보기 화면이 비행 경로에 가까운 쪽을 고른다."""
     import re
     from .geo import Geo
-    geo = Geo(CRS)
+    geo = Geo(crs or CRS)
     raw = Path(path).read_bytes()
     for enc in ('utf-8-sig', 'cp949', 'latin-1'):
         try:

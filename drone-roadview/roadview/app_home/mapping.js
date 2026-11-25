@@ -101,7 +101,7 @@
   }
   async function build() {
     if (S.sel.size < 3) { toast('사진 3장 이상 고르기'); return; }
-    const r = await call('start_mapping', { folder: S.folder, out: $('mOut').value, names: [...S.sel], quality: S.q, title: $('mTitle').value });
+    const r = await call('start_mapping', { folder: S.folder, out: $('mOut').value, names: [...S.sel], quality: S.q, title: $('mTitle').value, crs: $('mCrs').value });
     if (!r || !r.ok) { if (r) toast(r.msg); return; }
     S.job = r.job; $('mBuild').disabled = true; $('mStop').disabled = false; $('mBar').style.width = '0%'; poll();
   }

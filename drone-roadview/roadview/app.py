@@ -549,6 +549,51 @@ class Api:
             os.startfile(str(d))       # noqa: S606 — 사용자 PC 탐색기
         return {'ok': d.exists()}
 
+    def pick_checkpoints(self):
+        """검사점 파일(이름, X, Y, 표고 · CSV/TXT) → 매핑 좌표계 · 범위에 가까운 좌표 순서 (X=북/X=동)."""
+        if not self._project:
+            return {'ok': False, 'msg': '열린 프로젝트 없음'}
+        import webview
+        r = self._window.create_file_dialog(webview.FileDialog.OPEN, file_types=FILTER_GCP)
+        if not r:
+            return None
+        path = r[0] if isinstance(r, (list, tuple)) else r
+        from .media import parse_gcp
+        try:
+            M = json.loads((Path(self._project) / 'data' / 'mapping.js').read_text(encoding='utf-8').split('=', 1)[1].strip().rstrip(';'))
+            pts = parse_gcp(path, M.get('crs', 'EPSG:5186'))
+        except Exception as ex:
+            return {'ok': False, 'msg': '검사점 파일 못 읽음 · ' + str(ex)[:120]}
+        if not pts:
+            return {'ok': False, 'msg': '검사점 없음 · 한 줄 = 이름, X, Y, 표고'}
+        x0, y0, x1, y1 = M['bbox']; cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+        dist = lambda c: math.hypot(c['E'] - cx, c['N'] - cy)        # noqa: E731
+        k = 0
+        if len(pts[0]['cand']) > 1:                     # 두 순서 중 범위 가운데에 가까운 쪽 (가운데값)
+            d0 = sorted(dist(p['cand'][0]) for p in pts); d1 = sorted(dist(p['cand'][-1]) for p in pts)
+            k = 0 if d0[len(d0) // 2] <= d1[len(d1) // 2] else 1
+        out = []
+        for p in pts:
+            c = p['cand'][min(k, len(p['cand']) - 1)]
+            out.append({'name': p['name'], 'E': c['E'], 'N': c['N'], 'Z': p['z']})
+        far = sum(1 for p in out if not (x0 - 50 <= p['E'] <= x1 + 50 and y0 - 50 <= p['N'] <= y1 + 50))
+        note = '검사점 %d개' % len(out) + (' · 매핑 범위 밖 %d개' % far if far else '') + (' · X = 북' if k == 1 else '')
+        return {'ok': True, 'points': out, 'note': note}
+
+    def save_checks(self, items):
+        """검사점 잔차 → 결과물/정확도_검사점.csv · .txt (RMSE · DSM · DTM 표고 견줌)."""
+        if not self._project:
+            return {'ok': False, 'msg': '열린 프로젝트 없음'}
+        from .mapping import check_accuracy, set_crs
+        try:
+            M = json.loads((Path(self._project) / 'data' / 'mapping.js').read_text(encoding='utf-8').split('=', 1)[1].strip().rstrip(';'))
+            set_crs(M.get('crs', 'EPSG:5186'))
+            r = check_accuracy(self._project, list(items or []))
+        except Exception as ex:
+            return {'ok': False, 'msg': str(ex)[:200]}
+        f = lambda v: '-' if v is None else '%.3f m' % v         # noqa: E731
+        return {'ok': True, 'msg': '평면 RMSE %s · 높이 %s · %s' % (f(r['h']), f(r['v']), os.path.basename(r['csv'])), 'report': r}
+
     # ---------------------------------------------------------------- 3D 매핑 만들기 (JACK 1125)
     def scan_mapping(self, folder):
         """폴더의 매핑 사진(위치 XMP · 360 아님) → 지도 · 범위 고르기용 목록."""
@@ -579,6 +624,8 @@ class Api:
         lst = work / 'pick.txt'
         lst.write_text('\n'.join(names) + '\n', encoding='utf-8')
         args = [folder, '--out', out, '--quality', q, '--names', str(lst), '--title', p.get('title') or Path(out).name]
+        if p.get('crs') in ('EPSG:5186', 'EPSG:5185', 'EPSG:5187', 'EPSG:5188', 'EPSG:5179'):
+            args += ['--crs', p['crs']]
         cmd, cwd = _cli('map', args)
         j = Job('map', cmd, cwd, out=out)
         self._jobs[j.id] = j

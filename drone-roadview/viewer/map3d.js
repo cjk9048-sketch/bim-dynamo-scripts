@@ -58,26 +58,40 @@
     }
     gl.bindVertexArray(null); return vao;
   }
-  async function loadMesh() {
-    const meta = await (await fetch('data/mesh.json')).json();
-    const b = await (await fetch('data/mesh.bin')).arrayBuffer();
-    const n = meta.verts;
-    const pos = new Float32Array(b, 0, n * 3), uv = new Float32Array(b, n * 12, n * 2);
-    mesh = { meta, n, vao: buf([[0, pos, 3], [1, uv, 2]]) };
-    const img = new Image(); img.src = 'data/tex.jpg'; await img.decode();
+  async function texOf(url) {
+    const img = new Image(); img.src = url; await img.decode();
     const mx = gl.getParameter(gl.MAX_TEXTURE_SIZE);
     let src = img;
     if (img.width > mx || img.height > mx) {                // 그래픽 한도보다 크면 줄여서
       const k = mx / Math.max(img.width, img.height), c2 = document.createElement('canvas');
       c2.width = Math.floor(img.width * k); c2.height = Math.floor(img.height * k); c2.getContext('2d').drawImage(img, 0, 0, c2.width, c2.height); src = c2;
     }
-    tex = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, tex);
+    const t = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, t);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, gl.RGB, gl.UNSIGNED_BYTE, src); gl.generateMipmap(gl.TEXTURE_2D);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
-    const mn = meta.min, mxp = meta.max;
-    V.tgt = [(mn[0] + mxp[0]) / 2, (mn[1] + mxp[1]) / 2, mn[2] + (mxp[2] - mn[2]) * 0.3];
-    V.d = Math.hypot(mxp[0] - mn[0], mxp[1] - mn[1]) * 0.85;
-    window.__mesh = { tris: meta.tris, tex: [img.width, img.height], up: [src.width, src.height] };
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    return { t, size: [img.width, img.height], up: [src.width, src.height] };
+  }
+  async function loadMesh() {
+    const meta = await (await fetch('data/mesh.json')).json();
+    // 조각(tiles) — 조각마다 질감 (1.0.15 · 그래픽 한도 16384 안) · 옛 자료는 한 덩어리(mesh.bin · tex.jpg)
+    const list = meta.tiles || [{ bin: 'mesh.bin', tex: 'tex.jpg', verts: meta.verts }];
+    const parts = [];
+    for (let i = 0; i < list.length; i++) {
+      $('load').textContent = '불러오는 중… ' + (i + 1) + ' / ' + list.length;
+      const L = list[i], b = await (await fetch('data/' + L.bin)).arrayBuffer(), n = L.verts;
+      const tx = await texOf('data/' + L.tex);
+      parts.push({ n, vao: buf([[0, new Float32Array(b, 0, n * 3), 3], [1, new Float32Array(b, n * 12, n * 2), 2]]), tex: tx.t, size: tx.size, up: tx.up });
+      dirty = true;
+      if (i === 0) {
+        const mn = meta.min, mxp = meta.max;
+        V.tgt = [(mn[0] + mxp[0]) / 2, (mn[1] + mxp[1]) / 2, mn[2] + (mxp[2] - mn[2]) * 0.3];
+        V.d = Math.hypot(mxp[0] - mn[0], mxp[1] - mn[1]) * 0.85;
+        mesh = { meta, parts };
+      }
+    }
+    mesh = { meta, parts };
+    window.__mesh = { tris: meta.tris, tiles: parts.length, tex: parts.map((p) => p.size), up: parts.map((p) => p.up) };
   }
   const MAT_RGB = { ci: [0.35, 0.35, 0.37], steel: [0.0, 0.85, 1.0], plastic: [0.93, 0.93, 0.91] };
   function buildPipes() {
@@ -135,8 +149,9 @@
     const M = matrix(W, H);
     gl.enable(gl.DEPTH_TEST); gl.disable(gl.BLEND);
     gl.useProgram(MESH.p); gl.uniformMatrix4fv(MESH.u.M, false, M);
-    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, tex); gl.uniform1i(MESH.u.tex, 0);
-    gl.bindVertexArray(mesh.vao); gl.drawArrays(gl.TRIANGLES, 0, mesh.n);
+    gl.activeTexture(gl.TEXTURE0); gl.uniform1i(MESH.u.tex, 0);
+    for (const p of mesh.parts) { gl.bindTexture(gl.TEXTURE_2D, p.tex); gl.bindVertexArray(p.vao); gl.drawArrays(gl.TRIANGLES, 0, p.n); }
+    drawChecks(M);
     if (bandVao) {                                         // 땅 위 관 띠
       gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
       gl.enable(gl.POLYGON_OFFSET_FILL); gl.polygonOffset(-2, -2);
@@ -177,7 +192,8 @@
     gl.clearBufferfv(gl.COLOR, 0, [0, 0, 0, -1]); gl.clear(gl.DEPTH_BUFFER_BIT); gl.enable(gl.DEPTH_TEST); gl.disable(gl.BLEND);
     const M = matrix(W, H);
     gl.useProgram(PICK.p); gl.uniformMatrix4fv(PICK.u.M, false, M);
-    gl.uniform1f(PICK.u.id, 0); gl.bindVertexArray(mesh.vao); gl.drawArrays(gl.TRIANGLES, 0, mesh.n);
+    gl.uniform1f(PICK.u.id, 0);
+    for (const p of mesh.parts) { gl.bindVertexArray(p.vao); gl.drawArrays(gl.TRIANGLES, 0, p.n); }
     if (pipeVao) { gl.uniform1f(PICK.u.id, 1); gl.disable(gl.DEPTH_TEST); gl.bindVertexArray(pipeVao); gl.drawArrays(gl.TRIANGLES, 0, pipeN); gl.enable(gl.DEPTH_TEST); }
     const px = new Float32Array(4);
     gl.readPixels(Math.round(x * dpr), Math.round(H - y * dpr), 1, 1, gl.RGBA, gl.FLOAT, px);
@@ -198,6 +214,78 @@
     return best;
   }
 
+  // ---------------------------------------------------------------- 검사점 (설계서 6.4 · 매핑에 쓰지 않은 독립 점)
+  // pts = [{name, E, N, Z(측량 표고 | null), m: [E, N, Z] (3D 에서 찍은 곳) | null}] · 표시 = 팔면체 + 세로 막대 (모델 너머로도 보임)
+  const CK = { pts: [], active: -1, vao: null, ranges: [] };
+  const H0 = () => (P.origin && P.origin[2]) || 0;
+  function ckRel(p) { return [p.E - P.origin[0], p.N - P.origin[1], (p.Z != null ? p.Z : H0()) - H0()]; }
+  function ckBuild() {
+    const v = []; CK.ranges = [];
+    const O = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
+    const Fc = [[0, 2, 4], [2, 1, 4], [1, 3, 4], [3, 0, 4], [2, 0, 5], [1, 2, 5], [3, 1, 5], [0, 3, 5]];
+    for (const p of CK.pts) {
+      const c = ckRel(p), r = 0.25, h = 2.5, w = 0.04, s0 = v.length / 3;
+      for (const f of Fc) for (const k of f) v.push(c[0] + r * O[k][0], c[1] + r * O[k][1], c[2] + r * O[k][2]);
+      v.push(c[0] - w, c[1], c[2], c[0] + w, c[1], c[2], c[0] + w, c[1], c[2] + h, c[0] - w, c[1], c[2], c[0] + w, c[1], c[2] + h, c[0] - w, c[1], c[2] + h);
+      v.push(c[0], c[1] - w, c[2], c[0], c[1] + w, c[2], c[0], c[1] + w, c[2] + h, c[0], c[1] - w, c[2], c[0], c[1] + w, c[2] + h, c[0], c[1] - w, c[2] + h);
+      CK.ranges.push([s0, v.length / 3 - s0]);
+    }
+    CK.vao = v.length ? buf([[0, new Float32Array(v), 3]]) : null;
+  }
+  function drawChecks(M) {
+    if (!CK.vao || $('ck').style.display === 'none') return;
+    gl.disable(gl.DEPTH_TEST); gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    gl.useProgram(FLAT.p); gl.uniformMatrix4fv(FLAT.u.M, false, M); gl.bindVertexArray(CK.vao);
+    CK.ranges.forEach(([s, n], i) => {
+      const p = CK.pts[i], c = i === CK.active ? [1, 0.6, 0.12, 0.95] : p.m ? [0.35, 0.9, 0.45, 0.9] : [1, 0.85, 0.4, 0.85];
+      gl.uniform4f(FLAT.u.col, c[0], c[1], c[2], c[3]); gl.drawArrays(gl.TRIANGLES, s, n);
+    });
+    gl.enable(gl.DEPTH_TEST); gl.disable(gl.BLEND);
+    gl.useProgram(MESH.p);
+  }
+  function ckRes(p) { return p.m ? { h: Math.hypot(p.m[0] - p.E, p.m[1] - p.N), z: p.Z != null ? p.m[2] - p.Z : null } : null; }
+  function ckRender() {
+    const box = $('ckList'); box.textContent = '';
+    CK.pts.forEach((p, i) => {
+      const r = ckRes(p), d = document.createElement('div');
+      d.className = 'ci' + (i === CK.active ? ' on' : '');
+      d.innerHTML = '<span class="nm"></span><span class="r"></span>';
+      d.querySelector('.nm').textContent = p.name + (p.Z != null ? ' · Z ' + p.Z.toFixed(2) : '');
+      d.querySelector('.r').textContent = r ? '평면 ' + r.h.toFixed(3) + (r.z != null ? ' · 높이 ' + (r.z >= 0 ? '+' : '') + r.z.toFixed(3) : '') : '찍기 전';
+      d.addEventListener('click', () => { CK.active = i; const c = ckRel(p); V.tgt = c; V.d = Math.min(V.d, 30); ckRender(); redraw(); });
+      box.appendChild(d);
+    });
+    const ms = CK.pts.map(ckRes).filter(Boolean), hz = ms.map((r) => r.h), vz = ms.map((r) => r.z).filter((v) => v != null);
+    const rm = (a) => (a.length ? Math.sqrt(a.reduce((s, v) => s + v * v, 0) / a.length) : null);
+    $('ckRms').textContent = ms.length ? '평면 RMSE ' + rm(hz).toFixed(3) + (vz.length ? ' · 높이 ' + rm(vz).toFixed(3) : '') + ' m (' + ms.length + '/' + CK.pts.length + ')' : CK.pts.length + '점';
+    $('ckHint').textContent = CK.active >= 0 ? '«' + CK.pts[CK.active].name + '» 을 모델에서 누르기' : '점을 고르고 모델에서 누르기';
+    window.__ck = { n: CK.pts.length, measured: ms.length, h: rm(hz), v: rm(vz) };
+  }
+  function ckMeasure(h) {                                 // 모델에서 누른 곳 = 찍은 자리
+    const p = CK.pts[CK.active]; if (!p) return;
+    p.m = [h.p[0] + P.origin[0], h.p[1] + P.origin[1], h.p[2] + H0()];
+    const nx = CK.pts.findIndex((q, j) => j > CK.active && !q.m);
+    if (nx >= 0) { CK.active = nx; const c = ckRel(CK.pts[nx]); V.tgt = c; }
+    ckRender(); redraw();
+  }
+  $('bCheck').addEventListener('click', async () => {
+    if ($('ck').style.display !== 'none') { $('ck').style.display = 'none'; redraw(); return; }
+    if (!CK.pts.length) {
+      const r = await call('pick_checkpoints'); if (!r) return;
+      if (!r.ok) { toast(r.msg); return; }
+      CK.pts = r.points.map((q) => ({ name: q.name, E: q.E, N: q.N, Z: q.Z, m: null })); CK.active = 0;
+      ckBuild();
+      if (r.note) toast(r.note);
+    }
+    $('ck').style.display = 'flex'; ckRender(); redraw();
+  });
+  $('ckClose').addEventListener('click', () => { $('ck').style.display = 'none'; CK.active = -1; redraw(); });
+  $('ckSave').addEventListener('click', async () => {
+    const q = await call('save_checks', CK.pts.map((p) => ({ name: p.name, E: p.E, N: p.N, Z: p.Z, mE: p.m ? p.m[0] : null, mN: p.m ? p.m[1] : null, mZ: p.m ? p.m[2] : null })));
+    if (q && q.ok) toast('보고서 저장 · ' + q.msg); else if (q) toast(q.msg);
+  });
+  window.__ckApi = { set: (pts) => { CK.pts = pts.map((q) => ({ name: q.name, E: q.E, N: q.N, Z: q.Z, m: null })); CK.active = 0; ckBuild(); $('ck').style.display = 'flex'; ckRender(); redraw(); }, measure: (p) => ckMeasure({ p }), CK };
+
   // ---------------------------------------------------------------- 조작
   let dn = null;
   cv.addEventListener('pointerdown', (e) => { dn = { x: e.clientX, y: e.clientY, b: e.button, az: V.az, el: V.el, t: V.tgt.slice(), moved: false }; cv.setPointerCapture(e.pointerId); });
@@ -217,6 +305,7 @@
     cv.classList.remove('drag');
     if (dn && !dn.moved && dn.b === 0) {
       const r = cv.getBoundingClientRect(), h = pickAt(e.clientX - r.left, e.clientY - r.top), box = $('pick');
+      if (h && CK.active >= 0 && $('ck').style.display !== 'none') { ckMeasure(h); dn = null; return; }   // 검사점 찍기
       if (h && h.pipe && pipeInfo.length) {
         const q = pipeNear(h.p);
         if (q && q.d < 3) {
@@ -265,7 +354,7 @@
     buildPipes();
     $('load').style.display = 'none';
     $('info').textContent = '세모 ' + mesh.meta.tris.toLocaleString() + ' · 사진 ' + (P.registered || '?') + '/' + (P.photos || '?') + '장 · RTK 어긋남 ' +
-      (P.rtk_rms != null ? P.rtk_rms.toFixed(2) + ' m' : '-') + ' · EPSG:5186 + EGM2008' + (pipeN ? ' · 관로 ' + PIPES.lines.length + '줄' : '');
+      (P.rtk_rms != null ? P.rtk_rms.toFixed(2) + ' m' : '-') + ' · ' + (P.crs || 'EPSG:5186') + ' + ' + (P.height || 'EGM2008') + (pipeN ? ' · 관로 ' + PIPES.lines.length + '줄' : '');
     redraw(); loop();
   }).catch((e) => { $('load').textContent = '못 불러옴 · ' + e; window.__err = String(e); });
   window.__map3d = { V, redraw, pickAt };

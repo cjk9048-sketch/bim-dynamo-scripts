@@ -29,14 +29,28 @@ import numpy as np
 
 NO_WINDOW = 0x08000000 if os.name == 'nt' else 0
 CRS = 'EPSG:5186'
-PIPELINE_VERSION = '3'      # 2 = 3D 면 세모 한도 · 3 = 사진 많으면 전역 카메라 풀기      # 차례 · 옵션을 바꾸면 올림 → 지난번 중간 자료를 다시 쓰지 않음
+PIPELINE_VERSION = '4'      # 2 = 3D 면 세모 한도 · 3 = 사진 많으면 전역 카메라 풀기 · 4 = 조각 질감      # 차례 · 옵션을 바꾸면 올림 → 지난번 중간 자료를 다시 쓰지 않음
 # 품질: 질감용 사진 크기 · 특징점 사진 크기 (점구름은 질감용의 절반 · normal = 1125 80장 시험 값)
 QUALITY = {'fast': (1320, 2000), 'normal': (2640, 3200), 'fine': (5280, 4000)}
 QUALITY_NAME = {'fast': '빠르게', 'normal': '보통', 'fine': '정밀'}
 # 3D 보기 면 세모 수 한도 (보기 전용 · 정사 · DSM · 지표면은 점구름 그대로라 정확도는 안 바뀜 — 설계서 10.4)
 TARGET_FACES = {'fast': 1000000, 'normal': 3000000, 'fine': 6000000}
+DTM_CELL = 0.5             # DTM 격자 m
+MAX_TEX = 8192             # 조각 질감 그림 한 변 최대 (보기 전용 · 대부분 그래픽 16384 · 시험 렌더러 8192)
 GLOBAL_MIN = 50            # 이 장수 이상이면 전역 카메라 풀기 (1125: 394장 26분 → 10분 · 80장 209 → 53초 · RTK 어긋남 같음)
 ENGINE_DIRS = [Path(os.environ.get('LOCALAPPDATA', str(Path.home()))) / 'DH.Roadview' / 'engines', Path(r'D:\매핑시험\engines')]
+if os.environ.get('RV_ENGINE_DIRS'):          # 시험 · 다른 PC 흉내 (처음 내려받기) — ; 로 나눈 폴더들
+    ENGINE_DIRS = [Path(x) for x in os.environ['RV_ENGINE_DIRS'].split(';') if x]
+# 좌표계 고르기 (설계서 4.2 · 6.5) — 기본 = 중부원점 (회사 도면 · 그레이딩 · 로드뷰와 같게)
+CRS_CHOICES = {'EPSG:5186': '중부원점 (Korea 2000 / Central Belt 2010)', 'EPSG:5185': '서부원점 (West Belt 2010)',
+               'EPSG:5187': '동부원점 (East Belt 2010)', 'EPSG:5188': '동해(울릉)원점 (East Sea Belt 2010)', 'EPSG:5179': 'UTM-K (Unified CS)'}
+
+
+def set_crs(crs):
+    global CRS
+    if crs not in CRS_CHOICES:
+        raise ValueError('좌표계 %s 는 고를 수 없음 (%s)' % (crs, ', '.join(CRS_CHOICES)))
+    CRS = crs
 ENGINE_URLS = {
     'colmap': 'https://github.com/colmap/colmap/releases/download/4.2.1/colmap-x64-windows-cuda.zip',
     'openmvs': 'https://github.com/cdcseacave/openMVS/releases/download/v2.4.0/OpenMVS_Windows_x64.zip',
@@ -306,9 +320,272 @@ def landxml_from_dsm(dsm, filled, x0, y1, cell, out, step_m=1.0, name='DSM'):
     for p, q, r in zip(b[m2], c_[m2], d[m2]):
         lines.append('<F>%d %d %d</F>' % (p, q, r))
     lines.append('</Faces></Definition></Surface></Surfaces></LandXML>')
-    with open(os.path.join(out, '지표면_DSM.xml'), 'w', encoding='utf-8') as fp:
+    with open(os.path.join(out, '지표면_%s.xml' % name), 'w', encoding='utf-8') as fp:
         fp.write('\n'.join(lines))
     return int(ok.sum()), int(m1.sum() + m2.sum())
+
+
+# ---------------------------------------------------------------- DTM (땅 분류 · 설계서 6.1)
+def fill_pull_push(Z, mask):
+    """빈칸(mask False) 메우기 — 거친 단계로 평균 내려가며(pull) 다시 올라오며 채움(push). 넓은 빈칸도 부드럽게."""
+    import cv2
+    levels = [(Z.astype(np.float32) * mask, mask.astype(np.float32))]
+    while min(levels[-1][0].shape) > 2:
+        v, w = levels[-1]
+        h2, w2 = (v.shape[0] + 1) // 2, (v.shape[1] + 1) // 2
+        vp = np.zeros((h2 * 2, w2 * 2), np.float32); wp = np.zeros_like(vp)
+        vp[:v.shape[0], :v.shape[1]] = v; wp[:w.shape[0], :w.shape[1]] = w
+        vs = vp.reshape(h2, 2, w2, 2).sum((1, 3)); ws_ = wp.reshape(h2, 2, w2, 2).sum((1, 3))
+        levels.append((vs, ws_))
+    est = None
+    for v, w in reversed(levels):
+        cur = np.where(w > 0, v / np.maximum(w, 1e-9), np.nan).astype(np.float32)
+        if est is not None:
+            up = cv2.resize(est, (cur.shape[1], cur.shape[0]), interpolation=cv2.INTER_LINEAR)
+            cur = np.where(np.isfinite(cur), cur, up)
+        est = cur
+    return np.where(mask, Z, est).astype(np.float32)
+
+
+def dtm_from_points(E, N, H, cell=0.5, max_win_m=33.0, slope=0.25, dh0=0.3, dhmax=2.5):
+    """점진형 형태학 필터(PMF · Zhang 2003): 칸마다 가장 낮은 점 → 창을 키우며 열림(opening) → 창 크기에 맞는 높이 차보다
+    솟은 칸 = 땅 아님(건물 · 비닐하우스 · 나무). 땅 칸만 남겨 빈칸을 메운 것 = DTM. → (dtm, 땅, 자료 있음, x0, y1)."""
+    import cv2
+    x0 = math.floor(E.min() / cell) * cell; y1 = math.ceil(N.max() / cell) * cell
+    W = int(math.ceil((E.max() - x0) / cell)) + 1; Hh = int(math.ceil((y1 - N.min()) / cell)) + 1
+    idx = ((y1 - N) / cell).astype(np.int64) * W + ((E - x0) / cell).astype(np.int64)
+    order = np.lexsort((H, idx))
+    first = order[np.r_[True, idx[order][1:] != idx[order][:-1]]]
+    zmin = np.full(W * Hh, np.nan, np.float32); zmin[idx[first]] = H[first]
+    zmin = zmin.reshape(Hh, W)
+    valid = np.isfinite(zmin)
+    # 땅 밑 잡음 점(점구름 잡음)이 «땅» 으로 잡히지 않게: 이웃 가운데값보다 0.5 m 넘게 낮은 칸은 뺌 (1125 394장: DEM 보다 2 m 낮은 곳)
+    Zf = fill_pull_push(np.nan_to_num(zmin), valid)
+    med = cv2.medianBlur(Zf, 5)
+    valid &= ~(zmin < med - 0.5)
+    Z0 = fill_pull_push(np.nan_to_num(zmin), valid)
+    surf = Z0.copy(); flag = np.zeros(Z0.shape, bool); w_prev = 1
+    k = 1
+    while True:
+        w = 2 * (2 ** k) + 1                                   # 5, 9, 17, 33, 65 … 칸
+        if w * cell > max_win_m * 2 + cell:
+            break
+        opened = cv2.morphologyEx(surf, cv2.MORPH_OPEN, np.ones((w, w), np.uint8))
+        dh = min(dhmax, dh0 + slope * (w - w_prev) * cell)
+        flag |= (surf - opened) > dh
+        surf = opened; w_prev = w; k += 1
+    ground = valid & ~flag
+    dtm = fill_pull_push(np.nan_to_num(Z0), ground)
+    # 땅이 안 보인 곳(숲 · 건물 밑)은 둘레 땅에 맞춘 막 면(조화 보간)으로 매끄럽게 — 땅 칸은 고정 (1125: 메운 곳이 네모 덩어리)
+    hole = ~ground
+    if hole.any():
+        for _ in range(400):
+            sm = cv2.blur(dtm, (3, 3))
+            dtm[hole] = sm[hole]
+    cover = cv2.dilate(np.isfinite(zmin).astype(np.uint8), np.ones((5, 5), np.uint8)) > 0   # 자료 끝 밖은 비움
+    return dtm, ground, cover, x0, y1
+
+
+def write_raster(out, name, Z, mask, x0, y1, cell):
+    from PIL import Image
+    Image.fromarray(np.where(mask, Z, -9999).astype(np.float32), 'F').save(os.path.join(out, name + '.tif'))
+    _world(out, name, x0, y1, cell)
+
+
+def grid_sampler(Z, mask, x0, y1, cell):
+    def f(E, N):
+        E = np.asarray(E, float); N = np.asarray(N, float)
+        c = np.floor((E - x0) / cell).astype(int); r = np.floor((y1 - N) / cell).astype(int)
+        ok = (r >= 0) & (r < Z.shape[0]) & (c >= 0) & (c < Z.shape[1])
+        z = np.full(E.shape, np.nan)
+        z[ok] = np.where(mask[r[ok], c[ok]], Z[r[ok], c[ok]], np.nan)
+        return z
+    return f
+
+
+def compare_company_dem(E, N, Z, log=print):
+    """사내 수치지도 DEM(등고선 · 표고점 5 m)과 견줌 → (가운데값, 사분위 25, 75, 곳 수) 또는 None (접속 없음)."""
+    try:
+        from . import terrain
+        if not terrain.db_available():
+            return None
+        bbox = (np.min(E) - 200, np.min(N) - 200, np.max(E) + 200, np.max(N) + 200)
+        cl = terrain.contours_from_db(bbox, int(CRS.split(':')[1])); sp = terrain.spot_heights_from_db(bbox, int(CRS.split(':')[1]))
+        P = terrain.lines_to_points(cl, 2.0)
+        if len(sp):
+            P = np.vstack([P, sp])
+        if len(P) < 3:
+            return None
+        dem = terrain.GridDem(P, cell=5.0, sigma=15.0)
+        d = np.asarray(Z) - np.asarray(dem(E, N))
+        d = d[np.isfinite(d)]
+        if not len(d):
+            return None
+        return float(np.median(d)), float(np.percentile(d, 25)), float(np.percentile(d, 75)), int(len(d))
+    except Exception as ex:                       # noqa: BLE001
+        log('  사내 DEM 견줌 못 함: %s' % str(ex)[:120])
+        return None
+
+
+# ---------------------------------------------------------------- 조각 질감 (그래픽 한도 16384 안으로 · 조각마다 질감)
+TILE_FACES = 400000
+
+
+def split_mesh_tiles(mesh_ply, out_dir, max_faces=TILE_FACES):
+    """OpenMVS 면 PLY (xyz float32 · 면 uint8 3 + uint32 ×3) → 세모 가운데 기준 격자 조각 PLY 들 → [(경로, 세모 수)]."""
+    b = open(mesh_ply, 'rb').read()
+    i = b.find(b'end_header'); h = b.index(b'\n', i) + 1
+    head = [l.strip() for l in b[:h].decode('latin1').splitlines()]
+    nv = int([l for l in head if l.startswith('element vertex')][0].split()[2])
+    nf = int([l for l in head if l.startswith('element face')][0].split()[2])
+    V = np.frombuffer(b, np.float32, nv * 3, h).reshape(nv, 3)
+    Fb = np.frombuffer(b, np.uint8, nf * 13, h + nv * 12).reshape(nf, 13)
+    if not (Fb[:, 0] == 3).all():
+        raise RuntimeError('면 형식이 다름 (세모만)')
+    F = Fb[:, 1:13].copy().view(np.uint32).reshape(nf, 3)
+    C = V[F].mean(1)
+    k = max(1, int(math.ceil(nf / max_faces)))
+    w = float(C[:, 0].max() - C[:, 0].min()) or 1.0; hh = float(C[:, 1].max() - C[:, 1].min()) or 1.0
+    nx = max(1, int(round(math.sqrt(k * w / hh)))); ny = max(1, int(math.ceil(k / nx)))
+    ix = np.minimum(nx - 1, ((C[:, 0] - C[:, 0].min()) / w * nx).astype(int))
+    iy = np.minimum(ny - 1, ((C[:, 1] - C[:, 1].min()) / hh * ny).astype(int))
+    tid = iy * nx + ix
+    os.makedirs(out_dir, exist_ok=True)
+    tiles = []
+    for t in range(nx * ny):
+        sel = np.nonzero(tid == t)[0]
+        if len(sel) < 50:
+            continue
+        f = F[sel]
+        u, inv = np.unique(f.reshape(-1), return_inverse=True)
+        p = os.path.join(out_dir, 't%02d.ply' % len(tiles))
+        with open(p, 'wb') as fp:
+            fp.write(('ply\nformat binary_little_endian 1.0\nelement vertex %d\nproperty float x\nproperty float y\nproperty float z\n'
+                      'element face %d\nproperty list uchar uint vertex_indices\nend_header\n' % (len(u), len(sel))).encode('ascii'))
+            fp.write(V[u].astype(np.float32).tobytes())
+            rec = np.empty((len(sel), 13), np.uint8); rec[:, 0] = 3
+            rec[:, 1:13] = inv.reshape(-1, 3).astype(np.uint32).view(np.uint8).reshape(-1, 12)
+            fp.write(rec.tobytes())
+        tiles.append((p, int(len(sel))))
+    return tiles
+
+
+def read_textured_ply(td):
+    """COLMAP mesh_texturer 결과 → (꼭짓점 float64 n×3, 면 번호 m×3, 질감 좌표 m×3×2 (그림 위 = 0), 질감 그림 경로)."""
+    b = open(os.path.join(td, 'mesh.ply'), 'rb').read()
+    i = b.find(b'end_header'); h = b.index(b'\n', i) + 1
+    head = [l.strip() for l in b[:h].decode('latin1').splitlines()]
+    nv = int([l for l in head if l.startswith('element vertex')][0].split()[2])
+    nf = int([l for l in head if l.startswith('element face')][0].split()[2])
+    V = np.frombuffer(b, np.float32, nv * 3, h).reshape(nv, 3).astype(np.float64)
+    F = np.frombuffer(b, np.uint8, nf * 38, h + nv * 12).reshape(nf, 38)
+    if not ((F[:, 0] == 3).all() and (F[:, 13] == 6).all()):
+        raise RuntimeError('질감 면 형식이 다름 (세모 · 질감점 6개)')
+    fi = F[:, 1:13].copy().view(np.int32).reshape(nf, 3)
+    tc = F[:, 14:38].copy().view(np.float32).reshape(nf, 3, 2).copy()
+    tc[..., 1] = 1.0 - tc[..., 1]                       # 그림 위쪽 = 0 (COLMAP = OBJ 꼴 · 1125 99.9 %)
+    return V, fi, tc, os.path.join(td, 'texture.png')
+
+
+def tiles_to_web(tex_dirs, s, R, t, out, max_tex=8192):
+    """조각마다 질감 면 → data/tiles/tNN.bin (위치 float32×3 · 질감 float32×2, 세모마다 셋) + tNN.jpg · data/mesh.json.
+    질감 그림이 max_tex 보다 크면 줄여 저장 (보기 전용 · 대부분 그래픽 한도 16384 · 시험용 8192)."""
+    from PIL import Image
+    Image.MAX_IMAGE_PIXELS = None
+    parts = [read_textured_ply(d) for d in tex_dirs]
+    allE = []
+    conv = []
+    for V, fi, tc, tex in parts:
+        E, N, H = to_5186_h(s * (V @ R.T) + t)
+        conv.append((E, N, H)); allE.append((np.median(E), np.median(N), np.percentile(H, 5), len(E)))
+    w = np.array([a[3] for a in allE], float)
+    o = [round(float(np.average([a[0] for a in allE], weights=w)), 1), round(float(np.average([a[1] for a in allE], weights=w)), 1),
+         round(float(min(a[2] for a in allE)), 1)]
+    tdir = os.path.join(out, 'tiles'); os.makedirs(tdir, exist_ok=True)
+    for f in glob.glob(os.path.join(tdir, '*')):
+        os.remove(f)
+    tiles = []; mn = np.full(3, np.inf); mx = np.full(3, -np.inf); tris = 0
+    for k, ((V, fi, tc, tex), (E, N, H)) in enumerate(zip(parts, conv)):
+        vpos = np.stack([E - o[0], N - o[1], H - o[2]], 1).astype(np.float32)
+        pos = vpos[fi.reshape(-1)]
+        with open(os.path.join(tdir, 't%02d.bin' % k), 'wb') as fp:
+            fp.write(pos.tobytes()); fp.write(tc.reshape(-1, 2).astype(np.float32).tobytes())
+        im = Image.open(tex).convert('RGB')
+        if max(im.size) > max_tex:
+            r = max_tex / max(im.size); im = im.resize((max(1, int(im.size[0] * r)), max(1, int(im.size[1] * r))), Image.LANCZOS)
+        im.save(os.path.join(tdir, 't%02d.jpg' % k), quality=90)
+        tiles.append({'bin': 'tiles/t%02d.bin' % k, 'tex': 'tiles/t%02d.jpg' % k, 'verts': int(len(pos)), 'tris': int(len(fi)), 'texsize': list(im.size)})
+        mn = np.minimum(mn, pos.min(0)); mx = np.maximum(mx, pos.max(0)); tris += len(fi)
+    for f in ('mesh.bin', 'tex.jpg'):                   # 옛 한 덩어리 자료는 지움
+        if os.path.exists(os.path.join(out, f)):
+            os.remove(os.path.join(out, f))
+    meta = {'crs': CRS, 'height': 'EGM2008', 'origin': o, 'tris': int(tris), 'tiles': tiles, 'min': mn.tolist(), 'max': mx.tolist()}
+    with open(os.path.join(out, 'mesh.json'), 'w') as fp:
+        json.dump(meta, fp, indent=1)
+    return meta
+
+
+# ---------------------------------------------------------------- 검사점 정확도 (설계서 6.4 · GCP 와 검사점은 따로)
+def check_accuracy(out, items):
+    """items = [{name, E, N, Z, mE, mN, mZ}] (m* = 3D 보기에서 찍은 자리 · 없으면 None) → 결과물/정확도_검사점.csv · .txt.
+    표고는 DSM · DTM 에서도 읽어 같이 적음. → 요약 dict."""
+    P = _read_js(os.path.join(out, 'data', 'mapping.js'), 'RV_MAPPING')
+    d = os.path.join(out, '결과물')
+    samp = {}
+    for nm in ('DSM', 'DTM'):
+        if os.path.exists(os.path.join(d, nm + '.tif')):
+            samp[nm] = tif_sampler(d, nm)
+    rows = []
+    for it in items:
+        E, N, Z = float(it['E']), float(it['N']), (float(it['Z']) if it.get('Z') not in (None, '') else None)
+        r = {'name': it.get('name', ''), 'E': E, 'N': N, 'Z': Z}
+        if it.get('mE') is not None:
+            r.update(dE=float(it['mE']) - E, dN=float(it['mN']) - N, dZ=(float(it['mZ']) - Z) if Z is not None else None)
+        for nm, f in samp.items():
+            z = float(f([E], [N])[0])
+            r['dZ_' + nm] = (z - Z) if (Z is not None and np.isfinite(z)) else None
+        rows.append(r)
+
+    def rmse(vals):
+        v = [x for x in vals if x is not None]
+        return (math.sqrt(sum(x * x for x in v) / len(v)), len(v)) if v else (None, 0)
+    hz = rmse([math.hypot(r['dE'], r['dN']) if 'dE' in r else None for r in rows])
+    vz = rmse([r.get('dZ') for r in rows])
+    vs = {nm: rmse([r.get('dZ_' + nm) for r in rows]) for nm in samp}
+    import csv
+    with open(os.path.join(d, '정확도_검사점.csv'), 'w', newline='', encoding='utf-8-sig') as fp:
+        w = csv.writer(fp)
+        w.writerow(['이름', 'X(동)', 'Y(북)', '표고', 'dX', 'dY', 'd평면', 'dZ(찍은 곳)'] + ['dZ(%s)' % nm for nm in samp])
+        f3 = lambda v: '' if v is None else '%.3f' % v      # noqa: E731
+        for r in rows:
+            w.writerow([r['name'], '%.3f' % r['E'], '%.3f' % r['N'], f3(r['Z']), f3(r.get('dE')), f3(r.get('dN')),
+                        f3(math.hypot(r['dE'], r['dN']) if 'dE' in r else None), f3(r.get('dZ'))] + [f3(r.get('dZ_' + nm)) for nm in samp])
+    f2 = lambda t: '-' if t[0] is None else '%.3f m (%d점)' % t      # noqa: E731
+    lines = ['검사점 정확도 · %s · %s' % (P.get('title', ''), time.strftime('%Y-%m-%d %H:%M')), '',
+             '좌표계 %s · 표고 %s · 검사점 %d개' % (P.get('crs', CRS), P.get('height', 'EGM2008'), len(rows)),
+             '평면 RMSE (3D 보기에서 찍은 곳): %s' % f2(hz), '표고 RMSE (찍은 곳): %s' % f2(vz)]
+    lines += ['표고 RMSE (%s 에서 읽음): %s' % (nm, f2(v)) for nm, v in vs.items()]
+    lines += ['', '검사점은 매핑에 쓰지 않은 독립 점이어야 함 (GCP 잔차만으로 절대 정확도를 판단하지 않음 · 설계서 6.4)',
+              'DSM 은 건물 · 나무 포함 표면이라 땅 위 검사점은 DTM 값을 볼 것']
+    with open(os.path.join(d, '정확도_검사점.txt'), 'w', encoding='utf-8') as fp:
+        fp.write('\n'.join(lines) + '\n')
+    return {'n': len(rows), 'h': hz[0], 'v': vz[0], 'v_grid': {nm: v[0] for nm, v in vs.items()}, 'csv': os.path.join(d, '정확도_검사점.csv')}
+
+
+def tif_sampler(d, name):
+    from PIL import Image
+    Image.MAX_IMAGE_PIXELS = None
+    A = np.asarray(Image.open(os.path.join(d, name + '.tif')), np.float32)
+    w = [float(x) for x in open(os.path.join(d, name + '.tfw')).read().split()]
+    cell, xc, yc = w[0], w[4], w[5]
+
+    def f(E, N):
+        E = np.asarray(E, float); N = np.asarray(N, float)
+        c = np.round((E - xc) / cell).astype(int); r = np.round((yc - N) / cell).astype(int)
+        ok = (r >= 0) & (r < A.shape[0]) & (c >= 0) & (c < A.shape[1])
+        z = np.full(E.shape, np.nan); z[ok] = A[r[ok], c[ok]]; z[z <= -9998] = np.nan
+        return z
+    return f
 
 
 def textured_mesh_to_web(ws, s, R, t, out, td=None):
@@ -375,6 +652,7 @@ def import_pipes(out, path, dia_field=None, label_field=None, depth=None, layers
     from . import pipeload
     from .geo import Geo
     P = _read_js(os.path.join(out, 'data', 'mapping.js'), 'RV_MAPPING')
+    set_crs(P.get('crs', 'EPSG:5186'))
     E0, N0 = float(P['origin'][0]), float(P['origin'][1])
     x0, y0, x1, y1 = P['bbox']
     pad = 30.0
@@ -439,6 +717,26 @@ class Eta:
         self.done += self.W.get(name, 1)
 
 
+_MVS_CUDA = {}
+
+
+def mvs_cuda_opt(mvs):
+    """['--cuda-device', '-2'] (CPU 로) · 이 옵션이 없는 판(일반 zip · CUDA 없는 판)이면 [] —
+    없는 옵션을 주면 바로 종료코드 1 (1125 다른 PC 흉내 시험에서 잼)."""
+    if mvs not in _MVS_CUDA:
+        import tempfile
+        d = tempfile.mkdtemp(prefix='rv_mvs_')
+        try:
+            subprocess.run([os.path.join(mvs, 'DensifyPointCloud.exe'), '--help'], cwd=d, capture_output=True, timeout=60, creationflags=NO_WINDOW)
+            txt = ''.join(open(f, encoding='utf-8', errors='replace').read() for f in glob.glob(os.path.join(d, '*.log')))
+            _MVS_CUDA[mvs] = ['--cuda-device', '-2'] if 'cuda-device' in txt else []
+        except Exception:                          # noqa: BLE001
+            _MVS_CUDA[mvs] = []
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+    return _MVS_CUDA[mvs]
+
+
 def run(cmd, logpath, cwd=None):
     with open(logpath, 'w', encoding='utf-8', errors='replace') as fp:
         r = subprocess.run(cmd, stdout=fp, stderr=subprocess.STDOUT, cwd=cwd, creationflags=NO_WINDOW)
@@ -454,9 +752,11 @@ def main(argv=None):
     ap.add_argument('--cell', type=float, default=0.0, help='정사 · DSM 격자 m (0 = 품질에 맞춰)')
     ap.add_argument('--title', help='제목')
     ap.add_argument('--keep-work', action='store_true', help='중간 자료(점 깊이 · 왜곡 편 사진) 남기기')
+    ap.add_argument('--crs', default='EPSG:5186', choices=list(CRS_CHOICES), help='결과 좌표계 (기본 중부원점)')
     ap.add_argument('--mapper', choices=['auto', 'global', 'prior'], default='auto',
                     help='카메라 풀기: auto = %d장 이상이면 전역 · global · prior(한 장씩)' % GLOBAL_MIN)
     a = ap.parse_args(argv)
+    set_crs(a.crs)
     try:
         sys.stdout.reconfigure(encoding='utf-8')
     except Exception:
@@ -542,14 +842,24 @@ def main(argv=None):
     db = os.path.join(ws, 'db.db')
     dense = os.path.join(ws, 'dense')
     has = lambda *p: os.path.exists(os.path.join(ws, *p))       # noqa: E731
-    ok = step('특징점', [colmap, 'feature_extractor', '--database_path', db, '--image_path', a.photos,
-                          '--image_list_path', os.path.join(ws, 'names.txt'),
-                          '--ImageReader.single_camera', '1', '--ImageReader.camera_model', 'OPENCV']
-              + (['--ImageReader.camera_params', cam] if cam else [])
-              + ['--FeatureExtraction.max_image_size', str(res_feat), '--FeatureExtraction.use_gpu', '1'], '1_특징점.log',
-              check=lambda: has('db.db'))
-    ok = ok and step('맞추기', [colmap, 'spatial_matcher', '--database_path', db, '--SpatialMatching.max_num_neighbors', '40',
-                                '--SpatialMatching.max_distance', '300', '--FeatureMatching.use_gpu', '1'], '2_맞추기.log')
+    feat = lambda g: ([colmap, 'feature_extractor', '--database_path', db, '--image_path', a.photos,        # noqa: E731
+                       '--image_list_path', os.path.join(ws, 'names.txt'),
+                       '--ImageReader.single_camera', '1', '--ImageReader.camera_model', 'OPENCV']
+                      + (['--ImageReader.camera_params', cam] if cam else [])
+                      + ['--FeatureExtraction.max_image_size', str(res_feat), '--FeatureExtraction.use_gpu', g])
+    match = lambda g: [colmap, 'spatial_matcher', '--database_path', db, '--SpatialMatching.max_num_neighbors', '40',   # noqa: E731
+                       '--SpatialMatching.max_distance', '300', '--FeatureMatching.use_gpu', g]
+    ok = step('특징점', feat('1'), '1_특징점.log', check=lambda: has('db.db'))
+    if not ok:                                   # NVIDIA 그래픽카드가 없거나 CUDA 가 안 되는 PC → CPU 로 다시
+        log('  그래픽카드로 안 됨 → CPU 로 다시', fp)
+        if os.path.exists(db):
+            os.remove(db)
+        ok = step('특징점', feat('0'), '1_특징점_cpu.log', check=lambda: has('db.db'))
+    ok2 = ok and step('맞추기', match('1'), '2_맞추기.log')
+    if ok and not ok2:
+        log('  그래픽카드로 안 됨 → CPU 로 다시', fp)
+        ok2 = step('맞추기', match('0'), '2_맞추기_cpu.log')
+    ok = ok2
     # 카메라 풀기: 사진이 많으면 전역(global_mapper · 394장 26분 → 10분 · RTK 어긋남 같음) → RTK 위치로 동 · 북 · 위(m) 맞춤
     #   (전역 결과는 배율 · 방향이 제멋대로라 뒤 단계가 미터 틀에서 돌게) · 실패하거나 90 % 못 붙이면 한 장씩(pose_prior_mapper)
     use_global = a.mapper == 'global' or (a.mapper == 'auto' and len(photos) >= GLOBAL_MIN)
@@ -610,13 +920,39 @@ def main(argv=None):
     ok = ok and step('점구름 준비', [os.path.join(mvs, 'InterfaceCOLMAP.exe'), '-i', '.', '-o', 'scene.mvs', '--image-folder', 'images', '-w', '.'],
                      '5a_넘기기.log', cwd=dense, check=lambda: has('dense', 'scene.mvs')) and \
         step('점구름', [os.path.join(mvs, 'DensifyPointCloud.exe'), 'scene.mvs', '-o', 'scene_cpu.mvs', '--resolution-level', '1',
-                       '--max-resolution', str(res_tex), '--cuda-device', '-2', '-w', '.'], '5_점구름.log', cwd=dense,
+                       '--max-resolution', str(res_tex)] + mvs_cuda_opt(mvs) + ['-w', '.'], '5_점구름.log', cwd=dense,
              check=lambda: has('dense', 'scene_cpu.ply'))
-    ok = ok and step('3D 면', [os.path.join(mvs, 'ReconstructMesh.exe'), 'scene_cpu.mvs', '-o', 'scene_cpu_mesh.mvs', '--cuda-device', '-2',
-                               '--target-face-num', str(TARGET_FACES[a.quality]), '-w', '.'], '6_면.log', cwd=dense,
+    ok = ok and step('3D 면', [os.path.join(mvs, 'ReconstructMesh.exe'), 'scene_cpu.mvs', '-o', 'scene_cpu_mesh.mvs'] + mvs_cuda_opt(mvs) +
+                     ['--target-face-num', str(TARGET_FACES[a.quality]), '-w', '.'], '6_면.log', cwd=dense,
                      check=lambda: has('dense', 'scene_cpu_mesh.ply'))
-    ok = ok and step('질감', [colmap, 'mesh_texturer', '--workspace_path', dense, '--input_path', os.path.join(dense, 'scene_cpu_mesh.ply'),
-                             '--output_path', os.path.join(ws, 'tex_colmap')], '7_질감.log', check=lambda: has('tex_colmap', 'mesh.ply'))
+    # 질감 = 조각마다 (한 장이면 32768 폭까지 커져 그래픽 한도 16384 로 줄어 흐려짐 · 1125 394장)
+    tex_root = os.path.join(ws, 'tex_tiles'); tl_json = os.path.join(tex_root, 'tiles.json')
+
+    def tex_done():
+        try:
+            L = json.load(open(tl_json, encoding='utf-8'))
+            return bool(L) and all(os.path.exists(os.path.join(d, 'mesh.ply')) for d in L)
+        except (OSError, ValueError):
+            return False
+    tex_dirs = []
+    if ok and '질감' in stages['done'] and tex_done():
+        log('질감 · 지난번 것 씀', fp); eta.finish('질감'); tex_dirs = json.load(open(tl_json, encoding='utf-8'))
+    elif ok:
+        stages['done'] = [d for d in stages['done'] if ORDER.index(d) < ORDER.index('질감')]; save_stages()
+        eta.start('질감'); t2 = time.time()
+        shutil.rmtree(tex_root, ignore_errors=True); os.makedirs(tex_root)
+        tiles = split_mesh_tiles(os.path.join(dense, 'scene_cpu_mesh.ply'), os.path.join(ws, 'mesh_tiles'))
+        for k, (p, nf) in enumerate(tiles):
+            d = os.path.join(tex_root, 't%02d' % k); os.makedirs(d)
+            rc = run([colmap, 'mesh_texturer', '--workspace_path', dense, '--input_path', p, '--output_path', d], os.path.join(ws, '7_질감_t%02d.log' % k))
+            if rc != 0 or not os.path.exists(os.path.join(d, 'mesh.ply')):
+                ok = False; log('  조각 %d 질감 실패 (7_질감_t%02d.log)' % (k, k), fp); break
+            tex_dirs.append(d)
+        if ok:
+            json.dump(tex_dirs, open(tl_json, 'w', encoding='utf-8'))
+            stages['done'].append('질감'); save_stages()
+        log('질감 %d초 · 조각 %d개' % (time.time() - t2, len(tex_dirs)), fp)
+        eta.finish('질감')
     if not ok:
         log('매핑 실패 → work 폴더 기록(*.log) 확인', fp); return 4
     eta.start('결과물')
@@ -627,14 +963,25 @@ def main(argv=None):
     good = np.isfinite(E) & np.isfinite(H)
     dsm, filled, x0, y1 = ortho_dsm(E[good], N[good], H[good], rgb[good], outs, cell)
     npt, ntri = landxml_from_dsm(dsm, filled, x0, y1, cell, outs, step_m=1.0)
-    meta = textured_mesh_to_web(ws, s, R, t, os.path.join(out, 'data'))
+    # DTM (땅만 · 설계서 6.1) — 메운 곳(건물 · 비닐하우스 · 숲 밑)은 DTM_땅칸.tif 에 0 으로 따로 표시
+    dtm, ground, cover, dx0, dy1 = dtm_from_points(E[good], N[good], H[good], cell=DTM_CELL)
+    write_raster(outs, 'DTM', dtm, cover, dx0, dy1, DTM_CELL)
+    from PIL import Image
+    Image.fromarray(np.where(cover, ground.astype(np.uint8), 255).astype(np.uint8), 'L').save(os.path.join(outs, 'DTM_땅칸.tif'))
+    _world(outs, 'DTM_땅칸', dx0, dy1, DTM_CELL)
+    nptd, ntrid = landxml_from_dsm(dtm, cover, dx0, dy1, DTM_CELL, outs, step_m=1.0, name='DTM')
+    ground_frac = float(ground.sum() / max(1, cover.sum()))
+    rr, cc = np.nonzero(ground[::4, ::4] & cover[::4, ::4]); rr *= 4; cc *= 4
+    dem_cmp = compare_company_dem(dx0 + (cc + 0.5) * DTM_CELL, dy1 - (rr + 0.5) * DTM_CELL, dtm[rr, cc], log=lambda m: log(m, fp)) if len(rr) else None
+    log('  DTM %.1f m · 땅으로 잰 칸 %.0f%%%s' % (DTM_CELL, 100 * ground_frac, (' · 사내 DEM 과 가운데값 %.2f m (사분위 %.2f ~ %.2f)' % dem_cmp[:3]) if dem_cmp else ''), fp)
+    meta = tiles_to_web(tex_dirs, s, R, t, os.path.join(out, 'data'), max_tex=MAX_TEX)
     proj = {'version': 1, 'kind': 'mapping', 'title': a.title or Path(out).name, 'crs': CRS, 'height': 'EGM2008',
             'origin': meta['origin'], 'quality': a.quality, 'photos': len(photos), 'registered': nreg, 'rtk_rms': round(rms, 3),
             'cell': cell, 'bbox': [float(E[good].min()), float(N[good].min()), float(E[good].max()), float(N[good].max())],
             'made': time.strftime('%Y-%m-%d %H:%M')}
     with open(os.path.join(out, 'data', 'mapping.js'), 'w', encoding='utf-8') as f3:
         f3.write('window.RV_MAPPING = ' + json.dumps(proj, ensure_ascii=False, indent=1) + ';\n')
-    write_info(outs, proj, photos, a, cam, rms, s, npt, ntri, colmap, mvs)
+    write_info(outs, proj, photos, a, cam, rms, s, npt, ntri, colmap, mvs, dtm_info=(nptd, ntrid, ground_frac, dem_cmp), tiles=len(meta['tiles']))
     log('결과물 %d초 · 정사 · DSM (%.2f m) · 지표면 점 %d · 세모 %d · 3D 세모 %d' % (time.time() - t1, cell, npt, ntri, meta['tris']), fp)
     eta.finish('결과물')
     if not a.keep_work:                              # 무거운 중간 자료 지우기 (점 깊이 · 왜곡 편 사진 · 점구름)
@@ -657,7 +1004,7 @@ def _openmvs_ver(dense):
     return 'OpenMVS ?'
 
 
-def write_info(outs, proj, photos, a, cam, rms, scale, npt, ntri, colmap, mvs):
+def write_info(outs, proj, photos, a, cam, rms, scale, npt, ntri, colmap, mvs, dtm_info=None, tiles=0):
     """결과물/정보.txt — 좌표계 · 수직 기준 · 지오이드 · 엔진 판 · 처리 옵션 · 정확도 (설계서 6.5 · 10.3: 산출물마다 기준을 남김)."""
     def ver(cmd):
         try:
@@ -671,7 +1018,7 @@ def write_info(outs, proj, photos, a, cam, rms, scale, npt, ntri, colmap, mvs):
         '3D 매핑 결과물 정보 · %s' % proj['made'],
         '',
         '[좌표]',
-        '수평: EPSG:5186 Korea 2000 / Central Belt 2010 (정사영상 · DSM 의 .prj · .tfw)',
+        '수평: %s %s (정사영상 · DSM · DTM 의 .prj · .tfw · 지표면 LandXML 도 같은 좌표)' % (CRS, CRS_CHOICES.get(CRS, '')),
         '수직: 표고 = 타원체고 − 지오이드 (EGM2008 · PROJ). KNGeoid18(국토지리정보원) 과는 이 지역에서 보통 0.1~0.3 m 다를 수 있음',
         '원점(3D 보기 자료): E %.1f · N %.1f · H %.1f' % tuple(proj['origin']),
         '범위: E %.1f ~ %.1f · N %.1f ~ %.1f' % (proj['bbox'][0], proj['bbox'][2], proj['bbox'][1], proj['bbox'][3]),
@@ -684,6 +1031,11 @@ def write_info(outs, proj, photos, a, cam, rms, scale, npt, ntri, colmap, mvs):
         '정사영상.tif  RGBA · %.2f m 격자 · 투명 = 자료 없음' % proj['cell'],
         'DSM.tif       표고(m) float32 · %.2f m 격자 · -9999 = 자료 없음 · 건물 · 나무 포함한 표면 모델 (DTM 아님)' % proj['cell'],
         '지표면_DSM.xml  LandXML 세모 지표면 (DSM 1 m 솎음 · 점 %d · 세모 %d) — Civil 3D 지표면 가져오기용 · 표면 모델' % (npt, ntri),
+        ('DTM.tif       표고(m) float32 · %.1f m 격자 · 땅만 (점진형 형태학 필터 · 건물 · 비닐하우스 · 나무 뺌) · 땅으로 잰 칸 %.0f %%' % (DTM_CELL, 100 * dtm_info[2])) if dtm_info else '',
+        'DTM_땅칸.tif  1 = 땅으로 잰 칸 · 0 = 메운 칸(건물 밑 · 숲 밑 등 — 낮은 신뢰) · 255 = 자료 없음' if dtm_info else '',
+        ('지표면_DTM.xml  LandXML 세모 지표면 (DTM 1 m · 점 %d · 세모 %d) — Civil 3D 원지반용' % dtm_info[:2]) if dtm_info else '',
+        ('DTM ↔ 사내 수치지도 DEM(5 m 등고선): 가운데값 %.2f m · 사분위 %.2f ~ %.2f m (땅 칸 %d곳 · DEM 이 거칠어 참고용)' % dtm_info[3]) if dtm_info and dtm_info[3] else '',
+        '3D 보기: 조각 %d개 (조각마다 질감 · 보기 전용으로 세모를 줄임 — 측량 계산은 위 래스터 · 지표면)' % tiles if tiles else '',
         '',
         '[처리]',
         '품질 %s · 질감 사진 %d px · 특징점 사진 %d px · 카메라 %s %s %d×%d · 처음 내부표정 %s' % (
