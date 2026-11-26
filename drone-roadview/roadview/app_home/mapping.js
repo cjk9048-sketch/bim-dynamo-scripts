@@ -212,7 +212,7 @@
       las_density: v.lasDensity, las_classify: v.lasClassify, dem_cell: v.demCell, contour_base: v.ctBase, contour_label: v.ctLabel,
       contour_clean: v.ctClean, tin_step: v.tinStep / 100 });
     if (!r || !r.ok) { if (r) toast(r.msg); return; }
-    S.job = r.job; $('mBuild').disabled = true; $('mStop').disabled = false; $('mBar').style.width = '0%'; logShow(true); poll();
+    S.job = r.job; $('mBuild').disabled = true; $('mStop').disabled = false; $('mBar').style.width = '0%'; logShow(true); lockUi(true); poll();
   }
   async function poll() {
     if (!S.job) return;
@@ -222,8 +222,37 @@
     const lg = $('mLog'); lg.textContent = (j.log || []).join('\n'); lg.scrollTop = lg.scrollHeight;
     if (j.state === 'run') { setTimeout(poll, 1000); return; }
     $('mBuild').disabled = false; $('mStop').disabled = true; $('jobPill').classList.add('hide');
-    const out = j.out; S.job = null;
+    const out = j.out; S.job = null; lockUi(false);
     if (j.state === 'done') { $('mStatus').textContent = '끝 · 여는 중…'; const q = await call('open_project', out); if (q && !q.ok) toast(q.msg); }
+  }
+  // 재구성 중 = 사진 · 범위 · 설정 잠금 (JACK 1126 «재구성 시작 누르고 나서도 범위가 그려져» · 바꿔도 이미 도는 처리엔 안 들어감)
+  const LOCK_IDS = ['mAll', 'mArea', 'mNone', 'mPick', 'mPickFiles', 'mOutB', 'mOut', 'mTpl', 'mTplSave', 'mTitle', 'mRen'];
+  function lockUi(on) {
+    $('mp').classList.toggle('running', on);
+    if (on && S.area) { S.area = false; $('mArea').classList.remove('on'); mapEl().classList.remove('area'); $('mBox').classList.add('hide'); }
+    LOCK_IDS.forEach((id) => { const e = $(id); if (e) e.disabled = on; });
+    $$('#mp .tsbody select, #mp .tsbody input, #mp .tsbody button').forEach((e) => { if (!LOCK_IDS.includes(e.id)) e.disabled = on; });
+    if (!on) paint();                                                    // 끈 칸은 다시 잠긴 채로
+  }
+  // i 표시 = 누르면 설명 칸 (JACK 1126 «i 를 눌러도 아무것도 안 나와» · 전에는 마우스를 올려 두어야만 떴음)
+  function tipInit() {
+    const pop = document.createElement('div'); pop.className = 'qpop hide'; document.body.appendChild(pop);
+    let cur = null;
+    const hide = () => { pop.classList.add('hide'); cur = null; };
+    $$('#mp .qi').forEach((q) => { q.dataset.tip = q.title; q.removeAttribute('title'); });
+    document.addEventListener('click', (e) => {
+      const q = e.target.closest && e.target.closest('#mp .qi');
+      if (!q) { if (!pop.contains(e.target)) hide(); return; }
+      e.preventDefault(); e.stopPropagation();
+      if (cur === q) { hide(); return; }
+      cur = q; pop.textContent = q.dataset.tip || ''; pop.classList.remove('hide');
+      const r = q.getBoundingClientRect(), w = pop.offsetWidth, h = pop.offsetHeight;
+      pop.style.left = Math.max(8, Math.min(window.innerWidth - w - 8, r.left + r.width / 2 - w / 2)) + 'px';
+      pop.style.top = (r.bottom + 6 + h > window.innerHeight ? r.top - h - 6 : r.bottom + 6) + 'px';
+    }, true);
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') hide(); });
+    const body = document.querySelector('#mp .tsbody'); if (body) body.addEventListener('scroll', hide);
+    window.addEventListener('resize', hide);
   }
   // ------------------------------------------------------------ 아래 줄 · 윗줄 작은 단추
   function logShow(on) { $('mLogBox').classList.toggle('hide', !on); $('mLogBtn').classList.toggle('on', on); }
@@ -283,13 +312,14 @@
     toast('템플릿 저장 · ' + r.name);
   }
 
-  function open() { $('mp').classList.remove('hide'); $('jobPill').classList.add('hide'); draw(); est(); if (!S.photos.length && !S.job) pick(); }
+  function open() { $('mp').classList.remove('hide'); $('jobPill').classList.add('hide'); draw(); est(); }   // 사진은 오른쪽 «사진 폴더 선택 · 사진 선택» 으로 (열 때 저절로 창 띄우지 않음 · JACK 1126)
   function close() { $('mp').classList.add('hide'); if (S.job) $('jobPill').classList.remove('hide'); }
   function init(info) {
     S.info = info || {}; MAP.key = S.info.vworld || '';
     $('mBack').addEventListener('click', close);
     $('mPick').addEventListener('click', pick);
     $('mPickFiles').addEventListener('click', pickFiles);
+    tipInit();
     $('mBuild').addEventListener('click', build);
     $('mStop').addEventListener('click', async () => { if (S.job) await call('stop_job', S.job); });
     $('mAll').addEventListener('click', () => { S.sel = new Set(S.photos.map((p) => p.name)); S.range = null; draw(); est(); });
@@ -352,6 +382,6 @@
     sysinfo();
     mapInit();
   }
-  window.RVMap = { init, open, close, _S: S, _est: est, _test: { setPhotos: (folder, photos, out) => { S.folder = folder; S.photos = photos; S.sel = new Set(photos.map((p) => p.name)); $('mOut').value = out || ''; MAP.fitted = false; draw(); est(); },
+  window.RVMap = { init, open, close, _S: S, _est: est, _test: { lockUi: (on) => lockUi(on), setPhotos: (folder, photos, out) => { S.folder = folder; S.photos = photos; S.sel = new Set(photos.map((p) => p.name)); $('mOut').value = out || ''; MAP.fitted = false; draw(); est(); },
     take, build, draw, values, apply } };
 })();
