@@ -147,35 +147,80 @@ LIMIT @max";
         cmd.Parameters.AddWithValue("dbsrid", DbSrid);
         cmd.Parameters.AddWithValue("simp", simplifyM);
         cmd.Parameters.AddWithValue("max", maxRows);
-
-        using (var r = cmd.ExecuteReader())
-        {
-            while (r.Read())
-            {
-                try
-                {
-                    double cont = r.GetDouble(0);
-                    string divi = r.IsDBNull(1) ? "" : r.GetString(1);
-                    string wkt = r.IsDBNull(2) ? "" : r.GetString(2);
-                    var pts = ParseLineWkt(wkt, cont);
-                    if (pts.Count < 2) continue;
-                    list.Add(new ContourLine
-                    {
-                        Elev = cont,
-                        IsIndex = string.Equals(divi, "CTD001", System.StringComparison.OrdinalIgnoreCase),
-                        Pts = pts,
-                    });
-                }
-                catch { }
-            }
-        }
+        ReadRows(cmd, list);
         truncated = list.Count >= maxRows;
+        diag = Diag(list, sw.ElapsedMilliseconds);
+        return list;
+    }
+
+    /// <summary>★[JACK 1126 «관로는 선형으로 긴 사업 영역 — 다각형으로 가져오기»] 다각형(도면 좌표계 srid · WKT)으로 자른 등고선.
+    /// <para>네모 질의와 같은 꼴 — 다각형은 <b>매개변수(@wkt)로만</b> 넘긴다(SQL 문자열 이어 붙이기 없음) · <c>&amp;&amp;</c>(GiST 색인 · 다각형 범위) → ST_Intersects → ST_Intersection.
+    /// 네모 질의(<see cref="LoadContours"/>)는 손대지 않았다.</para></summary>
+    public static List<ContourLine> LoadContoursPoly(string wkt, int srid, double simplifyM, int maxRows, out bool truncated, out string diag)
+    {
+        var list = new List<ContourLine>();
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        const string sql = @"
+WITH b AS (
+  SELECT ST_GeomFromText(@wkt, @srid) AS gd,
+         ST_Transform(ST_GeomFromText(@wkt, @srid), @dbsrid) AS g6
+)
+SELECT c.cont, c.divi, ST_AsText(d.geom) AS wkt
+FROM public.contour c, b
+CROSS JOIN LATERAL ST_Dump(
+  ST_Force3D(
+    CASE WHEN @simp > 0
+         THEN ST_SimplifyPreserveTopology(
+                ST_CollectionExtract(ST_Intersection(ST_Transform(c.geom, @srid), b.gd), 2), @simp)
+         ELSE ST_CollectionExtract(ST_Intersection(ST_Transform(c.geom, @srid), b.gd), 2)
+    END, c.cont)) d
+WHERE c.geom && b.g6 AND ST_Intersects(c.geom, b.g6)
+LIMIT @max";
+        using var conn = new NpgsqlConnection(ConnString);
+        conn.Open();
+        using var cmd = new NpgsqlCommand(sql, conn);
+        cmd.Parameters.AddWithValue("wkt", wkt);
+        cmd.Parameters.AddWithValue("srid", srid);
+        cmd.Parameters.AddWithValue("dbsrid", DbSrid);
+        cmd.Parameters.AddWithValue("simp", simplifyM);
+        cmd.Parameters.AddWithValue("max", maxRows);
+        ReadRows(cmd, list);
+        truncated = list.Count >= maxRows;
+        diag = Diag(list, sw.ElapsedMilliseconds);
+        return list;
+    }
+
+    /// <summary>질의 결과(표고 · 구분 · WKT) → 등고선 — 네모 · 다각형 질의가 같이 쓴다.</summary>
+    static void ReadRows(NpgsqlCommand cmd, List<ContourLine> list)
+    {
+        using var r = cmd.ExecuteReader();
+        while (r.Read())
+        {
+            try
+            {
+                double cont = r.GetDouble(0);
+                string divi = r.IsDBNull(1) ? "" : r.GetString(1);
+                string wkt = r.IsDBNull(2) ? "" : r.GetString(2);
+                var pts = ParseLineWkt(wkt, cont);
+                if (pts.Count < 2) continue;
+                list.Add(new ContourLine
+                {
+                    Elev = cont,
+                    IsIndex = string.Equals(divi, "CTD001", System.StringComparison.OrdinalIgnoreCase),
+                    Pts = pts,
+                });
+            }
+            catch { }
+        }
+    }
+
+    internal static string Diag(List<ContourLine> list, long ms)
+    {
         int idx = 0; double zmin = double.MaxValue, zmax = double.MinValue;
         foreach (var c in list) { if (c.IsIndex) idx++; if (c.Elev < zmin) zmin = c.Elev; if (c.Elev > zmax) zmax = c.Elev; }
-        diag = list.Count == 0
-            ? $"등고선 0개 ({sw.ElapsedMilliseconds}ms)"
-            : $"등고선 {list.Count}가닥(계곡선 {idx}) · 표고 {zmin:F0}~{zmax:F0}m · {sw.ElapsedMilliseconds}ms";
-        return list;
+        return list.Count == 0
+            ? $"등고선 0개 ({ms}ms)"
+            : $"등고선 {list.Count}가닥(계곡선 {idx}) · 표고 {zmin:F0}~{zmax:F0}m · {ms}ms";
     }
 
     // ── WKT 파서(ST_Dump로 단순 도형만 오므로 최소 구현) ──────────────────────

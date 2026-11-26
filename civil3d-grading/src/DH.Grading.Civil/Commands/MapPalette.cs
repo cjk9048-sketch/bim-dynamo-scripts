@@ -2,6 +2,7 @@
 using System.Windows;
 using System.Windows.Controls;
 using Autodesk.AutoCAD.ApplicationServices;
+using Autodesk.AutoCAD.EditorInput;
 using Autodesk.AutoCAD.Runtime;
 using Autodesk.AutoCAD.Windows;
 using DH.Grading.Core;
@@ -33,6 +34,45 @@ public static class MapPalette
     /// 명령을 한 줄 태워 <b>명령 문맥 안에서</b> 가져오게 한다 — 이 저장소가 쓰는 방식이다.</para></summary>
     internal static (string DocName, int Epsg, string CsNote,
                      double X0, double Y0, double X1, double Y1, bool Cad)? Pending;
+    /// <summary>★[JACK 1126] 지도 다각형 — 있으면 <see cref="Pending"/>(= 그 외접 네모)와 함께 다각형으로 가져온다 · 만든 길 한 줄.</summary>
+    internal static List<(double X, double Y)>? PendingRing;
+    internal static string PendingHow = "";
+    /// <summary>★[JACK 1126] 도면에서 고르기(R = 노선 띠 · P = 닫힌 선) — 지도 단추가 맡기고 DHCONTOURPICK이 받는다.</summary>
+    internal static (string DocName, int Epsg, string CsNote, string How, bool Cad)? PendingPick;
+
+    /// <summary>지도에 한 줄 알림(거절 · 취소) — 열려 있을 때만.</summary>
+    internal static void Tell(string why) { try { _panel?.Reject(why); } catch { } }
+
+    /// <summary>★[검토 10] 도면에서 고르는 중(지도 단추가 DHCONTOURPICK을 태운 뒤 ~ 그 명령이 끝날 때) — 이때 지도가 또 태우면 그 글이 고르기 프롬프트 입력으로 들어간다 → 받지 않음.</summary>
+    internal static bool Picking;
+
+    /// <summary>★[재검토 · 낮음] DHCONTOURPICK이 실제로 시작했나 — 태운 글을 다른 명령 프롬프트가 받아먹으면 명령이 안 돌아 잠금이 지도를 닫을 때까지 남는다 → 8초 안에 안 시작하면 풂.</summary>
+    internal static bool PickStarted;
+    static int _pickGen;
+
+    /// <summary>고르기 끝(잘됨 · 취소 · 실패 · 예외) — 잠금 풀고 지도 단추도 풂.</summary>
+    internal static void EndPick()
+    {
+        Picking = false;
+        try { _panel?.Unlock(); } catch { }
+    }
+
+    /// <summary>태운 뒤 8초 — 명령이 안 시작했으면 잠금 풂 + 알림(시작했으면 명령 끝의 finally가 풂).</summary>
+    internal static void ArmPickTimeout()
+    {
+        try
+        {
+            int gen = ++_pickGen;   // 앞 고르기의 시계가 새 고르기를 풀지 않게
+            var t = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(8) };
+            t.Tick += (_, _) =>
+            {
+                t.Stop();
+                if (gen == _pickGen && Picking && !PickStarted) { PendingPick = null; EndPick(); Tell("도면 고르기 안 시작됨 → 명령 끝낸 뒤 다시"); }
+            };
+            t.Start();
+        }
+        catch { }
+    }
 
     /// <summary>★[v109] VWorld 키가 바뀌었다 — 열려 있으면 새 키로 다시 연다.</summary>
     internal static void KeyChanged() { try { _panel?.KeyChanged(); } catch { } }
@@ -153,7 +193,8 @@ public static class MapPalette
     /// 그대로 돌아 도면을 고쳐 버렸다 — 창은 닫혔는데 지형이 들어온다.</para></summary>
     internal static void Close()
     {
-        Pending = null;
+        Pending = null; PendingRing = null; PendingPick = null;
+        EndPick();   // 닫으면 잠금도 풂(못 태운 고르기가 잠금을 남기지 않게)
         try { if (_ps != null) _ps.Visible = false; } catch { }
     }
 
@@ -165,7 +206,8 @@ public static class MapPalette
         var doc = AcadApp.DocumentManager.MdiActiveDocument;
         if (doc == null) return;
         var got = Pending;
-        Pending = null;                       // ★한 번만 쓴다 — 남겨 두면 다음에 또 가져온다
+        var ring = PendingRing; string how = PendingHow;
+        Pending = null; PendingRing = null;   // ★한 번만 쓴다 — 남겨 두면 다음에 또 가져온다
         if (got == null)
         {
             doc.Editor.WriteMessage("\n[서버 지표면] 넘겨받은 범위가 없습니다.");
@@ -185,7 +227,8 @@ public static class MapPalette
             }
             // ★크기 관문은 <b>넣는 쪽</b>에서 본다 — 그래야 범위를 주는 길이 늘어도 구멍이 안 생긴다(§50).
             if (!ImportGisCommand.Sane(doc.Editor, "서버 지표면", p.X0, p.Y0, p.X1, p.Y1)) return;
-            bool ok = ImportGisCommand.ImportContourBox(doc, p.Epsg, p.CsNote, p.X0, p.Y0, p.X1, p.Y1);
+            bool ok = ring != null ? ImportGisCommand.ImportContourPoly(doc, p.Epsg, p.CsNote, ring, how)
+                                   : ImportGisCommand.ImportContourBox(doc, p.Epsg, p.CsNote, p.X0, p.Y0, p.X1, p.Y1);
             // ★[JACK 0901 "지적도 체크하면 지적도랑 지표면 같이 불러지게 해"]
             //   <b>같은 범위</b>로 이어서 받는다 — 따로 두 번 고르게 하지 않는다.
             //   ★[v109.1 · 검토 H1] 지적은 이제 VWorld(사내 DB와 따로) — 지표면이 실패해도 받는다.
@@ -202,6 +245,71 @@ public static class MapPalette
             ZoomTo(doc, p.X0, p.Y0, p.X1, p.Y1);
             // ★[JACK 1122 «서버에서 가져오기 끝나고 지도 창 닫히면 원지반 가져오기 창은 다시 열리게 — 도로 다듬기 이어서»]
             if (!SelfCheckLog.Headless) try { DH.Grading.Civil.GroundPalette.Show(); } catch { }
+        }
+    }
+}
+
+public static class MapPickArea
+{
+    /// <summary>★[JACK 1126 «관로는 선형으로 긴 사업 영역»] 도면에서 다각형 범위를 골라 서버 원지반 — (b) 노선 + 폭 → 띠 · (c) 닫힌 선.
+    /// <para>지도 도킹바 [도면 노선] · [도면 닫힌 선]이 태우거나(맡긴 길 · 지적도 체크 따라감) 명령창에서 바로(노선(R) · 닫힌선(P)을 물음).
+    /// 지적도는 다각형의 외접 네모로 받는다(VWorld 질의가 네모).</para></summary>
+    [CommandMethod("DHCONTOURPICK", CommandFlags.Modal)]
+    public static void RunPick()
+    {
+        MapPalette.PickStarted = true;
+        try { RunPickCore(); }
+        finally { MapPalette.EndPick(); }   // ★[검토 10] 지도 단추 잠금 풂 — 잘됨 · 취소 · 실패 · 예외 모두
+    }
+
+    static void RunPickCore()
+    {
+        var doc = AcadApp.DocumentManager.MdiActiveDocument;
+        if (doc == null) return;
+        GradingSettings.SyncToDocument(doc);
+        var ed = doc.Editor;
+        var pk = MapPalette.PendingPick;
+        MapPalette.PendingPick = null;
+        int epsg; string csNote, how; bool cad;
+        if (pk != null)
+        {
+            var q = pk.Value;
+            if (!string.Equals(doc.Name, q.DocName, StringComparison.OrdinalIgnoreCase)) { ed.WriteMessage("\n[서버 지표면] 고른 도면 ≠ 지금 도면 → 가져오지 않음"); MapPalette.Tell("도면 바뀜 → 다시"); return; }
+            epsg = q.Epsg; csNote = q.CsNote; how = q.How; cad = q.Cad;
+        }
+        else
+        {
+            epsg = GradingSettings.ExportEpsg; csNote = $"정지옵션 EPSG:{epsg}"; cad = false;
+            if (!GisDb.CanConnect(out string why)) { ed.WriteMessage("\n[서버 지표면] 사내 DB 접속 실패 → VPN 확인 · " + why); return; }
+            var ko = new PromptKeywordOptions("\n[서버 지표면] 범위") { AllowNone = false };
+            ko.Keywords.Add("R", "R", "노선(R)");
+            ko.Keywords.Add("P", "P", "닫힌선(P)");
+            ko.Keywords.Default = "R";
+            var kr = ed.GetKeywords(ko);
+            if (kr.Status != PromptStatus.OK) return;
+            how = kr.StringResult;
+        }
+        var made = how == "R" ? AreaPick.Route(ed, doc.Database, "서버 지표면") : AreaPick.Closed(ed, doc.Database, "서버 지표면");
+        if (made == null) { ed.WriteMessage("\n[서버 지표면] 취소"); MapPalette.Tell("취소됨"); return; }
+        if (!made.Ok) { ed.WriteMessage("\n[서버 지표면] " + made.Why); MapPalette.Tell(made.Why); return; }
+        string what = (how == "R" ? $"노선 띠 {AreaPick.LastWidth:0.#} m" : "닫힌 선") + $" · 꼭짓점 {made.Ring.Count}" + (made.Note.Length > 0 ? " · " + made.Note : "");
+        ed.WriteMessage("\n[서버 지표면] " + what);
+        var bb = DH.Grading.Core.AreaPolygon.Bbox(made.Ring);
+        bool ok = false;
+        try
+        {
+            ok = ImportGisCommand.ImportContourPoly(doc, epsg, csNote, made.Ring, what);
+            if (cad) ImportGisCommand.ImportParcelBox(doc, epsg, csNote, bb.X0, bb.Y0, bb.X1, bb.Y1, alone: false);
+        }
+        finally
+        {
+            if (pk != null)
+            {
+                MapPalette.Close();
+                if (!SelfCheckLog.Headless) try { DH.Grading.Civil.GroundPalette.Show(); } catch { }
+            }
+            if (ok && !SelfCheckLog.Headless)
+                try { ed.Command("_.ZOOM", "_W", new Autodesk.AutoCAD.Geometry.Point3d(bb.X0 - bb.W * 0.05, bb.Y0 - bb.H * 0.05, 0), new Autodesk.AutoCAD.Geometry.Point3d(bb.X1 + bb.W * 0.05, bb.Y1 + bb.H * 0.05, 0)); } catch { }
         }
     }
 }
@@ -632,10 +740,16 @@ internal sealed class MapPanel : UserControl
     }
 
     /// <summary>지도에 <b>안 됐다고 알린다</b> — 안 그러면 "받는 중"에서 영영 멈춘 것처럼 보인다.</summary>
-    private void Reject(string why)
+    internal void Reject(string why)
     {
         try { _web?.CoreWebView2?.PostWebMessageAsString("reject:" + why); } catch { }
         try { AcadApp.DocumentManager.MdiActiveDocument?.Editor.WriteMessage("\n[서버 지표면] " + why); } catch { }
+    }
+
+    /// <summary>★[검토 10] 도면에서 고르기가 끝남 — 지도 단추 잠금 풂(<c>unlock:</c>).</summary>
+    internal void Unlock()
+    {
+        try { _web?.CoreWebView2?.PostWebMessageAsString("unlock:"); } catch { }
     }
 
     /// <summary>주소 검색 — 통신은 C#에서(키 · 로그), 결과만 <c>geo:[..]</c>로 지도에 돌려준다.</summary>
@@ -671,6 +785,25 @@ internal sealed class MapPanel : UserControl
         if (raw.IndexOf("\"diag\"", StringComparison.Ordinal) >= 0)
         {
             try { DiagLog.Append("\n[지도도킹바] " + raw); } catch { }
+            return;
+        }
+        // ★[검토 10] 도면에서 고르는 중 — 지도가 무엇을 태워도 그 글이 고르기 프롬프트 입력으로 들어간다 → 받지 않음(지도 단추도 잠겨 있음 · 끝나면 풂)
+        if (MapPalette.Picking && (raw.StartsWith("{\"kind\":\"poly\"", StringComparison.Ordinal) || raw.StartsWith("{\"kind\":\"cadpick\"", StringComparison.Ordinal) || raw.StartsWith("{\"kind\":\"box\"", StringComparison.Ordinal)))
+        { Reject("도면에서 고르는 중 → 끝낸 뒤 다시"); return; }
+        // ★[JACK 1126] 지도 다각형 · 도면에서 고르기
+        if (raw.StartsWith("{\"kind\":\"poly\"", StringComparison.Ordinal)) { OnPoly(raw); return; }
+        if (raw.StartsWith("{\"kind\":\"cadpick\"", StringComparison.Ordinal))
+        {
+            var dk = AcadApp.DocumentManager.MdiActiveDocument;
+            if (dk == null) { Reject("열려 있는 도면이 없습니다."); Unlock(); return; }
+            bool cadP = System.Text.RegularExpressions.Regex.IsMatch(raw, @"""cad""\s*:\s*true");
+            string howP = raw.Contains("\"how\":\"P\"") ? "P" : "R";
+            MapPalette.PendingPick = (dk.Name, GradingSettings.ExportEpsg, _csNote, howP, cadP);
+            MapPalette.Picking = true;
+            MapPalette.PickStarted = false;
+            try { dk.SendStringToExecute("DHCONTOURPICK ", true, false, true); }
+            catch { MapPalette.PendingPick = null; MapPalette.EndPick(); throw; }
+            MapPalette.ArmPickTimeout();
             return;
         }
         if (raw.IndexOf("\"cancel\"", StringComparison.Ordinal) >= 0)
@@ -714,6 +847,41 @@ internal sealed class MapPanel : UserControl
         bool alsoCad = System.Text.RegularExpressions.Regex.IsMatch(
             raw, @"""cad""\s*:\s*true");
         MapPalette.Pending = (doc.Name, epsg, csNote, x0, y0, x1, y1, alsoCad);
+        MapPalette.PendingRing = null;
+        doc.SendStringToExecute("DHCONTOURBOX ", true, false, true);
+    }
+
+    /// <summary>★[JACK 1126] 지도 다각형 — 위경도 꼭짓점 → 도면 좌표(정지옵션 원점) → 검사(꼬임 · 크기 · 꼭짓점 상한) → DHCONTOURBOX(다각형).</summary>
+    private void OnPoly(string raw)
+    {
+        var doc = AcadApp.DocumentManager.MdiActiveDocument;
+        if (doc == null) { Reject("열려 있는 도면이 없습니다."); return; }
+        int epsg = GradingSettings.ExportEpsg;
+        var belt = ShapefileWriter.Belt(epsg);
+        if (belt == null) { Reject($"좌표계 EPSG:{epsg}로는 옮기지 못했습니다."); return; }
+        var tm = new List<(double X, double Y)>();
+        try
+        {
+            using var d = System.Text.Json.JsonDocument.Parse(raw);
+            var pts = d.RootElement.GetProperty("box").GetProperty("pts");
+            if (pts.GetArrayLength() > 5000) { Reject("꼭짓점 너무 많음 → 다시 그리기"); return; }
+            foreach (var q in pts.EnumerateArray())
+            {
+                double lon = q[0].GetDouble(), lat = q[1].GetDouble();
+                if (!(lon >= 122 && lon <= 134 && lat >= 32 && lat <= 40)) { Reject("국내 밖 꼭짓점 → 다시 그리기"); return; }
+                var (e, n) = KoreaTm.FromLonLat(lon, lat, belt.Value.cm, belt.Value.fn);
+                tm.Add((e, n));
+            }
+        }
+        catch { Reject("지도가 보낸 값을 읽지 못했습니다."); return; }
+        var made = AreaPolygon.FromPoints(tm);
+        if (!made.Ok) { Reject(made.Why); return; }
+        var bb = AreaPolygon.Bbox(made.Ring);
+        bool alsoCad = System.Text.RegularExpressions.Regex.IsMatch(raw, @"""cad""\s*:\s*true");
+        doc.Editor.WriteMessage($"\n[지도범위] 다각형 꼭짓점 {made.Ring.Count} · {AreaPolygon.Area(made.Ring):N0} ㎡ · 외접 {bb.W:F0}×{bb.H:F0}m" + (made.Note.Length > 0 ? " · " + made.Note : ""));
+        MapPalette.Pending = (doc.Name, epsg, _csNote, bb.X0, bb.Y0, bb.X1, bb.Y1, alsoCad);
+        MapPalette.PendingRing = made.Ring;
+        MapPalette.PendingHow = $"지도 다각형 꼭짓점 {made.Ring.Count}" + (made.Note.Length > 0 ? " · " + made.Note : "");
         doc.SendStringToExecute("DHCONTOURBOX ", true, false, true);
     }
 }

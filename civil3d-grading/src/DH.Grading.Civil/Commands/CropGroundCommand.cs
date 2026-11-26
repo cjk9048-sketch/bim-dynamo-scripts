@@ -38,12 +38,31 @@ public sealed class CropGroundCommand
     /// <summary>화면 없는 Civil 시험 고리 — 드래그 대신 상자를 차례로 꺼내 쓴다(x0 y0 x1 y1 · 다 쓰면 Esc와 같음). 평소엔 null.</summary>
 #pragma warning disable CS0649   // 시험(반사)만 씀
     internal static List<double[]>? _cropBoxesForTest;
+    /// <summary>★[JACK 1126] 시험 고리 — 다각형(반시계 고리)을 차례로 꺼내 쓴다(상자 고리보다 먼저 · 다 쓰고 상자 고리도 없으면 Esc와 같음).</summary>
+    internal static List<List<(double X, double Y)>>? _cropRingsForTest;
 #pragma warning restore CS0649
 
-    /// <summary>남길 범위 드래그(UCS → WCS · 축 정렬). 거짓 = 취소.</summary>
-    static bool AskBox(Editor ed, bool again, out double x0, out double y0, out double x1, out double y1)
+    /// <summary>★[JACK 1126 «원지형 자르기도 다각형으로»] 남길 범위 — 두 모서리(네모 · 그대로) 또는 [노선(R)] 띠 · [닫힌선(P)] 다각형. 거짓 = 취소 · <paramref name="ring"/> null = 네모.</summary>
+    static bool AskArea(Editor ed, Database db, bool again, out double x0, out double y0, out double x1, out double y1, out List<(double X, double Y)>? ring)
+    {
+        ring = null;
+        x0 = y0 = x1 = y1 = 0;
+        if (_cropRingsForTest != null && _cropRingsForTest.Count > 0)
+        {
+            ring = _cropRingsForTest[0]; _cropRingsForTest.RemoveAt(0);
+            var bb = Core.AreaPolygon.Bbox(ring);
+            x0 = bb.X0; y0 = bb.Y0; x1 = bb.X1; y1 = bb.Y1;
+            return true;
+        }
+        if (_cropRingsForTest != null && _cropBoxesForTest == null) return false;
+        return AskBox(ed, db, again, out x0, out y0, out x1, out y1, out ring);
+    }
+
+    /// <summary>남길 범위 드래그(UCS → WCS · 축 정렬) · 또는 노선 · 닫힌 선. 거짓 = 취소.</summary>
+    static bool AskBox(Editor ed, Database db, bool again, out double x0, out double y0, out double x1, out double y1, out List<(double X, double Y)>? ring)
     {
         x0 = y0 = x1 = y1 = 0;
+        ring = null;
         if (_cropBoxesForTest != null)
         {
             if (_cropBoxesForTest.Count == 0) return false;
@@ -51,8 +70,24 @@ public sealed class CropGroundCommand
             x0 = Math.Min(b[0], b[2]); x1 = Math.Max(b[0], b[2]); y0 = Math.Min(b[1], b[3]); y1 = Math.Max(b[1], b[3]);
             return true;
         }
-        var p1 = ed.GetPoint(again ? "\n[원지형 자르기] 빨간 네모를 덮도록 다시 — 첫 번째 모서리 (Esc=끝): "
-                                   : "\n[원지형 자르기] 남길 범위의 첫 번째 모서리 (Esc=취소): ");
+        PromptPointResult p1;
+        while (true)
+        {
+            var po = new PromptPointOptions(again ? "\n[원지형 자르기] 빨간 표시를 덮도록 다시 — 첫 번째 모서리 (Esc=끝)"
+                                                  : "\n[원지형 자르기] 남길 범위의 첫 번째 모서리 (Esc=취소)") { AppendKeywordsToMessage = true };
+            po.Keywords.Add("R", "R", "노선(R)");
+            po.Keywords.Add("P", "P", "닫힌선(P)");
+            p1 = ed.GetPoint(po);
+            if (p1.Status != PromptStatus.Keyword) break;
+            var made = p1.StringResult == "R" ? AreaPick.Route(ed, db, "원지형 자르기") : AreaPick.Closed(ed, db, "원지형 자르기");
+            if (made == null) return false;
+            if (!made.Ok) { ed.WriteMessage("\n[원지형 자르기] " + made.Why); continue; }
+            if (made.Note.Length > 0) ed.WriteMessage("\n[원지형 자르기] " + made.Note);
+            ring = made.Ring;
+            var bb = Core.AreaPolygon.Bbox(ring);
+            x0 = bb.X0; y0 = bb.Y0; x1 = bb.X1; y1 = bb.Y1;
+            return true;
+        }
         if (p1.Status != PromptStatus.OK) return false;
         var p2 = ed.GetCorner(new PromptCornerOptions("\n반대쪽 모서리: ", p1.Value));
         if (p2.Status != PromptStatus.OK) return false;
@@ -73,7 +108,10 @@ public sealed class CropGroundCommand
         try
         {
             var n = cov.Need;
-            if (!n.IsNone)
+            // ★[JACK 1126] 다각형 자르기 — 필요한 꼴 = 설계 자리 볼록 껍질 + 5 m(다각형 꼴)
+            if (cov.NeedRing is { Count: >= 3 } nr)
+                marks.Add(PickMark.PaintPath(doc, AreaPick.P3(nr), true));
+            else if (!n.IsNone)
                 marks.Add(PickMark.PaintPath(doc, new List<Core.Point3> { new(n.X0, n.Y0, 0), new(n.X1, n.Y0, 0), new(n.X1, n.Y1, 0), new(n.X0, n.Y1, 0) }, true));
             int k = 0;
             foreach (var o in cov.Outs)
@@ -103,7 +141,7 @@ public sealed class CropGroundCommand
             while (true)
             {
                 // ── ① 남길 범위를 드래그로 ────────────────────────────────────────
-                if (!AskBox(ed, again, out double x0, out double y0, out double x1, out double y1))
+                if (!AskArea(ed, db, again, out double x0, out double y0, out double x1, out double y1, out var ring))
                 {
                     ed.WriteMessage(again ? "\n[원지형 자르기] 끝 — 아무것도 바꾸지 않았습니다" : "\n[원지형 자르기] 취소");
                     job.DoneInfo(again ? "거절 뒤 끝(도면 그대로)" : "취소");
@@ -149,7 +187,8 @@ public sealed class CropGroundCommand
                     job.Done(false, "범위에 지형 없음");
                     return;
                 }
-                ed.WriteMessage($"\n[원지형 자르기] {x1 - x0:F0}×{y1 - y0:F0}m 밖의 지표면을 모두 숨깁니다…");
+                ed.WriteMessage(ring != null ? $"\n[원지형 자르기] 다각형 {Core.AreaPolygon.Area(ring):N0}㎡ 밖의 지표면을 모두 숨깁니다…"
+                                             : $"\n[원지형 자르기] {x1 - x0:F0}×{y1 - y0:F0}m 밖의 지표면을 모두 숨깁니다…");
 
                 // ── ③ 설계 자리 검사 → 대상 면 모두 네 띠 · 재작성 · 확인(어긋나면 통째로 물림) ─────
                 var box = new Core.GroundCrop.Box(x0, y0, x1, y1);
@@ -157,8 +196,16 @@ public sealed class CropGroundCommand
                 //   다른 원지반 · 정지 명령처럼 자동 팝업만 끔(기록은 남음 · EVENTVIEWER로 열람)
                 GroundCropBuilder.Result res;
                 var evPrev = EventViewerMute.Begin();
-                try { res = GroundCropBuilder.Run(doc, box, gid); }
+                try { res = GroundCropBuilder.Run(doc, box, gid, ring); }
                 finally { EventViewerMute.End(evPrev); }
+                // ★[검토 1] 다각형 — 위 네모 검사는 외접 네모라 다각형 밖 · 네모 안 지형도 통과 → 같은 셈(무게중심이 다각형 안인 보이는 세모)으로 지형 없으면 거절(세모는 자르기가 이미 읽어 그 자리에서 잼)
+                if (res.NoGround)
+                {
+                    Refuse(ed, "그 다각형에는 지형이 없습니다 — 원본은 그대로 두었습니다.\n\n"
+                             + $"지형은 {gext.MinPoint.X:F0},{gext.MinPoint.Y:F0} ~ {gext.MaxPoint.X:F0},{gext.MaxPoint.Y:F0} 에 있습니다.");
+                    job.Done(false, "다각형에 지형 없음");
+                    return;
+                }
                 if (res.Refused && res.Cover != null)
                 {
                     // ★[Q1 · JACK 1103 «설계된 자리를 자르면 거절»] 아무것도 안 바꿈 · 빨간 표시를 남긴 채 다시 묻기(Esc = 끝)
@@ -166,7 +213,8 @@ public sealed class CropGroundCommand
                     string items = string.Join(" · ", res.Red.Take(6)) + (res.Red.Count > 6 ? $" 외 {res.Red.Count - 6}" : "");
                     ed.WriteMessage($"\n[원지형 자르기] ⚠설계 자리가 상자 밖 — {items}");
                     if (!SelfCheckLog.Headless)
-                        AcadApp.ShowAlertDialog("원지형 자르기 — 설계된 자리(빨간 선)가 상자 밖으로 나갑니다.\n\n빨간 네모를 덮도록 다시 그려 주세요.\n\n" + items);
+                        AcadApp.ShowAlertDialog(ring != null ? "원지형 자르기 — 설계 자리(빨간 선) 다각형 밖\n\n빨간 꼴을 덮도록 다시 그리기\n\n" + items
+                                                             : "원지형 자르기 — 설계된 자리(빨간 선)가 상자 밖으로 나갑니다.\n\n빨간 네모를 덮도록 다시 그려 주세요.\n\n" + items);
                     job.Note("거절 — " + res.Why);
                     again = true;
                     continue;
@@ -188,7 +236,7 @@ public sealed class CropGroundCommand
                 }
 
                 // ── ④ 박스 <b>밖에 통째로</b> 있는 원본 선·점 정리(원지반 자료만 · 지우지 않고 끈 레이어로) ──────
-                int wiped = res.Nothing ? 0 : WipeOutside(doc, db, x0, y0, x1, y1);
+                int wiped = res.Nothing ? 0 : WipeOutside(doc, db, x0, y0, x1, y1, ring);
 
                 DrawOrderFix.Apply(db);
                 ed.Regen();
@@ -196,6 +244,7 @@ public sealed class CropGroundCommand
 
                 string done = res.Done + (wiped > 0 ? $" · 범위 밖 원본 {wiped:N0}개 껐음(지우지 않음)" : "");
                 ed.WriteMessage($"\n[원지형 자르기] {done}" + (res.GrowNote.Length > 0 ? "\n[원지형 자르기] " + res.GrowNote : ""));
+                if (res.PieceNote.Length > 0) ed.WriteMessage("\n[원지형 자르기] ⚠" + res.PieceNote);   // ★[검토 4]
                 if (res.FinalNote.StartsWith("⚠")) ed.WriteMessage("\n[원지형 자르기] " + res.FinalNote);
                 // ★[JACK 1124] 공통설정 «원지반 표시 = 표고 표시» — 자른 원지반으로(꺼져 있으면 기록 한 번 읽고 끝)
                 string ge = GroundElevLabels.Sync(db);
@@ -325,9 +374,26 @@ public sealed class CropGroundCommand
 
     /// <summary>박스 <b>밖에 통째로</b> 있는 원본 등고선·표고점을 지운다.
     /// <para>걸쳐 있는 것은 <b>남긴다</b> — 자른 경계에서 지형이 어떻게 이어졌는지 남겨 두는 편이 낫다.</para></summary>
-    private static int WipeOutside(Document doc, Database db, double x0, double y0, double x1, double y1)
+    private static int WipeOutside(Document doc, Database db, double x0, double y0, double x1, double y1, List<(double X, double Y)>? ring = null)
     {
         int n = 0;
+        // ★[JACK 1126] 다각형 — 외접 네모 안에 걸친 것도 다각형과 안 닿으면 밖(등고선 = 꺾은선 · 점 = 자리로 잼)
+        var poly = ring != null ? Core.AreaPolygon.ToPolygon(ring) : null;
+        // ★[검토 5] 등고선 수천 개를 한 다각형에 견줌 — prepared 한 번 만들어 씀
+        var prep = poly != null ? NetTopologySuite.Geometries.Prepared.PreparedGeometryFactory.Prepare(poly) : null;
+        bool OutsidePoly(Entity e)
+        {
+            var gf = poly!.Factory;
+            if (e is DBPoint dp) return !prep!.Covers(gf.CreatePoint(new NetTopologySuite.Geometries.Coordinate(dp.Position.X, dp.Position.Y)));
+            var cs = new List<NetTopologySuite.Geometries.Coordinate>();
+            if (e is Polyline3d p3) { foreach (ObjectId v in p3) if (v.GetObject(OpenMode.ForRead) is PolylineVertex3d pv) cs.Add(new(pv.Position.X, pv.Position.Y)); }
+            else if (e is Polyline pl) { for (int i = 0; i < pl.NumberOfVertices; i++) { var q = pl.GetPoint3dAt(i); cs.Add(new(q.X, q.Y)); } }   // ★[검토 2] WCS(GetPoint2dAt = OCS — 법선 −Z면 x가 뒤집힘)
+            else if (e is Line ln) { cs.Add(new(ln.StartPoint.X, ln.StartPoint.Y)); cs.Add(new(ln.EndPoint.X, ln.EndPoint.Y)); }
+            else return false;   // 모르는 꼴은 남김(걸친 것으로 봄)
+            if (cs.Count == 0) return false;
+            NetTopologySuite.Geometries.Geometry g = cs.Count == 1 ? gf.CreatePoint(cs[0]) : gf.CreateLineString(cs.ToArray());
+            return !prep!.Intersects(g);
+        }
         try
         {
             using var dl = doc.LockDocument();
@@ -346,6 +412,7 @@ public sealed class CropGroundCommand
                     var ext = e.GeometricExtents;
                     if (ext.MaxPoint.X < x0 || ext.MinPoint.X > x1 ||
                         ext.MaxPoint.Y < y0 || ext.MinPoint.Y > y1) doomed.Add(id);
+                    else if (poly != null && OutsidePoly(e)) doomed.Add(id);
                 }
                 catch { }
             }

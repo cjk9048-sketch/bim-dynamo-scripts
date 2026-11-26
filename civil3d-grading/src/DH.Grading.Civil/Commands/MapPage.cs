@@ -96,8 +96,12 @@ internal static class MapPage
   <div id='slist' style='display:none;position:absolute;left:0;right:0;top:100%;z-index:1000;background:#2b3242;border:1px solid #4a5268;border-radius:6px;max-height:220px;overflow:auto'></div>
  </div>
  <div class='row'>
-  <span><b>모서리 2곳</b> 클릭</span>
+  <label><input type='radio' name='mode' value='box' checked> 네모</label>
+  <label id='mpoly' style='display:none'><input type='radio' name='mode' value='poly'> 다각형</label>
+  <span id='hint'><b>모서리 2곳</b> 클릭</span>
   <button id='clr'>다시 찍기</button>
+  <button id='rt' style='display:none' title='도면의 노선(폴리선 · 선 · 호 · 선형) + 폭 → 띠'>도면 노선</button>
+  <button id='cl' style='display:none' title='도면의 닫힌 폴리선'>도면 닫힌 선</button>
   <label title='지도에만 표시 · 도면에는 안 들어옴'><input type='checkbox' id='cadview'> 지적 보기</label>
   <span id='cadmsg' style='color:#ffb020;display:none'>확대시 표시</span>
   <label title='같은 범위의 지적도를 도면으로 가져옴'><input type='checkbox' id='cad'> 지적도 가져오기</label>
@@ -350,6 +354,7 @@ internal static class MapPage
     return {w:w,h:h};
   }
   map.on('mousemove',function(e){
+    if(!quit&&mode==='poly'&&!poly&&pv.length){ polyDraw(e.latlng); return; }
     if(quit||p1===null) return;
     var s=drawLive(L.latLngBounds(p1,e.latlng));
     info.textContent=Math.round(s.w)+'m × '+Math.round(s.h)+'m · 클릭하면 확정';
@@ -363,11 +368,87 @@ internal static class MapPage
     lblClear();
     p1=null;box=null;send.disabled=true;info.textContent='범위 없음';
     pickOn(true);
+    polyReset();
   }
+  // ★[JACK 1126 «다각형으로 가져오기»] 다각형 모드 — 클릭 = 꼭짓점 · 첫 점 클릭/더블클릭 = 닫기 · Backspace = 되돌리기 · Esc/오른쪽 = 다시
+  var mode='box', pv=[], pline=null, prub=null, ppoly=null, poly=null, pdots=[];
+  // ★[검토 10] 도면에서 고르는 동안 지도 단추 잠금 — 또 누르면 'DHCONTOURPICK '이 고르기 프롬프트 입력으로 들어감 · CAD가 'unlock:'으로 풂(취소 · 실패 · 예외 길도)
+  var picking=false;
+  function pickLock(v){ picking=v; ['rt','cl'].forEach(function(id){ var b=document.getElementById(id); if(b) b.disabled=v; }); send.disabled=v||!(box||poly); }
+  function polyReset(){
+    [pline,prub,ppoly].forEach(function(l){ if(l) map.removeLayer(l); });
+    pdots.forEach(function(d){ map.removeLayer(d); });
+    pline=prub=ppoly=null; pdots=[]; pv=[]; poly=null;
+  }
+  function polyArea(a){
+    if(a.length<3) return 0;
+    var lat0=a[0].lat, k=111320*Math.cos(lat0*Math.PI/180), s2=0;
+    for(var i=0,j=a.length-1;i<a.length;j=i++){ s2+=(a[j].lng*k)*(a[i].lat*111320)-(a[i].lng*k)*(a[j].lat*111320); }
+    return Math.abs(s2/2);
+  }
+  function segX(a,b,c,d){
+    function o(p,q,r){ var v=(q.lng-p.lng)*(r.lat-p.lat)-(q.lat-p.lat)*(r.lng-p.lng); return v>0?1:(v<0?-1:0); }
+    return o(a,b,c)*o(a,b,d)<0 && o(c,d,a)*o(c,d,b)<0;
+  }
+  function polyTwisted(a){
+    var n=a.length;
+    for(var i=0;i<n;i++) for(var j=i+1;j<n;j++){
+      if(j===i+1||(i===0&&j===n-1)) continue;
+      if(segX(a[i],a[(i+1)%n],a[j],a[(j+1)%n])) return true;
+    }
+    return false;
+  }
+  function polyDraw(mouse){
+    var pts=pv.slice(); if(mouse) pts.push(mouse);
+    if(pline) pline.setLatLngs(pv); else if(pv.length) pline=L.polyline(pv,{color:'#ffb020',weight:2,interactive:false}).addTo(map);
+    if(mouse&&pv.length){ var rb=[pv[pv.length-1],mouse]; if(pv.length>=2) rb.push(pv[0]);
+      if(prub) prub.setLatLngs(rb); else prub=L.polyline(rb,{color:'#ffb020',weight:1,dashArray:'4 4',interactive:false}).addTo(map); }
+    info.textContent='꼭짓점 '+pv.length+(pts.length>=3?' · '+fmtArea(polyArea(pts)):'')+' · 첫 점/더블클릭 = 닫기 · Backspace = 되돌리기';
+  }
+  function polyDot(ll){ pdots.push(L.circleMarker(ll,{radius:4,color:'#ffb020',weight:2,fillOpacity:0.6,interactive:false}).addTo(map)); }
+  function polyClose(){
+    if(pv.length<3){ info.textContent='꼭짓점 3개 이상'; return; }
+    if(polyTwisted(pv)){ info.textContent='다각형 꼬임 → 다시 그리기'; return; }
+    poly=pv.slice();
+    if(prub){ map.removeLayer(prub); prub=null; }
+    if(pline){ map.removeLayer(pline); pline=null; }
+    ppoly=L.polygon(poly,{color:'#ffb020',weight:2,fillOpacity:0.08,interactive:false}).addTo(map);
+    info.textContent='꼭짓점 '+poly.length+' · '+fmtArea(polyArea(poly));
+    send.disabled=picking;
+  }
+  function polyClick(e){
+    if(poly){ reset(); }
+    if(pv.length>=3){
+      var a=map.latLngToContainerPoint(pv[0]), b=map.latLngToContainerPoint(e.latlng);
+      if(a.distanceTo(b)<10){ polyClose(); return; }
+    }
+    pv.push(e.latlng); polyDot(e.latlng); polyDraw(null);
+  }
+  function setMode(m){
+    mode=m; reset();
+    if(m==='poly'){ map.doubleClickZoom.disable(); document.getElementById('hint').textContent='꼭짓점 클릭'; }
+    else { map.doubleClickZoom.enable(); document.getElementById('hint').innerHTML='<b>모서리 2곳</b> 클릭'; }
+  }
+  document.querySelectorAll(""input[name='mode']"").forEach(function(r){ r.addEventListener('change',function(){ setMode(this.value); }); });
+  map.on('dblclick',function(e){
+    if(mode!=='poly'||poly) return;
+    // 더블클릭은 클릭 두 번을 먼저 보낸다 — 거의 같은 자리 꼭짓점 하나를 걷고 닫음
+    if(pv.length>=2){ var a=map.latLngToContainerPoint(pv[pv.length-1]), b=map.latLngToContainerPoint(pv[pv.length-2]);
+      if(a.distanceTo(b)<6){ pv.pop(); var d=pdots.pop(); if(d) map.removeLayer(d); } }
+    polyClose();
+  });
+  document.addEventListener('keydown',function(e){
+    if(mode!=='poly'||poly) return;
+    // ★[검토 7] 검색칸 등 글 칸에 포커스가 있으면 그 칸의 Backspace · Esc(꼭짓점을 지우지 않음)
+    var t=e.target; if(t&&(t.tagName==='TEXTAREA'||t.isContentEditable||(t.tagName==='INPUT'&&!/^(radio|checkbox|button)$/i.test(t.type||'')))) return;
+    if(e.key==='Backspace'&&pv.length){ e.preventDefault(); pv.pop(); var d=pdots.pop(); if(d) map.removeLayer(d); if(!pv.length) polyReset(); polyDraw(null); }
+    if(e.key==='Escape'){ reset(); }
+  });
   document.getElementById('clr').addEventListener('click',reset);
 
   map.on('click',function(e){
     if(quit) return;
+    if(mode==='poly'){ polyClick(e); return; }
     if(p1===null){
       reset();
       p1=e.latlng;
@@ -385,12 +466,20 @@ internal static class MapPage
     p1=null;
     if(w<1||h<1){ info.textContent='범위 너무 작음'; send.disabled=true; return; }
     info.textContent='약 '+Math.round(w)+'m × '+Math.round(h)+'m';
-    send.disabled=false;
+    send.disabled=picking;
     // ★[검토 0902] 여기서 손바닥으로 바꾸면 안 된다 — 바로 위에서 p1=null 로 되돌려
     //   <b>다음 클릭이 곷바로 새 찍기</b>다. 커서만 ‘끌기’라고 말하면 거짓이 된다.
   });
 
   send.addEventListener('click',function(){
+    if(picking) return;
+    if(mode==='poly'&&poly){
+      send.disabled=true; info.textContent='전송 중…';
+      tell('poly',{pts:poly.map(function(q){ return [q.lng,q.lat]; }),cad:document.getElementById('cad').checked},
+        function(){ info.textContent='가져오는 중…'; },
+        function(){ info.textContent='전송 실패'; send.disabled=false; });
+      return;
+    }
     if(!box) return;
     send.disabled=true; info.textContent='전송 중…'; TS.sending=true;
     // ★[JACK 0901] 지적도 체크는 <b>지도 위 표시</b>이자 <b>같이 가져올지</b>의 뜻이다.
@@ -416,6 +505,16 @@ internal static class MapPage
     try{ window.chrome.webview.postMessage(JSON.stringify({kind:'search',q:q})); }catch(e){ smsg.textContent='검색 실패 — 인터넷 · 키 확인'; }
   }
   if(EMBED){
+    document.getElementById('mpoly').style.display='inline';
+    ['rt','cl'].forEach(function(id){
+      var b=document.getElementById(id); b.style.display='inline-block';
+      b.addEventListener('click',function(){
+        if(quit||picking) return;
+        pickLock(true);
+        info.textContent='도면에서 고르기…';
+        tell('cadpick',{how:(id==='rt'?'R':'P'),cad:document.getElementById('cad').checked},null,function(){ info.textContent='전송 실패'; pickLock(false); });
+      });
+    });
     document.getElementById('srow').style.display='flex';
     document.getElementById('sbtn').addEventListener('click',doSearch);
     sq.addEventListener('keydown',function(e){ if(e.key==='Enter') doSearch(); });
@@ -439,7 +538,8 @@ internal static class MapPage
     window.chrome.webview.addEventListener('message',function(ev){
       var m=(typeof ev.data==='string')?ev.data:'';
       if(m.indexOf('geo:')===0){ onGeo(m.substring(4)); return; }
-      if(m.indexOf('reject:')===0){ info.textContent=m.substring(7); send.disabled=!box; TS.sending=false; }
+      if(m.indexOf('unlock:')===0){ pickLock(false); return; }
+      if(m.indexOf('reject:')===0){ info.textContent=m.substring(7); if(!picking) send.disabled=!(box||poly); TS.sending=false; }
     });
   }
 })();

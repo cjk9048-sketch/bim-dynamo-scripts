@@ -142,7 +142,11 @@ public static class GroundCrop
     // ══════════════════════════════ 설계 자리 ══════════════════════════════
 
     /// <summary>설계 자리 항목 하나 — 이름표(«계획부지 1» · «진입도로 DH도로_1» · «횡단 표본선 …») · 꺾은선(닫힘이면 첫 점으로 돌아옴).</summary>
-    public sealed record Item(string Label, IReadOnlyList<(double X, double Y)> Pts, bool Closed);
+    public sealed record Item(string Label, IReadOnlyList<(double X, double Y)> Pts, bool Closed)
+    {
+        /// <summary>★[JACK 1126 다각형 자르기 · 검토 3] <see cref="Pts"/>가 꺾은선이 아니라 <b>따로 선 변</b>(두 점씩 a0 b0 a1 b1 …) — 설계 면의 겹치지 않는 세모 변(다각형 길만 · 네모 길은 늘 거짓).</summary>
+        public bool Edges { get; init; }
+    }
 
     /// <summary>설계 자리 상자 D = 모든 항목 꼭짓점 범위(빈 목록 = 없음).</summary>
     public static Box DesignBox(IEnumerable<Item> items)
@@ -156,7 +160,11 @@ public static class GroundCrop
     public sealed record Out(string Label, double Length, double Far, List<List<(double X, double Y)>> Parts);
 
     /// <summary>검사 결과 — 통과 · 필요한 가장 작은 상자(D + 여유) · 나간 항목.</summary>
-    public sealed record Cover(bool Ok, Box Need, List<Out> Outs);
+    public sealed record Cover(bool Ok, Box Need, List<Out> Outs)
+    {
+        /// <summary>★[JACK 1126 다각형 자르기] 필요한 꼴(설계 자리 볼록 껍질 + 여유) — 다각형 길만(네모 길은 null · <see cref="Need"/> 네모).</summary>
+        public List<(double X, double Y)>? NeedRing { get; init; }
+    }
 
     /// <summary>★[계획 4장] <b>«상자 ⊇ D + 여유»</b> — 축 정렬 네모라 «모든 꼭짓점이 상자 − 여유 안»과 같다(볼록이라 꼭짓점이 안이면 선분도 안 · 근사 없음).
     /// 나간 항목마다 «상자 − 여유» 밖 조각과 그 길이(점 하나뿐인 항목은 길이 0 · 나간 거리로 보임). 항목 없음 = 통과.</summary>
@@ -247,10 +255,16 @@ public static class GroundCrop
     public static string InsideHash(IEnumerable<Tri> tris, Box box, double margin = Margin)
     {
         var inner = box.Grow(-margin);
+        return InsideHash(tris, inner.Contains);
+    }
+
+    /// <summary>★[JACK 1126 다각형 자르기] 안쪽 지문 — <paramref name="inside"/>(이미 여유만큼 줄인 꼴)에 세 꼭짓점이 다 든 세모. 네모 길은 위 함수가 «상자 − 여유»로 이것을 부른다(같은 셈).</summary>
+    public static string InsideHash(IEnumerable<Tri> tris, Func<double, double, bool> inside)
+    {
         ulong sum = 0, x = 0; int n = 0;
         foreach (var t in tris)
         {
-            if (!inner.Contains(t.A.X, t.A.Y) || !inner.Contains(t.B.X, t.B.Y) || !inner.Contains(t.C.X, t.C.Y)) continue;
+            if (!inside(t.A.X, t.A.Y) || !inside(t.B.X, t.B.Y) || !inside(t.C.X, t.C.Y)) continue;
             ulong h = TriKey(t);
             unchecked { sum += h; }
             x ^= h; n++;

@@ -108,6 +108,23 @@ public sealed class ImportGisCommand
     /// <b>받아서 그리는 일은 한 벌</b>이다(§50).</para></summary>
     internal static bool ImportContourBox(Document doc, int epsg, string csNote,
                                           double x0, double y0, double x1, double y1)
+        => ImportContourArea(doc, epsg, csNote, x0, y0, x1, y1, null, "");
+
+    /// <summary>★[JACK 1126 «다각형으로 가져오기»] 다각형 범위(도면 좌표 · 반시계 고리)로 등고선을 받아 원지반까지 — 네모와 같은 길(질의 · 테두리 맞춤만 다각형).
+    /// <paramref name="how"/> = 다각형을 만든 길 한 줄(지도 · 노선 띠 · 닫힌 선 — 알림 · 로그에 적음).</summary>
+    internal static bool ImportContourPoly(Document doc, int epsg, string csNote, List<(double X, double Y)> ring, string how)
+    {
+        var bb = AreaPolygon.Bbox(ring);
+        return ImportContourArea(doc, epsg, csNote, bb.X0, bb.Y0, bb.X1, bb.Y1, ring, how);
+    }
+
+    /// <summary>시험 고리 — 서버 대신 이 등고선(도면 좌표 · 표고 · 계곡선)을 다각형으로 잘라 넣는다(화면 없는 Civil · 사내 DB에 안 닿을 때). 평소엔 null.</summary>
+#pragma warning disable CS0649
+    internal static List<(double Elev, bool Index, IReadOnlyList<(double X, double Y)> Pts)>? _contoursForTest;
+#pragma warning restore CS0649
+
+    static bool ImportContourArea(Document doc, int epsg, string csNote,
+                                  double x0, double y0, double x1, double y1, List<(double X, double Y)>? ring, string how)
     {
         Editor ed = doc.Editor;
         Database db = doc.Database;
@@ -122,7 +139,19 @@ public sealed class ImportGisCommand
             bool cut; string diag;
             try
             {
-                lines = GisDb.LoadContours(x0, y0, x1, y1, epsg, SimplifyM, MaxContourRows, out cut, out diag);
+                if (ring == null) lines = GisDb.LoadContours(x0, y0, x1, y1, epsg, SimplifyM, MaxContourRows, out cut, out diag);
+                else if (_contoursForTest != null)
+                {
+                    var swT = System.Diagnostics.Stopwatch.StartNew();
+                    lines = AreaPolygon.ClipLines(_contoursForTest, ring).Take(MaxContourRows).Select(c => new GisDb.ContourLine
+                    {
+                        Elev = c.Elev, IsIndex = c.Index,
+                        Pts = new Point3dCollection(c.Pts.Select(q => new Point3d(q.X, q.Y, c.Elev)).ToArray()),
+                    }).ToList();
+                    cut = lines.Count >= MaxContourRows;
+                    diag = GisDb.Diag(lines, swT.ElapsedMilliseconds) + " · 시험 등고선";
+                }
+                else lines = GisDb.LoadContoursPoly(AreaPolygon.Wkt(ring), epsg, SimplifyM, MaxContourRows, out cut, out diag);
             }
             catch (System.Exception dex) { Refuse(ed, "등고선", "등고선을 받지 못했습니다.\n" + GisDb.Clean(dex.Message)); return false; }
 
@@ -173,7 +202,8 @@ public sealed class ImportGisCommand
             foreach (var g in GroundSet.List(db, legacy: false))
                 if (!before.Contains(g.Id))
                 {
-                    string fit = FitToBox(db, g.Id, x0, y0, x1, y1, lines.SelectMany(l => l.Pts.Cast<Point3d>()));
+                    var vs = lines.SelectMany(l => l.Pts.Cast<Point3d>());
+                    string fit = ring == null ? FitToBox(db, g.Id, x0, y0, x1, y1, vs) : FitToPolygon(db, g.Id, ring, vs);
                     if (fit.Length > 0) surfNote += " · " + fit;
                 }
             }
@@ -183,11 +213,15 @@ public sealed class ImportGisCommand
             DrawOrderFix.Apply(db);
             ed.Regen();
 
-            string done = $"등고선 {ids.Count}가닥 · {surfNote}" + (cut ? $" · ⚠상한 {MaxContourRows} 도달(범위 축소 권장)" : "");
+            // ★[JACK 1126] 다각형 — 넓이 · 외접 네모 대비(가벼워진 만큼)
+            string area = ring == null ? "" : string.Format(System.Globalization.CultureInfo.InvariantCulture, "다각형 {0:N0} ㎡ = 네모의 {1:F0} %{2}",
+                AreaPolygon.Area(ring), 100 * AreaPolygon.Area(ring) / Math.Max(1e-9, (x1 - x0) * (y1 - y0)), how.Length > 0 ? " · " + how : "");
+            string done = $"등고선 {ids.Count}가닥 · {surfNote}" + (area.Length > 0 ? " · " + area : "") + (cut ? $" · ⚠상한 {MaxContourRows} 도달(범위 축소 권장)" : "");
             ed.WriteMessage($"\n[등고선] {done}");
-            AcadApp.ShowAlertDialog("등고선 가져오기 완료\n\n" + diag + "\n" + surfNote +
-                (cut ? "\n\n⚠ 자료가 많아 일부만 가져왔습니다 — 범위를 좁혀 다시 받으세요." : ""));
-            try { DiagLog.Append($"\n■ DHCONTOUR — {diag} · {surfNote} · {csNote}\n"); } catch { }
+            if (!SelfCheckLog.Headless)
+                AcadApp.ShowAlertDialog("등고선 가져오기 완료\n\n" + diag + "\n" + surfNote + (area.Length > 0 ? "\n" + area : "") +
+                    (cut ? "\n\n⚠ 자료가 많아 일부만 가져왔습니다 — 범위를 좁혀 다시 받으세요." : ""));
+            try { DiagLog.Append($"\n■ DHCONTOUR — {diag} · {surfNote}" + (area.Length > 0 ? " · " + area : "") + $" · {csNote}\n"); } catch { }
             return true;
         }
         catch (System.Exception ex)
@@ -202,70 +236,32 @@ public sealed class ImportGisCommand
     /// 가까운 등고선 꼭짓점 높이(거리 가중 8점)로 점을 채우고, 상자를 바깥 경계로 넣는다. 못 하면 알림 글(지표면은 그대로).</summary>
     internal static string FitToBox(Database db, ObjectId sid, double x0, double y0, double x1, double y1, IEnumerable<Point3d> verts)
     {
+        if (x1 <= x0 || y1 <= y0) return "";
+        double per = 2 * ((x1 - x0) + (y1 - y0));
+        var ring = new List<(double X, double Y)> { (x0, y0), (x1, y0), (x1, y1), (x0, y1) };
+        return FitToRing(db, sid, ring, verts, Math.Clamp(per / 800, 1, 10), rectProbe: true, "네모");
+    }
+
+    /// <summary>★[JACK 1126] 다각형에 꼭 맞춤 — 테두리(둘레/800 · 1 ~ 10 m 간격)에서 지표면 없는 자리만 채우고 다각형을 바깥 경계로(오목한 빈 곳의 가짜 세모를 걷음).</summary>
+    internal static string FitToPolygon(Database db, ObjectId sid, List<(double X, double Y)> ring, IEnumerable<Point3d> verts)
+        => FitToRing(db, sid, ring, verts, AreaPolygon.BorderStep(ring), rectProbe: false, "다각형");
+
+    /// <summary>테두리 채움 + 바깥 경계 — 네모 · 다각형 한 벌(셈은 <see cref="AreaPolygon.BorderFill"/> · 네모는 옛 FitToBox와 비트 같음 — Core 시험).</summary>
+    static string FitToRing(Database db, ObjectId sid, List<(double X, double Y)> ring, IEnumerable<Point3d> verts, double step, bool rectProbe, string what)
+    {
         try
         {
-            var vs = verts.ToList();
-            if (vs.Count < 3 || x1 <= x0 || y1 <= y0) return "";
-            // 꼭짓점 격자(가까운 점 찾기)
-            double cell = Math.Max(5, Math.Sqrt((x1 - x0) * (y1 - y0) / Math.Max(1, vs.Count)) * 3);
-            var grid = new Dictionary<(int, int), List<int>>();
-            for (int i = 0; i < vs.Count; i++)
-            {
-                var k = ((int)Math.Floor((vs[i].X - x0) / cell), (int)Math.Floor((vs[i].Y - y0) / cell));
-                if (!grid.TryGetValue(k, out var l)) grid[k] = l = new List<int>();
-                l.Add(i);
-            }
-            double Idw(double x, double y)
-            {
-                int cx = (int)Math.Floor((x - x0) / cell), cy = (int)Math.Floor((y - y0) / cell);
-                var near = new List<(double D, double Z)>();
-                // ★[검토 1122 LOW] 고리 한 겹씩만 더 봄(전체 정사각형 되풀이 없음) · 8점 찾은 뒤 한 겹 더(대각 쪽 더 가까운 점) · 상자 크기에서 멈춤
-                int maxR = (int)Math.Ceiling(Math.Max(x1 - x0, y1 - y0) / cell) + 2, extra = -1;
-                for (int r = 0; r <= maxR; r++)
-                {
-                    for (int gx = cx - r; gx <= cx + r; gx++)
-                        for (int gy = cy - r; gy <= cy + r; gy++)
-                        {
-                            if (Math.Abs(gx - cx) != r && Math.Abs(gy - cy) != r) continue;
-                            if (grid.TryGetValue((gx, gy), out var l))
-                                foreach (int i in l) near.Add((Math.Sqrt((vs[i].X - x) * (vs[i].X - x) + (vs[i].Y - y) * (vs[i].Y - y)), vs[i].Z));
-                        }
-                    if (near.Count >= 8 && extra < 0) extra = r + 1;
-                    if (extra >= 0 && r >= extra) break;
-                }
-                if (near.Count == 0) return double.NaN;
-                double sw = 0, sz = 0;
-                foreach (var (d, z) in near.OrderBy(n => n.D).Take(8)) { double w = 1 / Math.Max(0.01, d * d); sw += w; sz += w * z; }
-                return sz / sw;
-            }
-            double per = 2 * ((x1 - x0) + (y1 - y0));
-            double step = Math.Clamp(per / 800, 1, 10);
-            var ring = new List<Point3> { new(x0, y0, 0), new(x1, y0, 0), new(x1, y1, 0), new(x0, y1, 0) };
-            var add = new List<Point3d>();
-            int miss = 0;
-            double cxm = (x0 + x1) / 2, cym = (y0 + y1) / 2;
+            var vs = verts.Select(p => new Point3(p.X, p.Y, p.Z)).ToList();
+            if (vs.Count < 3 || ring.Count < 3) return "";
+            List<Point3> addP; int miss;
             using (var tr = db.TransactionManager.StartTransaction())
             {
                 var tin = (TinSurface)tr.GetObject(sid, OpenMode.ForRead);
-                for (int e = 0; e < 4; e++)
-                {
-                    var a = ring[e]; var b = ring[(e + 1) % 4];
-                    double len = Math.Sqrt((b.X - a.X) * (b.X - a.X) + (b.Y - a.Y) * (b.Y - a.Y));
-                    int n = Math.Max(1, (int)Math.Ceiling(len / step));
-                    for (int k = 0; k < n; k++)
-                    {
-                        double t = (double)k / n, x = a.X + (b.X - a.X) * t, y = a.Y + (b.Y - a.Y) * t;
-                        // ★[검토 1122 LOW] 테두리 바로 안쪽(1 cm)을 봄 — 선 위 반올림으로 «없음»이 나와 칼날 점이 생기지 않게
-                        double tx = x + Math.Sign(cxm - x) * 0.01, ty = y + Math.Sign(cym - y) * 0.01;
-                        bool has;
-                        try { tin.FindElevationAtXY(tx, ty); has = true; } catch { has = false; }
-                        if (has) continue;
-                        double z = Idw(x, y);
-                        if (double.IsFinite(z)) add.Add(new Point3d(x, y, z)); else miss++;
-                    }
-                }
+                bool Has(double x, double y) { try { tin.FindElevationAtXY(x, y); return true; } catch { return false; } }
+                (addP, miss) = AreaPolygon.BorderFill(ring, step, rectProbe, vs, Has);
                 tr.Commit();
             }
+            var add = addP.Select(p => new Point3d(p.X, p.Y, p.Z)).ToList();
             // ★[검토 1122 MEDIUM] 채운 점 = 원지반 재료(표고점 레이어 · 주인 표시) — [측량도 보정]이 백판을 다시 읽어도 모서리가 남게
             var ids = new ObjectIdCollection();
             if (add.Count > 0)
@@ -286,13 +282,13 @@ public sealed class ImportGisCommand
             {
                 var tin = (TinSurface)tr.GetObject(sid, OpenMode.ForWrite);
                 if (ids.Count > 0) tin.DrawingObjectsDefinition.AddFromPoints(ids, "테두리 채움");
-                GradingBuilder.AddOuterBoundary(tin, ring, midOrd: 0.01);   // 다시 짓기는 이 안에서 한 번
+                GradingBuilder.AddOuterBoundary(tin, ring.Select(q => new Point3(q.X, q.Y, 0)).ToList(), midOrd: 0.01);   // 다시 짓기는 이 안에서 한 번
                 tr.Commit();
             }
-            return (add.Count > 0 ? $"고른 네모로 자름(빈 테두리 {add.Count}점은 가까운 등고선 높이로 채움)" : "고른 네모로 자름")
+            return (add.Count > 0 ? $"고른 {what}으로 자름(빈 테두리 {add.Count}점은 가까운 등고선 높이로 채움)" : $"고른 {what}으로 자름")
                  + (miss > 0 ? $" · ⚠테두리 {miss}곳은 가까운 등고선이 없어 못 채움" : "");
         }
-        catch (System.Exception ex) { return "⚠네모로 자르지 못함 — " + ex.Message; }
+        catch (System.Exception ex) { return $"⚠{what}으로 자르지 못함 — " + ex.Message; }
     }
 
     // ── 지적도 ────────────────────────────────────────────────────────────────

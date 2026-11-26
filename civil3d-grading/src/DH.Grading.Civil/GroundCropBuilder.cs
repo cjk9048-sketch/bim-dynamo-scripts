@@ -42,7 +42,11 @@ internal static class GroundCropBuilder
     internal sealed class Result
     {
         public bool Ok, Refused, RolledBack, Nothing;
+        /// <summary>★[검토 1] 다각형이 원지반과 안 닿음(무게중심이 다각형 안인 보이는 세모 0개 · 지난 자르기에 든 면도 아님) — 아무것도 안 바꿈.</summary>
+        public bool NoGround;
         public string Why = "", Line = "", Done = "", FinalNote = "", GrowNote = "";
+        /// <summary>★[검토 4] 지난 자르기 조각을 못 알아본 수 알림(그대로 둠 — 사람 경계 보호가 우선).</summary>
+        public string PieceNote = "";
         public GroundCrop.Cover? Cover;
         public readonly List<string> Red = new();
         public int Targets, Dependents, Untouched, Users, SameInside, Checked, HeightDiff, Stale;
@@ -75,6 +79,12 @@ internal static class GroundCropBuilder
         /// <summary>정의가 붙여넣기 줄뿐인가(경계 · 점 · 선 없음).</summary>
         public bool OnlyPaste;
         public List<Box> OldBands = new(), NewBands = new();
+        /// <summary>★[JACK 1126 다각형 자르기] 지난 · 새 숨김 조각(다각형 길 — 네모 길은 비어 있음).</summary>
+        public List<List<(double X, double Y)>> OldPieces = new(), NewPieces = new();
+        /// <summary>지난 조각 중 경계에서 못 알아본 수(그대로 둠 · 알림).</summary>
+        public int PieceMiss;
+        /// <summary>안쪽 지문을 잴 자리(다각형이 낀 자르기 — 여유만큼 줄인 꼴 · 지난 자리와 겹친 곳). null = 네모 길(<see cref="HashBox"/>).</summary>
+        public Func<double, double, bool>? HashIn;
         public int Removed;
         public long RebuildMs;
         public string Rebuilt = "";
@@ -91,6 +101,10 @@ internal static class GroundCropBuilder
     {
         public Box Box = Box.None;
         public readonly Dictionary<string, (List<Box> Bands, Box Ext0)> Surf = new(StringComparer.OrdinalIgnoreCase);
+        /// <summary>★[JACK 1126] 지난 자르기가 다각형이었으면 그 고리(Box = 그 외접 네모) · 면마다 넣은 숨김 조각.</summary>
+        public List<(double X, double Y)>? Poly;
+        public readonly Dictionary<string, List<List<(double X, double Y)>>> Pieces = new(StringComparer.OrdinalIgnoreCase);
+        public bool Had(string h) => (Surf.TryGetValue(h, out var e) && e.Bands.Count > 0) || (Pieces.TryGetValue(h, out var p) && p.Count > 0);
     }
 
     static bool OurName(string nm) => nm.Contains("_DH") || nm.StartsWith("DH_", StringComparison.Ordinal);
@@ -139,7 +153,27 @@ internal static class GroundCropBuilder
             var xr = (Xrecord)tr.GetObject(d.GetAt(RecName), OpenMode.ForRead);
             using var rb = xr.Data;
             if (rb == null) return r;
-            var a = rb.AsArray().Select(v => v.Value as string ?? "").ToArray();
+            // ★[JACK 1126] 다각형 · 조각 = «@POLY» / «@PIECE|핸들» 뒤 점(10)들 … «@END» — 글 줄(상자 · 면마다 띠)은 그 밖의 글만(옛 기록 그대로 읽힘)
+            var texts = new List<string>();
+            List<(double X, double Y)>? cur = null;
+            foreach (var tv in rb.AsArray())
+            {
+                if (tv.Value is string t)
+                {
+                    if (t == "@POLY") { cur = r.Poly = new(); continue; }
+                    if (t.StartsWith("@PIECE|", StringComparison.Ordinal))
+                    {
+                        string h = t.Substring(7);
+                        if (!r.Pieces.TryGetValue(h, out var l)) r.Pieces[h] = l = new();
+                        cur = new(); l.Add(cur);
+                        continue;
+                    }
+                    if (t == "@END") { cur = null; continue; }
+                    texts.Add(t);
+                }
+                else if (cur != null && tv.Value is Point3d q) cur.Add((q.X, q.Y));
+            }
+            var a = texts.ToArray();
             if (a.Length > 0 && GroundCrop.TryBox(a[0], out var b)) r.Box = b;
             for (int i = 2; i < a.Length; i++)
             {
@@ -153,7 +187,7 @@ internal static class GroundCropBuilder
         return r;
     }
 
-    static void WriteRec(Database db, Transaction tr, Box box, IEnumerable<Surf> cropped)
+    static void WriteRec(Database db, Transaction tr, Box box, IEnumerable<Surf> cropped, List<(double X, double Y)>? ring)
     {
         var nod = (DBDictionary)tr.GetObject(db.NamedObjectsDictionaryId, OpenMode.ForRead);
         DBDictionary d;
@@ -170,7 +204,16 @@ internal static class GroundCropBuilder
             new((int)DxfCode.Text, GroundCrop.BoxText(box)),
             new((int)DxfCode.Text, $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} · {GradingSettings.Version}"),
         };
-        foreach (var s in cropped) vals.Add(new((int)DxfCode.Text, $"{s.Handle}|{GroundCrop.BandsText(s.NewBands)}|{GroundCrop.BoxText(s.Ext0)}"));
+        var list = cropped.ToList();
+        foreach (var s in list) vals.Add(new((int)DxfCode.Text, $"{s.Handle}|{GroundCrop.BandsText(s.NewBands)}|{GroundCrop.BoxText(s.Ext0)}"));
+        void Ring(string head, IEnumerable<(double X, double Y)> r)
+        {
+            vals.Add(new((int)DxfCode.Text, head));
+            foreach (var (x, y) in r) vals.Add(new((int)DxfCode.XCoordinate, new Point3d(x, y, 0)));
+            vals.Add(new((int)DxfCode.Text, "@END"));
+        }
+        if (ring != null) Ring("@POLY", ring);
+        foreach (var s in list) foreach (var pc in s.NewPieces) Ring("@PIECE|" + s.Handle, pc);
         if (d.Contains(RecName)) d.Remove(RecName);
         using var rb = new ResultBuffer(vals.ToArray());
         var xr = new Xrecord { Data = rb };
@@ -184,7 +227,7 @@ internal static class GroundCropBuilder
         try
         {
             var r = ReadRec(s.Database, tr);
-            return r.Surf.TryGetValue(s.Handle.ToString(), out var e) && e.Bands.Count > 0;
+            return r.Had(s.Handle.ToString());
         }
         catch { return false; }
     }
@@ -256,13 +299,15 @@ internal static class GroundCropBuilder
     }
 
     /// <summary>D 안 표본 높이(25 × 25) — 면 밖은 NaN.</summary>
-    static double[] Heights(CivilDb.TinSurface s, Box d)
+    static double[] Heights(CivilDb.TinSurface s, Box d, Func<double, double, bool>? keep = null)
     {
         var z = new double[GridN * GridN];
         for (int i = 0; i < GridN; i++)
             for (int j = 0; j < GridN; j++)
             {
                 double x = d.X0 + d.W * i / (GridN - 1), y = d.Y0 + d.H * j / (GridN - 1);
+                // ★[JACK 1126] 다각형 길 — 남길 꼴(여유 안) 밖 표본은 안 봄(오목한 다각형이면 D 네모 일부가 밖 · 늘 NaN = 견주지 않음)
+                if (keep != null && !keep(x, y)) { z[i * GridN + j] = double.NaN; continue; }
                 try { z[i * GridN + j] = s.FindElevationAtXY(x, y); } catch { z[i * GridN + j] = double.NaN; }
             }
         return z;
@@ -339,7 +384,7 @@ internal static class GroundCropBuilder
     }
 
     /// <summary>★[계획 4장] 설계 자리 항목 — 정지 구역(경계 · 건 경계) · 진입도로 면 · 옹벽 · 터파기 · 우리 노선과 땅을 읽는 노선(선 + 모든 표본선) · 설계 크기 면(보이는 세모 범위 — 1 ~ 5를 놓쳐도 덮음).</summary>
-    static List<GroundCrop.Item> DesignItems(Database db, Transaction tr, List<Surf> surfs, List<string> notes)
+    static List<GroundCrop.Item> DesignItems(Database db, Transaction tr, List<Surf> surfs, List<string> notes, bool poly = false)
     {
         var items = new List<GroundCrop.Item>();
         try
@@ -403,14 +448,44 @@ internal static class GroundCropBuilder
             catch (Exception ex) { notes.Add("노선 못 읽음 — " + ex.Message); }
         }
         foreach (var s in surfs.Where(s => s.K == Kind.Design && !s.Vis.IsNone))
-            items.Add(new(s.Name.StartsWith(RoadSession.SurfBase, StringComparison.Ordinal) ? $"진입도로 면 {s.Name}" : $"설계 면 {s.Name}", RectList(s.Vis), true));
+        {
+            string lb = s.Name.StartsWith(RoadSession.SurfBase, StringComparison.Ordinal) ? $"진입도로 면 {s.Name}" : $"설계 면 {s.Name}";
+            // ★[JACK 1126] 다각형 자르기 — 외접 네모는 L자 도로 면이 오목한 곳을 덮는다고 잘못 거절 → 세모 <b>변</b>(이웃 세모와 겹친 변은 한 번 · 1 mm로 맞춤)
+            //   ★[검토 3] 점(꼭짓점 · 변 가운데)만 보면 오목한 곳을 가로지르는 변을 놓침 → 변 전체를 본다(Core가 MultiLineString으로 한 번에)
+            if (poly && s.Tris is { Count: > 0 } ts)
+            {
+                var seen = new HashSet<(long, long, long, long)>();
+                var pts = new List<(double X, double Y)>();
+                void Edge(Point3 a, Point3 b)
+                {
+                    long ax = (long)Math.Round(a.X * 1000), ay = (long)Math.Round(a.Y * 1000), bx = (long)Math.Round(b.X * 1000), by = (long)Math.Round(b.Y * 1000);
+                    if (ax == bx && ay == by) return;
+                    var k = ax < bx || (ax == bx && ay < by) ? (ax, ay, bx, by) : (bx, by, ax, ay);
+                    if (seen.Add(k)) { pts.Add((a.X, a.Y)); pts.Add((b.X, b.Y)); }
+                }
+                foreach (var t in ts) { Edge(t.A, t.B); Edge(t.B, t.C); Edge(t.C, t.A); }
+                items.Add(new(lb, pts, false) { Edges = true });
+            }
+            else items.Add(new(lb, RectList(s.Vis), true));
+        }
         return items;
     }
+
+    /// <summary>면이 자르기 범위와 안 겹치나 — 보이는 세모 범위가 상자와 안 겹침 · ★[검토 1] 다각형이면 무게중심이 다각형 안인 보이는 세모 0개도(세모를 못 읽은 면은 상자만). 보이는 세모 없음 = 거짓(옛 셈 그대로).</summary>
+    static bool Apart(Surf s, Box box, Func<double, double, bool>? inRing, IReadOnlyList<(double X, double Y)>? ring)
+    {
+        if (s.Vis.IsNone) return false;
+        if (s.Vis.X1 <= box.X0 || s.Vis.X0 >= box.X1 || s.Vis.Y1 <= box.Y0 || s.Vis.Y0 >= box.Y1) return true;
+        return inRing != null && s.Tris != null && !AreaPolygon.AnyInside(s.Tris, inRing, ring);
+    }
+
+    /// <summary>안쪽 지문 — 다각형이 낀 자르기면 꼴(<see cref="Surf.HashIn"/>) · 아니면 네모(옛 셈 그대로).</summary>
+    static string Hash(Surf s, IEnumerable<Tri> tris) => s.HashIn != null ? GroundCrop.InsideHash(tris, s.HashIn) : GroundCrop.InsideHash(tris, s.HashBox);
 
     // ══════════════════════════════ 본체 ══════════════════════════════
 
     /// <summary>★[계획 5장 2 ~ 10] 자르기 한 번. 문서 잠금은 여기서. 예외를 안 던진다(돌려줌 = 결과).</summary>
-    internal static Result Run(Document doc, Box box, ObjectId groundId)
+    internal static Result Run(Document doc, Box box, ObjectId groundId, List<(double X, double Y)>? ring = null)
     {
         var R = new Result();
         LastCropStats = R;
@@ -422,6 +497,7 @@ internal static class GroundCropBuilder
         Rec rec;
         Box need = Box.None;
         FinalSurfaceBuilder.State fin0 = FinalSurfaceBuilder.State.NoRoads;
+        var inRing = ring != null ? AreaPolygon.InsideFn(ring) : null;   // 다각형 그대로(면이 닿나 — 무게중심)
         try
         {
             // ── ① 읽기만 — 면 · 기록 · 설계 자리 ─────────────────────────────
@@ -459,8 +535,23 @@ internal static class GroundCropBuilder
                     if (u.K == Kind.Other) R.Skipped.Add(u.Name + "(격자면 — 못 자름)");
                     surfs.Add(u);
                 }
-                var items = DesignItems(db, tr, surfs, notes);
-                var cov = GroundCrop.Covers(box, items);
+                // ★[검토 1] 다각형 — 원지반(여러 장이면 전부)이 다각형과 안 닿으면 거절(외접 네모만 보면 다각형 밖 · 네모 안 지형을 대상으로 삼아 «세모 없음»으로 통째로 물림)
+                if (ring != null)
+                {
+                    var gs = surfs.Where(s => s.IsGround && s.K == Kind.Ground).ToList();
+                    if (gs.Count > 0 && gs.All(s => Apart(s, box, inRing, ring) && !rec.Had(s.Handle)))
+                    {
+                        tr.Commit();
+                        R.NoGround = true;
+                        R.Why = "다각형에 지형 없음";
+                        R.Line = $"\n■ DHCROP 거절 — 다각형이 원지반과 안 닿음(무게중심이 다각형 안인 세모 0개 · {string.Join(" · ", gs.Select(s => s.Name))}) · 상자 {box.Text} · 다각형 꼭짓점 {ring.Count} · {all.ElapsedMilliseconds} ms";
+                        try { DiagLog.AppendCarry(R.Line + "\n"); } catch { }
+                        return R;
+                    }
+                }
+                var items = DesignItems(db, tr, surfs, notes, ring != null);
+                // ★[JACK 1126] 다각형 자르기 — «다각형 − 5 m»가 설계 자리 선분 전체를 덮나(오목한 꼴은 꼭짓점만으로 못 봄)
+                var cov = ring != null ? AreaPolygon.Covers(ring, items) : GroundCrop.Covers(box, items);
                 R.Cover = cov;
                 need = GroundCrop.DesignBox(items);
                 try { fin0 = FinalSurfaceBuilder.StateOf(db, tr, out _, out _); } catch { }
@@ -470,24 +561,31 @@ internal static class GroundCropBuilder
                     R.Refused = true;
                     foreach (var o in cov.Outs) R.Red.Add(string.Format(ci, "{0} {1:F1} m", o.Label, o.Length > 0 ? o.Length : o.Far));
                     R.Why = "설계 자리가 상자 밖 — " + string.Join(" · ", R.Red.Take(8)) + (R.Red.Count > 8 ? $" 외 {R.Red.Count - 8}" : "");
-                    R.Line = $"\n■ DHCROP 거절 — {R.Why} · 상자 {box.Text} · 필요 {cov.Need.Text} · {all.ElapsedMilliseconds} ms";
+                    R.Line = $"\n■ DHCROP 거절 — {R.Why} · 상자 {box.Text}{(ring != null ? $" · 다각형 꼭짓점 {ring.Count}" : "")} · 필요 {cov.Need.Text} · {all.ElapsedMilliseconds} ms";
                     try { DiagLog.AppendCarry(R.Line + "\n"); } catch { }
                     return R;
                 }
             }
             // ── ② 대상 · 딸린 면 ─────────────────────────────────────────
             var byId = surfs.ToDictionary(s => s.Id);
+            // ★[JACK 1126] 다각형이 낀 자르기(이번이 다각형 · 지난번이 다각형) — 안쪽 지문 · 표본 높이 · 밖 세모 검사를 꼴로
+            bool anyPoly = ring != null || rec.Poly != null;
+            var inGrown = ring != null ? AreaPolygon.InsideFn(ring, -1e-3) : null;      // 다각형 + 1 mm(되읽기 끝)
+            Func<double, double, bool>? newInner = anyPoly ? (ring != null ? AreaPolygon.InsideFn(ring, GroundCrop.Margin) : box.Grow(-GroundCrop.Margin).Contains) : null;
+            Func<double, double, bool>? oldInner = anyPoly && !rec.Box.IsNone ? (rec.Poly != null ? AreaPolygon.InsideFn(rec.Poly, GroundCrop.Margin) : rec.Box.Grow(-GroundCrop.Margin).Contains) : null;
             foreach (var s in surfs.Where(s => s.K == Kind.Ground))
             {
-                bool had = rec.Surf.TryGetValue(s.Handle, out var re) && re.Bands.Count > 0;
-                bool over = GroundCrop.NeedsCrop(s.Vis, box);
-                // 상자와 안 겹치는 면(보이는 세모가 다 밖) — 자르면 빈 면이 된다 → 손 안 대고 이름만(원지반이면 앞에서 이미 거절)
-                bool apart = !s.Vis.IsNone && (s.Vis.X1 <= box.X0 || s.Vis.X0 >= box.X1 || s.Vis.Y1 <= box.Y0 || s.Vis.Y0 >= box.Y1);
-                if (apart && !had) { R.Skipped.Add(s.Name + "(상자와 안 겹침 — 그대로)"); continue; }
+                bool had = rec.Had(s.Handle);
+                rec.Surf.TryGetValue(s.Handle, out var re);
+                bool over = GroundCrop.NeedsCrop(s.Vis, box) || (inGrown != null && s.Tris != null && AreaPolygon.NeedsCrop(s.Tris, inGrown));
+                // 상자(다각형)와 안 겹치는 면(보이는 세모가 다 밖) — 자르면 빈 면이 된다 → 손 안 대고 이름만(원지반이면 앞에서 이미 거절)
+                bool apart = Apart(s, box, inRing, ring);
+                if (apart && !had) { R.Skipped.Add(s.Name + (ring != null ? "(다각형과 안 겹침 — 그대로)" : "(상자와 안 겹침 — 그대로)")); continue; }
                 if (over || had)
                 {
                     s.Target = true;
-                    s.OldBands = had ? re.Bands : new List<Box>();
+                    s.OldBands = had && re.Bands != null ? re.Bands : new List<Box>();
+                    s.OldPieces = had && rec.Pieces.TryGetValue(s.Handle, out var opc) ? opc : new();
                     s.Ext0 = rec.Surf.TryGetValue(s.Handle, out var re2) && !re2.Ext0.IsNone ? re2.Ext0 : had ? s.All.Union(s.Vis) : s.Vis;
                 }
                 else { R.Untouched++; }
@@ -498,7 +596,7 @@ internal static class GroundCropBuilder
             for (bool more = true; more;)
             {
                 more = false;
-                foreach (var s in surfs.Where(s => s.Target && s.OnlyPaste && !s.Snap && s.OldBands.Count == 0))
+                foreach (var s in surfs.Where(s => s.Target && s.OnlyPaste && !s.Snap && s.OldBands.Count == 0 && s.OldPieces.Count == 0))
                     if (s.Sources.All(id => byId.TryGetValue(id, out var q) && (q.Target || q.Dep) && q.Id != s.Id)) { s.Target = false; s.Dep = true; more = true; }
             }
             // 딸린 면 — 대상(또는 딸린 면)을 붙여넣은 스냅샷 없는 면 · 체적면(그 소스가 바뀌면 구식으로 남는다 — V86 «(옛)»)
@@ -531,13 +629,20 @@ internal static class GroundCropBuilder
             R.Chain = order.Count(s => s.Sources.Count > 0 && (s.K == Kind.Volume || !s.Snap));
             // 앞 상태 — 안쪽 지문 · D 안 표본 높이(D 없으면 상자 − 5 m)
             var dBox = need.IsNone ? box.Grow(-GroundCrop.Margin) : need;
+            var keepZ = ring != null ? newInner : null;   // 다각형 길 — 표본 높이는 «다각형 − 5 m» 안만
             using (var tr = db.TransactionManager.StartTransaction())
             {
                 foreach (var s in work.Where(s => s.Tris != null))
                 {
                     s.HashBox = s.OldBands.Count > 0 && !rec.Box.IsNone ? box.Intersect(rec.Box) : box;
-                    s.Hash0 = GroundCrop.InsideHash(s.Tris!, s.HashBox);
-                    s.Heights0 = Heights((CivilDb.TinSurface)tr.GetObject(s.Id, OpenMode.ForRead), dBox);
+                    if (anyPoly)
+                    {
+                        bool hadOld = (s.OldBands.Count > 0 || s.OldPieces.Count > 0) && oldInner != null;
+                        var ni = newInner!; var oi = oldInner;
+                        s.HashIn = hadOld ? (x, y) => ni(x, y) && oi!(x, y) : ni;
+                    }
+                    s.Hash0 = Hash(s, s.Tris!);
+                    s.Heights0 = Heights((CivilDb.TinSurface)tr.GetObject(s.Id, OpenMode.ForRead), dBox, keepZ);
                 }
                 tr.Commit();
             }
@@ -570,8 +675,8 @@ internal static class GroundCropBuilder
                         foreach (var s in work.Where(s => s.Tris != null))
                         {
                             var ts = (CivilDb.TinSurface)tb.GetObject(s.Id, OpenMode.ForRead);
-                            string h = GroundCrop.InsideHash(PureWithWallsBuilder.ReadTris(ts, out _), s.HashBox);
-                            var z = Heights(ts, dBox);
+                            string h = Hash(s, PureWithWallsBuilder.ReadTris(ts, out _));
+                            var z = Heights(ts, dBox, keepZ);
                             var hd = HeightDiff(s.Heights0, z);
                             s.DriftTri = h != s.Hash0;
                             s.DriftN = hd.Max > HeightEps ? hd.N : 0;
@@ -591,12 +696,28 @@ internal static class GroundCropBuilder
                             var ts = (CivilDb.TinSurface)t1.GetObject(s.Id, OpenMode.ForWrite);
                             var bl = Bounds(ts);
                             var ours = GroundCrop.OurBoundaries(bl.Select(b => b.B).ToList(), s.OldBands.Count > 0 ? s.OldBands : null, s.IsGround);
+                            var drop = new HashSet<int>(ours.Select(o => o.Index));
+                            // ★[JACK 1126] 지난 다각형 자르기 조각 — 기록한 꼴과 같은 Hide만(사람 경계는 안 건드림)
+                            if (s.OldPieces.Count > 0)
+                            {
+                                var hit = new HashSet<int>();
+                                for (int i = 0; i < bl.Count; i++)
+                                {
+                                    if (drop.Contains(i) || !bl[i].B.IsHide) continue;
+                                    int k = s.OldPieces.FindIndex(pc => AreaPolygon.SameRing(bl[i].B.V, pc));
+                                    if (k >= 0) { drop.Add(i); hit.Add(k); }
+                                }
+                                // ★[검토 4] 못 알아본 조각은 말없이 남기지 않고 알림(물리지는 않음 — 사람 경계 보호가 우선)
+                                s.PieceMiss = s.OldPieces.Count - hit.Count;
+                            }
                             var bd = ts.BoundariesDefinition;
-                            foreach (var (ix, _) in ours.OrderByDescending(o => o.Index)) { bd.RemoveAt(bl[ix].Op); s.Removed++; }
+                            foreach (int ix in drop.OrderByDescending(i => i)) { bd.RemoveAt(bl[ix].Op); s.Removed++; }
                             var e = s.Vis.Union(s.All).Union(s.Ext0);
-                            s.NewBands = GroundCrop.Frame(box, e);
+                            if (ring != null) s.NewPieces = AreaPolygon.HidePieces(ring, e);
+                            else s.NewBands = GroundCrop.Frame(box, e);
                             if (SkipBandsForTest && ReferenceEquals(s, work.First(q => q.Target))) continue;
                             foreach (var b in s.NewBands) bd.AddBoundaries(RectPts(b), 0.1, Autodesk.Civil.SurfaceBoundaryType.Hide, true);
+                            foreach (var pc in s.NewPieces) bd.AddBoundaries(new Point3dCollection(pc.Select(q => new Point3d(q.X, q.Y, 0)).ToArray()), 0.1, Autodesk.Civil.SurfaceBoundaryType.Hide, true);
                         }
                         t1.Commit();
                     }
@@ -636,12 +757,13 @@ internal static class GroundCropBuilder
                             if (s.Target)
                             {
                                 var okBox = box.Grow(GroundCrop.VertexTol);
-                                int outN = t.Count(q => !okBox.Contains((q.A.X + q.B.X + q.C.X) / 3, (q.A.Y + q.B.Y + q.C.Y) / 3));
-                                if (outN > 0) bad.Add($"«{s.Name}» 상자 밖 세모 {outN}개가 남음(띠가 안 먹음)");
+                                int outN = t.Count(q => !okBox.Contains((q.A.X + q.B.X + q.C.X) / 3, (q.A.Y + q.B.Y + q.C.Y) / 3)
+                                                     || (inGrown != null && !inGrown((q.A.X + q.B.X + q.C.X) / 3, (q.A.Y + q.B.Y + q.C.Y) / 3)));
+                                if (outN > 0) bad.Add($"«{s.Name}» {(ring != null ? "다각형" : "상자")} 밖 세모 {outN}개가 남음(띠가 안 먹음)");
                             }
-                            string h = GroundCrop.InsideHash(t, s.HashBox);
+                            string h = Hash(s, t);
                             if (h == s.Hash0) R.SameInside++; else bad.Add($"«{s.Name}» 안쪽 세모가 바뀜({s.Hash0} → {h})");
-                            var hd = HeightDiff(s.Heights0, Heights(ts, dBox));
+                            var hd = HeightDiff(s.Heights0, Heights(ts, dBox, keepZ));
                             R.HeightBits += hd.N; R.HeightMax = Math.Max(R.HeightMax, hd.Max);
                             if (hd.Max > HeightEps) { R.HeightDiff++; bad.Add(string.Format(ci, "«{0}» 설계 자리 표본 높이가 바뀜({1}/{2}점 · 최대 {3:E2} m · 점 {4})", s.Name, hd.N, GridN * GridN, hd.Max, hd.At)); }
                         }
@@ -649,7 +771,7 @@ internal static class GroundCropBuilder
                     }
                     if (FailVerifyForTest) bad.Add("시험 고리 — 확인 실패");
                     if (bad.Count > 0) fail = string.Join(" · ", bad);
-                    else WriteRec(db, outer, box, surfs.Where(s => s.Target && s.NewBands.Count > 0));   // 띠가 든 면은 늘 대상이라(②) 대상만 적으면 기록이 빠지지 않는다
+                    else WriteRec(db, outer, box, surfs.Where(s => s.Target && (s.NewBands.Count > 0 || s.NewPieces.Count > 0)), ring);   // 띠가 든 면은 늘 대상이라(②) 대상만 적으면 기록이 빠지지 않는다
                 }
                 catch (Exception ex) { fail = "예외 " + ex.GetType().Name + ": " + ex.Message; }
                 if (fail.Length > 0) outer.Abort();
@@ -657,7 +779,7 @@ internal static class GroundCropBuilder
             }
             long msCrop = sw.ElapsedMilliseconds;
             string per = string.Join(" · ", order.Select(s => s.Tris == null ? $"{s.Name}(체적면 {s.Rebuilt} {s.RebuildMs} ms)"
-                                                       : string.Format(ci, "{0} {1:N0}→{2:N0}({3:F2} s · 정의대로 {6:F2} s{7}{4}{5})", s.Name, s.Tri0, s.Tri1, s.RebuildMs / 1000.0, s.Dep ? " · 딸린 면" : $" · 띠 {s.NewBands.Count} · 뺌 {s.Removed}", s.Rebuilt == "OK" ? "" : " · " + s.Rebuilt,
+                                                       : string.Format(ci, "{0} {1:N0}→{2:N0}({3:F2} s · 정의대로 {6:F2} s{7}{4}{5})", s.Name, s.Tri0, s.Tri1, s.RebuildMs / 1000.0, s.Dep ? " · 딸린 면" : $" · 띠 {s.NewBands.Count + s.NewPieces.Count} · 뺌 {s.Removed}", s.Rebuilt == "OK" ? "" : " · " + s.Rebuilt,
                                                                        s.PreMs / 1000.0, s.DriftTri || s.DriftN > 0 ? string.Format(ci, " 바뀜(세모 {0} · 표본 {1}점 최대 {2:E2} m)", s.DriftTri ? "다름" : "같음", s.DriftN, s.DriftMax) : " 그대로")));
             string drift = R.Drift.Count > 0 ? "자르기 전 정의대로 다시 지음 — " + string.Join(" · ", R.Drift) : "";
             if (fail.Length > 0)
@@ -670,7 +792,7 @@ internal static class GroundCropBuilder
                     {
                         using var trK = db.TransactionManager.StartTransaction();
                         foreach (var s in work.Where(s => s.DriftTri && !s.Id.IsErased))
-                            if (trK.GetObject(s.Id, OpenMode.ForRead) is CivilDb.TinSurface tk && GroundCrop.InsideHash(PureWithWallsBuilder.ReadTris(tk, out _), s.HashBox) != s.HashPre) kept.Add(s.Name);
+                            if (trK.GetObject(s.Id, OpenMode.ForRead) is CivilDb.TinSurface tk && Hash(s, PureWithWallsBuilder.ReadTris(tk, out _)) != s.HashPre) kept.Add(s.Name);
                         trK.Commit();
                     }
                     catch (Exception kx) { kept.Add("못 잼 " + kx.Message); }
@@ -678,6 +800,13 @@ internal static class GroundCropBuilder
                 R.Line = $"\n■ DHCROP 되돌림 — {R.Why} · 상자 {box.Text} · 면 {work.Count}: {per} · 넣기~확인 {msCrop} ms(바깥 트랜잭션 물림{(kept.Count > 0 ? "" : " — 모든 면 그대로")})";
                 try { DiagLog.AppendCarry(R.Line + "\n"); } catch { }
                 return R;
+            }
+            // ★[검토 4] 지난 다각형 조각을 못 알아본 면 — 남긴 채 알림(명령창 · 로그 R.Line)
+            int miss = work.Sum(s => s.PieceMiss);
+            if (miss > 0)
+            {
+                R.PieceNote = $"지난 자르기 조각 {miss}개 못 찾음 → 그대로 둠(" + string.Join(" · ", work.Where(s => s.PieceMiss > 0).Select(s => $"{s.Name} {s.PieceMiss}개")) + ")";
+                notes.Add("⚠" + R.PieceNote);
             }
             // ── ④ 커밋 뒤 되읽기(화면을 정하는 값 — 새 트랜잭션) ─────────────────────
             using (var tr = db.TransactionManager.StartTransaction())
@@ -721,7 +850,7 @@ internal static class GroundCropBuilder
             int tgt = work.Count(s => s.Target);
             R.Done = $"면 {tgt}개 자름" + (drift.Length > 0 ? " · " + drift : "") + (R.Chain > 0 ? $" · 붙여넣기 · 체적면 {R.Chain}개는 다음 명령(DHCROPDEPS)에서 다시 지음" : "")
                    + (R.FinalNote.Length > 0 ? (R.FinalNote.StartsWith("⚠") ? " · ⚠최종지표면 못 다시 지음 — 진입도로 창 [업데이트]" : " · 최종지표면 다시 지음") : "");
-            R.Line = string.Format(ci, "\n■ DHCROP v2 — 상자 {0} · 설계 자리 D(+5 m) {1} · 면 {2}: {3} · 손 안 댐 {4}(상자 안) · 사람 면 {5} · 안쪽 지문 같음 {6}/{7} · 표본 높이 바뀐 면 {8}(끝자리만 다른 점 {16} · 최대 {17:E1} m) · 구식 {9}{10}{11}{12}{13} · 넣기~확인 {14} ms · 합 {15:F1} s",
+            R.Line = string.Format(ci, "\n■ DHCROP v2 — 상자 {0}" + (ring != null ? string.Format(ci, " · 다각형 꼭짓점 {0} · {1:N0} ㎡", ring.Count, AreaPolygon.Area(ring)) : "") + " · 설계 자리 D(+5 m) {1} · 면 {2}: {3} · 손 안 댐 {4}(상자 안) · 사람 면 {5} · 안쪽 지문 같음 {6}/{7} · 표본 높이 바뀐 면 {8}(끝자리만 다른 점 {16} · 최대 {17:E1} m) · 구식 {9}{10}{11}{12}{13} · 넣기~확인 {14} ms · 합 {15:F1} s",
                 box.Text, need.IsNone ? "없음" : "통과", work.Count, per, R.Untouched, R.Users, R.SameInside, R.Checked, R.HeightDiff, R.Stale,
                 R.FinalNote.Length > 0 ? $" · 최종면 «{R.FinalNote}» {R.FinalMs} ms" : fin0 == FinalSurfaceBuilder.State.NoRoads ? "" : $" · 최종면 {fin0}(다시 안 지음)",
                 R.NotGrown.Count > 0 ? " · 못 커진 면 [" + string.Join(" · ", R.NotGrown) + "]" : "",
