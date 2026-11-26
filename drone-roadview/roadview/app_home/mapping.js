@@ -131,14 +131,18 @@
     const [w, h] = size(), x0 = MAP.cx - w / 2, y0 = MAP.cy - h / 2;
     const P = (la, lo) => { const p = wpx(la, lo, MAP.z); return [(p[0] - x0).toFixed(1), (p[1] - y0).toFixed(1)]; };
     let s = '';
-    for (const p of S.photos) {                       // 바라보는 곳 (고른 것만 · 주황 작은 점)
-      if (!S.sel.has(p.name)) continue;
-      const [x, y] = P(p.look_lat, p.look_lon); s += '<circle cx="' + x + '" cy="' + y + '" r="2" fill="#ffb020" fill-opacity=".75"/>';
+    // 찍은 자리 ● → 바라본 곳 ◦ 를 선으로 이음 (어느 사진이 어디를 찍었는지 한눈에 · JACK 1126 «파란점 노란점 구려»)
+    let off = '', ray = '', shot = '';
+    for (const p of S.photos) {
+      const [x, y] = P(p.lat, p.lon), nm = esc(p.name), on = S.sel.has(p.name);
+      if (!on) { off += '<circle cx="' + x + '" cy="' + y + '" r="2.6" class="dOff"><title>' + nm + ' · 안 고름</title></circle>'; continue; }
+      const [lx, ly] = P(p.look_lat, p.look_lon);
+      ray += '<line x1="' + x + '" y1="' + y + '" x2="' + lx + '" y2="' + ly + '" class="dRay"/><circle cx="' + lx + '" cy="' + ly + '" r="2.4" class="dLook"/>';
+      shot += '<circle cx="' + x + '" cy="' + y + '" r="4.3" class="dShot' + (p.rtk === 50 ? '' : ' noRtk') + '"><title>' + nm + (p.rtk === 50 ? '' : ' · RTK 아님') + '</title></circle>';
     }
-    for (const p of S.photos) {                       // 촬영점 (고름 = 파랑 · 안 고름 = 회색 · RTK 아님 = 빨간 테)
-      const [x, y] = P(p.lat, p.lon), on = S.sel.has(p.name);
-      s += '<circle cx="' + x + '" cy="' + y + '" r="' + (on ? 3.5 : 2.5) + '" fill="' + (on ? '#2f81f7' : '#9aa0a8') + '" stroke="' + (p.rtk === 50 ? '#0008' : '#ff4d5e') + '" stroke-width="1"/>';
-    }
+    s += off + ray + shot;
+    const lg = $('mLegend'); if (lg) lg.classList.toggle('hide', !S.photos.length);
+    if (lg) lg.querySelector('.lgNoRtk').classList.toggle('hide', !S.photos.some((p) => p.rtk !== 50));
     if (S.range) {                                    // 그린 범위 (주황 점선) — 이 안을 보는 사진만 · 결과물도 이 안만
       const pts = S.range.map((q) => P(q[0], q[1]).join(',')).join(' ');
       s = '<polygon points="' + pts + '" fill="#ffb020" fill-opacity=".10" stroke="#ffb020" stroke-width="2" stroke-dasharray="6 4"/>' + s;

@@ -352,3 +352,20 @@ button.chip.on { background:#2f6fd6; color:#fff; box-shadow:none; }
 .mp .tlinkb { color:var(--dh); }
 /* i 설명 칸 (body 아래 · 매핑 화면에서만 씀) */
 .qpop { background:#fff; color:#1B2628; border:1px solid #A9C9CB; border-left:3px solid #00484E; box-shadow:0 6px 18px rgba(0,40,44,.18); }
+
+/* 지도 점 (찍은 자리 → 바라본 곳) · 범례 — JACK 1126 «직관적이고 예쁘게» */
+.mp .dShot { fill:#16B3BA; stroke:#fff; stroke-width:1.6; }
+.mp .dShot.noRtk { fill:#FF7A45; }
+.mp .dLook { fill:#FFE08A; stroke:rgba(0,0,0,.45); stroke-width:.8; }
+.mp .dRay { stroke:#fff; stroke-opacity:.6; stroke-width:1.2; }
+.mp .dOff { fill:#c9d3d4; fill-opacity:.75; stroke:#fff; stroke-opacity:.6; stroke-width:.8; }
+.mp .dRange { fill:rgba(255,176,32,.12); stroke:#ffb020; stroke-width:1.6; stroke-dasharray:3 2; }
+.mp .mmap svg.ov circle.dShot, .mp .mmap svg.ov circle.dOff { pointer-events:auto; cursor:default; }
+.mp .mlegend { position:absolute; right:12px; top:12px; z-index:2; display:flex; gap:12px; align-items:center; background:rgba(255,255,255,.94);
+               border-radius:8px; padding:6px 12px; font-size:12px; color:#1B2628; box-shadow:0 1px 6px rgba(0,0,0,.3); white-space:nowrap; }
+.mp .mlegend span { display:inline-flex; align-items:center; gap:5px; }
+.mp .mlegend svg { height:12px; width:auto; }
+.mp .mlegend svg[viewBox^="0 0 26"] { width:26px; }
+.mp .mlegend svg[viewBox^="0 0 12"] { width:12px; }
+.mp .mlegend svg[viewBox^="0 0 16"] { width:16px; }
+.mp .mlegend .dRay { stroke:#7d9a9c; stroke-opacity:1; }
