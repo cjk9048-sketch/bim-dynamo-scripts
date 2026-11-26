@@ -220,6 +220,88 @@ input[type=number]::-webkit-outer-spin-button, input[type=number]::-webkit-inner
 body.edOn #toast, body.shOn #toast { bottom: 90px; }
 #toast.click { cursor: pointer; }
 #toast button { margin-left: 12px; height: 26px; padding: 0 12px; border: 0; border-radius: 999px; background: var(--acc); color: #fff; font-weight: 700; }
+/* 오른쪽 메뉴 (오른쪽 눌렀다 떼기 · JACK 1126) */
+#ctxMenu { position: fixed; z-index: 11; min-width: 208px; max-width: 290px; padding: 4px; background: rgba(31, 31, 31, .97); border-radius: var(--r);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, .5), inset 0 0 0 1px var(--line-2); overflow-y: auto; }
+#ctxMenu .cHd { padding: 5px 8px 6px; color: var(--dim); font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#ctxMenu .ci { display: flex; align-items: center; gap: 9px; width: 100%; height: 30px; padding: 0 10px 0 8px; border: 0; border-radius: var(--r-s); background: transparent; text-align: left; white-space: nowrap; }
+#ctxMenu .ci span { overflow: hidden; text-overflow: ellipsis; }
+#ctxMenu .ci svg { flex: none; width: 16px; height: 16px; stroke-width: 1.8; color: #9aa3b2; }
+#ctxMenu .ci:hover, #ctxMenu .ci:focus-visible { background: var(--acc-soft); outline: none; }
+#ctxMenu .ci:hover svg { color: #fff; }
+#ctxMenu .ci.warn:hover { background: rgba(248, 113, 113, .2); }
+#ctxMenu .sep { height: 1px; margin: 4px 6px; background: var(--line-2); }
+#ctxMenu .sub { display: flex; gap: 4px; padding: 2px 6px 6px 33px; }
+#ctxMenu .sub button { flex: 1; height: 24px; padding: 0 6px; border: 0; border-radius: 5px; background: var(--panel-2); font-size: 11.5px; font-weight: 600; white-space: nowrap; }
+#ctxMenu .sub button:hover { background: var(--panel-3); }
+
+/* 재기 · 새 관 · 잘라내기: 아래 안내 줄 · 결과 칸 */
+#msChip { position: absolute; left: 50%; bottom: 44px; transform: translateX(-50%); display: none; align-items: center; gap: 8px; height: 36px; padding: 0 6px 0 14px; max-width: calc(100% - 24px);
+  background: rgba(24, 24, 24, .9); border-radius: 999px; backdrop-filter: blur(6px); white-space: nowrap; box-shadow: inset 0 0 0 1px rgba(250, 204, 21, .6); z-index: 3; }
+#msChip.show { display: flex; }
+#msChip.crop { box-shadow: inset 0 0 0 1px rgba(248, 113, 113, .7); padding-left: 6px; }
+#msTip { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+#msChip button { flex: none; height: 26px; padding: 0 12px; border: 0; border-radius: 999px; background: var(--panel-2); font-weight: 600; }
+#msChip button:hover { background: var(--panel-3); }
+#msChip button:disabled { opacity: .45; pointer-events: none; }
+#msChip #msEnd { background: var(--yel); color: #11141a; }
+#msChip.crop #msEnd { background: #f87171; color: #fff; }
+#msSeg { display: inline-flex; gap: 2px; padding: 2px; border-radius: 999px; background: var(--bg); }
+#msSeg button { height: 24px; padding: 0 10px; background: transparent; color: var(--dim); }
+#msSeg button.on { background: var(--acc); color: #fff; }
+body.msOn #toast { bottom: 90px; }
+#msBox { left: 10px; bottom: 38px; width: 250px; max-width: calc(100% - 20px); }
+#msBox.wide { width: 420px; }
+#msBox .cHead button.pb { margin-left: auto; height: 22px; padding: 0 10px; border: 0; border-radius: 999px; background: var(--panel-2); font-size: 11.5px; font-weight: 600; }
+#msBox .cHead button.pb:hover { background: var(--panel-3); }
+#msSegs { display: grid; grid-template-columns: auto 1fr 1fr; gap: 2px 12px; max-height: 96px; margin-top: 6px; padding-top: 5px; border-top: 1px solid var(--line); overflow-y: auto; font-size: 11.5px; }
+#msSegs:empty { display: none; }
+#msSegs span { text-align: right; white-space: nowrap; }
+#msSegs span.h { color: var(--dim); }
+#msSvg { width: 100%; height: auto; display: block; margin-top: 6px; background: #141414; border-radius: 6px; stroke: none; stroke-width: 1; }
+.fields .frow { display: grid; grid-template-columns: 1fr 160px; align-items: center; gap: 10px; color: var(--dim); font-weight: 600; }
+#npMat { display: flex; gap: 3px; }
+#npMat button { flex: 1; height: 30px; padding: 0; background: var(--panel-2); color: var(--dim); }
+#npMat button.on { background: var(--acc); color: #fff; }
+
+/* 결과물 다듬기 (잘라내기 · DEM · 웹 공유) */
+#trimBox { position: absolute; right: 10px; top: 64px; width: 300px; max-width: calc(100% - 20px); padding: 8px 10px 10px; display: flex; flex-direction: column; gap: 8px; z-index: 5; box-shadow: 0 10px 30px rgba(0, 0, 0, .45); }
+#side #trimBox { position: relative; right: auto; top: auto; width: auto; max-width: none; box-shadow: none; z-index: auto; }
+#trimBox .ugHead .x { margin-left: auto; width: 24px; height: 24px; padding: 0; border: 0; border-radius: 5px; background: transparent; color: var(--dim); font-size: 16px; line-height: 1; }
+#trimBox .ugHead .x:hover { background: var(--panel-3); color: var(--text); }
+.tbRow { display: flex; align-items: center; gap: 8px; min-height: 26px; }
+#tbState { flex: 1; min-width: 0; color: var(--dim); font-size: 12px; font-variant-numeric: tabular-nums; }
+.pb2 { flex: none; height: 26px; padding: 0 10px; border: 0; border-radius: var(--r-s); background: var(--panel-2); font-size: 12px; font-weight: 600; white-space: nowrap; }
+.pb2:hover { background: var(--panel-3); }
+.pb2:disabled { opacity: .45; pointer-events: none; }
+#tbBtns button:disabled { opacity: .45; pointer-events: none; }
+.bar { height: 6px; border-radius: 999px; background: var(--panel-3); overflow: hidden; }
+.bar i { display: block; height: 100%; width: 0; background: var(--acc); transition: width .3s; }
+#tbProg { display: flex; flex-direction: column; gap: 5px; }
+#tbProg.done .bar i { background: #22c55e; }
+#tbProg.fail .bar i { background: #f87171; }
+#tbProg.fail #tbLine { color: #f87171; }
+#tbLine { color: var(--dim); font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.urlRow { display: flex; gap: 6px; }
+#tbUrl { flex: 1; min-width: 0; height: 28px; padding: 0 8px; background: var(--bg); border: 1px solid var(--line-2); border-radius: 6px; outline: none; }
+#tbHint { color: var(--dim); font-size: 11px; }
+
+/* 원본 사진 */
+#phBox { position: fixed; right: 18px; top: 66px; z-index: 8; width: min(760px, calc(100% - 24px)); max-height: calc(100% - 78px); display: flex; flex-direction: column; }
+#phBox .dlgHead { gap: 6px; }
+#phBox .dlgHead b { flex: none; }
+#phBox .dlgHead .ib.s { width: 30px; height: 30px; padding: 0; background: transparent; }
+#phBox .dlgHead .ib.s:hover { background: var(--panel-2); }
+#phBox .dlgHead .ib.s.on { background: var(--acc-soft); }
+#phBox .dlgHead .ib.s svg { width: 17px; height: 17px; }
+#phName { flex: 1; min-width: 0; color: var(--dim); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#phNum { color: var(--dim); font-size: 12px; font-variant-numeric: tabular-nums; }
+#phWrap { position: relative; display: flex; align-items: center; justify-content: center; min-height: 200px; margin: 0 12px 12px; background: #111; border-radius: 6px; overflow: hidden; }
+#phPic { position: relative; display: inline-block; line-height: 0; }
+#phImg { display: block; max-width: 100%; max-height: calc(100vh - 170px); }
+#phMark { position: absolute; width: 30px; height: 30px; margin: -15px 0 0 -15px; border: 2.5px solid #ef4444; border-radius: 50%; box-shadow: 0 0 0 2px rgba(0, 0, 0, .55), inset 0 0 0 2px rgba(0, 0, 0, .55); pointer-events: none; }
+#phMsg { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); padding: 8px 14px; background: rgba(24, 24, 24, .9); border-radius: 8px; font-weight: 600; white-space: nowrap; }
+#phMsg:empty { display: none; }
 #flat { position: fixed; inset: 66px 0 28px 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; }
 #flat img { max-width: 92%; max-height: calc(100% - 40px); object-fit: contain; background: #0c0c0c; }
 #flat .fl { color: #aaa; font-size: 12.5px; }
@@ -236,6 +318,7 @@ body.edOn #toast, body.shOn #toast { bottom: 90px; }
   <div id="hostTools" class="tools host">
     <button class="ib" id="bPipes" type="button" title="관로 넣기 (SHP · DXF)" aria-label="관로 넣기"><svg viewBox="0 0 24 24"><path d="M3 8h9M3 16h9"/><path d="M12 8a2.2 4 0 0 1 0 8"/><path d="M18 8v8M14 12h8"/></svg></button>
     <button class="ib" id="hObst" type="button" title="지장물 넣기 (SHP)" aria-label="지장물 넣기"><svg viewBox="0 0 24 24"><path d="M2 12h2.5M7 12h2.5M12 12h0.5"/><path d="M2 7.5h10M2 16.5h10" opacity=".45"/><path d="M18 8v8M14 12h8"/></svg></button>
+    <button class="ib" id="bTrim" type="button" title="결과물 다듬기 (잘라내기 · DEM · 웹 공유)" aria-label="결과물 다듬기"><svg viewBox="0 0 24 24"><path d="M6 2v14a2 2 0 0 0 2 2h14"/><path d="M18 22V8a2 2 0 0 0-2-2H2"/></svg></button>
     <button class="ib" id="bFiles" type="button" title="결과물 폴더 (정사영상 · DSM · 지표면)" aria-label="결과물"><svg viewBox="0 0 24 24"><path d="M4 6h5l2 2h9v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/></svg></button>
   </div>
   <div class="tools">
@@ -290,6 +373,34 @@ body.edOn #toast, body.shOn #toast { bottom: 90px; }
 </div>
 <div id="edChip"><span id="edTip">관로 고치기 · 점 끌기 · 두 번 누르기 = 점 추가 · Delete = 삭제 · Shift 끌기 = 통째로</span><button id="edShp" type="button" hidden>SHP로 내보내기</button><button id="edDrop" type="button" hidden>고친 것 버리기</button><button id="edEnd" type="button">끝</button></div>
 <div id="shChip"><b id="shTip">시작점</b><span id="shName"></span><button id="shCancel" type="button" title="취소 (Esc)">취소</button></div>
+<div id="msChip"><span id="msSeg" hidden><button id="msRect" type="button" title="두 구석 끌기">네모</button><button id="msPoly" type="button" title="점 찍기">다각형</button></span><span id="msTip"></span><button id="msEnd" type="button">끝</button><button id="msX" type="button" title="취소 (Esc)">취소</button></div>
+<div id="msBox" class="card" hidden>
+  <div class="cHead"><b id="msTitle"></b><button id="msClr" class="pb" type="button">지우기</button></div>
+  <div id="msRows" class="kv"></div>
+  <div id="msSegs"></div>
+  <svg id="msSvg" viewBox="0 0 400 210" role="img" aria-label="지형 단면" hidden></svg>
+</div>
+<div id="ctxMenu" role="menu" hidden></div>
+<section id="trimBox" class="pane" hidden>
+  <div class="ugHead"><b>결과물 다듬기</b><button id="tbX" class="x" type="button" title="닫기">×</button></div>
+  <div class="tbRow"><span id="tbState">잘린 곳 없음</span><button id="tbClear" class="pb2" type="button" hidden>잘라내기 없앰</button></div>
+  <div id="tbBtns" class="seg4" role="group" aria-label="결과물 다듬기">
+    <button id="tbCut" type="button" title="네모 · 다각형으로 그려 바깥을 잘라냄"><svg viewBox="0 0 24 24"><path d="M6 2v14a2 2 0 0 0 2 2h14"/><path d="M18 22V8a2 2 0 0 0-2-2H2"/></svg><span>잘라내기</span></button>
+    <button id="tbDem" type="button" title="땅만 남긴 높이 (DTM)"><svg viewBox="0 0 24 24"><path d="M3 18l5-7 4 4 3-5 6 8z"/></svg><span>DEM 만들기</span></button>
+    <button id="tbWeb" type="button" title="웹 주소로 올리기 (NAS)"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3.5 3 14.5 0 18M12 3c-3 3.5-3 14.5 0 18"/></svg><span>웹 공유</span></button>
+  </div>
+  <div id="tbProg" hidden><div class="bar"><i id="tbBar"></i></div><div id="tbLine"></div></div>
+  <div id="tbUrlRow" class="urlRow" hidden><input id="tbUrl" type="text" readonly spellcheck="false"><button id="tbCopy" class="pb2" type="button">주소 복사</button></div>
+  <div id="tbHint">잘라내기 · DEM = 결과물 다시 만듦 (3D · 정사 · DSM · DTM · LAS · 등고선) · 사진 394장이면 3~5분</div>
+</section>
+<section id="phBox" class="dlg" role="dialog" aria-label="원본 사진" hidden>
+  <div class="dlgHead"><b>원본 사진</b><span id="phName"></span><span id="phNum"></span>
+    <button id="phPrev" class="ib s" type="button" title="이전 (←)" aria-label="이전"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button>
+    <button id="phNext" class="ib s" type="button" title="다음 (→)" aria-label="다음"><svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></button>
+    <button id="phZoom" class="ib s" type="button" title="확대 (원본 화소)" aria-label="확대"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l5 5M11 8v6M8 11h6"/></svg></button>
+    <button id="phX" class="dlgX" type="button" title="닫기 (Esc)">×</button></div>
+  <div id="phWrap"><span id="phPic"><img id="phImg" alt=""><i id="phMark" hidden></i></span><div id="phMsg"></div></div>
+</section>
 <div id="pipeCard" class="card" hidden>
   <div class="cHead"><b id="pcName"></b><button id="pcSec" class="ib s" type="button" title="이 자리 터파기 단면" aria-label="이 자리 단면"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M4 9.5h16"/><circle cx="12" cy="14.5" r="2.5"/></svg></button><button id="pcX" class="x" type="button" title="닫기">×</button></div>
   <div id="pcRows" class="kv"></div>
@@ -328,6 +439,19 @@ body.edOn #toast, body.shOn #toast { bottom: 90px; }
       <div id="omMsg" class="err"></div>
     </div>
     <div class="dlgFoot"><button id="omGo" class="primary" type="button" disabled>넣기</button></div>
+  </section>
+  <section id="npDlg" class="dlg" role="dialog" aria-label="새 관" hidden>
+    <div class="dlgHead"><b>새 관</b><button class="dlgX" type="button" title="닫기">×</button></div>
+    <div class="dlgBody">
+      <div class="fields">
+        <label>관경 (mm)<input id="npDia" type="number" step="50" min="20" max="5000" inputmode="numeric"></label>
+        <div class="frow"><span>관종</span><span id="npMat"></span></div>
+        <label>이름<input id="npName" type="text" placeholder="없어도 됨" spellcheck="false" autocomplete="off"></label>
+      </div>
+      <div id="npNote" class="hint"></div>
+      <div id="npMsg" class="err"></div>
+    </div>
+    <div class="dlgFoot"><button id="npGo" class="primary" type="button">넣기</button></div>
   </section>
 </div>
 <section id="secDlg" class="dlg" role="dialog" aria-label="터파기 설정" hidden>

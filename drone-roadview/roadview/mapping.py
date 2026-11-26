@@ -40,8 +40,8 @@ TARGET_FACES = {'fast': 1000000, 'normal': 3000000, 'fine': 6000000}
 # OpenMVS 는 640 px 아래로 안 줄임 (--min-resolution) → 빠르게는 둘이 같음
 DENSE_PX_SURVEY = {'fast': 660, 'normal': 1320, 'fine': 2640}
 DENSE_PX_MESH = {'fast': 660, 'normal': 660, 'fine': 1320}
-OUTPUTS = ['mesh', 'ortho', 'dsm', 'dtm', 'las']
-OUTPUT_NAME = {'mesh': '3D 모델', 'ortho': '정사영상', 'dsm': 'DSM', 'dtm': 'DTM', 'las': '점구름(LAS)'}
+OUTPUTS = ['mesh', 'ortho', 'dsm', 'dtm', 'las', 'contour']
+OUTPUT_NAME = {'mesh': '3D 모델', 'ortho': '정사영상', 'dsm': 'DSM', 'dtm': 'DTM', 'las': '점구름(LAS)', 'contour': '등고선 DXF'}
 DTM_CELL = 0.5             # DTM 격자 m
 MAX_TEX = 4096             # 보기 조각 질감 tex 한 변 최대 (늘 읽음 · 1126 8192 → 4096 · 가까운 조각은 tex_hi 로 바꿔 읽음)
 MAX_TEX_HI = 16384         # 고해상도 질감 tex_hi 한 변 최대 (대부분 그래픽 한도 · OpenMVS 질감은 8192 안)
@@ -439,6 +439,115 @@ def write_las(path, E, N, H, rgb, ground=None, chunk=4000000):
             fp.write(rec.tobytes())
 
 
+def read_crop(out):
+    """data/crop.json → 잘라내기 다각형 [[E, N], …] (도면 좌표 · 3점 이상) 또는 None (JACK 1126 «경계가 지저분 → 그려서 잘라내기»)."""
+    try:
+        d = json.load(open(os.path.join(out, 'data', 'crop.json'), encoding='utf-8'))
+        poly = [[float(p[0]), float(p[1])] for p in d.get('polygon') or []]
+        return poly if len(poly) >= 3 else None
+    except (OSError, ValueError, TypeError, IndexError):
+        return None
+
+
+def crop_points(E, N, poly, cell=0.1):
+    """점마다 다각형 안인지 (다각형을 cell 격자에 칠해 찾음 · 수천만 점도 빠르게)."""
+    import cv2
+    P = np.asarray(poly, float)
+    E = np.asarray(E); N = np.asarray(N)
+    out = np.zeros(len(E), bool)
+    if not len(E):
+        return out
+    # 격자는 다각형과 점 범위가 겹치는 곳만 (화면 밖 먼 꼭짓점이 있어도 격자가 커지지 않게 · 1126 검토)
+    ex0, ex1, ny0, ny1 = max(P[:, 0].min(), float(E.min())), min(P[:, 0].max(), float(E.max())),         max(P[:, 1].min(), float(N.min())), min(P[:, 1].max(), float(N.max()))
+    if ex0 > ex1 or ny0 > ny1:
+        return out
+    cell = max(cell, math.sqrt((ex1 - ex0 + 1) * (ny1 - ny0 + 1) / 4e8))   # 격자 4억 칸 안
+    x0, y1 = ex0 - cell, ny1 + cell
+    W = int(math.ceil((ex1 + cell - x0) / cell)) + 1; Hh = int(math.ceil((y1 - ny0 + cell) / cell)) + 1
+    m = np.zeros((Hh, W), np.uint8)
+    cv2.fillPoly(m, [np.round(np.c_[(P[:, 0] - x0) / cell, (y1 - P[:, 1]) / cell]).astype(np.int32)], 1)
+    for i in range(0, len(E), 5_000_000):              # 나눠서 (색인 메모리)
+        e, n = E[i:i + 5_000_000], N[i:i + 5_000_000]
+        c = ((e - x0) / cell).astype(np.int32); r = ((y1 - n) / cell).astype(np.int32)
+        ok = (r >= 0) & (r < Hh) & (c >= 0) & (c < W)
+        o = np.zeros(len(e), bool); o[ok] = m[r[ok], c[ok]] > 0
+        out[i:i + len(e)] = o
+    return out
+
+
+def crop_grid(poly, x0, y1, cell, shape):
+    """격자(서쪽 끝 x0 · 북쪽 끝 y1 · cell · shape) 칸마다 다각형 안인지."""
+    import cv2
+    P = np.asarray(poly, float)
+    m = np.zeros(shape, np.uint8)
+    cv2.fillPoly(m, [np.round(np.c_[(P[:, 0] - x0) / cell - 0.5, (y1 - P[:, 1]) / cell - 0.5]).astype(np.int32)], 1)
+    return m > 0
+
+
+def write_contour_dxf(path, Z, mask, x0, y1, cell, minor=1.0, major=5.0, smooth_m=1.0, log=print):
+    """땅(DTM) 격자 → 등고선 DXF (R12 · 한글 도면층 = ANSI_949): 등고선_주곡선 · 등고선_계곡선 (표고 = 높이값 · 2D 폴리선)
+    + 등고선_표고 (계곡선 가운데 표고 글). 거친 칸 잡음은 smooth_m 가우시안으로 펴고 점은 2 cm 안으로 솎음. → (주곡선 수, 계곡선 수)."""
+    import cv2
+    import contourpy
+    Zf = fill_pull_push(np.where(mask, Z, 0).astype(np.float32), mask)
+    if smooth_m > 0:
+        s = smooth_m / cell
+        Zf = cv2.GaussianBlur(Zf, (0, 0), s)
+    Zm = np.ma.masked_array(Zf, ~mask)
+    ny, nx = Z.shape
+    xs = x0 + (np.arange(nx) + 0.5) * cell; ys = y1 - (np.arange(ny) + 0.5) * cell
+    gen = contourpy.contour_generator(xs, ys, Zm, line_type='Separate')
+    zv = Zf[mask]
+    if not len(zv):
+        return 0, 0
+    lo, hi = math.ceil(float(zv.min()) / minor) * minor, float(zv.max())
+    L = []                                                        # DXF 줄 (코드 · 값)
+
+    def ent(*kv):
+        for k, v in zip(kv[::2], kv[1::2]):
+            L.append('%d\n%s\n' % (k, v))
+    n_minor = n_major = 0
+    lv = lo
+    while lv <= hi + 1e-9:
+        is_major = abs(lv / major - round(lv / major)) < 1e-6
+        lay = '등고선_계곡선' if is_major else '등고선_주곡선'
+        for seg in gen.lines(lv):
+            if len(seg) < 2:
+                continue
+            ap = cv2.approxPolyDP(seg.astype(np.float32).reshape(-1, 1, 2), 0.02, False).reshape(-1, 2) if len(seg) > 2 else seg
+            if len(ap) < 2:
+                continue
+            closed = len(seg) > 3 and np.hypot(*(seg[0] - seg[-1])) < cell * 0.5
+            ent(0, 'POLYLINE', 8, lay, 66, 1, 10, '0.0', 20, '0.0', 30, '%.3f' % lv, 70, 1 if closed else 0)
+            for x, y in ap[:-1] if closed else ap:
+                ent(0, 'VERTEX', 8, lay, 10, '%.3f' % x, 20, '%.3f' % y, 30, '%.3f' % lv)
+            ent(0, 'SEQEND', 8, lay)
+            if is_major:
+                n_major += 1
+                ln = float(np.sum(np.hypot(*np.diff(ap, axis=0).T)))
+                if ln >= 30:                                      # 계곡선 가운데 표고 글
+                    k = len(ap) // 2; d = ap[min(k + 1, len(ap) - 1)] - ap[max(k - 1, 0)]
+                    ang = math.degrees(math.atan2(d[1], d[0]))
+                    ang = ang + 180 if ang > 90 or ang < -90 else ang
+                    ent(0, 'TEXT', 8, '등고선_표고', 10, '%.3f' % ap[k][0], 20, '%.3f' % ap[k][1], 30, '%.3f' % lv,
+                        40, '0.8', 1, ('%.0f' % lv) if abs(lv - round(lv)) < 1e-6 else ('%.1f' % lv), 50, '%.2f' % ang, 72, 1, 11,
+                        '%.3f' % ap[k][0], 21, '%.3f' % ap[k][1], 31, '%.3f' % lv)
+            else:
+                n_minor += 1
+        lv = round(lv + minor, 6)
+    head = ['0\nSECTION\n2\nHEADER\n9\n$ACADVER\n1\nAC1009\n9\n$DWGCODEPAGE\n3\nANSI_949\n',
+            '9\n$EXTMIN\n10\n%.3f\n20\n%.3f\n30\n%.3f\n' % (xs[0], ys[-1], lo),
+            '9\n$EXTMAX\n10\n%.3f\n20\n%.3f\n30\n%.3f\n' % (xs[-1], ys[0], hi), '0\nENDSEC\n',
+            '0\nSECTION\n2\nTABLES\n0\nTABLE\n2\nLTYPE\n70\n1\n0\nLTYPE\n2\nCONTINUOUS\n70\n0\n3\nSolid line\n72\n65\n73\n0\n40\n0.0\n0\nENDTAB\n',
+            '0\nTABLE\n2\nLAYER\n70\n3\n']
+    for nm, col in (('등고선_주곡선', 8), ('등고선_계곡선', 1), ('등고선_표고', 7)):
+        head.append('0\nLAYER\n2\n%s\n70\n0\n62\n%d\n6\nCONTINUOUS\n' % (nm, col))
+    head.append('0\nENDTAB\n0\nENDSEC\n0\nSECTION\n2\nENTITIES\n')
+    with open(path, 'w', encoding='cp949', errors='replace', newline='\r\n') as fp:
+        fp.write(''.join(head)); fp.write(''.join(L)); fp.write('0\nENDSEC\n0\nEOF\n')
+    return n_minor, n_major
+
+
 def write_raster(out, name, Z, mask, x0, y1, cell):
     from PIL import Image
     Image.fromarray(np.where(mask, Z, -9999).astype(np.float32), 'F').save(os.path.join(out, name + '.tif'))
@@ -779,7 +888,7 @@ def tex_ply_exists(td):
     return os.path.exists(os.path.join(td, 'web.ply')) or os.path.exists(os.path.join(td, 'mesh.ply'))
 
 
-def tiles_to_web(tex_dirs, s, R, t, out, max_tex=MAX_TEX, origin=None, max_hi=MAX_TEX_HI):
+def tiles_to_web(tex_dirs, s, R, t, out, max_tex=MAX_TEX, origin=None, max_hi=MAX_TEX_HI, crop=None):
     """조각마다 질감 면 → data/tiles/tNN.bin (위치 float32×3 · 질감 float32×2, 세모마다 셋) + tNN.jpg · data/mesh.json.
     한 조각에 질감이 여러 장이면 장마다 보기 조각 하나. tex = 한 변 max_tex 이하 (늘 읽음) ·
     tex_hi = 원래 크기 (한 변 max_hi 이하 · tex 보다 클 때만 · 보기 화면이 가까운 조각만 바꿔 읽음) + texsize_hi."""
@@ -802,8 +911,11 @@ def tiles_to_web(tex_dirs, s, R, t, out, max_tex=MAX_TEX, origin=None, max_hi=MA
         (max(1, int(im.size[0] * cap / max(im.size))), max(1, int(im.size[1] * cap / max(im.size)))), Image.LANCZOS)
     for (V, fi, tc, tn, texs), (E, N, H) in zip(parts, conv):
         vpos = np.stack([E - o[0], N - o[1], H - o[2]], 1).astype(np.float32)
+        keep = crop_points(E[fi].mean(1), N[fi].mean(1), crop) if crop else np.ones(len(fi), bool)   # 잘라내기 = 세모 가운데가 안인 것만
         for q in np.unique(tn):
-            sel = tn == q; k = len(tiles)
+            sel = (tn == q) & keep; k = len(tiles)
+            if not sel.any():
+                continue
             pos = vpos[fi[sel].reshape(-1)]
             with open(os.path.join(tdir, 't%02d.bin' % k), 'wb') as fp:
                 fp.write(pos.tobytes()); fp.write(tc[sel].reshape(-1, 2).astype(np.float32).tobytes())
@@ -826,6 +938,8 @@ def tiles_to_web(tex_dirs, s, R, t, out, max_tex=MAX_TEX, origin=None, max_hi=MA
     for f in ('mesh.bin', 'tex.jpg'):                   # 옛 한 덩어리 자료는 지움
         if os.path.exists(os.path.join(out, f)):
             os.remove(os.path.join(out, f))
+    if not tiles:                                       # 잘라내기 안쪽에 세모가 없음 → 무한대 대신 0 (보기 화면 JSON 이 깨지지 않게)
+        mn = np.zeros(3); mx = np.zeros(3)
     meta = {'crs': CRS, 'height': 'EGM2008', 'origin': o, 'tris': int(tris), 'tiles': tiles, 'min': mn.tolist(), 'max': mx.tolist()}
     with open(os.path.join(out, 'mesh.json'), 'w') as fp:
         json.dump(meta, fp, indent=1)
@@ -1181,7 +1295,11 @@ def main(argv=None):
                     help='카메라 풀기: auto = %d장 이상이면 전역 · global · prior(한 장씩)' % GLOBAL_MIN)
     ap.add_argument('--outputs', default='mesh,ortho,dsm,dtm',
                     help='만들 결과물 (쉼표): mesh = 3D 모델 · ortho = 정사영상 · dsm = DSM + 지표면 · dtm = DTM + 지표면 · las = 점구름')
+    ap.add_argument('--contour', type=float, default=1.0, help='등고선 주곡선 간격 m (계곡선 = 5배)')
+    ap.add_argument('--reuse-only', action='store_true', help='결과물 다듬기: 앞 단계를 다시 쓸 수 없으면(사진 · 설정이 바뀜) 처음부터 돌지 말고 멈춤')
     a = ap.parse_args(argv)
+    if not (0.05 <= a.contour <= 100):
+        print('등고선 간격은 0.05 ~ 100 m (%s)' % a.contour); return 2
     set_crs(a.crs)
     outs_sel = {x.strip() for x in a.outputs.split(',') if x.strip() in OUTPUTS}
     if not outs_sel:
@@ -1215,6 +1333,9 @@ def main(argv=None):
     if len(photos) < 3:
         log('매핑 사진 부족 (%d장) → 위치(XMP) 있는 사진 3장 이상' % len(photos), fp); return 2
     names = [p['name'] for p in photos]
+    with open(os.path.join(ws, 'args.json'), 'w', encoding='utf-8') as f2:    # 결과물 다듬기(잘라내기 · DEM 더하기)에서 같은 설정으로 다시
+        json.dump({'photos': os.path.abspath(a.photos), 'quality': a.quality, 'names': a.names, 'title': a.title, 'crs': a.crs,
+                   'outputs': sorted(outs_sel), 'contour': a.contour, 'cell': a.cell}, f2, ensure_ascii=False, indent=1)
     with open(os.path.join(ws, 'names.txt'), 'w', encoding='utf-8') as f2:
         f2.write('\n'.join(names) + '\n')
     cam = camera_params(photos[0])
@@ -1224,7 +1345,7 @@ def main(argv=None):
         len(photos), QUALITY_NAME[a.quality], sum(p['rtk'] == 50 for p in photos),
         photos[0].get('model') or '?', photos[0].get('src') or '?', photos[0].get('w', 0), photos[0].get('h', 0)), fp)
     eta = Eta(len(photos), a.quality)
-    want_pts0 = bool({'dsm', 'dtm', 'las'} & outs_sel)     # 정사는 원본 사진 색 → 측량용 점구름이 없어도 됨 (1126)
+    want_pts0 = bool({'dsm', 'dtm', 'las', 'contour'} & outs_sel)     # 정사는 원본 사진 색 → 측량용 점구름이 없어도 됨 (1126)
     eta.plan(skip=(set() if 'mesh' in outs_sel else {'3D 면', '질감'}) | {'측량 점구름'},
              scale={'점구름': 1.0 if want_pts0 else (DENSE_PX_MESH[a.quality] / DENSE_PX_SURVEY[a.quality]) ** 2})
     T0 = time.time()
@@ -1243,6 +1364,8 @@ def main(argv=None):
     except (OSError, ValueError):
         stages = {}
     fresh = stages.get('sig') != sig
+    if fresh and a.reuse_only and stages.get('sig'):  # 결과물 다듬기인데 앞 단계를 못 씀 → 몇 시간 처음부터 돌지 않고 멈춤 (1126 검토)
+        log('다듬기 멈춤: 사진 · 설정이 처음과 달라 앞 단계를 다시 쓸 수 없음 → 매핑 화면에서 새로 만들기', fp); return 6
     if fresh:                                        # 사진 · 품질이 바뀜 → 처음부터
         for p in ('db.db', 'sparse', 'sparse_txt', 'dense', 'dense_tex', 'tex_colmap'):
             q = os.path.join(ws, p)
@@ -1363,7 +1486,7 @@ def main(argv=None):
     #   3D 만 = 점구름을 덜 촘촘하게(모양 · 질감은 그대로 선명한 사진) · 정사 · DSM · DTM · LAS 를 고르면 측량용 해상도
     #   나중에 더 고르면 사진 맞추기 · 카메라 · (있으면) 점구름 · 3D 는 그대로 쓰고 모자란 것만
     want_mesh = 'mesh' in outs_sel
-    want_pts = bool({'dsm', 'dtm', 'las'} & outs_sel)       # 정사만이면 가벼운 점구름 (색은 원본 사진 · 높이만 씀 · 1126)
+    want_pts = bool({'dsm', 'dtm', 'las', 'contour'} & outs_sel)       # 정사만이면 가벼운 점구름 (색은 원본 사진 · 높이만 씀 · 1126)
     px_srv, px_mesh = DENSE_PX_SURVEY[a.quality], DENSE_PX_MESH[a.quality]
     if 'params' not in stages:                   # 1.0.14 까지 만든 프로젝트 = 측량용 점구름 · 지금 세모 한도
         stages['params'] = {'dense': px_srv, 'faces': TARGET_FACES[a.quality]} if '점구름' in stages['done'] else {}
@@ -1513,11 +1636,25 @@ def main(argv=None):
     E, N, H = to_5186_h(s * (xyz.astype(np.float64) @ R.T) + t)
     good = np.isfinite(E) & np.isfinite(H)
     E, N, H, rgb = E[good], N[good], H[good], rgb[good]
+    crop = read_crop(out)                            # 잘라내기 (data/crop.json · 결과물 다듬기 · JACK 1126)
+    if crop:
+        k = crop_points(E, N, crop)
+        if k.sum() < 1000:                           # 범위 밖 · 너무 작음 → 파일을 쓰기 전에 멈추고 잘라내기를 치움 (다음 다듬기가 계속 실패하지 않게)
+            bad = os.path.join(data_dir, 'crop.json')
+            if os.path.exists(bad):
+                os.replace(bad, os.path.join(data_dir, 'crop_못씀.json'))
+            log('잘라내기 멈춤: 그린 안쪽에 자료가 없음 (점 %d) → 결과물 범위 안에 다시 그리기' % int(k.sum()), fp); return 5
+        E, N, H, rgb = E[k], N[k], H[k], rgb[k]
+        log('  잘라내기 다각형 %d점 · 점 %d 남김' % (len(crop), len(E)), fp)
     origin = P_old.get('origin') or [round(float(np.median(E)), 1), round(float(np.median(N)), 1), round(float(np.percentile(H, 5)), 1)]
     npt = ntri = None
     ortho_meta = None
     if 'ortho' in outs_sel or 'dsm' in outs_sel:
-        dsm, filled, x0, y1 = ortho_dsm(E, N, H, rgb, outs, cell, write_ortho=False, write_dsm='dsm' in outs_sel)
+        dsm, filled, x0, y1 = ortho_dsm(E, N, H, rgb, outs, cell, write_ortho=False, write_dsm=False)
+        if crop:                                     # 이웃 메움이 경계 밖으로 번지지 않게
+            filled &= crop_grid(crop, x0, y1, cell, filled.shape)
+        if 'dsm' in outs_sel:
+            write_raster(outs, 'DSM', dsm, filled, x0, y1, cell)
         if 'ortho' in outs_sel:
             # 정사 = 원본 사진 재투영 (JACK 1126 «탁함 · Terra 는 확대해도 깨끗» · ortho.py) · 안 되면 옛 점구름 색 정사
             try:
@@ -1538,12 +1675,24 @@ def main(argv=None):
     gc = max(cell, 0.25)
     gz, gf, gx0, gy1 = ortho_dsm(E, N, H, rgb, data_dir, gc, write_ortho=False, write_dsm=False,
                                  preview=os.path.join(data_dir, '미리보기.png'))
+    if crop:
+        gf &= crop_grid(crop, gx0, gy1, gc, gf.shape)
     write_raster(data_dir, '지면', gz, gf, gx0, gy1, gc)
     dtm_info = None
     ground_cls = None
-    if 'dtm' in outs_sel:
-        # DTM (땅만 · 설계서 6.1) — 메운 곳(건물 · 비닐하우스 · 숲 밑)은 DTM_땅칸.tif 에 0 으로 따로 표시
+    n_ct = None
+    if 'dtm' in outs_sel or 'contour' in outs_sel:
+        # DTM (땅만 · 설계서 6.1) — 메운 곳(건물 · 비닐하우스 · 숲 밑)은 DTM_땅칸.tif 에 0 으로 따로 표시 · 등고선도 이 땅으로
         dtm, ground, cover, dx0, dy1 = dtm_from_points(E, N, H, cell=DTM_CELL)
+        if crop:
+            cover &= crop_grid(crop, dx0, dy1, DTM_CELL, cover.shape)
+        if 'contour' in outs_sel:                    # 등고선 DXF (주곡선 a.contour · 계곡선 5배 · JACK 1126)
+            n_ct = write_contour_dxf(os.path.join(outs, '등고선.dxf'), dtm, cover, dx0, dy1, DTM_CELL,
+                                     minor=a.contour, major=a.contour * 5)
+            if not sum(n_ct) and os.path.exists(os.path.join(outs, '등고선.dxf')):
+                os.remove(os.path.join(outs, '등고선.dxf'))    # 땅 칸이 없어 한 줄도 없음 → 잘리기 전 옛 파일이 남지 않게
+            log('  등고선 DXF 주곡선 %g m · 계곡선 %g m · 선 %d + %d' % (a.contour, a.contour * 5, n_ct[0], n_ct[1]), fp)
+    if 'dtm' in outs_sel:
         write_raster(outs, 'DTM', dtm, cover, dx0, dy1, DTM_CELL)
         from PIL import Image
         Image.fromarray(np.where(cover, ground.astype(np.uint8), 255).astype(np.uint8), 'L').save(os.path.join(outs, 'DTM_땅칸.tif'))
@@ -1563,15 +1712,15 @@ def main(argv=None):
         log('  점구름 LAS %d점%s' % (len(E), ' · 땅 분류 %.0f%%' % (100 * ground_cls.mean()) if ground_cls is not None else ''), fp)
     meta = None
     if want_mesh:
-        meta = tiles_to_web(tex_dirs, s, R, t, data_dir, max_tex=MAX_TEX, origin=origin)
+        meta = tiles_to_web(tex_dirs, s, R, t, data_dir, max_tex=MAX_TEX, origin=origin, crop=crop)
     elif os.path.exists(os.path.join(data_dir, 'mesh.json')):   # 지난번에 만든 3D 는 그대로 둠
         try:
             meta = json.load(open(os.path.join(data_dir, 'mesh.json'), encoding='utf-8'))
         except (OSError, ValueError):
             meta = None
-    have = {'mesh': bool(meta), 'ortho': os.path.exists(os.path.join(outs, '정사영상.tif')),
+    have = {'mesh': bool(meta and meta.get('tris')), 'ortho': os.path.exists(os.path.join(outs, '정사영상.tif')),
             'dsm': os.path.exists(os.path.join(outs, 'DSM.tif')), 'dtm': os.path.exists(os.path.join(outs, 'DTM.tif')),
-            'las': os.path.exists(os.path.join(outs, '점구름.las'))}
+            'las': os.path.exists(os.path.join(outs, '점구름.las')), 'contour': os.path.exists(os.path.join(outs, '등고선.dxf'))}
     proj = {'version': 1, 'kind': 'mapping', 'title': a.title or P_old.get('title') or Path(out).name, 'crs': CRS, 'height': 'EGM2008',
             'origin': meta['origin'] if meta else origin, 'quality': a.quality, 'photos': len(photos), 'registered': nreg,
             'rtk_rms': round(rms, 3), 'cell': cell, 'bbox': [float(E.min()), float(N.min()), float(E.max()), float(N.max())],
@@ -1579,6 +1728,10 @@ def main(argv=None):
     for k in ('cover',):                         # 관로 넣기에서 정한 값은 남김
         if k in P_old:
             proj[k] = P_old[k]
+    if crop:
+        proj['crop'] = crop
+    if have['contour']:
+        proj['contour'] = {'minor': a.contour, 'major': a.contour * 5} if 'contour' in outs_sel else P_old.get('contour')
     if have['ortho'] and (ortho_meta or P_old.get('ortho')):     # 정사 방식 · 칸 (정보.txt) — 이번에 안 만들었으면 지난번 것
         proj['ortho'] = ortho_meta or P_old['ortho']
     with open(os.path.join(data_dir, 'mapping.js'), 'w', encoding='utf-8') as f3:
@@ -1658,6 +1811,12 @@ def write_info(outs, proj, photos, a, cam, rms, scale, npt, ntri, colmap, mvs, d
         lines.append('지표면_DTM.xml  LandXML 세모 지표면 (DTM 1 m%s) — Civil 3D 원지반용' % (' · 점 %d · 세모 %d' % dtm_info[:2] if dtm_info else ''))
     if dtm_info and dtm_info[3]:
         lines.append('DTM ↔ 사내 수치지도 DEM(5 m 등고선): 가운데값 %.2f m · 사분위 %.2f ~ %.2f m (땅 칸 %d곳 · DEM 이 거칠어 참고용)' % dtm_info[3])
+    if ex('등고선.dxf'):
+        ct = proj.get('contour') or {}
+        lines.append('등고선.dxf    DXF R12 · 땅(DTM) 기준 · 주곡선 %s m (등고선_주곡선) · 계곡선 %s m (등고선_계곡선 · 표고 글 등고선_표고) · 폴리선 높이값 = 표고'
+                     % (ct.get('minor', '?'), ct.get('major', '?')))
+    if proj.get('crop'):
+        lines.append('잘라내기: 다각형 %d점 안만 (data/crop.json · 결과물 다듬기에서 바꾸거나 없앰)' % len(proj['crop']))
     if ex('점구름.las'):
         lines.append('점구름.las    LAS 1.2 · 위치 + 색 · 1 mm 단위 · 분류 2 = 땅 (DTM 을 같이 만들 때) · 좌표 %s + EGM2008' % CRS)
     if tiles:

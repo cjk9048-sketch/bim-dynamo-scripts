@@ -18,10 +18,13 @@
   const S = { info: {}, folder: '', photos: [], sel: new Set(), q: 'normal', area: false, job: null, outTouched: false,
     outs: new Set((localStorage.getItem(OUTK) || 'mesh').split(',').filter(Boolean)) };
   const perPhoto = () => {
-    const k = SEC[S.q], pts = ['dsm', 'dtm', 'las'].some((o) => S.outs.has(o))   /* 정사는 원본 사진 색 → 가벼운 점구름 (1126) */, mesh = S.outs.has('mesh');
+    const k = SEC[S.q], pts = ['dsm', 'dtm', 'las', 'contour'].some((o) => S.outs.has(o))   /* 정사는 원본 사진 색 → 가벼운 점구름 (1126) */, mesh = S.outs.has('mesh');
     return k.base + (pts ? k.pts : k.mesh) + (mesh ? (pts ? k.mP : k.mM) + k.tex : 0) + (pts ? k.out : 0.05);
   };
-  function outsUi() { document.querySelectorAll('#mOuts button').forEach((b) => b.classList.toggle('on', S.outs.has(b.dataset.o))); }
+  function outsUi() {
+    document.querySelectorAll('#mOuts button').forEach((b) => b.classList.toggle('on', S.outs.has(b.dataset.o)));
+    const r = $('mCtRow'); if (r) r.classList.toggle('hide', !S.outs.has('contour'));       // 등고선을 고르면 간격 칸
+  }
   const MAP = { z: 15, cx: 0, cy: 0, imgs: new Map(), fitted: false, key: '' };
   const wpx = (lat, lon, z) => { const s = 256 * Math.pow(2, z), r = lat * Math.PI / 180; return [(lon + 180) / 360 * s, (1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2 * s]; };
   const mapEl = () => $('mMap');
@@ -116,7 +119,7 @@
   async function build() {
     if (S.sel.size < 3) { toast('사진 3장 이상 고르기'); return; }
     if (!S.outs.size) { toast('만들 것 고르기'); return; }
-    const r = await call('start_mapping', { folder: S.folder, out: $('mOut').value, names: [...S.sel], quality: S.q, title: $('mTitle').value, crs: $('mCrs').value, outputs: [...S.outs] });
+    const r = await call('start_mapping', { folder: S.folder, out: $('mOut').value, names: [...S.sel], quality: S.q, title: $('mTitle').value, crs: $('mCrs').value, outputs: [...S.outs], contour: Number($('mCt').value) || 1 });
     if (!r || !r.ok) { if (r) toast(r.msg); return; }
     S.job = r.job; $('mBuild').disabled = true; $('mStop').disabled = false; $('mBar').style.width = '0%'; poll();
   }

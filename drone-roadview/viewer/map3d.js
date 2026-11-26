@@ -89,9 +89,89 @@
   $('bHome').addEventListener('click', () => { beforeHome().catch(() => {}).then(() => call('go_home')); });
   $('bFiles').addEventListener('click', () => call('open_results'));
 
+  // ---------------------------------------------------------------- 결과물 다듬기 (JACK 1126 · 프로그램 안에서만): 잘라내기 · DEM 만들기 · 웹 공유
+  // 프로그램 일 (crop_apply · crop_clear · add_outputs · export_web) → {ok, job} → job(id) 을 0.5 초마다 → 진행 막대.
+  // 잘라내기 · DEM = 결과물을 다시 만듦 → 끝나면 다시 엶 · 웹 공유 = 끝나면 주소 + [주소 복사]. 3D 없는 프로젝트도 됨 (잘라내기 빼고).
+  const TB = { id: null, kind: '', crop: null, flush: () => Promise.resolve(), cut: null, onCrop: () => {} };
+  const tbBox = $('trimBox');
+  function tbShow(on) {
+    tbBox.hidden = !on;
+    if (on && tbBox.parentElement && tbBox.parentElement.id === 'side' && $('side').hidden) { $('side').hidden = false; $('tgSide').classList.add('on'); }
+    $('bTrim').classList.toggle('on', on);
+    $('tbCut').hidden = !TB.cut;
+    $('tbDem').querySelector('span').textContent = (Array.isArray(P.outputs) && P.outputs.includes('dtm')) ? 'DEM 다시 만들기' : 'DEM 만들기';
+    if (on) tbCropGet();
+    TB.onCrop();
+  }
+  function tbCropGet() {
+    return call('crop_get').then((r) => {
+      const pg = r && Array.isArray(r.polygon) && r.polygon.length >= 3 ? r.polygon.map((q) => [Number(q[0]), Number(q[1])]) : null;
+      TB.crop = pg;
+      let a = 0;
+      if (pg) for (let i = 0, j = pg.length - 1; i < pg.length; j = i++) a += (pg[j][0] + pg[i][0]) * (pg[j][1] - pg[i][1]);
+      $('tbState').textContent = pg ? '잘림 · 점 ' + pg.length + '개 · ' + Math.abs(a / 2).toLocaleString('ko-KR', { maximumFractionDigits: 0 }) + ' m²' : '잘린 곳 없음';
+      $('tbClear').hidden = !pg;
+      TB.onCrop();
+      return pg;
+    });
+  }
+  function tbJobUI(st, pct, line) {
+    const pr = $('tbProg');
+    pr.hidden = false;
+    $('tbBar').style.width = clamp(num(pct, 0), 0, 100) + '%';
+    $('tbLine').textContent = line || '';
+    pr.classList.toggle('fail', st === 'fail');
+    pr.classList.toggle('done', st === 'done');
+    pr.dataset.st = st;
+    const busy = st === 'run';
+    ['tbCut', 'tbDem', 'tbWeb', 'tbClear'].forEach((id) => { $(id).disabled = busy; });
+  }
+  // kind = 'crop' · 'clear' · 'dem' · 'web' · start = 프로그램 일 시작 (→ {ok, job})
+  function tbJob(kind, start) {
+    if (TB.id != null) { toast('다른 일 하는 중'); return; }
+    if (tbBox.hidden) tbShow(true);
+    TB.kind = kind;
+    $('tbUrlRow').hidden = true;
+    tbJobUI('run', 0, '준비');
+    TB.flush().then(start).then((r) => {
+      if (!r || r.ok === false || r.job == null) { tbJobUI('fail', 0, (r && r.msg) || '못 함'); return; }
+      TB.id = r.job;
+      tbPoll();
+    }, (e) => tbJobUI('fail', 0, errText(e)));
+  }
+  function tbPoll() {
+    setTimeout(() => {
+      call('job', TB.id).then((r) => {
+        if (!r) { TB.id = null; tbJobUI('fail', 0, '연결 끊김'); return; }
+        if (r.state === 'done') {
+          TB.id = null;
+          if (TB.kind === 'web') {
+            tbJobUI('done', 100, r.line || '끝');
+            if (r.url) { $('tbUrl').value = String(r.url); $('tbUrlRow').hidden = false; }
+          } else {
+            tbJobUI('done', 100, '다 만듦 · 다시 여는 중');
+            setTimeout(() => location.reload(), 700);
+          }
+        } else if (r.state === 'fail') { TB.id = null; tbJobUI('fail', r.pct, r.line || '못 함'); }
+        else { tbJobUI('run', r.pct, r.line); tbPoll(); }
+      });
+    }, 500);
+  }
+  $('bTrim').addEventListener('click', () => tbShow(tbBox.hidden));
+  $('tbX').addEventListener('click', () => tbShow(false));
+  $('tbCut').addEventListener('click', () => { if (TB.cut) TB.cut(null); });
+  $('tbDem').addEventListener('click', () => tbJob('dem', () => call('add_outputs', ['dtm'])));
+  $('tbWeb').addEventListener('click', () => tbJob('web', () => call('export_web')));
+  $('tbClear').addEventListener('click', () => toast('잘라내기 없애고 결과물 다시 만들기', () => tbJob('clear', () => call('crop_clear')), '없애기'));
+  $('tbUrl').addEventListener('focus', () => $('tbUrl').select());
+  $('tbCopy').addEventListener('click', () => {
+    const u = $('tbUrl').value;
+    if (u) hostCall('copy_text', u).then((r) => { if (r && r.ok !== false) toast('주소 복사됨'); else copyText(u); }, () => copyText(u));
+  });
+
   // 3D 를 안 만든 프로젝트 (결과물 고르기 · 1.0.15) → 위에서 본 미리보기 그림 + 만든 것 · [결과물]
   if (Array.isArray(P.outputs) && !P.outputs.includes('mesh')) {
-    const NM = { ortho: '정사영상', dsm: 'DSM', dtm: 'DTM', las: '점구름 LAS' };
+    const NM = { ortho: '정사영상', dsm: 'DSM', dtm: 'DTM', las: '점구름 LAS', contour: '등고선' };
     ['bPipes', 'hObst', 'tgEdit', 'tgQty', 'bXray', 'bCheck', 'bTop', 'tgSide', 'side', 'c', 'ov', 'load'].forEach((id) => { $(id).style.display = 'none'; });
     const f = document.createElement('div'); f.id = 'flat';
     f.innerHTML = '<img src="data/미리보기.png" alt=""><div class="fl">3D 모델 없음 · 만든 것: ' + P.outputs.map((k) => NM[k] || k).join(' · ') + '</div>';
@@ -101,6 +181,7 @@
     return;
   }
 
+  $('side').insertBefore(tbBox, $('side').firstChild);                 // 결과물 다듬기 = 오른쪽 칸 맨 위 (3D 화면)
   const cv = $('c'), ovc = $('ov'), ov = ovc.getContext('2d');
   const gl = cv.getContext('webgl2', { antialias: true, preserveDrawingBuffer: true, stencil: true });
   if (!gl) { $('load').textContent = 'WebGL2 없음'; return; }
@@ -1896,6 +1977,7 @@
         ov.lineWidth = 2.2; ov.strokeStyle = PIN; ov.stroke();
       }
     }
+    msOverlay();                                  // 재기 · 새 관 · 잘라내기 · 원본 사진 자리 (오른쪽 메뉴)
   }
 
   // ---------------------------------------------------------------- 지하 시설물 칸: 표현 (영역 · 터파기) · [단면] · 표시 항목 · 평균매설깊이
@@ -2182,8 +2264,8 @@
 
   // ---------------------------------------------------------------- 창: [관로 넣기] · [지장물 넣기] (360 과 같음)
   const dlgBack = $('dlgBack');
-  function dlgShow(id) { dlgBack.hidden = false; ['pipeDlg', 'obstDlg'].forEach((k) => { $(k).hidden = k !== id; }); }
-  function dlgClose() { dlgBack.hidden = true; }
+  function dlgShow(id) { dlgBack.hidden = false; ['pipeDlg', 'obstDlg', 'npDlg'].forEach((k) => { $(k).hidden = k !== id; }); }
+  function dlgClose() { dlgBack.hidden = true; if (MS.kind === 'pipe') msClear(); }   // 새 관 창을 넣지 않고 닫으면 그리던 것도 버림
   dlgBack.addEventListener('click', (e) => { if (e.target === dlgBack) dlgClose(); });
   dlgBack.querySelectorAll('.dlgX').forEach((b) => b.addEventListener('click', dlgClose));
   const PM = { pick: null, busy: false };
@@ -2573,7 +2655,7 @@
     } else {
       const out = {};
       ED.dirty.forEach((i) => { out[i] = window.RV_PIPES.lines[i]; });
-      try { localStorage.setItem(PIPE_KEY, JSON.stringify({ sig: ED.origSig, lines: out })); } catch (e) { toast('이 브라우저에 저장 못 함'); }
+      try { localStorage.setItem(PIPE_KEY, JSON.stringify({ sig: ED.origSig, lines: out, layers: window.RV_PIPES.layers })); } catch (e) { toast('이 브라우저에 저장 못 함'); }
     }
     edUI();
   }
@@ -2628,11 +2710,15 @@
   ED.origSig = pipesSig(window.RV_PIPES);
   ED.origEdited = !!(window.RV_PIPES && window.RV_PIPES.edited);
   (function restore() {
-    const st = lsGet(PIPE_KEY), Pp = window.RV_PIPES;
-    if (!st || HOST() || !Pp || !Array.isArray(Pp.lines) || st.sig !== ED.origSig || !st.lines || typeof st.lines !== 'object') return;
+    const st = lsGet(PIPE_KEY);
+    if (!st || HOST() || st.sig !== ED.origSig || !st.lines || typeof st.lines !== 'object') return;
+    if (!window.RV_PIPES && Object.keys(st.lines).length) { window.RV_PIPES = { layers: [], lines: [], origin: { E: ORG[0], N: ORG[1] } }; poSet(window.RV_PIPES); }  // 관로 없던 프로젝트에 그린 새 관
+    const Pp = window.RV_PIPES;
+    if (!Pp || !Array.isArray(Pp.lines)) return;
     let n = 0;
-    Object.keys(st.lines).forEach((k) => {
-      const i = Number(k), l = st.lines[k];
+    Object.keys(st.lines).map(Number).sort((a, b) => a - b).forEach((i) => {
+      const l = st.lines[i];
+      if (i === Pp.lines.length && l && Array.isArray(l.pts)) Pp.lines.push({ pts: [] });   // 이 브라우저에서 그린 새 관 (오른쪽 메뉴) = 끝에 자리 만들고
       if (!Number.isInteger(i) || i < 0 || i >= Pp.lines.length || !l || !Array.isArray(l.pts)) return;
       ED.orig.set(i, Pp.lines[i]);
       Pp.lines[i] = l;
@@ -2640,6 +2726,7 @@
       n++;
     });
     if (!n) return;
+    if (Array.isArray(st.layers) && st.layers.length > (Array.isArray(Pp.layers) ? Pp.layers.length : 0)) Pp.layers = st.layers;   // 새 관 층
     Pp.edited = true;
     lines = buildLines(Pp);
     toast('고친 관로 불러옴', edDiscard, '버리기');
@@ -3010,17 +3097,22 @@
     if (nx >= 0) { CK.active = nx; const c = ckRel(CK.pts[nx]); V.tgt = c; }
     ckRender(); redraw();
   }
-  $('bCheck').addEventListener('click', async () => {
-    if ($('ck').style.display !== 'none') { $('ck').style.display = 'none'; setOn($('bCheck'), false); redraw(); return; }
-    if (!CK.pts.length) {
-      const r = await call('pick_checkpoints'); if (!r) return;
-      if (!r.ok) { toast(r.msg); return; }
-      CK.pts = r.points.map((q) => ({ name: q.name, E: q.E, N: q.N, Z: q.Z, m: null })); CK.active = 0;
-      ckBuild();
-      if (r.note) toast(r.note);
-    }
+  async function ckLoad() {                     // 검사점 파일 고르기 (프로그램) → true = 읽음
+    const r = await call('pick_checkpoints'); if (!r) return false;
+    if (!r.ok) { toast(r.msg); return false; }
+    CK.pts = r.points.map((q) => ({ name: q.name, E: q.E, N: q.N, Z: q.Z, m: null })); CK.active = 0;
+    ckBuild();
+    if (r.note) toast(r.note);
+    return true;
+  }
+  function ckShow() {
     $('side').hidden = false; setOn($('tgSide'), true);
     $('ck').style.display = 'flex'; setOn($('bCheck'), true); ckRender(); redraw();
+  }
+  $('bCheck').addEventListener('click', async () => {
+    if ($('ck').style.display !== 'none') { $('ck').style.display = 'none'; setOn($('bCheck'), false); redraw(); return; }
+    if (!CK.pts.length && !(await ckLoad())) return;
+    ckShow();
   });
   $('ckClose').addEventListener('click', () => { $('ck').style.display = 'none'; setOn($('bCheck'), false); CK.active = -1; redraw(); });
   $('ckSave').addEventListener('click', async () => {
@@ -3029,11 +3121,671 @@
   });
   window.__ckApi = { set: (pts) => { CK.pts = pts.map((q) => ({ name: q.name, E: q.E, N: q.N, Z: q.Z, m: null })); CK.active = 0; ckBuild(); $('ck').style.display = 'flex'; ckRender(); redraw(); }, measure: (p) => ckMeasure({ p }), CK };
 
+  // ---------------------------------------------------------------- 재기 · 새 관 그리기 · 잘라내기 경계 (JACK 1126 · 오른쪽 메뉴에서 시작)
+  // MS.pts = 세계 점 (매핑 원점 기준 · z = 표고 − 원점 표고). dist = 거리 (평면 · 경사) · area = 면적 (평면) · height = 높이 차 ·
+  // prof = 지형 단면 (땅 = dem.js · 3D 모델 면 = 위에서 본 띠 그리기) · pipe = 새 관 (끝나면 관경 · 관종 · 이름 창) · crop = 잘라내기 경계.
+  // 점 찍기 = 누르기 · 끝 = 두 번 누르기 · Enter · Esc = 취소 · Backspace = 마지막 점 빼기. 결과 칸은 [지우기] 까지 남음.
+  const MS = { kind: '', pts: [], hov: null, done: false, drag: -1, rect: false, rNew: false, res: null, prof: null };
+  const MS_TIP = { dist: '거리 · 점 찍기 · 두 번 누르기 · Enter = 끝', area: '면적 · 점 찍기 · 두 번 누르기 · Enter = 닫기',
+    height: '높이 차 · 두 점', prof: '지형 단면 · 두 점', pipe: '새 관 · 점 찍기 · 두 번 누르기 · Enter = 끝' };
+  const MS_COL = { dist: '#facc15', area: '#facc15', height: '#facc15', prof: '#facc15', pipe: '#a3e635', crop: '#f87171' };
+  const fM = (v) => v.toFixed(2) + ' m';
+  const fA = (v) => v.toLocaleString('ko-KR', { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + ' m²';
+  const msBox = $('msBox'), msChip = $('msChip');
+  function msStart(kind, w) {
+    msClear();
+    if (ED.on) edMode(false);
+    shCancel(); cardHide();
+    MS.kind = kind; MS.pts = w ? [w.slice()] : []; MS.done = false; MS.hov = null; MS.drag = -1; MS.rect = false;
+    cv.classList.add('pick');
+    msUI(); redraw();
+  }
+  function msClear() {
+    if (!MS.kind) return;
+    MS.kind = ''; MS.pts = []; MS.hov = null; MS.done = false; MS.drag = -1; MS.res = null; MS.prof = null;
+    cv.classList.remove('pick');
+    msUI(); redraw();
+  }
+  // 화면 → 세계 점: 3D 모델 면 · 잘라내기는 모델 밖이면 지금 높이 수평면
+  function rayZ(x, y, z) {
+    const vw = vwNow(), nx = (x - vw.w / 2) / (vw.w / 2), ny = (vw.h / 2 - y) / (vw.h / 2);
+    const d = [0, 1, 2].map((i) => vw.f[i] + nx * vw.tanH * vw.r[i] + ny * vw.tanV * vw.u[i]);
+    if (Math.abs(d[2]) < 1e-9) return null;
+    const t = (z - vw.E[2]) / d[2];
+    return t > 0 ? [vw.E[0] + t * d[0], vw.E[1] + t * d[1], z] : null;
+  }
+  function msPoint(x, y) {
+    const h = pickAt(x, y);
+    if (h) return h.p.slice();
+    return MS.kind === 'crop' ? rayZ(x, y, MS.pts.length ? MS.pts[MS.pts.length - 1][2] : V.tgt[2]) : null;
+  }
+  const wScr = (p) => toScr(p[0] - TX, p[1] - TY, p[2] - TZ);
+  function msTap(x, y) {
+    if (!MS.kind) return false;
+    if (MS.done) return MS.kind === 'crop';
+    if (MS.kind === 'crop' && MS.rect) return true;                      // 네모 = 누르고 끌기 (msDown · msUp)
+    const p = msPoint(x, y);
+    if (!p) { toast('모델 위 누르기'); return true; }
+    const last = MS.pts[MS.pts.length - 1];
+    if (last && Math.hypot(p[0] - last[0], p[1] - last[1], p[2] - last[2]) < 0.01) return true;   // 두 번 누르기의 둘째
+    MS.pts.push(p);
+    if ((MS.kind === 'height' || MS.kind === 'prof') && MS.pts.length >= 2) { msFinish(); return true; }
+    msUI(); redraw();
+    return true;
+  }
+  function msFinish() {
+    const k = MS.kind, need = k === 'area' || k === 'crop' ? 3 : 2;
+    if (!k || MS.done) return;
+    if (MS.pts.length < need) { toast('점 ' + need + '개 이상'); return; }
+    if (k === 'pipe') { npShow(); return; }
+    MS.done = true; MS.hov = null;
+    if (k !== 'crop') cv.classList.remove('pick');
+    if (k === 'prof') MS.prof = profGet(MS.pts[0], MS.pts[1]);
+    msUI(); redraw();
+  }
+  function msBack() {
+    if (!MS.kind || MS.done || !MS.pts.length) return;
+    MS.pts.pop(); msUI(); redraw();
+  }
+  function msCalc() {
+    const Pp = MS.pts, n = Pp.length, r = { segs: [], plan: 0, slope: 0, area: 0, perim: 0, n: n };
+    for (let i = 1; i < n; i++) {
+      const a = Pp[i - 1], b = Pp[i], pl = Math.hypot(b[0] - a[0], b[1] - a[1]), dz = b[2] - a[2];
+      r.segs.push([pl, Math.hypot(pl, dz), dz]); r.plan += pl; r.slope += Math.hypot(pl, dz);
+    }
+    if (n >= 3) {
+      let a = 0;
+      for (let i = 0, j = n - 1; i < n; j = i++) a += (Pp[j][0] + Pp[i][0]) * (Pp[j][1] - Pp[i][1]);
+      r.area = Math.abs(a / 2);
+      r.perim = r.plan + Math.hypot(Pp[0][0] - Pp[n - 1][0], Pp[0][1] - Pp[n - 1][1]);
+    }
+    return r;
+  }
+  function msUI() {
+    const k = MS.kind, crop = k === 'crop';
+    document.body.classList.toggle('msOn', !!k && !MS.done || crop);
+    msChip.classList.toggle('show', !!k && (!MS.done || crop));
+    msChip.classList.toggle('crop', crop);
+    $('msSeg').hidden = !crop;
+    setOn($('msRect'), crop && MS.rect); setOn($('msPoly'), crop && !MS.rect);
+    const n = MS.pts.length;
+    let tip = MS_TIP[k] || '';
+    if (k === 'height' || k === 'prof') tip += n ? ' · 둘째 점' : ' · 첫 점';
+    if (crop) tip = MS.done ? '점 끌어 고치기 · 적용 = 결과물 다시 만듦 (394장 3~5분 · 1.0.15 이전 프로젝트는 질감도 다시라 더 걸림)' : MS.rect ? (n ? '맞은 구석 누르기 · 끌기' : '두 구석 끌기') : '점 찍기 · 두 번 누르기 · Enter = 닫기 · 점 끌어 고치기';
+    $('msTip').textContent = tip;
+    const end = $('msEnd');
+    end.hidden = k === 'height' || k === 'prof';
+    end.textContent = crop ? '적용' : '끝';
+    end.disabled = crop ? !MS.done : n < (k === 'area' ? 3 : 2);
+    msChip.dataset.kind = k; msChip.dataset.n = String(n);
+    // 결과 칸
+    const show = !!k && k !== 'pipe' && !crop && n >= (k === 'area' ? 3 : 2);
+    msBox.hidden = !show;
+    msBox.dataset.kind = show ? k : '';
+    if (!show) { MS.res = null; return; }
+    const r = MS.res = msCalc();
+    msBox.classList.toggle('wide', k === 'prof');
+    $('msTitle').textContent = { dist: '거리', area: '면적', height: '높이 차', prof: '지형 단면' }[k];
+    const segs = $('msSegs'), svg = $('msSvg');
+    segs.textContent = ''; svg.toggleAttribute('hidden', true);                 // SVG 는 .hidden 속성이 없음 → 글자 속성으로
+    let rows = [];
+    if (k === 'dist') {
+      rows = [['plan', '평면 길이', r.plan, fM(r.plan)], ['slope', '경사 길이', r.slope, fM(r.slope)], ['n', '마디', r.segs.length, r.segs.length + '개']];
+      if (r.segs.length > 1) {
+        ['', '평면', '경사'].forEach((t) => { const s = document.createElement('span'); s.className = 'h'; s.textContent = t; segs.appendChild(s); });
+        r.segs.forEach((g, i) => [String(i + 1), fM(g[0]), fM(g[1])].forEach((t, j) => { const s = document.createElement('span'); if (!j) s.className = 'h'; s.textContent = t; segs.appendChild(s); }));
+      }
+    } else if (k === 'area') {
+      rows = [['area', '평면 면적', r.area, fA(r.area)], ['perim', '둘레', r.perim, fM(r.perim)], ['n', '점', n, n + '개']];
+    } else {
+      const a = MS.pts[0], b = MS.pts[1], g = r.segs[0], gr = g[0] > 0.01 ? g[2] / g[0] * 100 : NaN;
+      rows = [['dz', '표고 차', g[2], (g[2] >= 0 ? '+' : '') + fM(g[2])], ['plan', '평면 거리', g[0], fM(g[0])],
+        ['grade', '기울기', gr, Number.isFinite(gr) ? (gr >= 0 ? '+' : '') + gr.toFixed(1) + ' %' : '-'],
+        ['za', 'A 표고', a[2] + H0, elTxt(a[2] + H0)], ['zb', 'B 표고', b[2] + H0, elTxt(b[2] + H0)]];
+      if (k === 'prof') { rows = [rows[1], rows[0], rows[3], rows[4]]; rows[0] = ['len', '길이', g[0], fM(g[0])]; if (MS.prof) { svg.toggleAttribute('hidden', false); profSvg(svg, MS.prof); } }
+    }
+    kvRows($('msRows'), rows, 'ms_');
+  }
+  $('msEnd').addEventListener('click', () => { if (MS.kind === 'crop') crApply(); else msFinish(); });
+  $('msX').addEventListener('click', msClear);
+  $('msClr').addEventListener('click', msClear);
+  // 지형 단면: 땅 (dem.js · 매끈한 땅 DTM) + 3D 모델 면 (위에서 본 가장 높은 면 · 두 점 사이 띠 1 화소 줄 그리기)
+  function profModel(a, b, n) {
+    if (!mesh || !fext) return null;
+    const L = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    if (!(L > 0.01)) return null;
+    const ux = (b[0] - a[0]) / L, uy = (b[1] - a[1]) / L, vx = -uy, vy = ux, hw = 0.05;
+    const zlo = mesh.meta.min[2] - 5, zhi = mesh.meta.max[2] + 5, zr = zhi - zlo;
+    const fb = gl.createFramebuffer(), tx = gl.createTexture(), dp = gl.createRenderbuffer();
+    gl.bindTexture(gl.TEXTURE_2D, tx); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, n, 1, 0, gl.RGBA, gl.FLOAT, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.bindRenderbuffer(gl.RENDERBUFFER, dp); gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT24, n, 1);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fb); gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tx, 0);
+    gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, dp);
+    gl.viewport(0, 0, n, 1);
+    gl.colorMask(true, true, true, true); gl.depthMask(true);
+    gl.clearBufferfv(gl.COLOR, 0, [0, 0, 0, -1]); gl.clear(gl.DEPTH_BUFFER_BIT);
+    gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LESS); gl.disable(gl.BLEND); gl.disable(gl.STENCIL_TEST); gl.disable(gl.CULL_FACE);
+    // x = 측점 (0 ~ L → −1 ~ 1) · y = 선에서 옆 (±hw) · 깊이 = 높은 면이 앞 (hmSync 와 같음)
+    const M = [2 * ux / L, vx / hw, 0, 0, 2 * uy / L, vy / hw, 0, 0, 0, 0, -2 / zr, 0,
+      -2 * (ux * a[0] + uy * a[1]) / L - 1, -(vx * a[0] + vy * a[1]) / hw, (zlo + zhi) / zr, 1];
+    gl.useProgram(PICK.p); gl.uniformMatrix4fv(PICK.u.M, false, M); gl.uniform1f(PICK.u.id, 0);
+    for (const p of mesh.parts) { gl.bindVertexArray(p.vao); gl.drawArrays(gl.TRIANGLES, 0, p.n); }
+    const px = new Float32Array(n * 4);
+    gl.readPixels(0, 0, n, 1, gl.RGBA, gl.FLOAT, px);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.bindVertexArray(null);
+    gl.deleteFramebuffer(fb); gl.deleteTexture(tx); gl.deleteRenderbuffer(dp);
+    const out = new Array(n);
+    for (let i = 0; i < n; i++) out[i] = px[i * 4 + 3] < 0 ? NaN : px[i * 4 + 2] + H0;
+    redraw();
+    return out;
+  }
+  function profGet(a, b) {
+    const L = Math.hypot(b[0] - a[0], b[1] - a[1]), n = clamp(Math.ceil(L / 0.1), 2, 1024), s = [], dtm = [], e = [], nn = [];
+    for (let i = 0; i < n; i++) {
+      const t = (i + 0.5) / n, x = a[0] + (b[0] - a[0]) * t, y = a[1] + (b[1] - a[1]) * t;
+      s.push(t * L); e.push(x + ORG[0]); nn.push(y + ORG[1]); dtm.push(demAt(x, y));
+    }
+    return { L: L, s: s, e: e, n: nn, dtm: dtm, mdl: profModel(a, b, n) || dtm.map(() => NaN), za: a[2] + H0, zb: b[2] + H0 };
+  }
+  function profSvg(svg, pr) {
+    const W = 400, H = 210, pl = 50, prr = 12, pt = 24, pb = 24;
+    let z0 = Infinity, z1 = -Infinity;
+    for (const v of pr.dtm.concat(pr.mdl)) if (Number.isFinite(v)) { if (v < z0) z0 = v; if (v > z1) z1 = v; }
+    svg.dataset.n = String(pr.s.length);
+    if (!(z1 >= z0)) { svg.innerHTML = '<text x="200" y="105" text-anchor="middle" fill="#8b8b8b" font-size="12">높이 자료 없음</text>'; return; }
+    const pad = Math.max(0.4, (z1 - z0) * 0.12); z0 -= pad; z1 += pad;
+    const X = (s) => pl + s / pr.L * (W - pl - prr), Y = (z) => pt + (z1 - z) / (z1 - z0) * (H - pt - pb);
+    const n1 = (v) => v.toFixed(1);
+    const nice = (span, k) => { const raw = span / k, p = Math.pow(10, Math.floor(Math.log10(raw))), m = raw / p; return (m < 1.5 ? 1 : m < 3.5 ? 2 : m < 7.5 ? 5 : 10) * p; };
+    const txt = (x, y, t, an, col) => '<text x="' + n1(x) + '" y="' + n1(y) + '" text-anchor="' + (an || 'middle') + '" fill="' + (col || '#8b8b8b') + '" font-size="10.5" font-weight="600">' + t + '</text>';
+    let s = '';
+    const dz = nice(z1 - z0, 4), dsx = nice(pr.L, 5);
+    for (let z = Math.ceil(z0 / dz) * dz; z <= z1; z += dz) s += '<line x1="' + pl + '" x2="' + (W - prr) + '" y1="' + n1(Y(z)) + '" y2="' + n1(Y(z)) + '" stroke="#2c2c2c" stroke-width="1"/>' + txt(pl - 5, Y(z) + 3.5, z.toFixed(dz < 1 ? 1 : 0), 'end');
+    for (let d = 0; d <= pr.L + 1e-6; d += dsx) s += '<line x1="' + n1(X(d)) + '" x2="' + n1(X(d)) + '" y1="' + pt + '" y2="' + (H - pb) + '" stroke="#2c2c2c" stroke-width="1"/>' + txt(X(d), H - pb + 14, d.toFixed(dsx < 1 ? 1 : 0));
+    const runs = (arr) => { const out = []; let cur = []; arr.forEach((v, i) => { if (Number.isFinite(v)) cur.push([X(pr.s[i]), Y(v)]); else if (cur.length) { out.push(cur); cur = []; } }); if (cur.length) out.push(cur); return out; };
+    const path = (rs) => rs.map((r) => 'M' + r.map((q) => n1(q[0]) + ' ' + n1(q[1])).join('L')).join('');
+    const gr = runs(pr.dtm), md = runs(pr.mdl);
+    for (const r of gr) s += '<path d="M' + n1(r[0][0]) + ' ' + (H - pb) + 'L' + r.map((q) => n1(q[0]) + ' ' + n1(q[1])).join('L') + 'L' + n1(r[r.length - 1][0]) + ' ' + (H - pb) + 'Z" fill="#5a4330" fill-opacity="0.85"/>';
+    if (md.length) s += '<path d="' + path(md) + '" fill="none" stroke="#5fb3ff" stroke-width="1.3" stroke-linejoin="round"/>';
+    if (gr.length) s += '<path d="' + path(gr) + '" fill="none" stroke="#f0dfae" stroke-width="1.7" stroke-linejoin="round"/>';
+    s += txt(X(0) + 2, pt - 8, 'A', 'start', '#e9e9e9') + txt(X(pr.L) - 2, pt - 8, 'B', 'end', '#e9e9e9');
+    s += '<rect x="' + (pl + 22) + '" y="' + (pt - 14) + '" width="12" height="3" fill="#f0dfae"/>' + txt(pl + 38, pt - 9.5, '땅 (DTM)', 'start') +
+      '<rect x="' + (pl + 110) + '" y="' + (pt - 14) + '" width="12" height="3" fill="#5fb3ff"/>' + txt(pl + 126, pt - 9.5, '3D 모델 면', 'start') + txt(pl - 5, pt - 9.5, 'EL', 'end') + txt(W - prr, H - 6, 'm', 'end');
+    svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
+    svg.innerHTML = s;
+  }
+  // 겹쳐 그리기 (overlay 끝에서): 선 · 점 · 글 · 잘라내기 경계 (바깥 어둡게) · 원본 사진 자리
+  function wClip(a, b) {
+    const ca = camc(a[0] - TX, a[1] - TY, a[2] - TZ), cb = camc(b[0] - TX, b[1] - TY, b[2] - TZ);
+    if (ca[2] < NEAR && cb[2] < NEAR) return null;
+    const at = (t) => ca.map((v, i) => v + (cb[i] - v) * t);
+    const A = ca[2] < NEAR ? at((NEAR - ca[2]) / (cb[2] - ca[2])) : ca, B = cb[2] < NEAR ? at((NEAR - ca[2]) / (cb[2] - ca[2])) : cb;
+    return [scr(A), scr(B)];
+  }
+  function msTag(text, x, y, col) {
+    ov.font = '600 12px Malgun Gothic, Segoe UI, sans-serif'; ov.textAlign = 'center'; ov.textBaseline = 'middle';
+    const tw = ov.measureText(text).width + 16, th = 20, bx = clamp(x - tw / 2, 4, VW.w - tw - 4), by = clamp(y - th / 2, 4, VW.h - th - 4);
+    roundRect(ov, bx, by, tw, th, 10); ov.fillStyle = 'rgba(12, 14, 20, 0.86)'; ov.fill();
+    if (col) { ov.strokeStyle = col; ov.lineWidth = 1.2; ov.stroke(); }
+    ov.fillStyle = '#fff'; ov.fillText(text, bx + tw / 2, by + th / 2 + 0.5);
+  }
+  function msLine(a, b, col, dash) {
+    const s = wClip(a, b);
+    if (!s) return null;
+    ov.setLineDash(dash ? [6, 5] : []);
+    ov.beginPath(); ov.moveTo(s[0][0], s[0][1]); ov.lineTo(s[1][0], s[1][1]);
+    ov.strokeStyle = PIN_DARK; ov.lineWidth = 5; ov.stroke();
+    ov.strokeStyle = col; ov.lineWidth = 2.2; ov.stroke();
+    ov.setLineDash([]);
+    return s;
+  }
+  function msDot(p, col, r) {
+    const s = wScr(p);
+    if (!s) return;
+    ov.beginPath(); ov.arc(s[0], s[1], r || 4.5, 0, 2 * Math.PI);
+    ov.fillStyle = col; ov.fill(); ov.strokeStyle = PIN_DARK; ov.lineWidth = 1.6; ov.stroke();
+  }
+  function cropWorld(pg) { return pg.map((q) => { const x = q[0] - ORG[0], y = q[1] - ORG[1], g = demAt(x, y); return [x, y, Number.isFinite(g) ? g - H0 : V.tgt[2]]; }); }
+  function msOverlay() {
+    const w = VW.w, h = VW.h;
+    if (TB.crop && (MS.kind === 'crop' || !tbBox.hidden)) {             // 지금 잘린 경계 (옅게)
+      const c = cropWorld(TB.crop);
+      ov.setLineDash([5, 5]); ov.strokeStyle = 'rgba(255, 255, 255, 0.55)'; ov.lineWidth = 1.5;
+      c.forEach((p, i) => { const s = wClip(p, c[(i + 1) % c.length]); if (s) { ov.beginPath(); ov.moveTo(s[0][0], s[0][1]); ov.lineTo(s[1][0], s[1][1]); ov.stroke(); } });
+      ov.setLineDash([]);
+    }
+    if (PH.at && !phBox.hidden) {                                         // 원본 사진 자리
+      const s = wScr(PH.at);
+      if (s) { ov.beginPath(); ov.arc(s[0], s[1], 9, 0, 2 * Math.PI); ov.strokeStyle = PIN_DARK; ov.lineWidth = 5; ov.stroke(); ov.strokeStyle = CF_RED; ov.lineWidth = 2.5; ov.stroke(); }
+    }
+    const k = MS.kind;
+    if (!k) return;
+    const col = MS_COL[k];
+    let Pp = MS.pts.slice();
+    if (k === 'crop' && MS.rect && !MS.done && Pp.length === 1 && MS.hov) Pp = crRect(Pp[0], MS.hov);
+    else if (!MS.done && MS.hov && Pp.length) Pp.push(MS.hov);
+    const closed = (k === 'area' || k === 'crop') && Pp.length >= 3;
+    if (closed) {
+      const sc = Pp.map(wScr);
+      if (sc.every(Boolean)) {
+        ov.beginPath();
+        if (k === 'crop') ov.rect(0, 0, w, h);
+        sc.forEach((q, i) => (i ? ov.lineTo(q[0], q[1]) : ov.moveTo(q[0], q[1])));
+        ov.closePath();
+        ov.fillStyle = k === 'crop' ? 'rgba(0, 0, 0, 0.5)' : 'rgba(250, 204, 21, 0.16)';
+        ov.fill('evenodd');
+      }
+    }
+    const nSeg = closed ? Pp.length : Pp.length - 1;
+    for (let i = 0; i < nSeg; i++) {
+      const a = Pp[i], b = Pp[(i + 1) % Pp.length], s = msLine(a, b, col, !MS.done && (i >= MS.pts.length - 1));
+      if (s && k === 'dist') msTag(fM(Math.hypot(b[0] - a[0], b[1] - a[1])), (s[0][0] + s[1][0]) / 2, (s[0][1] + s[1][1]) / 2 - 14);
+    }
+    if (k === 'height' && Pp.length >= 2) {                               // 세로 · 가로 보조선 + 표고 차 · 기울기
+      const a = Pp[0], b = Pp[1], lo = a[2] <= b[2] ? a : b, hi = lo === a ? b : a, c = [lo[0], lo[1], hi[2]];
+      msLine(lo, c, '#ffffff', true); msLine(c, hi, '#ffffff', true);
+      const s = wClip(a, b), pl = Math.hypot(b[0] - a[0], b[1] - a[1]), dz = b[2] - a[2];
+      if (s) msTag('Δ ' + (dz >= 0 ? '+' : '') + fM(dz) + (pl > 0.01 ? ' · ' + (dz / pl * 100).toFixed(1) + ' %' : ''), (s[0][0] + s[1][0]) / 2, (s[0][1] + s[1][1]) / 2 - 16, col);
+    }
+    if (k === 'prof' && Pp.length >= 2) {
+      const s = wClip(Pp[0], Pp[1]);
+      if (s) msTag(fM(Math.hypot(Pp[1][0] - Pp[0][0], Pp[1][1] - Pp[0][1])), (s[0][0] + s[1][0]) / 2, (s[0][1] + s[1][1]) / 2 - 16, col);
+      const sa = wScr(Pp[0]), sb = wScr(Pp[1]);
+      if (sa) msTag('A', sa[0], sa[1] - 18); if (sb) msTag('B', sb[0], sb[1] - 18);
+    }
+    if (k === 'area' && closed) {
+      const sc = Pp.map(wScr).filter(Boolean);
+      let A = 0;
+      for (let i = 0, j = Pp.length - 1; i < Pp.length; j = i++) A += (Pp[j][0] + Pp[i][0]) * (Pp[j][1] - Pp[i][1]);
+      if (sc.length) msTag(fA(Math.abs(A / 2)), sc.reduce((s2, q) => s2 + q[0], 0) / sc.length, sc.reduce((s2, q) => s2 + q[1], 0) / sc.length, col);
+    }
+    if (k === 'dist' && MS.pts.length >= 3) {
+      const r = msCalc(), s = wScr(MS.pts[MS.pts.length - 1]);
+      if (s) msTag('합계 ' + fM(r.plan), s[0], s[1] + 22, col);
+    }
+    MS.pts.forEach((p, i) => msDot(p, i === 0 && closed && !MS.done ? col : '#ffffff', k === 'crop' ? 5.5 : 4.5));
+  }
+
+  // ---------------------------------------------------------------- 잘라내기 (결과물 다듬기 · 오른쪽 메뉴 «여기서부터 잘라내기»): 위에서 보기 · 네모 = 두 구석 끌기 · 다각형 = 점 찍기
+  // [적용] → crop_apply({polygon: [[E, N] 도면 좌표 절대값]}) → 진행 → 다시 엶
+  function crStart(w) {
+    if (!HOST()) { toast('프로그램 안에서만'); return; }
+    msStart('crop', null);
+    if (V.el <= 80) { V.el = 89.5; setOn($('bTop'), true); }
+    if (w) V.tgt = w.slice();
+    MS.rect = true;
+    MS.pts = w ? [w.slice()] : [];
+    if (tbBox.hidden) tbShow(true); else tbCropGet();
+    msUI(); redraw();
+  }
+  function crRect(a, b) {                                              // 화면에 나란한 네모 (지금 방위)
+    const az = V.az * D2R, r = [Math.cos(az), Math.sin(az)], u = [-r[1], r[0]];
+    const du = (b[0] - a[0]) * r[0] + (b[1] - a[1]) * r[1], dv = (b[0] - a[0]) * u[0] + (b[1] - a[1]) * u[1], z = (a[2] + b[2]) / 2;
+    return [[a[0], a[1], z], [a[0] + r[0] * du, a[1] + r[1] * du, z], [b[0], b[1], z], [a[0] + u[0] * dv, a[1] + u[1] * dv, z]];
+  }
+  function crMode(rect) {
+    if (MS.kind !== 'crop') return;
+    MS.rect = rect; MS.done = false; MS.hov = null;
+    MS.pts = MS.pts.slice(0, 1);
+    cv.classList.add('pick');
+    msUI(); redraw();
+  }
+  $('msRect').addEventListener('click', () => crMode(true));
+  $('msPoly').addEventListener('click', () => crMode(false));
+  function crCross(P) {                                                // 다각형 변끼리 엇갈리면 true (이웃 변은 빼고)
+    const n = P.length, cr = (a, b, c) => (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+    for (let i = 0; i < n; i++) for (let j = i + 2; j < n; j++) {
+      if (i === 0 && j === n - 1) continue;
+      const a = P[i], b = P[(i + 1) % n], c = P[j], d = P[(j + 1) % n];
+      if (cr(a, b, c) * cr(a, b, d) < 0 && cr(c, d, a) * cr(c, d, b) < 0) return true;
+    }
+    return false;
+  }
+  function crApply() {
+    if (MS.kind !== 'crop' || !MS.done || MS.pts.length < 3) { toast('경계 먼저'); return; }
+    if (crCross(MS.pts)) { toast('경계선이 서로 엇갈림 · 점을 끌어 고치기'); return; }
+    const poly = MS.pts.map((p) => [round(p[0] + ORG[0], 3), round(p[1] + ORG[1], 3)]);
+    msClear();
+    tbJob('crop', () => call('crop_apply', { polygon: poly }));
+  }
+  // 누르기 (왼쪽): 네모 그리기 · 꼭짓점 끌기 (잘라내기) → true 면 이 누르기는 재기 몫 (돌리기 · 옮기기 안 함)
+  function msDown(x, y) {
+    if (MS.kind !== 'crop') return false;
+    if (MS.rect && !MS.done) {
+      MS.rNew = !MS.pts.length;
+      if (MS.rNew) { const p = msPoint(x, y); if (!p) return false; MS.pts = [p]; MS.hov = null; redraw(); }
+      return true;
+    }
+    let best = -1, bd = 10;
+    for (let i = 0; i < MS.pts.length; i++) { const s = wScr(MS.pts[i]); if (s) { const d = Math.hypot(s[0] - x, s[1] - y); if (d < bd) { bd = d; best = i; } } }
+    if (best < 0) return false;
+    MS.drag = best;
+    return true;
+  }
+  function msMove(x, y) {
+    if (MS.drag >= 0) { const p = msPoint(x, y); if (p) { MS.pts[MS.drag] = p; redraw(); } return; }
+    if (MS.kind === 'crop' && MS.rect && !MS.done) { MS.hov = msPoint(x, y); redraw(); }
+  }
+  function msUp(x, y, moved) {
+    if (MS.drag >= 0) {
+      const i = MS.drag;
+      MS.drag = -1;
+      if (!moved && !MS.done) {
+        if (i === 0 && MS.pts.length >= 3) msFinish();                  // 첫 점 누르기 = 닫기
+        else if (i !== MS.pts.length - 1) msTap(x, y);
+      }
+      msUI(); redraw();
+      return;
+    }
+    if (MS.kind === 'crop' && MS.rect && !MS.done && MS.pts.length === 1 && (moved || !MS.rNew)) {
+      const b = msPoint(x, y), a = MS.pts[0];
+      if (b && Math.hypot(b[0] - a[0], b[1] - a[1]) > 0.05) { MS.pts = crRect(a, b); MS.hov = null; MS.done = true; }
+    }
+    MS.rNew = false;
+    msUI(); redraw();
+  }
+  TB.cut = (w) => crStart(w);
+  TB.flush = () => pipesFlush();
+  TB.onCrop = redraw;
+
+  // ---------------------------------------------------------------- 새 관 (오른쪽 메뉴 «여기서 새 관 그리기»): 점 찍기 → 관경 · 관종 · 이름 창 → RV_PIPES 새 줄
+  // 저장 = 관로 고치기와 같은 길 (edCommit → save_pipes · 이 브라우저 · 되돌리기). 깊이 = 평균매설깊이 (관 표고 없음).
+  const NP = { mat: 'ci', dia: 0 };
+  function npMatUI() { $('npMat').querySelectorAll('button').forEach((b) => setOn(b, b.dataset.m === NP.mat)); }
+  MAT_T.forEach((m) => {
+    const b = document.createElement('button');
+    b.type = 'button'; b.dataset.m = m; b.textContent = MAT_SHORT[m]; b.title = MAT_NAME[m];
+    b.addEventListener('click', () => { NP.mat = m; npMatUI(); });
+    $('npMat').appendChild(b);
+  });
+  function npShow() {
+    const cnt = new Map();
+    lines.forEach((L) => { const d = Math.round(L.dia * 1000); cnt.set(d, (cnt.get(d) || 0) + 1); });
+    const top = [...cnt.entries()].sort((a, b) => b[1] - a[1])[0];
+    $('npDia').value = String(NP.dia || (top ? top[0] : 300));
+    npMatUI();
+    $('npName').value = '';
+    $('npMsg').textContent = '';
+    $('npNote').textContent = '점 ' + MS.pts.length + '개 · ' + msCalc().plan.toFixed(1) + ' m · 깊이 = 평균매설깊이 ' + round(S.cover, 2) + ' m';
+    dlgShow('npDlg');
+  }
+  function npGo() {
+    const mm = Number($('npDia').value);
+    if (!(mm >= 20 && mm <= 5000)) { $('npMsg').textContent = '관경 20 ~ 5000 mm'; return; }
+    if (MS.kind !== 'pipe' || MS.pts.length < 2) { dlgClose(); return; }
+    if (!window.RV_PIPES || !Array.isArray(window.RV_PIPES.lines)) {
+      window.RV_PIPES = { layers: [], lines: [], origin: { E: ORG[0], N: ORG[1] } };
+      poSet(window.RV_PIPES);
+    }
+    const Pp = window.RV_PIPES;
+    if (!Array.isArray(Pp.layers)) Pp.layers = [];
+    let li = Pp.layers.findIndex((l) => l && l.name === '새 관');
+    if (li < 0) { Pp.layers.push({ name: '새 관', color: '#a3e635' }); li = Pp.layers.length - 1; }
+    const raw = { layer: li, label: $('npName').value.trim(), dia: round(mm / 1000, 4), hasZ: false, mat: NP.mat };
+    edRebuild(raw, MS.pts.map((p) => [p[0] - TX, p[1] - TY, null]));
+    const src = Pp.lines.length;
+    Pp.lines.push({ pts: [] });
+    const before = JSON.stringify(Pp.lines[src]);
+    Pp.lines[src] = raw;
+    lines = buildLines(Pp);
+    pipeGen++;
+    NP.dia = mm;
+    edCommit(src, before, JSON.stringify(raw));
+    const L = lines.find((q) => q.src === src);
+    msClear();
+    dlgClose();
+    if (!S.pipes) setPipes(true);
+    infoUpd(); redraw();
+    toast('새 관 · D' + Math.round(mm) + ' · ' + (L ? L.len.toFixed(1) : '?') + ' m');
+  }
+  $('npGo').addEventListener('click', npGo);
+  ['npDia', 'npName'].forEach((id) => $(id).addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); npGo(); } else if (e.key === 'Escape') { e.preventDefault(); dlgClose(); } }));
+  // 관 지우기 (확인 뒤) — 자리는 남기고 빈 줄 ({pts: []}) · 되돌리기 = 알림 단추 · 관로 고치기의 Ctrl+Z
+  function pipeDel(src) {
+    const Pp = window.RV_PIPES, raw = Pp && Array.isArray(Pp.lines) ? Pp.lines[src] : null;
+    if (!raw) return;
+    const before = JSON.stringify(raw);
+    Pp.lines[src] = { pts: [] };
+    const after = JSON.stringify(Pp.lines[src]);
+    if (ED.sel === src) { ED.sel = -1; ED.hi = -1; ED.hov = -1; }
+    if (PC.src === src) cardHide();
+    shCancel();
+    edPut(src);
+    edCommit(src, before, after);
+    infoUpd();
+    toast('관 지움', () => {
+      if (JSON.stringify(Pp.lines[src]) !== after) return;
+      Pp.lines[src] = JSON.parse(before);
+      edPut(src); edCommit(src, after, before); infoUpd();
+      toast('되돌림');
+    }, '되돌리기');
+  }
+
+  // ---------------------------------------------------------------- 원본 사진 (프로그램 안에서만): photos_at(E, N, H) → 좋은 순서 사진 · photo_view → 그림 + 그 자리
+  const PH = { list: [], i: 0, zoom: false, at: null, seq: 0 };
+  const phBox = $('phBox'), phImg = $('phImg'), phMark = $('phMark');
+  function phMsg(t) { $('phMsg').textContent = t || ''; }
+  function phClose() { phBox.hidden = true; PH.at = null; PH.seq++; redraw(); }
+  function phOpen(E, N, Z, w) {
+    PH.at = w; PH.list = []; PH.i = 0; PH.zoom = false; PH.seq++;
+    phBox.hidden = false; phImg.removeAttribute('src'); phMark.hidden = true;
+    $('phName').textContent = ''; $('phNum').textContent = ''; phBox.dataset.i = '';
+    setOn($('phZoom'), false);
+    phMsg('사진 찾는 중…'); redraw();
+    const seq = PH.seq;
+    call('photos_at', E, N, Z).then((r) => {
+      if (seq !== PH.seq) return;
+      if (!r) { phClose(); return; }
+      if (!r.ok || !Array.isArray(r.photos) || !r.photos.length) { phMsg((r && r.msg) || '사진 없음'); return; }
+      PH.list = r.photos;
+      phShow();
+    });
+  }
+  function phShow() {
+    const q = PH.list[PH.i];
+    if (!q) return;
+    const seq = ++PH.seq;
+    $('phName').textContent = q.name;
+    $('phNum').textContent = (PH.i + 1) + ' / ' + PH.list.length;
+    $('phPrev').disabled = PH.i <= 0; $('phNext').disabled = PH.i >= PH.list.length - 1;
+    phMsg('불러오는 중…');
+    call('photo_view', q.name, q.u, q.v, PH.zoom).then((v) => {
+      if (seq !== PH.seq || phBox.hidden) return;
+      if (!v || !v.ok) { phMsg((v && v.msg) || '사진 못 읽음'); return; }
+      phImg.onload = () => {
+        if (seq !== PH.seq) return;
+        phMark.style.left = (v.x / v.w * 100) + '%'; phMark.style.top = (v.y / v.h * 100) + '%';
+        phMark.hidden = false; phMsg('');
+        Object.assign(phBox.dataset, { i: String(PH.i), name: q.name, x: String(v.x), y: String(v.y), w: String(v.w), h: String(v.h) });
+      };
+      phImg.src = v.url;
+    });
+  }
+  function phStep(d) { const i = clamp(PH.i + d, 0, PH.list.length - 1); if (i !== PH.i) { PH.i = i; phShow(); } }
+  $('phPrev').addEventListener('click', () => phStep(-1));
+  $('phNext').addEventListener('click', () => phStep(1));
+  $('phZoom').addEventListener('click', () => { PH.zoom = !PH.zoom; setOn($('phZoom'), PH.zoom); phShow(); });
+  $('phX').addEventListener('click', phClose);
+
+  // ---------------------------------------------------------------- 오른쪽 메뉴 (JACK 1126 · 오른쪽 눌렀다 떼기 · 누른 자리에 맞는 항목만 · 묶음 사이 구분선)
+  const IC = {
+    center: '<circle cx="12" cy="12" r="3"/><path d="M12 2v5M12 17v5M2 12h5M17 12h5"/>',
+    copy: '<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/>',
+    shot: '<path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/>',
+    home: '<path d="M3 11l9-7 9 7"/><path d="M5.5 9.5V20h13V9.5"/>',
+    top: '<path d="M12 3 4 8l8 5 8-5zM4 12l8 5 8-5M4 16l8 5 8-5"/>',
+    north: '<path d="M12 3l5 17-5-4-5 4z"/>',
+    dist: '<path d="M4 18 20 6"/><circle cx="4" cy="18" r="1.8"/><circle cx="20" cy="6" r="1.8"/><circle cx="12" cy="12" r="1.8"/>',
+    area: '<path d="M5 6l13 2 2 10-14 1z"/>',
+    height: '<path d="M7 4v16M4 7l3-3 3 3M4 17l3 3 3-3"/><path d="M13 18l7-9"/>',
+    prof: '<path d="M3 17l4-6 4 3 4-7 6 8"/><path d="M3 21h18"/>',
+    pipe: '<path d="M3 8h9M3 16h9"/><path d="M12 8a2.2 4 0 0 1 0 8"/><path d="M18 8v8M14 12h8"/>',
+    edit: '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13 7l4 4"/>',
+    del: '<path d="M5 7h14M10 7V4h4v3M7 7l1 13h8l1-13"/>',
+    shore: '<path d="M2 5h4M18 5h4"/><path d="M6 5v15M18 5v15"/><path d="M6 10h12"/>',
+    info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.5"/>',
+    photo: '<rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-8 8"/>',
+    xray: '<path d="M2 9h20"/><path d="M4 15h16" stroke-dasharray="2.5 2.5"/><path d="M2 9c3-4.5 17-4.5 20 0" opacity=".5"/>',
+    eye: '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
+    folder: '<path d="M4 6h5l2 2h9v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/>',
+    ck: '<path d="M12 3 4 21h16z"/><path d="M12 10v5"/>',
+    crop: '<path d="M6 2v14a2 2 0 0 0 2 2h14"/><path d="M18 22V8a2 2 0 0 0-2-2H2"/>',
+  };
+  const ctxEl = $('ctxMenu');
+  const CTX = { open: false, items: [], at: null };
+  function ctxClose() {
+    if (!CTX.open) return;
+    CTX.open = false; CTX.items = []; CTX.at = null;
+    ctxEl.hidden = true; ctxEl.textContent = '';
+  }
+  function ctxPlace(cx, cy) {
+    const mw = ctxEl.offsetWidth, mh = Math.min(ctxEl.scrollHeight, innerHeight - 16);
+    ctxEl.style.maxHeight = (innerHeight - 16) + 'px';
+    let l = cx + 2, t = cy + 2;
+    if (l + mw > innerWidth - 8) l = cx - mw - 2;
+    if (t + mh > innerHeight - 8) t = Math.max(8, innerHeight - 8 - mh);
+    ctxEl.style.left = Math.max(8, Math.min(l, innerWidth - mw - 8)) + 'px';
+    ctxEl.style.top = Math.max(8, t) + 'px';
+  }
+  function viewHome() {
+    if (!mesh) return;
+    const mn = mesh.meta.min, mx = mesh.meta.max;
+    V.tgt = [(mn[0] + mx[0]) / 2, (mn[1] + mx[1]) / 2, mn[2] + (mx[2] - mn[2]) * 0.3];
+    V.d = Math.hypot(mx[0] - mn[0], mx[1] - mn[1]) * 0.85; V.az = 25; V.el = 38;
+    setOn($('bTop'), false); redraw();
+  }
+  function copyXYZ(E, N, Z) {
+    const t = E.toFixed(3) + ', ' + N.toFixed(3) + ', ' + Z.toFixed(3);
+    const ok = () => toast('복사됨 · X ' + E.toFixed(3) + ' · Y ' + N.toFixed(3) + ' · Z ' + Z.toFixed(3) + ' · ' + (P.crs || 'EPSG:5186'));
+    if (HOST()) hostCall('copy_text', t).then((r) => (r && r.ok !== false ? ok() : copyText(t)), () => copyText(t));
+    else copyText(t);
+  }
+  function shotSave() {
+    if (dirty) { dirty = false; draw(); }
+    const c = document.createElement('canvas');
+    c.width = cv.width; c.height = cv.height;
+    const g = c.getContext('2d');
+    g.fillStyle = '#1b1f26'; g.fillRect(0, 0, c.width, c.height);
+    g.drawImage(cv, 0, 0); g.drawImage(ovc, 0, 0);
+    const url = c.toDataURL('image/png'), d = new Date(), z2 = (v) => String(v).padStart(2, '0');
+    const name = String(P.title || '3D').replace(/[\\/:*?"<>|]+/g, '_') + '_' + d.getFullYear() + z2(d.getMonth() + 1) + z2(d.getDate()) + '_' + z2(d.getHours()) + z2(d.getMinutes()) + '.png';
+    if (HOST()) {
+      call('save_image', { name: name, data: url }).then((r) => {
+        if (r && r.ok) toast('저장 · ' + r.path, () => hostCall('copy_text', String(r.path)).then(() => toast('복사됨'), () => copyText(String(r.path))));
+        else if (r) toast(r.msg || '저장 안 됨');
+      });
+    } else {
+      const a = document.createElement('a');
+      a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
+      toast('내려받기 · ' + name);
+    }
+  }
+  // 검사점 찍기: 파일이 열려 있으면 지금 고른 검사점 (없으면 10 m 안 가까운 것) 을 이 자리로 · 없으면 파일 고르기부터 (고른 뒤 가까운 검사점)
+  async function ckHere(w) {
+    const fresh = !CK.pts.length;
+    if (fresh && !(await ckLoad())) return;
+    ckShow();
+    if (fresh || CK.active < 0) {
+      let bi = -1, bd = 10;
+      CK.pts.forEach((p, i) => { const d = Math.hypot(p.E - ORG[0] - w[0], p.N - ORG[1] - w[1]); if (d < bd) { bd = d; bi = i; } });
+      if (bi < 0) { toast('10 m 안 검사점 없음 · 점을 고르고 모델에서 누르기'); return; }
+      CK.active = bi;
+    }
+    const nm = CK.pts[CK.active].name;
+    ckMeasure({ p: w });
+    toast('검사점 «' + nm + '» 찍음');
+  }
+  function ctxOpen(cx, cy, x, y) {
+    ctxClose();
+    if (!mesh || !dlgBack.hidden) return;
+    vwNow();
+    const h = pickAt(x, y), w = h ? h.p.slice() : null, host = !!HOST();
+    const E = w ? w[0] + ORG[0] : 0, N = w ? w[1] + ORG[1] : 0, Z = w ? w[2] + H0 : 0;
+    const src = S.pipes && lines.length ? lineAt('v', x, y) : -1, L = src >= 0 ? lines.find((q) => q.src === src) : null, pk = L ? pickOf('v', L, x, y) : null;
+    const G = [[], [], [], []];                                          // 보기 · 재기 · 관로 · 기타
+    const CLR = new Set(['pInfo', 'pEdit', 'pShore', 'pDel', 'photo', 'ck', 'center']);    // 재기 · 잘라내기를 끝내고 할 것
+    const wrap = (id, fn) => (fn && CLR.has(id) ? (...q) => { msClear(); return fn(...q); } : fn);
+    const it = (g, id, ic, t, fn, o) => {
+      const e = Object.assign({ id: id, ic: ic, t: t, fn: wrap(id, fn) }, o || {});
+      if (e.sub && CLR.has(id)) e.sub = e.sub.map((q) => [q[0], q[1], wrap(id, q[2])]);
+      G[g].push(e);
+    };
+    if (w) {
+      it(0, 'center', 'center', '여기 가운데로', () => { V.tgt = w.slice(); redraw(); });
+      it(0, 'copy', 'copy', '좌표 · 표고 복사', () => copyXYZ(E, N, Z));
+    }
+    it(0, 'shot', 'shot', '화면 그림 저장', shotSave);
+    it(0, 'home', 'home', '처음 시점', viewHome);
+    it(0, 'top', 'top', V.el > 80 ? '비스듬히 보기' : '위에서 보기', () => $('bTop').click());
+    it(0, 'north', 'north', '북쪽 보기', () => { V.az = 0; redraw(); });
+    it(1, 'mDist', 'dist', '거리 재기', () => msStart('dist', w));
+    it(1, 'mArea', 'area', '면적 재기', () => msStart('area', w));
+    it(1, 'mHeight', 'height', '높이 차 (두 점)', () => msStart('height', w));
+    it(1, 'mProf', 'prof', '지형 단면 (두 점)', () => msStart('prof', w));
+    if (L && pk) {
+      it(2, 'pInfo', 'info', '관 정보 · 그 자리 단면', () => { cardShow(L, pk, [x, y]); secShow(true, { src: L.src, k: pk.k, t: pk.t }); });
+      it(2, 'pEdit', 'edit', '이 관 고치기', () => { cardHide(); edMode(true); ED.sel = L.src; ED.hi = -1; ED.hov = -1; redraw(); });
+      it(2, 'pShore', 'shore', '이 관에 가시설 넣기', null, { sub: SHORE_T.map((t) => [t, { panel: '간이흙막이', hpile: '토류벽', sheet: '시트파일' }[t], () => shoreFrom(L, pk, t)]) });
+      it(2, 'pDel', 'del', '이 관 지우기', () => toast('«' + (L.base || L.label || dTxt(L.dia)) + '» 지우기', () => pipeDel(L.src), '지우기'), { warn: true });
+    } else if (w) it(2, 'pNew', 'pipe', '여기서 새 관 그리기', () => msStart('pipe', w));
+    if (w && host) it(3, 'photo', 'photo', '이 자리 원본 사진 보기', () => phOpen(E, N, Z, w));
+    it(3, 'xray', 'xray', xray ? '투시 끄기' : '투시 켜기', () => $('bXray').click());
+    if (lines.length) it(3, 'pipes', 'eye', S.pipes ? '관로 숨기기' : '관로 보이기', () => setPipes(!S.pipes));
+    if (host) it(3, 'files', 'folder', '결과물 폴더', () => call('open_results'));
+    if (w && (host || CK.pts.length)) it(3, 'ck', 'ck', CK.pts.length && CK.active >= 0 ? '검사점 «' + CK.pts[CK.active].name + '» 여기로' : '검사점 찍기', () => ckHere(w));
+    if (host) it(3, 'crop', 'crop', '여기서부터 잘라내기', () => crStart(w));
+    if (w) {
+      const hd = document.createElement('div');
+      hd.className = 'cHd'; hd.title = (P.crs || 'EPSG:5186') + ' · X = 동 · Y = 북 · Z = 표고 (' + (P.height || 'EGM2008') + ')';
+      hd.textContent = 'X ' + E.toFixed(2) + ' · Y ' + N.toFixed(2) + ' · Z ' + Z.toFixed(2);
+      ctxEl.appendChild(hd);
+    }
+    G.filter((g) => g.length).forEach((g, gi) => {
+      if (gi) { const s = document.createElement('div'); s.className = 'sep'; ctxEl.appendChild(s); }
+      for (const r of g) {
+        const b = document.createElement('button');
+        b.type = 'button'; b.className = 'ci' + (r.warn ? ' warn' : ''); b.dataset.id = r.id; b.setAttribute('role', 'menuitem');
+        b.innerHTML = '<svg viewBox="0 0 24 24">' + IC[r.ic] + '</svg><span></span>';
+        b.querySelector('span').textContent = r.t;
+        ctxEl.appendChild(b);
+        CTX.items.push(r.id);
+        if (r.sub) {
+          const sub = document.createElement('div');
+          sub.className = 'sub'; sub.hidden = true; sub.dataset.of = r.id;
+          r.sub.forEach(([sid, st, fn]) => {
+            const sb = document.createElement('button');
+            sb.type = 'button'; sb.dataset.id = r.id + ':' + sid; sb.textContent = st;
+            sb.addEventListener('click', (e) => { e.stopPropagation(); ctxClose(); fn(); });
+            sub.appendChild(sb);
+          });
+          ctxEl.appendChild(sub);
+          b.addEventListener('click', (e) => { e.stopPropagation(); sub.hidden = !sub.hidden; ctxPlace(cx, cy); });
+        } else b.addEventListener('click', (e) => { e.stopPropagation(); ctxClose(); r.fn(); });
+      }
+    });
+    CTX.open = true; CTX.at = w ? { x: x, y: y, E: E, N: N, Z: Z, src: L ? L.src : -1 } : { x: x, y: y, src: L ? L.src : -1 };
+    ctxEl.hidden = false;
+    ctxPlace(cx, cy);
+  }
+  function shoreFrom(L, pk, t) {
+    if ($('side').hidden) { $('side').hidden = false; setOn($('tgSide'), true); }
+    if (shBox.hidden) shOpen(true);
+    shArm(t);
+    const s = round(L.cum[pk.k] + (L.cum[pk.k + 1] - L.cum[pk.k]) * pk.t, 2), p = pickPoint(L, pk);
+    SH.a = { src: L.src, s: s, e: p[0], n: p[1], g: p[3] };
+    shUI(); redraw();
+  }
+  window.addEventListener('pointerdown', (e) => { if (CTX.open && !ctxEl.contains(e.target)) ctxClose(); }, true);
+  window.addEventListener('blur', ctxClose);
+  window.addEventListener('resize', ctxClose);
+
   // ---------------------------------------------------------------- 조작 (왼쪽 끌기 = 돌기 · 오른쪽 / Shift = 옮기기 · 위에서 보기면 왼쪽 = 옮기기 · 휠 = 마우스 쪽으로)
   let dn = null;
   const evXY = (e) => { const r = cv.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
   function tap(x, y) {
     vwNow();
+    if (MS.kind && msTap(x, y)) return;                                  // 재기 · 새 관 · 잘라내기 점 찍기
     if (CK.active >= 0 && $('ck').style.display !== 'none') { const h = pickAt(x, y); if (h) { ckMeasure(h); return; } }
     if (SH.arm) { shTap('v', x, y); return; }
     if (ED.on) { edTap('v', x, y); return; }
@@ -3042,13 +3794,17 @@
   function hover(x, y) {
     if (!mesh) return;
     vwNow();
+    if (MS.kind && !MS.done) { MS.hov = msPoint(x, y); redraw(); return; }     // 재는 중: 마지막 점 → 마우스 (네모는 첫 구석 → 마우스)
     if (ED.on) { edHover('v', x, y); return; }
     cv.classList.toggle('point', S.pipes && lines.length > 0 && lineAt('v', x, y) >= 0);
   }
   cv.addEventListener('pointerdown', (e) => {
+    if (e.button === 1) e.preventDefault();                              // 휠 누르기 = 자동 스크롤 막기
+    ctxClose();
     const [x, y] = evXY(e);
-    dn = { x: e.clientX, y: e.clientY, b: e.button, az: V.az, el: V.el, t: V.tgt.slice(), moved: false, edit: false };
-    if (e.button === 0 && ED.on && mesh) { vwNow(); edStart('v', x, y, e); dn.edit = !!ED.down; }
+    dn = { x: e.clientX, y: e.clientY, b: e.button, az: V.az, el: V.el, t: V.tgt.slice(), moved: false, edit: false, ms: false };
+    if (e.button === 0 && MS.kind && mesh) { vwNow(); dn.ms = msDown(x, y); }
+    if (dn.ms) { /* 잘라내기 네모 · 꼭짓점 끌기 */ } else if (e.button === 0 && ED.on && mesh) { vwNow(); edStart('v', x, y, e); dn.edit = !!ED.down; }
     cv.setPointerCapture(e.pointerId);
   });
   cv.addEventListener('pointermove', (e) => {
@@ -3056,8 +3812,12 @@
     const dx = e.clientX - dn.x, dy = e.clientY - dn.y;
     if (!dn.moved && dx * dx + dy * dy < 9) return;
     dn.moved = true; cv.classList.add('drag');
+    if (dn.ms) { const [x, y] = evXY(e); msMove(x, y); return; }
     if (dn.edit) { edMove(dx, dy); return; }
-    const top = V.el > 80, pan = top ? dn.b === 0 || e.shiftKey : dn.b === 2 || e.shiftKey;
+    // JACK 1126: 오른쪽이 하던 일을 휠 버튼으로 · 오른쪽은 눌렀다 떼면 메뉴 (끌어도 아무것도 안 함)
+    //   기본 = 왼쪽 돌리기 · 휠 옮기기 / 위에서 보기 = 왼쪽 옮기기 · 휠 돌리기 · Shift + 왼쪽 = 옮기기
+    if (dn.b === 2) return;
+    const top = V.el > 80, pan = top ? dn.b === 0 || e.shiftKey : dn.b === 1 || e.shiftKey;
     if (pan) {
       const a = V.az * Math.PI / 180, k = V.d * 2 * Math.tan(V.fov * Math.PI / 360) / cv.clientHeight;
       V.tgt = [dn.t[0] - (dx * Math.cos(a) + dy * Math.sin(a) * Math.sin(V.el * Math.PI / 180)) * k,
@@ -3070,13 +3830,16 @@
     const d = dn; dn = null;
     if (!d) return;
     const [x, y] = evXY(e);
+    if (d.ms) { vwNow(); msUp(x, y, d.moved); return; }
     if (d.edit) { edEnd(d.moved); if (!d.moved) tap(x, y); return; }
     if (!d.moved && d.b === 0) tap(x, y);
+    if (!d.moved && d.b === 2) ctxOpen(e.clientX, e.clientY, x, y);   // 오른쪽 눌렀다 떼기 = 메뉴
   });
-  cv.addEventListener('pointercancel', () => { cv.classList.remove('drag'); if (dn && dn.edit) edEnd(dn.moved); dn = null; });
+  cv.addEventListener('pointercancel', () => { cv.classList.remove('drag'); if (dn && dn.edit) edEnd(dn.moved); if (dn && dn.ms) { MS.drag = -1; MS.rNew = false; } dn = null; });
   cv.addEventListener('contextmenu', (e) => e.preventDefault());
   cv.addEventListener('wheel', (e) => {
     e.preventDefault();
+    ctxClose();
     const k = e.deltaY > 0 ? 1.15 : 1 / 1.15;
     const [x, y] = evXY(e), h = k < 1 ? pickAt(x, y) : null;
     if (h) V.tgt = V.tgt.map((v, i) => v + (h.p[i] - v) * (1 - k));
@@ -3085,6 +3848,7 @@
   cv.addEventListener('dblclick', (e) => {
     const [x, y] = evXY(e);
     vwNow();
+    if (MS.kind) { if (!MS.done && !(MS.kind === 'crop' && MS.rect)) msFinish(); return; }   // 두 번 누르기 = 끝 (닫기)
     if (ED.on) { edInsert('v', x, y); return; }
     if (S.pipes && !SH.arm && lines.length) {                          // 관 두 번 누르기 → 관로 고치기 · 그 관 고름 (360 과 같음)
       const src = lineAt('v', x, y);
@@ -3095,7 +3859,17 @@
   window.addEventListener('keydown', (e) => {
     const tg = (e.target && e.target.tagName) || '';
     if (/^(INPUT|SELECT|TEXTAREA)$/.test(tg)) return;
+    if (CTX.open && e.key === 'Escape') { ctxClose(); return; }
     if (e.key === 'Escape' && !dlgBack.hidden) { dlgClose(); return; }
+    if (!phBox.hidden && (e.key === 'Escape' || e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+      if (e.key === 'Escape') phClose(); else phStep(e.key === 'ArrowLeft' ? -1 : 1);
+      e.preventDefault(); return;
+    }
+    if (MS.kind && (!MS.done || MS.kind === 'crop')) {                   // 재기 · 새 관 · 잘라내기: Esc = 취소 · Enter = 끝 · Backspace = 마지막 점 빼기
+      if (e.key === 'Escape') { msClear(); return; }
+      if (e.key === 'Enter') { e.preventDefault(); if (MS.kind === 'crop' && MS.done) crApply(); else msFinish(); return; }
+      if (e.key === 'Backspace' && !MS.done) { e.preventDefault(); msBack(); return; }
+    }
     if (e.key === 'Escape' && (SH.arm || SH.a)) { shCancel(); return; }
     if (ED.on && edKey(e)) { e.preventDefault(); return; }
     if (e.key === 'Escape') { if (!secDlg.hidden) secShow(false); else ugEsc(); }
@@ -3125,5 +3899,6 @@
     hnd: () => S.hnd, vtx: () => S.vtx, cf: () => CF.list, setMode, setPipes, trSet, secShow, edMode, shArm, mesh: () => mesh, T: () => [TX, TY, TZ],
     xray: (on) => { xray = !!on; setOn($('bXray'), xray); redraw(); },
     rebuild: () => { lines = buildLines(window.RV_PIPES); pipeGen++; redraw(); },
+    ctx: () => ({ open: CTX.open, items: CTX.items.slice(), at: CTX.at }), MS, PH, TB, NP, profGet,
   };
 })();

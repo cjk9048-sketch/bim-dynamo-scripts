@@ -20,7 +20,7 @@ import uuid
 from pathlib import Path
 
 APP_NAME = '드론 로드뷰'
-APP_VERSION = '1.0.16'
+APP_VERSION = '1.0.17'
 FROZEN = getattr(sys, 'frozen', False)
 BASE = Path(sys._MEIPASS) if FROZEN else Path(__file__).resolve().parent.parent      # noqa: SLF001
 HOME_HTML = (BASE / 'roadview' / 'app_home' / 'index.html') if not FROZEN else (BASE / 'app_home' / 'index.html')
@@ -33,6 +33,7 @@ FILTER_PIPES = ('관로 SHP DXF (*.shp;*.SHP;*.dxf;*.DXF)', '모든 파일 (*.*)
 FILTER_OBST = ('지장물 SHP (*.shp;*.SHP)', '모든 파일 (*.*)')
 FILTER_SHP_SAVE = ('SHP (*.shp)',)
 FILTER_GCP = ('GCP CSV TXT (*.csv;*.CSV;*.txt;*.TXT)', '모든 파일 (*.*)')
+FILTER_PNG_SAVE = ('PNG (*.png)',)
 
 
 def _cli(cmd, args):
@@ -616,6 +617,107 @@ class Api:
         d = self.pick_folder()
         return self.scan_mapping(d) if d else None
 
+    # ---- 결과물 다듬기 (JACK 1126: 다 만든 결과물에서 잘라내기 · DEM 더하기 · 웹 공유) — 같은 설정으로 결과물 단계만 다시
+    def _map_args(self):
+        """열린 3D 매핑 프로젝트를 다시 돌릴 설정 (work/args.json · 없으면 mapping.js · 정보.txt · 사진 목록으로)."""
+        pj = Path(self._project or '')
+        M = json.loads((pj / 'data' / 'mapping.js').read_text(encoding='utf-8').split('=', 1)[1].strip().rstrip(';'))
+        try:
+            A = json.loads((pj / 'work' / 'args.json').read_text(encoding='utf-8'))
+        except (OSError, ValueError):
+            A = {}
+        photos = A.get('photos') or M.get('photos_dir')
+        if not photos:
+            for ln in (pj / '결과물' / '정보.txt').read_text(encoding='utf-8').splitlines():
+                if ln.startswith('사진 폴더:'):
+                    photos = ln.split(':', 1)[1].strip()
+        if not photos or not Path(photos).is_dir():
+            raise RuntimeError('사진 폴더 없음 · ' + str(photos))
+        names = A.get('names')
+        if not names or not Path(names).exists():
+            names = next((str(q) for q in (pj / 'work' / 'pick.txt', pj / 'work' / 'names.txt') if q.exists()), None)
+        return {'photos': photos, 'quality': A.get('quality') or M.get('quality') or 'normal', 'names': names,
+                'title': A.get('title') or M.get('title') or pj.name, 'crs': A.get('crs') or M.get('crs') or 'EPSG:5186',
+                'outputs': list(M.get('outputs') or A.get('outputs') or ['mesh']), 'contour': A.get('contour') or (M.get('contour') or {}).get('minor') or 1.0,
+                'cell': A.get('cell') or 0}
+
+    def _busy(self, folder):
+        """같은 결과 폴더에 매핑 작업이 돌고 있으면 True (stages · tiles 가 엉키지 않게 · 1126 검토)."""
+        f = os.path.normcase(os.path.abspath(folder))
+        return any(j.kind == 'map' and j.state == 'run' and os.path.normcase(os.path.abspath(j.out or '')) == f for j in self._jobs.values())
+
+    def _rerun(self, add=(), A=None):
+        if self._busy(self._project):
+            return {'ok': False, 'msg': '이 결과물을 만드는 작업이 이미 돌고 있음'}
+        try:
+            A = A or self._map_args()
+        except Exception as ex:                          # noqa: BLE001
+            return {'ok': False, 'msg': str(ex)[:160]}
+        outs = [o for o in ('mesh', 'ortho', 'dsm', 'dtm', 'las', 'contour') if o in set(A['outputs']) | set(add)]
+        args = [A['photos'], '--out', self._project, '--quality', A['quality'], '--title', A['title'], '--crs', A['crs'],
+                '--outputs', ','.join(outs or ['mesh']), '--contour', str(min(50.0, max(0.1, float(A['contour'])))), '--reuse-only']
+        if A['names']:
+            args += ['--names', A['names']]
+        if A['cell']:
+            args += ['--cell', str(A['cell'])]
+        cmd, cwd = _cli('map', args)
+        j = Job('map', cmd, cwd, out=self._project)
+        self._jobs[j.id] = j
+        return {'ok': True, 'job': j.id}
+
+    def crop_get(self):
+        if not self._project:
+            return {'polygon': None}
+        try:
+            d = json.loads((Path(self._project) / 'data' / 'crop.json').read_text(encoding='utf-8'))
+            return {'polygon': d.get('polygon')}
+        except (OSError, ValueError):
+            return {'polygon': None}
+
+    def crop_apply(self, p):
+        if not self._project:
+            return {'ok': False, 'msg': '열린 프로젝트 없음'}
+        poly = [[float(q[0]), float(q[1])] for q in ((p or {}).get('polygon') or []) if len(q) >= 2]
+        if len(poly) < 3:
+            return {'ok': False, 'msg': '점 3개 이상'}
+        area = 0.5 * abs(sum(poly[i][0] * poly[i - 1][1] - poly[i - 1][0] * poly[i][1] for i in range(len(poly))))
+        if area < 25:
+            return {'ok': False, 'msg': '잘라낼 넓이가 너무 작음 (25 m² 이상)'}
+        try:                                             # 설정 · 사진 폴더를 먼저 확인 (안 되면 crop.json 을 바꾸지 않음)
+            A = self._map_args()
+            M = json.loads((Path(self._project) / 'data' / 'mapping.js').read_text(encoding='utf-8').split('=', 1)[1].strip().rstrip(';'))
+        except Exception as ex:                          # noqa: BLE001
+            return {'ok': False, 'msg': str(ex)[:160]}
+        bb = M.get('bbox') or []
+        if len(bb) == 4 and (max(q[0] for q in poly) < bb[0] or min(q[0] for q in poly) > bb[2]
+                             or max(q[1] for q in poly) < bb[1] or min(q[1] for q in poly) > bb[3]):
+            return {'ok': False, 'msg': '결과물 범위 밖'}
+        if self._busy(self._project):
+            return {'ok': False, 'msg': '이 결과물을 만드는 작업이 이미 돌고 있음'}
+        f = Path(self._project) / 'data' / 'crop.json'
+        f.write_text(json.dumps({'polygon': poly, 'made': time.strftime('%Y-%m-%d %H:%M')}, ensure_ascii=False), encoding='utf-8')
+        return self._rerun(A=A)
+
+    def crop_clear(self):
+        if not self._project:
+            return {'ok': False, 'msg': '열린 프로젝트 없음'}
+        try:
+            A = self._map_args()
+        except Exception as ex:                          # noqa: BLE001
+            return {'ok': False, 'msg': str(ex)[:160]}
+        if self._busy(self._project):
+            return {'ok': False, 'msg': '이 결과물을 만드는 작업이 이미 돌고 있음'}
+        f = Path(self._project) / 'data' / 'crop.json'
+        if f.exists():
+            f.unlink()
+        return self._rerun(A=A)
+
+    def add_outputs(self, add):
+        if not self._project:
+            return {'ok': False, 'msg': '열린 프로젝트 없음'}
+        add = [o for o in (add or []) if o in ('mesh', 'ortho', 'dsm', 'dtm', 'las', 'contour')]
+        return self._rerun(add)
+
     def start_mapping(self, p):
         folder, out = p.get('folder'), (p.get('out') or '').strip()
         names = [n for n in (p.get('names') or []) if n]
@@ -626,6 +728,8 @@ class Api:
         q = p.get('quality') if p.get('quality') in ('fast', 'normal', 'fine') else 'normal'
         if (Path(out) / 'data' / 'project.js').exists():
             return {'ok': False, 'msg': '로드뷰 폴더 → 다른 결과 폴더'}
+        if self._busy(out):
+            return {'ok': False, 'msg': '이 결과 폴더에 작업이 이미 돌고 있음'}
         work = Path(out) / 'work'
         work.mkdir(parents=True, exist_ok=True)
         lst = work / 'pick.txt'
@@ -634,10 +738,15 @@ class Api:
         if p.get('crs') in ('EPSG:5186', 'EPSG:5185', 'EPSG:5187', 'EPSG:5188', 'EPSG:5179'):
             args += ['--crs', p['crs']]
         sel = p.get('outputs')
-        outs = [o for o in (['mesh'] if sel is None else sel) if o in ('mesh', 'ortho', 'dsm', 'dtm', 'las')]
+        outs = [o for o in (['mesh'] if sel is None else sel) if o in ('mesh', 'ortho', 'dsm', 'dtm', 'las', 'contour')]
         if not outs:
             return {'ok': False, 'msg': '만들 것 고르기'}
         args += ['--outputs', ','.join(outs)]
+        try:                                             # 등고선 주곡선 간격 (m · 계곡선 = 5배)
+            ct = float(p.get('contour') or 1.0)
+        except (TypeError, ValueError):
+            ct = 1.0
+        args += ['--contour', str(min(50.0, max(0.1, ct)))]
         cmd, cwd = _cli('map', args)
         j = Job('map', cmd, cwd, out=out)
         self._jobs[j.id] = j
@@ -756,6 +865,49 @@ class Api:
             target = Path(dst) / (Path(self._project).name + time.strftime('_%m%d_%H%M'))
         shutil.copytree(self._project, target, ignore=skip)
         return {'ok': True, 'path': str(target)}
+
+    # ---------------------------------------------------------------- 3D 보기 오른쪽 메뉴 (JACK 1126)
+    def photos_at(self, E, N, H):
+        """«이 자리 원본 사진 보기»: 땅 자리 (E, N, 표고) 를 본 드론 원본 사진 (좋은 순서) · 사진 안 자리 (u, v)."""
+        if not self._project:
+            return {'ok': False, 'msg': '열린 프로젝트 없음'}
+        from . import photo_at
+        try:
+            return photo_at.photos_at(self._project, float(E), float(N), float(H))
+        except Exception as ex:                         # noqa: BLE001
+            return {'ok': False, 'msg': str(ex)[:160]}
+
+    def photo_view(self, name, u, v, zoom=False):
+        """사진 한 장 → 화면 그림 (data URL · 줄인 전체 또는 그 자리 둘레 원본 화소) + 표시 자리."""
+        if not self._project:
+            return {'ok': False, 'msg': '열린 프로젝트 없음'}
+        from . import photo_at
+        try:
+            return photo_at.photo_view(self._project, str(name), float(u), float(v), bool(zoom))
+        except Exception as ex:                         # noqa: BLE001
+            return {'ok': False, 'msg': str(ex)[:160]}
+
+    def save_image(self, p):
+        """«화면 그림 저장»: PNG (data URL) → 저장 창 (처음 폴더 = 결과물)."""
+        import base64
+        import webview
+        data = str((p or {}).get('data') or '')
+        if not data.startswith('data:image/png;base64,'):
+            return {'ok': False, 'msg': '그림 없음'}
+        name = re.sub(r'[\\/:*?"<>|]+', '_', str((p or {}).get('name') or '화면.png')).strip() or '화면.png'
+        d = Path(self._project) / '결과물' if self._project else None
+        r = self._window.create_file_dialog(webview.FileDialog.SAVE, directory=str(d) if d and d.exists() else '',
+                                            save_filename=name, file_types=FILTER_PNG_SAVE)
+        if not r:
+            return None
+        path = r[0] if isinstance(r, (list, tuple)) else r
+        if not path.lower().endswith('.png'):
+            path += '.png'
+        try:
+            Path(path).write_bytes(base64.b64decode(data.split(',', 1)[1]))
+        except (OSError, ValueError) as ex:
+            return {'ok': False, 'msg': str(ex)[:160]}
+        return {'ok': True, 'path': path}
 
 
 def _selftest(api, w, out_path, project):

@@ -243,9 +243,17 @@ def check_web(url):
 def scan(folder):
     """[(원격 상대경로, 로컬 경로, 크기, mtime_ns)] — 쓰레기 파일 제외, 로드뷰.html 만 있으면 index.html 로."""
     out = {}
-    for root, _, names in os.walk(folder):
+    # 3D 매핑 결과 폴더 (data/mapping.js): 보기에 쓰는 것만 — index.html · viewer/ · data/ (work = 중간 자료 수 GB · 결과물 = 원본 tif · las 는 뺌 · 1126)
+    mapping = os.path.exists(os.path.join(folder, "data", "mapping.js"))
+    for root, dirs, names in os.walk(folder):
+        if mapping and os.path.normcase(os.path.abspath(root)) == os.path.normcase(os.path.abspath(folder)):
+            dirs[:] = [d for d in dirs if d in ("viewer", "data")]
         for n in names:
             if n in JUNK_NAMES or n.lower().endswith(JUNK_EXT):
+                continue
+            if mapping and (root == folder or os.path.abspath(root) == os.path.abspath(folder)) and n != "index.html":
+                continue
+            if mapping and n.lower().endswith((".tif", ".tfw", ".prj")):     # data/지면.tif 등 (보기 화면이 안 씀)
                 continue
             p = os.path.join(root, n)
             rel = os.path.relpath(p, folder).replace(os.sep, "/")

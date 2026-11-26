@@ -159,7 +159,8 @@
     </div>
     <div class="form">
       <label>만들 것</label>
-      <div id="mOuts" class="chips"><button data-o="mesh" class="on">3D 모델</button><button data-o="ortho">정사영상</button><button data-o="dsm">DSM</button><button data-o="dtm" title="땅만 · Civil 3D 원지반">DTM</button><button data-o="las">점구름 LAS</button></div>
+      <div id="mOuts" class="chips"><button data-o="mesh" class="on">3D 모델</button><button data-o="ortho">정사영상</button><button data-o="dsm">DSM</button><button data-o="dtm" title="땅만 · Civil 3D 원지반">DTM</button><button data-o="las">점구름 LAS</button><button data-o="contour" title="땅(DTM) 기준 · DXF">등고선</button></div>
+      <div id="mCtRow" class="row hide"><span class="sub">등고선 간격</span><input id="mCt" type="number" min="0.5" max="50" step="0.5" value="1" style="width:64px"><span class="sub">m · 계곡선 5배</span></div>
       <label>좌표계</label>
       <select id="mCrs"><option value="EPSG:5186" selected>중부원점 (5186)</option><option value="EPSG:5185">서부원점 (5185)</option>
         <option value="EPSG:5187">동부원점 (5187)</option><option value="EPSG:5188">동해원점 (5188)</option><option value="EPSG:5179">UTM-K (5179)</option></select>
