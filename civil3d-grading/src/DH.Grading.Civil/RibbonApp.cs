@@ -61,6 +61,7 @@ using AcadApp = Autodesk.AutoCAD.ApplicationServices.Application;
 [assembly: CommandClass(typeof(DH.Grading.Civil.UndoGuard))]                          // ★[v114.2] DHUNDOCLR(명령 뒤 되돌리기 기록 비움 — Civil 결함 회피)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.StructBoxCommand))]          // ★[v117.19 · JACK 1121] DHSTRUCTBOX(팝업) · DHSTRUCTBOXADD · DHSTRUCTBOXEDIT(명령줄) — 박스 구조물
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.StructCommand))]           // ★[v115 · JACK 1105] DHSTRUCT · DHSTRUCTPTS(v116.9 좌표계 내보내기) · DHSTRUCTOFF(Revit 구조물)
+[assembly: CommandClass(typeof(DH.Grading.Civil.Commands.RoadviewCommand))]         // ★[v117.44 · JACK 1126] DHROADVIEW(찍은 자리 위 작은 창에 카카오 로드뷰)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.UDitchCommand))]             // ★[배수지 U형 측구 1단계] DHUDITCH(창) · -DHUDITCH(명령줄)
 [assembly: CommandClass(typeof(DH.Grading.Civil.WallSetCommand))]                         // ★[JACK 1124] DHWALLSET · DHWALLSETROAD(옹벽 설정 팝업) · DHWALLSETAPPLY([적용] — 명령 밖 창이 넘긴 값)
 [assembly: CommandClass(typeof(DH.Grading.Civil.SectionPalette))]                         // ★[JACK 1112] DHSECPANEL · DHROADSECPANEL(종횡단도 도킹창 — 종단도 · 횡단도 단추를 하나로)
@@ -1019,6 +1020,15 @@ public sealed class RibbonApp : IExtensionApplication
             // ★★[JACK 1123 «위성지도 삽입 단추를 기타로 · 구조물은 공통으로»] [위성지도 삽입] 스플릿 = 지적도 옆(둘 다 VWorld에서 받아 깔기) · 옛 [구조물] 스플릿 자리
             //   ★[v115 · JACK 1105]부터 여기 있던 [구조물] 스플릿(불러오기 · 박스 배치 · 좌표계 내보내기 · 지우기)은 [공통]의 단추 하나 + 도킹창으로
             pMisc.Items.Add(splitMap);
+            pMisc.Items.Add(Spacer());
+            // ★★[v117.44 · JACK 1126 «기타 카테고리에 로드뷰 · 위치를 찍으면 그 위에 작은 팝업 · 그 자리 로드뷰»] 지도 단추 옆(셋 다 바깥 지도 자료)
+            var btnRoadview = MakeButton("로드뷰", "DHROADVIEW ", "도면에서 위치를 찍으면 그 자리 위 작은 창에 로드뷰", "로드뷰");
+            btnRoadview.ToolTip = MakeTip("로드뷰 (DHROADVIEW)",
+                "도면에서 **위치를 찍으면** 그 자리 위 작은 창에 카카오 로드뷰\n" +
+                "· 계속 찍기 — 찍을 때마다 창이 따라옴 · **Esc**로 끝\n" +
+                "· 보는 방향 = 도면의 주황 부채꼴(임시 · 창 닫으면 사라짐)\n" +
+                "· 카카오 지도 키 = [공통설정] «기타»", null);
+            pMisc.Items.Add(btnRoadview);
             pMisc.Items.Add(Spacer());
             pMisc.Items.Add(btnReset);
             pMisc.Items.Add(Spacer());

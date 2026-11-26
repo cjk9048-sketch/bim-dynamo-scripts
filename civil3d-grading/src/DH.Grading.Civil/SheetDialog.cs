@@ -46,6 +46,8 @@ public sealed class SheetDialog : Window
     private readonly CheckBox _parcelOd;
     private readonly TextBox _vwKey;
     private readonly TextBlock _vwState;
+    private readonly TextBox _kkKey;      // ★[v117.44] 카카오 지도 키(로드뷰)
+    private readonly TextBlock _kkState;
     private readonly CheckBox _forestOn;
     private readonly TextBlock _forestState;
     private readonly ForestSettings _fs;
@@ -204,13 +206,44 @@ public sealed class SheetDialog : Window
             finally { test.IsEnabled = true; }
         };
 
+        // ★★[v117.44 · JACK 1126 로드뷰] 카카오 지도 키 — VWorld 키 칸과 같은 꼴(비우면 내장 키 · 저장은 [저장])
+        _kkKey = new TextBox
+        {
+            Text = KakaoKey.User,
+            Width = 200, Height = 26,
+            VerticalContentAlignment = VerticalAlignment.Center,
+            HorizontalAlignment = HorizontalAlignment.Left,
+            ToolTip = "[로드뷰]에 씀 — 카카오 JavaScript 키(16진 32자) · 비우면 내장 키",
+        };
+        var kkRow = new DockPanel { Margin = new Thickness(0, 6, 0, 2), LastChildFill = false };
+        kkRow.Children.Add(new TextBlock { Text = "카카오 지도 키", Width = 110, VerticalAlignment = VerticalAlignment.Center });
+        kkRow.Children.Add(_kkKey);
+        var kkHow = new Button
+        {
+            Content = "발급 방법", MinWidth = 64, Margin = new Thickness(6, 0, 0, 0),
+            ToolTip = "developers.kakao.com 로그인 → 내 애플리케이션 → 앱 추가\n"
+                    + "· 앱 → 플랫폼 → Web → 사이트 도메인: " + KakaoKey.Domain + "\n"
+                    + "· 앱 → 카카오맵 → 사용 설정 ON\n"
+                    + "· 앱 키 → JavaScript 키를 복사해 여기에 붙여 넣기",
+        };
+        kkRow.Children.Add(kkHow);
+        root.Children.Add(kkRow);
+        var kkState = _kkState = new TextBlock { FontSize = 11, Foreground = DhBrand.Sub, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(110, 0, 0, 4) };
+        kkState.Text = "지금: " + KakaoKey.Source;
+        root.Children.Add(kkState);
+        kkHow.Click += (_, __) =>
+        {
+            try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("https://developers.kakao.com/console/app") { UseShellExecute = true }); }
+            catch (System.Exception ex) { kkState.Text = "브라우저를 못 열었습니다 — " + ex.Message; }
+        };
+
         // ★★★[JACK 0908 "너무 옛스럽고 딱딱한데" · "회사로고 활용" · "도킹창도 일관성있는 색으로"]
         //   창의 껍데기(청록 띠·로고 머리띠·바닥 단추)와 컨트롤 모양은 <see cref="DhBrand"/>가 맡는다.
         //   [JACK 0728과 같은 규칙] Enter로 저장되지 않게 — 저장은 클릭으로만(IsDefault를 안 준다).
         var (ok, cancel) = DhBrand.FooterButtons(okText);
         ok.Click += OnOk;
         root.Margin = new Thickness(18, 14, 18, 14);
-        DhBrand.Dress(this, "공통설정", "노리선 · 표시 · 임상도 · 배경지도 화질 · 좌표계 · 원지반 표시 · 등고선 간격 · VWorld 키", root, ok, cancel);
+        DhBrand.Dress(this, "공통설정", "노리선 · 표시 · 임상도 · 배경지도 화질 · 좌표계 · 원지반 표시 · 등고선 간격 · VWorld 키 · 카카오 키", root, ok, cancel);
     }
 
 
@@ -275,6 +308,25 @@ public sealed class SheetDialog : Window
             _vwState.Text = "VWorld 키 꼴이 아닙니다(8-4-4-4-12) — 고치거나 비우세요";
             _vwKey.Focus();
             return;
+        }
+        string kk = _kkKey.Text.Trim();
+        if (kk.Length > 0 && !KakaoKey.LooksValid(kk))
+        {
+            _kkState.Foreground = DhBrand.Warn;
+            _kkState.Text = "카카오 키 꼴이 아닙니다(16진 32자) — 고치거나 비우세요";
+            _kkKey.Focus();
+            return;
+        }
+        // ★[v117.44] 카카오 키 — VWorld 사슬(지도 다시 열기 · 지표면)과 따로: 저장만 하고 떠 있는 로드뷰 창에 알림
+        //   ★[검토 낮음] 다른 저장보다 먼저 — 못 쓰면 아무것도 안 바꾸고 창을 둠(VWorld 키만 바뀌고 [취소]로 사슬이 안 도는 반쪽 저장을 막음)
+        if (kk != KakaoKey.User)
+        {
+            try
+            {
+                if (kk.Length == 0) KakaoKey.ClearUser(); else KakaoKey.SaveUser(kk);
+                RoadviewWindow.KeyChanged();
+            }
+            catch (System.Exception ex) { _kkState.Foreground = DhBrand.Warn; _kkState.Text = "키를 저장하지 못했습니다 — " + ex.Message; return; }
         }
         bool forestNow = _forestOn.IsChecked == true;
         // ★[v115 · 검토 L4] 임상도 설정을 먼저 쓴다 — 못 쓰면 아무것도 바꾸지 않고 창을 둔다(반쯤 저장을 막음)

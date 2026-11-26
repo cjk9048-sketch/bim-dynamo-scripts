@@ -23,6 +23,7 @@ internal static class DhKeys
         public string VWorld = "";
         public Db GisDb = new();
         public string GisApi = "";   // ★[v117.19] 회사 GIS 데이터 API 주소(저장소 밖 · 로그 · 화면에 안 적음)
+        public string Kakao = "";    // ★[v117.44] 카카오 지도 JavaScript 키(로드뷰 · 도메인 https://dh.map 등록 필요)
         public string Note = "";   // 파일을 못 읽은 까닭(값은 안 적음)
         /// <summary>★[v117.19 · 사내 배포 1123] 새 판 확인 위치(<c>"update"</c> — 문자열 하나 또는 목록 · 차례로 시도 · https 주소 또는 UNC/로컬 경로의 latest.json) — <see cref="UpdateCheck"/>.</summary>
         public List<string> Update = new();
@@ -48,6 +49,8 @@ internal static class DhKeys
             static string S(JsonElement e, string k) => e.ValueKind == JsonValueKind.Object && e.TryGetProperty(k, out var v) && v.ValueKind == JsonValueKind.String ? (v.GetString() ?? "").Trim() : "";
             b.VWorld = S(r, "vworld");
             b.GisApi = S(r, "gisapi");
+            b.Kakao = S(r, "kakao");
+            if (b.Kakao.Length > 0 && !KakaoKey.LooksValid(b.Kakao)) { b.Kakao = ""; b.Note = "설치 키 파일의 카카오 키 꼴이 틀렸습니다(16진 32자)"; }
             if (r.TryGetProperty("update", out var up))
             {
                 if (up.ValueKind == JsonValueKind.String && (up.GetString() ?? "").Trim() is { Length: > 0 } u1) b.Update.Add(u1);
@@ -68,6 +71,67 @@ internal static class DhKeys
         try { if (b.Note.Length > 0) DiagLog.Append("\n[키] " + b.Note); } catch { }
         return b;
     }
+}
+
+/// <summary>★[v117.44 · JACK 1126 로드뷰] 카카오 지도 JavaScript 키 — <b>내 키</b>([공통설정] · %APPDATA% · DPAPI)가 있으면 그것, 없으면 내장 키(dh.keys.json «kakao»).
+/// <para>JavaScript 키는 페이지 안에서 쓰여 숨길 수 없는 대신 <b>등록한 사이트 도메인</b>에서만 돈다 — 로드뷰 창은 <see cref="Domain"/>에서 연다(카카오 개발자 사이트 → 앱 → 플랫폼 → Web에 이 주소 등록).</para></summary>
+internal static class KakaoKey
+{
+    /// <summary>로드뷰 창 페이지의 출처 — 카카오 개발자 사이트에 등록할 주소(지도 도킹바와 같은 가짜 도메인).</summary>
+    internal const string Domain = "https://dh.map";
+    static string Dir => DhKeys.TestDir ?? System.IO.Path.Combine(System.Environment.GetFolderPath(System.Environment.SpecialFolder.ApplicationData), "DH.Grading");
+    static string UserPath => System.IO.Path.Combine(Dir, "kakao.json");
+    static readonly byte[] Entropy = Encoding.UTF8.GetBytes("DH.Grading.KakaoKey.v1");
+    static string? _user;
+
+    internal static string User
+    {
+        get
+        {
+            if (_user != null) return _user;
+            string u = "";
+            try
+            {
+                if (System.IO.File.Exists(UserPath))
+                {
+                    using var doc = JsonDocument.Parse(System.IO.File.ReadAllText(UserPath));
+                    if (doc.RootElement.TryGetProperty("key", out var v) && v.GetString() is { Length: > 0 } enc)
+                        u = Encoding.UTF8.GetString(System.Security.Cryptography.ProtectedData.Unprotect(
+                            System.Convert.FromBase64String(enc), Entropy, System.Security.Cryptography.DataProtectionScope.CurrentUser)).Trim();
+                }
+            }
+            catch (System.Exception ex) { try { DiagLog.Append("\n[키] 내 카카오 키를 못 읽었습니다(내장 키로) — " + ex.GetType().Name); } catch { } }
+            _user = u;
+            return u;
+        }
+    }
+
+    internal static bool UsingUser => User.Length > 0;
+    internal static string Current => UsingUser ? User : DhKeys.Installed.Kakao;
+    internal static string Source => UsingUser ? "내 키" : DhKeys.Installed.Kakao.Length > 0 ? "내장 키" : "키 없음";
+
+    /// <summary>카카오 앱 키 꼴 — 16진 32자.</summary>
+    internal static bool LooksValid(string k) =>
+        System.Text.RegularExpressions.Regex.IsMatch((k ?? "").Trim(), "^[0-9A-Fa-f]{32}$");
+
+    internal static void SaveUser(string key)
+    {
+        key = key.Trim();
+        System.IO.Directory.CreateDirectory(Dir);
+        string enc = System.Convert.ToBase64String(System.Security.Cryptography.ProtectedData.Protect(
+            Encoding.UTF8.GetBytes(key), Entropy, System.Security.Cryptography.DataProtectionScope.CurrentUser));
+        System.IO.File.WriteAllText(UserPath, JsonSerializer.Serialize(new { key = enc }), new UTF8Encoding(false));
+        _user = key;
+    }
+
+    /// <summary>내 키 지우기 — 못 지우면 예외(VWorld 키와 같은 규칙).</summary>
+    internal static void ClearUser()
+    {
+        if (System.IO.File.Exists(UserPath)) System.IO.File.Delete(UserPath);
+        _user = "";
+    }
+
+    internal const string NoKeyHelp = "카카오 키 없음 → [공통설정] «기타»에서 넣기";
 }
 
 /// <summary>★★[v109 · 계획_v109.md 2] VWorld 인증키 — <b>내 키</b>([기타 설정] · %APPDATA% · DPAPI)가 있으면 그것, 없으면 <b>내장 키</b>(JACK 1028 «처음 써 볼 때 진입장벽을 낮추고 싶어»).

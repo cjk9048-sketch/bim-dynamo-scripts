@@ -1,4 +1,4 @@
-# DH 정지 플러그인 — 배포판 v117.43.0
+# DH 정지 플러그인 — 배포판 v117.44.0
 
 ## 받는 사람이 할 일
 
@@ -6,13 +6,13 @@
 
 | 파일 | 크기 | 쓰는 경우 |
 |---|---|---|
-| `DH정지플러그인_설치_v117.43.0.exe` | 214.0 MB | **보통은 이것** — .NET이 없는 PC에서도 돕니다 |
-| `DH정지플러그인_v117.43.0_수동설치.zip` | 178.9 MB | 회사 보안정책으로 exe가 막힐 때 |
+| `DH정지플러그인_설치_v117.44.0.exe` | 214.0 MB | **보통은 이것** — .NET이 없는 PC에서도 돕니다 |
+| `DH정지플러그인_v117.44.0_수동설치.zip` | 178.9 MB | 회사 보안정책으로 exe가 막힐 때 |
 
 설치가 끝나면 창에 **버전과 지문**이 찍힙니다 — 그것으로 무엇이 깔렸는지 확인하세요.
 
 ```
-   버전 117.43.0 · 지문 632d53013776
+   버전 117.44.0 · 지문 c794ed4909a6
 ```
 
 ### ⚠ 처음 받는 분이 겪는 것 — 미리 알려 주세요
@@ -30,7 +30,7 @@ Windows에서 PC를 보호했습니다   →  [추가 정보]를 누르고  → 
 
 ```
 %APPDATA%\Autodesk\ApplicationPlugins\DH.Grading.bundle\
-  PackageContents.xml            자동 로드 매니페스트(명령 266개)
+  PackageContents.xml            자동 로드 매니페스트(명령 268개)
   Contents\*.dll                 애드인 본체 + NetTopologySuite · Npgsql · WebView2
   Contents\*.pdb                 진단 로그에 줄번호가 찍히게(문제 추적용)
   Contents\3D_VIEW_LOCATION.LSP  3D 뷰 전환 단축(v1~v4 · vv1~vv3)
@@ -132,6 +132,6 @@ python tools/setup/mklatest.py    # 새 판 알림 배포/latest.json(판 · 날
 ## 지문 (SHA-256)
 
 ```
-ddd71d81d1c020fc16c86f1f6615891e7e00474bd0f1babe3e628a878e9810c3  DH정지플러그인_설치_v117.43.0.exe
-78000ecbf417aa9ce7f7045a1707a46a0c088083363ed77ed668212ddd145412  DH정지플러그인_v117.43.0_수동설치.zip
+889cfce5a3c69ec5df79d705fb756d7e224bf7466df2effea26a79def908bdd2  DH정지플러그인_설치_v117.44.0.exe
+13c39ecfb04633387c90169ac961fa05be45eb454ed23b281f719b913215589e  DH정지플러그인_v117.44.0_수동설치.zip
 ```
