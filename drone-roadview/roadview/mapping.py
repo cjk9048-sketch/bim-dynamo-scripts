@@ -1379,7 +1379,16 @@ class Eta:
 
     def __init__(self, n, quality='normal'):
         self.t0 = time.time(); self.done = 0.0; self.n = n; self.q = quality
+        self.work = 0.0                                  # 실제로 돌린 단계 무게 (다시 쓴 단계 빼고) — 빠르기 = 지난 시간 ÷ 이 값
         self.plan()
+
+    def _rate(self):
+        """무게 1 당 초 · 아직 돌린 단계가 없으면 무게표(394장 실측) × 사진 수 비율."""
+        el = time.time() - self.t0
+        return el / self.work if self.work > 1e-6 and el > 5 else max(0.05, self.n / 394.0)
+
+    def _left(self, done_w):
+        return max(0, int((self.total - done_w) * self._rate()))
 
     def plan(self, skip=(), scale=None):
         """안 할 단계는 무게 0 · 점구름 해상도에 따라 무게 줄임 (결과물 고르기 · 1.0.15) · 품질 배수."""
@@ -1397,19 +1406,28 @@ class Eta:
         frac = min(1.0, self.done / max(1e-6, self.total))
         pct = max(getattr(self, 'last', 0.0), min(99.0, 100.0 * frac))     # 다시 계획해도 뒤로 안 감
         self.last = pct
-        left = max(0, int(el / max(1e-6, frac) - el)) if self.done > 0 else -1
-        print('@진행 %.1f %d %s' % (pct, left, STAGE_LABEL.get(name, name)), flush=True)
+        del el, frac
+        print('@진행 %.1f %d %s' % (pct, self._left(self.done), STAGE_LABEL.get(name, name)), flush=True)
+        w = self.W.get(name, 0)                          # 이 단계 끝 퍼센트 · 어림 초 → 앱이 엔진 진행 글 없는 동안 막대를 시간으로 밀어 줌
+        end = max(pct, min(99.0, 100.0 * min(1.0, (self.done + w) / max(1e-6, self.total))))
+        print('@단계 %.1f %.1f %d' % (pct, end, max(1, int(w * self._rate()))), flush=True)
 
-    def finish(self, name):
+    def finish(self, name, reused=False):
+        """reused = 지난번 것 다시 씀 (바로 끝남) → 빠르기 셈에서 뺌 (전에는 남은 시간이 너무 짧게 나왔음 · JACK 1126 «1.9시간 · 8분»)."""
         self.done += self.W.get(name, 1)
+        if not reused:
+            self.work += self.W.get(name, 1)
 
     def inside(self, name, frac, label):
         """단계 안 진행 (함께 처리처럼 한 단계가 길 때 · cluster.py) — 퍼센트 · 남은 시간이 그 단계 안에서도 앞으로."""
         el = time.time() - self.t0
-        f = min(1.0, (self.done + max(0.0, min(1.0, frac)) * self.W.get(name, 0)) / max(1e-6, self.total))
+        part = max(0.0, min(1.0, frac)) * self.W.get(name, 0)
+        f = min(1.0, (self.done + part) / max(1e-6, self.total))
         pct = max(getattr(self, 'last', 0.0), min(99.0, 100.0 * f))
         self.last = pct
-        left = max(0, int(el / max(1e-6, f) - el)) if f > 0 and self.done > 0 else -1
+        worked = self.work + part
+        rate = el / worked if worked > 1e-6 and el > 5 else self._rate()
+        left = max(0, int((self.total - self.done - part) * rate))
         print('@진행 %.1f %d %s' % (pct, left, label), flush=True)
 
 
@@ -1435,10 +1453,88 @@ def mvs_cuda_opt(mvs):
     return _MVS_CUDA[mvs]
 
 
-def run(cmd, logpath, cwd=None):
+_RX_IJ = re.compile(r'\[(\d+)/(\d+)\]')                 # COLMAP «Processed file [12/47]» · «Processing image [3/47]» · «Undistorting image [5/47]»
+_RX_REG = re.compile(r'num_reg_frames=(\d+)')              # COLMAP 한 장씩 풀기 «Registering image #5 (num_reg_frames=46)»
+_RX_BA = re.compile(r'bundle adjustment iteration (\d+) / (\d+)')
+_RX_MVS_N = re.compile(r'Selecting images for dense reconstruction completed: (\d+) images')
+_MESH_MARK = (('Delaunay tetrahedralization completed', 0.25), ('tetrahedras weighting completed', 0.45),
+              ('graph-cut completed', 0.8), ('Mesh reconstruction completed', 0.85), ('Cleaned mesh', 0.92), ("' saved", 0.98))
+
+
+def _tail(path, nbytes=262144):
+    try:
+        with open(path, 'rb') as f:
+            f.seek(0, 2); n = f.tell(); f.seek(max(0, n - nbytes))
+            return f.read().decode('utf-8', errors='replace')
+    except OSError:
+        return ''
+
+
+def engine_frac(logpath, cwd, t0, n_img=0):
+    """엔진 기록에서 이 단계 진행 0~1 (모르면 None) — 막대가 단계 끝에만 쑥 오르지 않게 (JACK 1126)."""
+    txt = _tail(logpath)
+    m = None
+    for m in _RX_IJ.finditer(txt):
+        pass
+    if m and int(m.group(2)) > 0:
+        return min(1.0, int(m.group(1)) / float(m.group(2)))
+    m = None
+    for m in _RX_REG.finditer(txt):
+        pass
+    if m and n_img > 0:
+        return min(1.0, int(m.group(1)) / float(n_img))
+    m = None
+    for m in _RX_BA.finditer(txt):
+        pass
+    if m and int(m.group(2)) > 0:
+        return 0.3 + 0.6 * int(m.group(1)) / float(m.group(2))
+    if not cwd:
+        return None
+    logs = [f for f in glob.glob(os.path.join(cwd, '*.log')) if os.path.getmtime(f) >= t0 - 2 and
+            os.path.basename(f).split('-')[0] in ('DensifyPointCloud', 'ReconstructMesh')]
+    if not logs:
+        return None
+    f = max(logs, key=os.path.getmtime)
+    t = _tail(f, 4 << 20)
+    if os.path.basename(f).startswith('DensifyPointCloud'):
+        mn = _RX_MVS_N.search(t)
+        if not mn or int(mn.group(1)) <= 0:
+            return None
+        n, c = int(mn.group(1)), t.count('Depth-map for image')   # 깊이 지도 세 번 (처음 계산이 가장 김 · 1126 47장 실측 4분 · 1분 · 1분)
+        if 'fused and filtered' in t:
+            return 0.98
+        if c <= n:
+            return 0.65 * c / n
+        if c <= 2 * n:
+            return 0.65 + 0.15 * (c - n) / n
+        return min(0.96, 0.8 + 0.16 * (c - 2 * n) / n)
+    best = None
+    for mark, v in _MESH_MARK:
+        if mark in t:
+            best = v
+    return best
+
+
+def run(cmd, logpath, cwd=None, prog=None, n_img=0):
+    """엔진 돌리기 · prog(0~1) = 엔진 기록에서 읽은 단계 안 진행 (2초마다 · 바뀔 때만)."""
+    t0 = time.time()
     with open(logpath, 'w', encoding='utf-8', errors='replace') as fp:
-        r = subprocess.run(cmd, stdout=fp, stderr=subprocess.STDOUT, cwd=cwd, creationflags=NO_WINDOW)
-    return r.returncode
+        pr = subprocess.Popen(cmd, stdout=fp, stderr=subprocess.STDOUT, cwd=cwd, creationflags=NO_WINDOW)
+        last = -1.0
+        while True:
+            try:
+                return pr.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                pass
+            if prog:
+                try:
+                    fp.flush()
+                    f = engine_frac(logpath, cwd, t0, n_img)
+                    if f is not None and f > last + 0.004:
+                        last = f
+                        prog(f)
+                except Exception:                    # noqa: BLE001 — 진행 읽기가 실패해도 엔진은 그대로
+                    pass
 
 
 def main(argv=None):
@@ -1589,13 +1685,13 @@ def main(argv=None):
     def step(name, cmd, logname, cwd=None, check=None):
         if name in stages['done'] and (check is None or check()):
             log('%s · 지난번 것 씀' % STAGE_LABEL.get(name, name), fp)
-            eta.finish(name)
+            eta.finish(name, reused=True)
             return True
         drop_from(name)
         save_stages()
         eta.start(name)
         t = time.time()
-        rc = run(cmd, os.path.join(ws, logname), cwd)
+        rc = run(cmd, os.path.join(ws, logname), cwd, prog=lambda f: eta.inside(name, f, STAGE_LABEL.get(name, name)), n_img=len(photos))
         good = rc == 0 and (check is None or check())
         log('%s %d초%s' % (STAGE_LABEL.get(name, name), time.time() - t, '' if good else ' · 실패 (종료코드 %d · %s)' % (rc, logname)), fp)
         eta.finish(name)
@@ -1636,13 +1732,13 @@ def main(argv=None):
         raw = os.path.join(ws, 'sparse_global')
         aligned = os.path.join(ws, 'sparse', '0')
         if '카메라 풀기' in stages['done'] and sparse_ok():
-            log('카메라 풀기 · 지난번 것 씀', fp); eta.finish('카메라 풀기'); ok = True
+            log('카메라 풀기 · 지난번 것 씀', fp); eta.finish('카메라 풀기', reused=True); ok = True
         else:
             drop_from('카메라 풀기'); save_stages()
             shutil.rmtree(raw, ignore_errors=True); os.makedirs(raw, exist_ok=True)
             eta.start('카메라 풀기'); t = time.time()
             rc = run([colmap, 'global_mapper', '--database_path', db, '--image_path', a.photos, '--output_path', raw],
-                     os.path.join(ws, '3_카메라풀기_전역.log'))
+                     os.path.join(ws, '3_카메라풀기_전역.log'), prog=lambda f: eta.inside('카메라 풀기', f, STAGE_LABEL.get('카메라 풀기', '카메라 풀기')))
             gm = sorted(glob.glob(os.path.join(raw, '*', 'images.bin')))
             rc2 = 1
             if rc == 0 and gm:
@@ -1793,7 +1889,7 @@ def main(argv=None):
         #   질감 방식 · 사진 폭이 다르면 (1.0.15 까지 만든 프로젝트 포함) 질감만 다시
         tex_sig = '%s-%d' % (TEX_METHOD, TEX_PX[a.quality])
         if ok and reuse('질감', tex_list) and prm.get('tex') == tex_sig:
-            log('질감 · 지난번 것 씀', fp); eta.finish('질감'); tex_dirs = tex_list()
+            log('질감 · 지난번 것 씀', fp); eta.finish('질감', reused=True); tex_dirs = tex_list()
         elif ok:
             drop_from('질감'); save_stages()
             eta.start('질감'); t2 = time.time()
@@ -1802,6 +1898,8 @@ def main(argv=None):
             mvs_ok = ensure_tex_images()
             n_mvs = 0; t_lv = 0.0
             for k, (p, nf) in enumerate(tiles):
+                if k:
+                    eta.inside('질감', k / float(len(tiles)), STAGE_LABEL.get('질감', '질감'))   # 조각마다 막대 (JACK 1126)
                 d = os.path.join(tex_root, 't%02d' % k); os.makedirs(d, exist_ok=True)
                 err = texture_tile_mvs(colmap, mvs, ws, tex_ws, p, d, os.path.join(ws, '7_질감_t%02d' % k)) if mvs_ok else '질감 사진 없음'
                 if not err:

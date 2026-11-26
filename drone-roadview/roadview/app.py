@@ -20,7 +20,7 @@ import uuid
 from pathlib import Path
 
 APP_NAME = '드론 로드뷰'
-APP_VERSION = '1.0.18.1'
+APP_VERSION = '1.0.19'
 FROZEN = getattr(sys, 'frozen', False)
 BASE = Path(sys._MEIPASS) if FROZEN else Path(__file__).resolve().parent.parent      # noqa: SLF001
 HOME_HTML = (BASE / 'roadview' / 'app_home' / 'index.html') if not FROZEN else (BASE / 'app_home' / 'index.html')
@@ -78,6 +78,8 @@ class Job:
         self.t0 = time.time()
         self.label = ''          # 만들기가 알려 준 지금 단계 (@진행 줄)
         self.eta_at = None       # 끝날 시각 (time.time 기준) · 모르면 None
+        self.stage = None        # «@단계 <시작 %> <끝 %> <어림 초>» — 엔진 진행 글이 없는 동안 막대를 시간으로 밀어 줌 (JACK 1126 «한꺼번에 쑥쑥»)
+        self.inner = False       # 이 단계 안에서 엔진 진행(@진행)을 받았으면 그 값을 씀
         env = dict(os.environ, PYTHONIOENCODING='utf-8')
         self.proc = subprocess.Popen(args, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                      creationflags=NO_WINDOW, env=env)
@@ -88,6 +90,14 @@ class Job:
             s = raw.decode('utf-8', errors='replace').rstrip()
             if s.startswith('@진행 '):
                 self._progress(s)
+                continue
+            if s.startswith('@단계 '):
+                try:
+                    _, a0, a1, sec = s.split(' ', 3)
+                    self.stage = (float(a0), float(a1), max(1.0, float(sec)), time.time())
+                    self.inner = False
+                except ValueError:
+                    self.stage = None
                 continue
             self.lines.append(s)
             if len(self.lines) > 400:
@@ -105,6 +115,7 @@ class Job:
         """«@진행 <퍼센트> <남은 초 | -1> <글>» — 만들기가 단계마다 잰 빠르기로 셈한 값."""
         try:
             _, pct, left, label = s.split(' ', 3)
+            self.inner = self.stage is not None and label.strip() == self.label and float(pct) > self.stage[0] + 1e-6
             self.pct = max(self.pct, float(pct))
             left = int(left)
             self.eta_at = time.time() + left if left >= 0 else None
@@ -120,7 +131,15 @@ class Job:
             return '곧 끝'
         m = int(math.ceil(r / 60.0))
         hm = ('%d시간 %d분' % divmod(m, 60)) if m >= 60 else ('%d분' % m)
-        return '남은 약 %s · %s 끝' % (hm, time.strftime('%H:%M', time.localtime(self.eta_at)))
+        return '남은 %s · %s 끝' % (hm, time.strftime('%H:%M', time.localtime(self.eta_at)))
+
+    def _shown_pct(self):
+        """막대 = 받은 퍼센트 · 엔진 진행 글이 없는 단계는 단계 어림 시간에 따라 단계 끝 9할까지 천천히."""
+        p = self.pct
+        if self.state == 'run' and self.stage and not self.inner:
+            a0, a1, sec, t = self.stage
+            p = max(p, a0 + (a1 - a0) * min(0.9, (time.time() - t) / sec))
+        return min(99.5, p) if self.state == 'run' else p
 
     def _parse(self, s):
         el = time.time() - self.t0
@@ -164,8 +183,11 @@ class Job:
         if self.state == 'run' and self.label:
             pill = self._left_text()
             line = self.label + ' · ' + pill
-        return {'id': self.id, 'state': self.state, 'pct': round(self.pct, 1), 'line': line, 'pill': pill,
-                'url': self.url, 'out': self.out, 'log': self.lines[-12:]}
+        left = int(max(0, self.eta_at - time.time())) if (self.state == 'run' and self.eta_at) else -1
+        return {'id': self.id, 'state': self.state, 'pct': round(self._shown_pct(), 1), 'line': line, 'pill': pill,
+                'url': self.url, 'out': self.out, 'log': self.lines[-12:],
+                'label': self.label, 'left': left, 'elapsed': int(time.time() - self.t0),
+                'eta': time.strftime('%H:%M', time.localtime(self.eta_at)) if left >= 0 else ''}
 
 
 class HelperProc:

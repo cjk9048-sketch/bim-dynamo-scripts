@@ -154,11 +154,12 @@
   </section>
 </div>
 <!-- 3D 매핑 만들기 (JACK 1125 · 경사촬영 사진 → 3D 모델 · 정사 · DSM)
-     1126 DJI Terra 꼴 (JACK «Terra 메뉴처럼»): 왼쪽 지도 · 오른쪽 «설정» 칸 (펼치고 접는 칸 · 결과물 칸마다 머리줄 켜고 끄기 · 끄면 흐림)
+     1126 도화 꼴 (JACK «Terra 참고 · 너무 똑같음 → 도화 톤 · 도화 로고»): 왼쪽 지도 · 오른쪽 «만들기 설정» (펼치고 접는 칸 · 결과물 칸마다 켜고 끄기 · 끄면 흐림)
      · 아래 줄 (장치 성능 · 실행 기록 · 출력 좌표 참조계) · mapping.js -->
 <div id="mp" class="mp hide">
   <header class="etop mtop">
     <button id="mBack" class="ib" title="처음 화면"><svg viewBox="0 0 24 24"><path d="M15 5 8 12l7 7" fill="none" stroke="currentColor" stroke-width="2.2"/></svg></button>
+    <img class="mlogo" src="dohwa_logo.png" alt="DOHWA"><span class="mkind">3D 매핑</span>
     <input id="mTitle" class="mname" type="text" placeholder="이름" spellcheck="false">
     <button id="mRen" class="ib" title="이름 고치기"><svg viewBox="0 0 24 24"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75zM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75z"/></svg></button>
     <div class="sp"></div>
@@ -179,63 +180,63 @@
     <button id="mDev" class="mbb" title="장치 성능"><svg viewBox="0 0 24 24"><path d="M21 3H3a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h5v2h8v-2h5a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2zm0 14H3V5h18z"/></svg>장치 성능 <span id="mDevDot" class="dot"></span></button>
     <button id="mLogBtn" class="mbb"><svg viewBox="0 0 24 24"><path d="M13 3a9 9 0 0 0-9 9H1l3.9 3.9L9 12H6a7 7 0 1 1 2.05 4.95l-1.42 1.42A9 9 0 1 0 13 3zm-1 5v5l4.3 2.5.7-1.2-3.5-2.1V8z"/></svg>실행 기록 <i class="car">▾</i></button>
     <div class="sp"></div>
-    <span class="mbcrs"><svg viewBox="0 0 24 24"><path d="M5 3h2v12.6l5.3-5.3 1.4 1.4L8.4 17H21v2H5z"/></svg>출력 좌표 참조계: <b id="mCrsBar"></b></span>
+    <span class="mbcrs"><svg viewBox="0 0 24 24"><path d="M5 3h2v12.6l5.3-5.3 1.4 1.4L8.4 17H21v2H5z"/></svg>좌표계 <b id="mCrsBar"></b></span>
   </footer>
   <aside class="eside tset">
-    <div class="tshead"><b>설정</b><button id="mFold" class="ib" title="칸 접기"><svg viewBox="0 0 24 24"><path d="M6 6l6 6-6 6M12 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2"/></svg></button></div>
+    <div class="tshead"><b>만들기 설정</b><button id="mFold" class="ib" title="칸 접기"><svg viewBox="0 0 24 24"><path d="M6 6l6 6-6 6M12 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2"/></svg></button></div>
     <div class="tsbody">
       <section class="tsec" data-sec="data">
-        <div class="tsh"><i class="chev"></i>데이터 세트</div>
+        <div class="tsh"><i class="chev"></i><span class="num">1</span>사진</div>
         <div class="tsb">
-          <button id="mPick" class="tbtn">사진 폴더 선택</button>
-          <button id="mPickFiles" class="tbtn">사진 선택</button>
+          <div class="tpair"><button id="mPick" class="tbtn">사진 폴더 고르기</button><button id="mPickFiles" class="tbtn">사진 파일 고르기</button></div>
           <div id="mInfo" class="tnote"></div>
-          <div class="tnote dim">지원되는 사진 형식: JPG (위치 XMP 있는 DJI 매핑 사진 · M4E 경사 · 수직) · 360 영상은 처음 화면 «프로젝트 생성»</div>
+          <div class="tnote dim">DJI 매핑 사진 (JPG · 위치 정보 · 경사 · 수직) · 360 영상은 처음 화면에서</div>
         </div>
       </section>
       <section class="tsec" data-sec="proc">
-        <div class="tsh"><i class="chev"></i>처리</div>
+        <div class="tsh"><i class="chev"></i><span class="num">2</span>설정 · 결과물</div>
         <div class="tsb">
-          <span class="tlab">템플릿</span>
-          <select id="mTpl" class="wide"><option value="">일반</option></select>
+          <span class="tlab">저장한 설정</span>
+          <select id="mTpl" class="wide"><option value="">기본</option></select>
           <span class="tlab">결과 폴더</span>
           <div class="trow2"><input id="mOut" type="text"><button id="mOutB" class="tbtn sm">바꾸기</button></div>
 
           <div class="tcard" data-sec="at">
-            <div class="tch"><i class="tri"></i>전처리(AT)</div>
+            <div class="tch"><i class="tri"></i>사진 맞추기</div>
             <div class="tcb">
               <div class="tr"><span class="tl">품질<i class="qi" title="결과물이 얼마나 선명한지 정함 (3D · 정사 · 점구름 모두) · 단순 = 빠르고 거침 (사진 1/4 크기) · 보통 = 사진 1/2 · 정밀 = 원본 크기 · 가장 선명하지만 3~4배 느림">i</i></span>
                 <div id="mQ" class="seg tv"><button data-q="fast">단순</button><button data-q="normal" class="on">보통</button><button data-q="fine">정밀</button></div></div>
-              <div class="tr"><span class="tl">계산 방법<i class="qi" title="꺼짐 = 단독 계산 (이 PC) · 켜짐 = 함께 처리 (옆 PC 도우미와 점구름을 나눔 · 공유 폴더 = 처음 화면 왼쪽 «함께 처리»)">i</i></span>
+              <div class="tr"><span class="tl">옆 PC 와 함께<i class="qi" title="꺼짐 = 이 PC 혼자 · 켜짐 = 옆 PC 도우미와 점구름을 나눠 계산 (공유 폴더 = 처음 화면 왼쪽 «함께 처리»)">i</i></span>
                 <span class="tv"><span class="tfix">함께 처리</span><button id="mClu" class="tog" title="옆 PC 도우미와 점구름을 나눠 처리">꺼짐</button></span></div>
               <div class="tr tsub"><span id="mCluSub" class="sub"></span></div>
-              <div class="tr"><span class="tl">특징 포인트 밀도<i class="qi" title="사진끼리 서로 위치를 맞출 때 쓰는 점의 양 · 결과물 선명도와는 상관없음 · 보통이면 그대로 · 사진이 덜 맞춰질 때(겹침 적음 · 물 · 숲) 높음 · 낮음 = 맞추기만 조금 빨라짐 · 바꾸면 처음부터 다시">i</i></span>
+              <div class="tr"><span class="tl">특징점 밀도<i class="qi" title="사진끼리 서로 위치를 맞출 때 쓰는 점의 양 · 결과물 선명도와는 상관없음 · 보통이면 그대로 · 사진이 덜 맞춰질 때(겹침 적음 · 물 · 숲) 높음 · 낮음 = 맞추기만 조금 빨라짐 · 바꾸면 처음부터 다시">i</i></span>
                 <select data-k="feat"><option value="high">높음</option><option value="normal">보통</option><option value="low">낮음</option></select></div>
-              <div class="tr"><span class="tl">출력 좌표 참조계</span>
+              <div class="tr"><span class="tl">좌표계</span>
                 <select id="mCrs"><option value="EPSG:5186" selected>중부원점 (5186)</option><option value="EPSG:5185">서부원점 (5185)</option>
                   <option value="EPSG:5187">동부원점 (5187)</option><option value="EPSG:5188">동해원점 (5188)</option><option value="EPSG:5179">UTM-K (5179)</option></select></div>
             </div>
           </div>
 
+          <div class="tgrp"><span class="num">3</span>만들 결과물<span class="sp"></span><span class="tgrpsub">켠 것만 만듦</span></div>
           <div class="tcard" data-sec="ortho">
-            <div class="tch"><i class="tri"></i>2D 지도<span class="sp"></span><button class="sw" data-o="ortho" title="정사영상 만들기"></button></div>
+            <div class="tch"><i class="tri"></i>정사영상<span class="sp"></span><button class="sw" data-o="ortho" title="정사영상 만들기"></button></div>
             <div class="tcb">
               <div class="tr"><span class="tl">해상도<i class="qi" title="자동 = 품질에 맞춤 · 높음 = 사진 해상도 (GSD) · 중간 = 2배 칸 · 낮음 = 4배 칸">i</i></span>
                 <select data-k="orthoRes"><option value="auto">자동</option><option value="high">높음 (100%)</option><option value="mid">중간 (50%)</option><option value="low">낮음 (25%)</option></select></div>
-              <div class="tr"><span class="tl">출력 형식</span><span class="tv"><span class="chip">GeoTIFF</span></span></div>
-              <button class="tr tlink" data-act="area"><span class="tl">관심 지역</span><span class="tv"><span class="roi">전체</span> ›</span></button>
-              <div class="tr"><span class="tl">지능형 홀 채우기<i class="qi" title="점이 없는 안쪽 빈칸 (지붕 · 물 등) 을 둘레 높이로 메워 사진 색을 넣음">i</i></span><button class="sw" data-k="orthoFill"></button></div>
+              <div class="tr"><span class="tl">파일</span><span class="tv"><span class="chip">GeoTIFF</span></span></div>
+              <button class="tr tlink" data-act="area"><span class="tl">범위</span><span class="tv"><span class="roi">전체</span> ›</span></button>
+              <div class="tr"><span class="tl">빈 곳 메우기<i class="qi" title="점이 없는 안쪽 빈 곳 (지붕 · 물 등) 을 둘레 높이로 메우고 사진 색을 넣음">i</i></span><button class="sw" data-k="orthoFill"></button></div>
             </div>
           </div>
 
           <div class="tcard" data-sec="mesh">
-            <div class="tch"><i class="tri"></i>3D 메시<span class="sp"></span><button class="sw" data-o="mesh" title="질감 3D 모델 만들기"></button></div>
+            <div class="tch"><i class="tri"></i>3D 모델<span class="sp"></span><button class="sw" data-o="mesh" title="질감 3D 모델 만들기"></button></div>
             <div class="tcb">
-              <div class="tr"><span class="tl">모델 축소 비율<i class="qi" title="세모 수 = 품질 한도 × 이 비율 (100 = 줄이지 않음 · 3D 보기 · 내보내기 둘 다)">i</i></span>
+              <div class="tr"><span class="tl">모델 크기<i class="qi" title="세모 수를 줄여 가볍게 · 100 = 그대로 · 50 = 절반 (3D 보기 · 내보내기 둘 다)">i</i></span>
                 <span class="tnum"><input type="number" data-k="meshRatio" min="5" max="100" step="5"><i>%</i></span></div>
-              <div class="tr"><span class="tl">파일 형식<i class="qi" title="보기용 (늘 만듦 · 3D 화면) + 고른 형식 = 결과물 폴더 3D_model.ply · .obj (도면 좌표 · 질감)">i</i></span>
+              <div class="tr"><span class="tl">파일<i class="qi" title="보기용 (늘 만듦 · 3D 화면) + 고른 형식 = 결과물 폴더 3D_model.ply · .obj (도면 좌표 · 질감)">i</i></span>
                 <span id="mFmt" class="tv"><span class="chip">보기용</span><button class="chip" data-f="ply">PLY</button><button class="chip" data-f="obj">OBJ</button></span></div>
-              <button class="tr tlink" data-act="area"><span class="tl">ROI/블록</span><span class="tv"><span class="roi">전체</span> ›</span></button>
+              <button class="tr tlink" data-act="area"><span class="tl">범위</span><span class="tv"><span class="roi">전체</span> ›</span></button>
             </div>
           </div>
 
@@ -243,29 +244,29 @@
             <div class="tch"><i class="tri"></i>가우시안 스플래팅<span class="sp"></span><button class="sw" data-o="gs" title="가우시안 스플래팅 만들기"></button></div>
             <div id="mGsWhy" class="tnote warn hide"></div>
             <div class="tcb">
-              <div class="tr"><span class="tl">계산 방법</span><span class="tv"><span class="tfix">단독 계산 (이 PC 그래픽카드)</span></span></div>
+              <div class="tr"><span class="tl">계산</span><span class="tv"><span class="tfix">이 PC 그래픽카드</span></span></div>
               <div class="tr"><span class="tl">품질</span>
                 <select data-k="gsQ"><option value="low">낮음</option><option value="normal">보통</option><option value="high">높음</option><option value="ultra">매우 높음</option></select></div>
-              <div class="tr"><span class="tl">출력 형식</span><span class="tv"><span class="chip">PLY</span></span></div>
-              <div class="tr"><span class="tl">DOM(정사영상) 생성<i class="qi" title="가우시안으로 위에서 본 정사영상도 만듦">i</i></span><button class="sw" data-k="gsDom"></button></div>
-              <button class="tr tlink" data-act="area"><span class="tl">관심 지역</span><span class="tv"><span class="roi">전체</span> ›</span></button>
+              <div class="tr"><span class="tl">파일</span><span class="tv"><span class="chip">PLY</span></span></div>
+              <div class="tr"><span class="tl">정사영상도 만들기<i class="qi" title="가우시안으로 위에서 본 정사영상도 만듦 (결과물/가우시안_정사.tif)">i</i></span><button class="sw" data-k="gsDom"></button></div>
+              <button class="tr tlink" data-act="area"><span class="tl">범위</span><span class="tv"><span class="roi">전체</span> ›</span></button>
             </div>
           </div>
 
           <div class="tcard" data-sec="las">
-            <div class="tch"><i class="tri"></i>포인트 클라우드<span class="sp"></span><button class="sw" data-o="las" title="점구름 LAS 만들기"></button></div>
+            <div class="tch"><i class="tri"></i>점구름 (LAS)<span class="sp"></span><button class="sw" data-o="las" title="점구름 LAS 만들기"></button></div>
             <div class="tcb">
-              <div class="tr"><span class="tl">밀도<i class="qi" title="점을 고르게 솎음">i</i></span>
+              <div class="tr"><span class="tl">밀도<i class="qi" title="점을 고르게 솎아 파일을 가볍게 (100% = 전부)">i</i></span>
                 <select data-k="lasDensity"><option value="100">전부 (100%)</option><option value="50">높음 (50%)</option><option value="25">중간 (25%)</option><option value="10">낮음 (10%)</option></select></div>
-              <div class="tr"><span class="tl">출력 형식</span><span class="tv"><span class="chip">LAS 1.2</span></span></div>
-              <div class="tr"><span class="tl">지면 포인트 분류<i class="qi" title="DTM 으로 땅 = 분류 2 · 그 밖 = 1 (DEM 을 꺼도 안에서 셈)">i</i></span><button class="sw" data-k="lasClassify"></button></div>
+              <div class="tr"><span class="tl">파일</span><span class="tv"><span class="chip">LAS 1.2</span></span></div>
+              <div class="tr"><span class="tl">땅 점 분류<i class="qi" title="땅 점 = 분류 2 · 나머지 = 1 (DTM 칸을 꺼도 안에서 셈)">i</i></span><button class="sw" data-k="lasClassify"></button></div>
             </div>
           </div>
 
           <div class="tcard" data-sec="dtm">
-            <div class="tch"><i class="tri"></i>DEM<span class="sp"></span><button class="sw" data-o="dtm" title="DTM (땅만 · 나무 · 건물 뺌) 만들기"></button></div>
+            <div class="tch"><i class="tri"></i>DTM (맨땅)<span class="sp"></span><button class="sw" data-o="dtm" title="DTM (땅만 · 나무 · 건물 뺌) 만들기"></button></div>
             <div class="tcb">
-              <div class="tr"><span class="tl">크기(스케일)<i class="qi" title="DTM 칸 크기 · 땅만 (나무 · 건물 빼고 둘레 땅 경향으로 메움) · GeoTIFF + LandXML">i</i></span>
+              <div class="tr"><span class="tl">칸 크기<i class="qi" title="DTM 칸 크기 · 땅만 (나무 · 건물 빼고 둘레 땅 경향으로 메움) · GeoTIFF + LandXML">i</i></span>
                 <select data-k="demCell"><option value="0.25">1:500 (0.25 m)</option><option value="0.5">1:1000 (0.5 m)</option><option value="1">1:2500 (1 m)</option><option value="2">1:5000 (2 m)</option></select></div>
             </div>
           </div>
@@ -274,42 +275,39 @@
             <div class="tch"><i class="tri"></i>등고선<span class="sp"></span><button class="sw" data-o="contour" title="등고선 DXF 만들기 (땅 · DTM 기준)"></button></div>
             <div class="tcb">
               <div class="tr"><span class="tl">간격<i class="qi" title="주곡선 간격 · 계곡선 = 5배">i</i></span><span class="tnum"><input id="mCt" type="number" min="0.5" max="50" step="0.5" value="1"><i>m</i></span></div>
-              <div class="tr"><span class="tl">고도 기준면<i class="qi" title="등고선 높이 = 기준면 + 간격의 배수">i</i></span><span class="tnum"><input type="number" data-k="ctBase" step="0.1"><i>m</i></span></div>
-              <div class="tr"><span class="tl">고도 주석 간격<i class="qi" title="계곡선 위 표고 글 사이 거리 · 0 = 글 없음">i</i></span><span class="tnum"><input type="number" data-k="ctLabel" min="0" max="1000" step="10"><i>m</i></span></div>
-              <div class="tr"><span class="tl">잘못된 등고선 제거<i class="qi" title="짧은 조각 · 작은 고리 빼기 (간격에 맞춘 길이)">i</i></span><button class="sw" data-k="ctClean"></button></div>
+              <div class="tr"><span class="tl">기준 높이<i class="qi" title="등고선 높이 = 기준 높이 + 간격의 배수">i</i></span><span class="tnum"><input type="number" data-k="ctBase" step="0.1"><i>m</i></span></div>
+              <div class="tr"><span class="tl">표고 글 간격<i class="qi" title="계곡선 위 표고 글 사이 거리 · 0 = 글 없음 · 5 m 이상">i</i></span><span class="tnum"><input type="number" data-k="ctLabel" min="0" max="1000" step="10"><i>m</i></span></div>
+              <div class="tr"><span class="tl">짧은 조각 빼기<i class="qi" title="짧은 조각 · 작은 고리 빼기 (간격에 맞춘 길이)">i</i></span><button class="sw" data-k="ctClean"></button></div>
             </div>
           </div>
 
           <div class="tcard" data-sec="dsm">
-            <div class="tch"><i class="tri"></i>포인트의 그리드 및 TIN<span class="sp"></span><button class="sw" data-o="dsm" title="DSM GeoTIFF + 지표면 LandXML (건물 · 나무 포함)"></button></div>
+            <div class="tch"><i class="tri"></i>DSM · 지표면<span class="sp"></span><button class="sw" data-o="dsm" title="DSM GeoTIFF + 지표면 LandXML (건물 · 나무 포함)"></button></div>
             <div class="tcb">
-              <div class="tr"><span class="tl">샘플 거리<i class="qi" title="지표면_DSM.xml (LandXML · Civil 3D) 점 간격">i</i></span><span class="tnum"><input type="number" data-k="tinStep" min="25" max="5000" step="25"><i>cm</i></span></div>
-              <div class="tr"><span class="tl">출력 형식</span><span class="tv"><span class="chip">GeoTIFF</span><span class="chip">LandXML</span></span></div>
+              <div class="tr"><span class="tl">LandXML 점 간격<i class="qi" title="지표면_DSM.xml (Civil 3D 지표면) 점 사이 거리">i</i></span><span class="tnum"><input type="number" data-k="tinStep" min="25" max="5000" step="25"><i>cm</i></span></div>
+              <div class="tr"><span class="tl">파일</span><span class="tv"><span class="chip">GeoTIFF</span><span class="chip">LandXML</span></span></div>
             </div>
           </div>
         </div>
       </section>
-      <section class="tsec" data-sec="app">
-        <div class="tsh"><i class="chev"></i>애플리케이션</div>
-        <div class="tsb"><div class="tr"><span class="tl">주석 및 측정</span><span class="tv tfix">결과 3D 화면 · 오른쪽 메뉴 «재기»</span></div></div>
-      </section>
       <section class="tsec tips" data-sec="tips" id="mTips">
-        <div class="tsh"><i class="chev"></i>팁</div>
+        <div class="tsh"><i class="chev"></i>도움말</div>
         <div class="tsb tnote"><ol>
-          <li>재구성은 시간이 걸림 · 예상 시간은 아래</li>
-          <li>재구성 중에 사진 폴더의 사진을 옮기거나 지우지 말 것</li>
+          <li>만들기는 시간이 걸림 · 예상 시간은 아래</li>
+          <li>만드는 중에 사진 폴더의 사진을 옮기거나 지우지 말 것</li>
+          <li>재기 · 주석 = 결과 3D 화면 오른쪽 메뉴 «재기»</li>
           <li>NVIDIA 그래픽카드가 있어야 빠름 (없으면 CPU 로 느리게)</li>
           <li>결과물 더하기 · 잘라내기 = 결과 3D 화면 «결과물 다듬기» (앞 단계를 다시 씀)</li>
         </ol></div>
       </section>
     </div>
     <div class="tsfoot">
-      <div id="mEst" class="test"></div>
+      <div id="mEst" class="tclock"></div>
       <div class="prog"><div id="mBar"></div></div>
       <div id="mStatus" class="sub"></div>
-      <div class="trun"><button id="mBuild" class="tgo">재구성 시작</button><button id="mStop" class="tbtn sm" disabled>멈추기</button></div>
-      <button id="mTplSave" class="tlinkb">매개변수를 템플릿으로 저장</button>
-      <div id="mTplRow" class="trow2 hide"><input id="mTplName" type="text" placeholder="템플릿 이름"><button id="mTplOk" class="tbtn sm">저장</button><button id="mTplX" class="tbtn sm">취소</button></div>
+      <div class="trun"><button id="mBuild" class="tgo">만들기 시작</button><button id="mStop" class="tbtn sm" disabled>멈추기</button></div>
+      <button id="mTplSave" class="tlinkb">이 설정 저장</button>
+      <div id="mTplRow" class="trow2 hide"><input id="mTplName" type="text" placeholder="설정 이름"><button id="mTplOk" class="tbtn sm">저장</button><button id="mTplX" class="tbtn sm">취소</button></div>
     </div>
   </aside>
 </div>

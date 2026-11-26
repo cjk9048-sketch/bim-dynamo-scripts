@@ -1,6 +1,6 @@
 /* 드론 로드뷰 — 3D 매핑 만들기 (JACK 1125: 경사촬영 사진 → 3D 모델 · 정사 · DSM · 지표면)
  * 사진 폴더 (또는 사진 고르기) → 위성지도에 촬영점 · 바라보는 곳 → 관심 지역 (범위 그리기) → [재구성 시작] (rv_cli map)
- * 1126 DJI Terra 꼴 (JACK «Terra 메뉴처럼»): 오른쪽 «설정» 칸 = 데이터 세트 · 처리 (템플릿 · 전처리 · 결과물 칸) · 애플리케이션 · 팁
+ * 1126 도화 꼴 (JACK «Terra 참고 · 너무 똑같음 → 도화 톤»): 오른쪽 «만들기 설정» = ① 사진 · ② 설정 · 결과물 (저장한 설정 · 사진 맞추기 · 결과물 칸) · 도움말
  *   칸 머리줄 = ▾ 접기 (따로) + 오른쪽 켜고 끄기 (켠 칸만 결과물 · 끈 칸은 흐리게 · 누를 수 없음 · 값은 그대로)
  *   아래 줄 = 장치 성능 · 실행 기록 · 출력 좌표 참조계 · 접힘 · 고른 값 = localStorage (rv.map.ui) · 템플릿 = 앱 설정 폴더 (app.template_*)
  */
@@ -19,7 +19,12 @@
     fine: { base: 3.0, pts: 29.7, mesh: 7.1, mP: 15.6, mM: 3.6, tex: 6.6, out: 1.5 },
   };
   const UIK = 'rv.map.ui', OUTK = 'rv.map.outputs';
-  const OUT_NAME = { mesh: '3D', gs: '가우시안', ortho: '정사', dsm: 'DSM', dtm: 'DEM', las: 'LAS', contour: '등고선' };
+  const OUT_NAME = { mesh: '3D', gs: '가우시안', ortho: '정사', dsm: 'DSM', dtm: 'DTM', las: 'LAS', contour: '등고선' };
+  const GS_SEC = { low: 75, normal: 280, high: 1130, ultra: 4000 };   // 가우시안 학습 초 (gsplat.QUALITY_SEC · 80장 RTX 5070 Ti 실측 · 사진 수와 거의 무관)
+  // 시간 글: «1시간 54분» · «8분» (전에는 «1.9시간» 처럼 소수 · JACK 1126 «1.9시간인지 7분인지 모르겠어»)
+  const fmtDur = (sec) => { const m = Math.max(1, Math.round(sec / 60)); return m < 60 ? m + '분' : Math.floor(m / 60) + '시간' + (m % 60 ? ' ' + (m % 60) + '분' : ''); };
+  const hhmm = (t) => { const d = new Date(t); return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'); };
+  const clock = (k, big, sub, cls) => { const e = $('mEst'); e.className = 'tclock ' + (cls || ''); e.innerHTML = '<div class="tk">' + k + '</div><div class="tbig">' + big + '</div><div class="tsm">' + sub + '</div>'; };
   // 세부 설정 기본값 = 1.0.17 까지 만들던 그대로 (고도 주석 간격 · 지면 분류만 Terra 처럼 값이 있음)
   const DEF = { outs: ['mesh'], q: 'normal', crs: 'EPSG:5186', ct: 1, feat: 'normal', orthoRes: 'auto', orthoFill: true, meshRatio: 100,
     meshFmt: [], gsQ: 'normal', gsDom: false, lasDensity: 100, lasClassify: true, demCell: 0.5, ctBase: 0, ctLabel: 100, ctClean: false, tinStep: 100 };
@@ -90,6 +95,7 @@
   }
 
   const MAP = { z: 15, cx: 0, cy: 0, imgs: new Map(), fitted: false, key: '' };
+  const TILE_MAX = 19, ZOOM_MAX = 21;                                  // 위성 그림 단계 한도 · 확대 한도 (19 넘으면 그림을 키움)
   const wpx = (lat, lon, z) => { const s = 256 * Math.pow(2, z), r = lat * Math.PI / 180; return [(lon + 180) / 360 * s, (1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2 * s]; };
   const mapEl = () => $('mMap');
   const size = () => [mapEl().clientWidth, mapEl().clientHeight];
@@ -107,14 +113,15 @@
   function tiles() {
     const box = mapEl().querySelector('.tiles');
     if (!MAP.key) { box.textContent = ''; return; }
-    const [w, h] = size(), z = MAP.z, x0 = MAP.cx - w / 2, y0 = MAP.cy - h / 2, n = Math.pow(2, z), want = new Set();
-    for (let ty = Math.floor(y0 / 256); ty <= Math.floor((y0 + h) / 256); ty++) for (let tx = Math.floor(x0 / 256); tx <= Math.floor((x0 + w) / 256); tx++) {
+    // 브이월드 위성 = 19단계까지 · 더 확대하면 19단계 그림을 키움 (전에는 20단계 그림이 없어 검게 나왔음 · JACK 1126)
+    const [w, h] = size(), z = Math.min(MAP.z, TILE_MAX), T = 256 * Math.pow(2, MAP.z - z), x0 = MAP.cx - w / 2, y0 = MAP.cy - h / 2, n = Math.pow(2, z), want = new Set();
+    for (let ty = Math.floor(y0 / T); ty <= Math.floor((y0 + h) / T); ty++) for (let tx = Math.floor(x0 / T); tx <= Math.floor((x0 + w) / T); tx++) {
       if (ty < 0 || ty >= n) continue;
       const k = z + '/' + tx + '/' + ty; want.add(k);
       let im = MAP.imgs.get(k);
       if (!im) { im = document.createElement('img'); im.draggable = false; im.onerror = () => { im.style.visibility = 'hidden'; };
         im.src = 'https://api.vworld.kr/req/wmts/1.0.0/' + MAP.key + '/Satellite/' + z + '/' + ty + '/' + (((tx % n) + n) % n) + '.jpeg'; MAP.imgs.set(k, im); box.appendChild(im); }
-      im.style.left = (tx * 256 - x0) + 'px'; im.style.top = (ty * 256 - y0) + 'px';
+      im.style.left = (tx * T - x0) + 'px'; im.style.top = (ty * T - y0) + 'px'; im.style.width = im.style.height = T + 'px';
     }
     for (const [k, im] of MAP.imgs) if (!want.has(k)) { im.remove(); MAP.imgs.delete(k); }
   }
@@ -143,10 +150,13 @@
     const n = S.sel.size;
     $('mSel').textContent = S.photos.length ? '고름 ' + n + ' / ' + S.photos.length + '장' + (S.range ? ' · 범위 안만' : '') : '';
     $$('#mp .roi').forEach((e) => { e.textContent = S.range ? '그린 범위' : '전체'; });
-    const outs = [...S.outs], m = Math.max(1, Math.round(n * perPhoto() / 60));
+    if (S.job) return;                                                  // 만드는 중 = poll 이 «남은 시간» 을 그림 (예상 시간과 섞이지 않게)
+    const outs = [...S.outs], sec = n * perPhoto() + (S.outs.has('gs') ? GS_SEC[S.v.gsQ] || 0 : 0);
     const head = '결과물 ' + outs.length + '개' + (outs.length ? ' (' + outs.map((o) => OUT_NAME[o]).join(' · ') + ')' : '');
-    $('mEst').textContent = head + (n && outs.length ? ' · 사진 ' + n + '장 · 약 ' + (m >= 90 ? (m / 60).toFixed(1) + '시간' : m + '분') + ' (' +
-      { fast: '단순', normal: '보통', fine: '정밀' }[S.q] + (workers() > 1 ? ' · PC ' + workers() + '대' : '') + (S.outs.has('gs') ? ' · 가우시안 시간 빼고' : '') + ')' : '');
+    const qn = { fast: '단순', normal: '보통', fine: '정밀' }[S.q] + (workers() > 1 ? ' · PC ' + workers() + '대' : '');
+    if (!n) clock('예상 시간', '–', '사진을 고르면 나옴 · ' + head, 'idle');
+    else if (!outs.length) clock('예상 시간', '–', '만들 결과물 칸을 켜기', 'idle');
+    else clock('예상 시간', fmtDur(sec), '사진 ' + n + '장 · ' + qn + ' · ' + esc(head) + '<br>지금 시작하면 <b>' + hhmm(Date.now() + sec * 1000) + '</b> 쯤 끝');
   }
   function take(r) {
     if (!r) return;
@@ -195,7 +205,7 @@
       dn = null;
     });
     el.addEventListener('wheel', (e) => {
-      e.preventDefault(); const nz = Math.max(6, Math.min(20, MAP.z + (e.deltaY < 0 ? 1 : -1))); if (nz === MAP.z) return;
+      e.preventDefault(); const nz = Math.max(6, Math.min(ZOOM_MAX, MAP.z + (e.deltaY < 0 ? 1 : -1))); if (nz === MAP.z) return;
       const r = el.getBoundingClientRect(), mx = e.clientX - r.left, my = e.clientY - r.top, [w, h] = size(), f = Math.pow(2, nz - MAP.z);
       const wx = (MAP.cx - w / 2 + mx) * f, wy = (MAP.cy - h / 2 + my) * f; MAP.z = nz; MAP.cx = wx - mx + w / 2; MAP.cy = wy - my + h / 2; MAP.fitted = true; draw();
     }, { passive: false });
@@ -217,12 +227,19 @@
   async function poll() {
     if (!S.job) return;
     const j = (await call('job', S.job)) || { state: 'fail', line: '작업 상태를 못 읽음' };
-    $('mBar').style.width = (j.pct || 0) + '%'; $('mStatus').textContent = j.line || '';
+    $('mBar').style.width = (j.pct || 0) + '%';
     $('jobPillText').textContent = Math.round(j.pct || 0) + '% · ' + (j.pill || j.line || '매핑 중').slice(0, 40);
+    if (j.state === 'run') {                                             // 만드는 중 = 남은 시간 하나만 크게 · 지금 단계 · 끝 시각 · 지난 시간
+      const left = j.left == null ? -1 : j.left;
+      clock('남은 시간', left < 0 ? '재는 중…' : left < 60 ? '1분 안' : fmtDur(left),
+        '지금 <b>' + esc(j.label || '준비') + '</b> · ' + Math.floor(j.pct || 0) + '%' + (j.eta ? ' · <b>' + j.eta + '</b> 쯤 끝' : '') +
+        '<br>지난 시간 ' + fmtDur(j.elapsed || 0), 'run');
+      $('mStatus').textContent = '';
+    } else $('mStatus').textContent = j.line || '';
     const lg = $('mLog'); lg.textContent = (j.log || []).join('\n'); lg.scrollTop = lg.scrollHeight;
     if (j.state === 'run') { setTimeout(poll, 1000); return; }
     $('mBuild').disabled = false; $('mStop').disabled = true; $('jobPill').classList.add('hide');
-    const out = j.out; S.job = null; lockUi(false);
+    const out = j.out; S.job = null; lockUi(false); est();
     if (j.state === 'done') { $('mStatus').textContent = '끝 · 여는 중…'; const q = await call('open_project', out); if (q && !q.ok) toast(q.msg); }
   }
   // 재구성 중 = 사진 · 범위 · 설정 잠금 (JACK 1126 «재구성 시작 누르고 나서도 범위가 그려져» · 바꿔도 이미 도는 처리엔 안 들어감)
@@ -256,6 +273,21 @@
   }
   // ------------------------------------------------------------ 아래 줄 · 윗줄 작은 단추
   function logShow(on) { $('mLogBox').classList.toggle('hide', !on); $('mLogBtn').classList.toggle('on', on); }
+  // 실행 기록 칸 높이 = 위 가장자리 끌기 · 기억 · 두 번 누르면 처음 높이 (JACK 1126 «오른쪽 칸처럼 조절»)
+  function logGripInit() {
+    const box = $('mLogBox'), g = document.createElement('div'), KEY = 'rv_ui:logH';
+    g.className = 'logGrip'; g.title = '끌어서 높이 바꾸기 · 두 번 누르면 처음 높이'; box.prepend(g);
+    const maxH = () => Math.max(120, box.parentElement.getBoundingClientRect().height - 60);
+    const apply = (h) => { box.style.height = Math.round(Math.max(90, Math.min(h, maxH()))) + 'px'; };
+    let saved = 0; try { saved = Number(localStorage.getItem(KEY)) || 0; } catch (e) { /* 저장소 없음 */ }
+    if (saved > 0) apply(saved);
+    let dn = null;
+    g.addEventListener('pointerdown', (e) => { if (e.button !== 0) return; dn = { y: e.clientY, h: box.getBoundingClientRect().height }; g.setPointerCapture(e.pointerId); g.classList.add('on'); e.preventDefault(); });
+    g.addEventListener('pointermove', (e) => { if (dn) apply(dn.h + (dn.y - e.clientY)); });
+    const up = () => { if (!dn) return; dn = null; g.classList.remove('on'); try { localStorage.setItem(KEY, String(Math.round(box.getBoundingClientRect().height))); } catch (e) { /* 저장 못 해도 됨 */ } };
+    g.addEventListener('pointerup', up); g.addEventListener('pointercancel', up);
+    g.addEventListener('dblclick', () => { box.style.height = ''; try { localStorage.removeItem(KEY); } catch (e) { /* 없어도 됨 */ } });
+  }
   const logToggle = () => logShow($('mLogBox').classList.contains('hide'));
   function sideToggle() {
     const c = !$('mp').classList.contains('sidecol');
@@ -268,7 +300,7 @@
     S.sys = d;
     const good = d.engines && d.gpu_nvidia;
     $('mDevDot').className = 'dot ' + (good ? 'ok' : 'warn');
-    $('mDev').title = good ? '장치 준비됨' : (!d.gpu_nvidia ? 'NVIDIA 그래픽카드 없음 → CPU 로 (느림)' : '엔진 = 처음 재구성 때 내려받음');
+    $('mDev').title = good ? '장치 준비됨' : (!d.gpu_nvidia ? 'NVIDIA 그래픽카드 없음 → CPU 로 (느림)' : '엔진 = 처음 만들 때 내려받음');
     if (S.outs.has('gs') && !gsOk()) S.outs.delete('gs');       // 이 PC 에서 못 하는 결과물은 꺼 둠
     paint();
   }
@@ -280,7 +312,7 @@
       '<b>CPU</b>' + esc(d.cpu || '?') + ' · ' + d.cores + '코어',
       '<b>메모리</b>' + d.ram_gb + ' GB' + (d.ram_free_gb != null ? ' (남은 ' + d.ram_free_gb + ' GB)' : ''),
       '<b>그래픽카드</b>' + (d.gpu_nvidia ? esc(d.gpu) + ' · ' + d.vram_gb + ' GB' : 'NVIDIA 없음 → CPU 로 (느림)'),
-      '<b>엔진</b>' + (d.engines ? 'COLMAP · OpenMVS 준비됨' : '처음 재구성 때 내려받음'),
+      '<b>엔진</b>' + (d.engines ? 'COLMAP · OpenMVS 준비됨' : '처음 만들 때 내려받음'),
       '<b>가우시안</b>' + (d.gs_ok ? '됨' : '안 됨') + (d.gs_why ? ' · ' + esc(d.gs_why) : ''),
     ];
     p.innerHTML = L.join('<br>');
@@ -291,25 +323,25 @@
   async function tplList(sel) {
     const L = (await call('templates_list')) || [];
     const s = $('mTpl'); s.textContent = '';
-    s.add(new Option('일반', ''));
+    s.add(new Option('기본', ''));
     for (const n of L) s.add(new Option(n, n));
     s.value = sel && L.includes(sel) ? sel : '';
   }
   async function tplPick() {
     const n = $('mTpl').value;
-    if (!n) { apply(DEF); saveUi(); toast('일반 (기본값)'); return; }
+    if (!n) { apply(DEF); saveUi(); toast('기본 설정'); return; }
     const r = await call('template_load', n);
-    if (!r || !r.ok) { toast(r ? r.msg : '템플릿 못 읽음'); return; }
-    apply(r.values); saveUi(); toast('템플릿 «' + n + '»');
+    if (!r || !r.ok) { toast(r ? r.msg : '저장한 설정 못 읽음'); return; }
+    apply(r.values); saveUi(); toast('저장한 설정 «' + n + '»');
   }
   async function tplSave() {
     const n = $('mTplName').value.trim();
-    if (!n) { toast('템플릿 이름 넣기'); $('mTplName').focus(); return; }
+    if (!n) { toast('설정 이름 넣기'); $('mTplName').focus(); return; }
     const r = await call('template_save', n, values());
     if (!r || !r.ok) { if (r) toast(r.msg); return; }
     await tplList(r.name);
     $('mTplRow').classList.add('hide'); $('mTplSave').classList.remove('hide');
-    toast('템플릿 저장 · ' + r.name);
+    toast('설정 저장 · ' + r.name);
   }
 
   function open() { $('mp').classList.remove('hide'); $('jobPill').classList.add('hide'); draw(); est(); }   // 사진은 오른쪽 «사진 폴더 선택 · 사진 선택» 으로 (열 때 저절로 창 띄우지 않음 · JACK 1126)
@@ -319,7 +351,7 @@
     $('mBack').addEventListener('click', close);
     $('mPick').addEventListener('click', pick);
     $('mPickFiles').addEventListener('click', pickFiles);
-    tipInit();
+    tipInit(); logGripInit();
     $('mBuild').addEventListener('click', build);
     $('mStop').addEventListener('click', async () => { if (S.job) await call('stop_job', S.job); });
     $('mAll').addEventListener('click', () => { S.sel = new Set(S.photos.map((p) => p.name)); S.range = null; draw(); est(); });
@@ -382,6 +414,6 @@
     sysinfo();
     mapInit();
   }
-  window.RVMap = { init, open, close, _S: S, _est: est, _test: { lockUi: (on) => lockUi(on), setPhotos: (folder, photos, out) => { S.folder = folder; S.photos = photos; S.sel = new Set(photos.map((p) => p.name)); $('mOut').value = out || ''; MAP.fitted = false; draw(); est(); },
+  window.RVMap = { init, open, close, _S: S, _est: est, _test: { lockUi: (on) => lockUi(on), poll: () => poll(), est: () => est(), setPhotos: (folder, photos, out) => { S.folder = folder; S.photos = photos; S.sel = new Set(photos.map((p) => p.name)); $('mOut').value = out || ''; MAP.fitted = false; draw(); est(); },
     take, build, draw, values, apply } };
 })();

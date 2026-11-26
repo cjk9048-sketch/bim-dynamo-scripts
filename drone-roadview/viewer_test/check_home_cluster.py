@@ -101,7 +101,9 @@ def run(w, api):
         click('mClu')
         ok('매핑 화면에서 끔', wait('document.getElementById("mClu").textContent === "꺼짐"', 5) and cfg().get('use') is False, cfg())
         e_off = txt('mEst')
-        num = lambda t: float(__import__('re').search(r'약 ([\d.]+)', t).group(1)) * (60 if '시간' in t else 1)   # noqa: E731
+        def num(t):                                  # 예상 시간 «1시간 54분» · «8분» → 분
+            m = __import__('re').search(r'(?:(\d+)시간)?\s*(?:(\d+)분)?', t.split('사진')[0].replace('예상 시간', ''))
+            return int(m.group(1) or 0) * 60 + int(m.group(2) or 0)
         ok('함께 처리가 예상 시간을 줄임', num(e_on) < num(e_off) and 'PC' not in e_off, [e_on, e_off])
         click('mClu')
         ok('다시 켬', wait('document.getElementById("mClu").textContent === "켜짐"', 5) and cfg().get('use') is True)

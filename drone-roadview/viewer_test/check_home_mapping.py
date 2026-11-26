@@ -80,9 +80,9 @@ def run(w, api):
     ok('고른 사진 글', '고른 사진 %d장' % (len(files) - 2) in J('document.getElementById("mInfo").textContent'), J('document.getElementById("mInfo").textContent'))
     # Terra 꼴 틀
     secs = jv('[...document.querySelectorAll("#mp [data-sec]")].map(e => e.dataset.sec)')
-    ok('칸 차례 (Terra 꼴)', secs == ['data', 'proc', 'at', 'ortho', 'mesh', 'gs', 'las', 'dtm', 'contour', 'dsm', 'app', 'tips'], secs)
-    ok('설정 머리 · 재구성 시작 · 템플릿 저장 · 아래 줄', J('document.querySelector(".tshead b").textContent') == '설정'
-       and J('document.getElementById("mBuild").textContent') == '재구성 시작' and J('document.getElementById("mTplSave").textContent') == '매개변수를 템플릿으로 저장'
+    ok('칸 차례 (도화 꼴)', secs == ['data', 'proc', 'at', 'ortho', 'mesh', 'gs', 'las', 'dtm', 'contour', 'dsm', 'tips'], secs)
+    ok('설정 머리 · 만들기 시작 · 설정 저장 · 아래 줄', J('document.querySelector(".tshead b").textContent') == '만들기 설정'
+       and J('document.getElementById("mBuild").textContent') == '만들기 시작' and J('document.getElementById("mTplSave").textContent') == '이 설정 저장'
        and J('__t.vis("#mDev") && __t.vis("#mLogBtn") && __t.vis("#mCrsBar")'), J('document.getElementById("mCrsBar").textContent'))
     ok('함께 처리 단추 (cluster.js 그대로)', J('__t.vis("#mClu")') and J('document.getElementById("mClu").textContent') in ('켜짐', '꺼짐'))
     # 장치 성능
@@ -171,7 +171,7 @@ def run(w, api):
         J('__t.sw(".sw[data-k=%s]", %s)' % (k, 'true' if SET[k] else 'false'))
     for f in ('ply', 'obj'):
         J('__t.sw("#mFmt button[data-f=%s]", %s)' % (f, 'true' if f in SET['meshFmt'] else 'false'))
-    J('__t.click(".tsec[data-sec=app] .tsh")')                    # 접힘도 기억하는지
+    J('__t.click(".tsec[data-sec=data] .tsh")')                    # 접힘도 기억하는지
     v1 = jv('RVMap._test.values()')
     want = dict(SET, outs=sorted(SET['outs']))
     got = {k: (sorted(v1[k]) if k in ('outs', 'meshFmt') else v1[k]) for k in want}
@@ -190,7 +190,7 @@ def run(w, api):
     setup(r_pick)
     v2 = jv('RVMap._test.values()')
     ok('다시 읽어도 값 그대로', v2 == v1, {k: v2[k] for k in v2 if v2[k] != v1.get(k)})
-    ok('다시 읽어도 접힘 그대로 (애플리케이션 접힘 · 팁 펼침)', J('__t.q(".tsec[data-sec=app]").classList.contains("fold")') and not J('__t.q(".tsec[data-sec=tips]").classList.contains("fold")'))
+    ok('다시 읽어도 접힘 그대로 (사진 접힘 · 도움말 펼침)', J('__t.q(".tsec[data-sec=data]").classList.contains("fold")') and not J('__t.q(".tsec[data-sec=tips]").classList.contains("fold")'))
     ok('다시 읽어도 칸 꼴 그대로 (끈 칸 흐림)', J('__t.q(".tcard[data-sec=gs]").classList.contains("off")') and not J('__t.q(".tcard[data-sec=dtm]").classList.contains("off")')
        and J('__t.q("select[data-k=demCell]").value') == '1')
 
@@ -224,7 +224,7 @@ def run(w, api):
     ok('범위로 고름 · 관심 지역 = 그린 범위', 3 <= n_sel <= len(files) - 2 and J('__t.q(".tcard[data-sec=ortho] .roi").textContent') == '그린 범위', n_sel)
     J('RVMap._S.sel = new Set(RVMap._S.photos.map(p => p.name)); RVMap._test.draw();')     # 시험은 고른 사진 전체로 (작은 폴더)
     J('__t.click("#mBuild")')
-    ok('재구성 시작', wait('!!RVMap._S.job', 15))
+    ok('만들기 시작', wait('!!RVMap._S.job', 15))
     ok('실행 기록 펼쳐짐', J('__t.vis("#mLogBox")'))
     t0 = time.time(); seen_pct = 0
     while time.time() - t0 < 2400:
