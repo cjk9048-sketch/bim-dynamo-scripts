@@ -10,15 +10,15 @@
   //   base = 특징점 · 맞추기 · 카메라 · 왜곡 펴기 (많을수록 늘어 394장 기준) · pts / mesh = 점구름 (측량용 / 3D 만)
   //   mP / mM = 3D 면 (측량용 점구름 / 3D 만 점구름) · tex = 질감 · out = 정사 · DSM · DTM (3D 만이면 거의 0)
   const SEC = {
-    fast: { base: 1.5, pts: 1.6, mesh: 1.6, mP: 0.4, mM: 0.4, tex: 0.15, out: 0.1 },
-    normal: { base: 2.8, pts: 7.1, mesh: 1.7, mP: 3.4, mM: 1.0, tex: 0.8, out: 0.35 },
-    fine: { base: 3.0, pts: 29.7, mesh: 7.1, mP: 15.6, mM: 3.6, tex: 4.8, out: 1.2 },
+    fast: { base: 1.5, pts: 1.6, mesh: 1.6, mP: 0.4, mM: 0.4, tex: 1.0, out: 0.1 },
+    normal: { base: 2.8, pts: 7.1, mesh: 1.7, mP: 3.4, mM: 1.0, tex: 3.3, out: 0.5 },
+    fine: { base: 3.0, pts: 29.7, mesh: 7.1, mP: 15.6, mM: 3.6, tex: 6.6, out: 1.5 },
   };
   const OUTK = 'rv.map.outputs';
   const S = { info: {}, folder: '', photos: [], sel: new Set(), q: 'normal', area: false, job: null, outTouched: false,
     outs: new Set((localStorage.getItem(OUTK) || 'mesh').split(',').filter(Boolean)) };
   const perPhoto = () => {
-    const k = SEC[S.q], pts = ['ortho', 'dsm', 'dtm', 'las'].some((o) => S.outs.has(o)), mesh = S.outs.has('mesh');
+    const k = SEC[S.q], pts = ['dsm', 'dtm', 'las'].some((o) => S.outs.has(o))   /* 정사는 원본 사진 색 → 가벼운 점구름 (1126) */, mesh = S.outs.has('mesh');
     return k.base + (pts ? k.pts : k.mesh) + (mesh ? (pts ? k.mP : k.mM) + k.tex : 0) + (pts ? k.out : 0.05);
   };
   function outsUi() { document.querySelectorAll('#mOuts button').forEach((b) => b.classList.toggle('on', S.outs.has(b.dataset.o))); }

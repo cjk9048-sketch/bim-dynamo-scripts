@@ -20,7 +20,7 @@ import uuid
 from pathlib import Path
 
 APP_NAME = '드론 로드뷰'
-APP_VERSION = '1.0.15'
+APP_VERSION = '1.0.16'
 FROZEN = getattr(sys, 'frozen', False)
 BASE = Path(sys._MEIPASS) if FROZEN else Path(__file__).resolve().parent.parent      # noqa: SLF001
 HOME_HTML = (BASE / 'roadview' / 'app_home' / 'index.html') if not FROZEN else (BASE / 'app_home' / 'index.html')
@@ -289,6 +289,12 @@ class Api:
                  (src / 'index.html', dst / 'index.html'), (src / 'index.html', dst / '로드뷰.html')]
         if (dst / 'data' / 'mapping.js').exists():      # 3D 매핑 프로젝트 = 3D 보기 화면
             pairs = [(src / 'map3d.js', dst / 'viewer' / 'map3d.js'), (src / 'map3d.html', dst / 'index.html')]
+            if not (dst / 'data' / 'dem.js').exists():  # 1.0.15 까지 만든 프로젝트: 관로 땅 높이(매끈한 땅) 를 지금 만듦 (몇 초)
+                try:
+                    from .mapping import write_dem_js
+                    write_dem_js(str(dst), log=lambda m: None)
+                except Exception:                       # noqa: BLE001
+                    pass
         for a, b in pairs:
             try:
                 if not b.exists() or a.read_bytes() != b.read_bytes():

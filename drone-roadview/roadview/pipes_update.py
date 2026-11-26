@@ -208,12 +208,17 @@ def update_obstacles(out, path, type_field=None, dia_field=None, depth_field=Non
                      default_depth=1.0, log=print):
     """지장물 SHP → data/obstacles.js (터파기 없음 · 고치기 없음). → (조각 수, 알림)."""
     from .shp import read_dbf, read_shp_lines, prj_crs
-    P = _read_js(os.path.join(out, 'data', 'project.js'), 'RV_PROJECT')
-    crs = P.get('crs', 'EPSG:5186')
-    E0, N0 = float(P['origin']['E']), float(P['origin']['N'])
-    shots = P['shots']
-    sen = [(s['e'] + E0, s['n'] + N0) for s in shots]
-    sg = [s['groundZ'] for s in shots]
+    M = _mapping(out)
+    if M:                                        # 3D 매핑 프로젝트: 원점 · 좌표계 = mapping.js (땅 · 범위는 아래)
+        crs = M.get('crs', 'EPSG:5186')
+        E0, N0 = float(M['origin'][0]), float(M['origin'][1])
+    else:
+        P = _read_js(os.path.join(out, 'data', 'project.js'), 'RV_PROJECT')
+        crs = P.get('crs', 'EPSG:5186')
+        E0, N0 = float(P['origin']['E']), float(P['origin']['N'])
+        shots = P['shots']
+        sen = [(s['e'] + E0, s['n'] + N0) for s in shots]
+        sg = [s['groundZ'] for s in shots]
     fields, recs = read_dbf(path)
     src = prj_crs(path)
     tr = None
@@ -256,8 +261,11 @@ def update_obstacles(out, path, type_field=None, dia_field=None, depth_field=Non
                       'hasZ': False, 'pts': pts})
     n_raw = len(lines)
     lines = pipeload.densify(lines, 5.0)
-    lines = pipeload.clip_near(lines, sen, 200.0)
-    lines = pipeload.ground_for(lines, sen, sg)
+    if M:
+        lines = _mapping_clip_ground(out, M, lines)
+    else:
+        lines = pipeload.clip_near(lines, sen, 200.0)
+        lines = pipeload.ground_for(lines, sen, sg)
     geo = Geo(crs)
     layers = [{'name': k, 'color': _obst_color(k, i)} for i, k in enumerate(kinds)]
     ol = []
@@ -272,9 +280,45 @@ def update_obstacles(out, path, type_field=None, dia_field=None, depth_field=Non
                   'window.RV_OBST = ' + json.dumps({'layers': layers, 'lines': ol, 'origin': {'E': E0, 'N': N0},
                                                     'defaultDepth': float(default_depth),
                                                     'source': os.path.basename(path)}, ensure_ascii=False) + ';\n')
-    msg = '지장물 %d개 → 경로 200 m 안 조각 %d개 · 종류 %d%s' % (n_raw, len(ol), len(kinds), (' · ' + note) if note else '')
+    msg = '지장물 %d개 → %s 조각 %d개 · 종류 %d%s' % (n_raw, '매핑 범위 안' if M else '경로 200 m 안', len(ol), len(kinds), (' · ' + note) if note else '')
     log(msg)
     return len(ol), msg
+
+
+def _mapping(out):
+    """3D 매핑 프로젝트 (data/project.js 없음 · data/mapping.js 있음) 면 RV_MAPPING · 아니면 None."""
+    if os.path.exists(os.path.join(out, 'data', 'project.js')):
+        return None
+    p = os.path.join(out, 'data', 'mapping.js')
+    return _read_js(p, 'RV_MAPPING') if os.path.exists(p) else None
+
+
+def _mapping_clip_ground(out, M, lines, pad=30.0):
+    """3D 매핑 프로젝트: 매핑 범위 (+pad) 안 덩어리마다 한 줄 · 땅 높이 g = 매끈한 땅 (DTM · 관로와 같음)."""
+    import numpy as np
+    from .mapping import ground_sampler
+    x0, y0, x1, y1 = M['bbox']
+    inside = lambda p: x0 - pad <= p[0] <= x1 + pad and y0 - pad <= p[1] <= y1 + pad   # noqa: E731
+    cut = []
+    for ln in lines:
+        run = []
+        for p in ln['pts']:
+            if inside(p):
+                run.append(p)
+            else:
+                if len(run) >= 2:
+                    cut.append(dict(ln, pts=run))
+                run = []
+        if len(run) >= 2:
+            cut.append(dict(ln, pts=run))
+    try:
+        g = ground_sampler(out)
+    except Exception:                                 # noqa: BLE001 — 땅 자료가 하나도 없는 옛 프로젝트 (1126 검토)
+        g = None
+    for ln in cut:
+        gz = g([p[0] for p in ln['pts']], [p[1] for p in ln['pts']]) if g else [np.nan] * len(ln['pts'])
+        ln['g'] = [float(v) if np.isfinite(v) else None for v in gz]
+    return cut
 
 
 # ---------------------------------------------------------------- 고친 관로 → SHP (중심선)
@@ -330,9 +374,15 @@ def export_pipes_shp(out, shp_path):
     가시설 구간은 그 자리에서 선을 끊고 SHORING 속성에 가시설 이름 (1124 JACK)."""
     from .shp import write_lines
     from pyproj import CRS
-    P = _read_js(os.path.join(out, 'data', 'project.js'), 'RV_PROJECT')
     D = _read_js(os.path.join(out, 'data', 'pipes.js'), 'RV_PIPES')
-    E0, N0 = float(P['origin']['E']), float(P['origin']['N'])
+    M = _mapping(out)
+    if M:                                        # 3D 매핑 프로젝트: 관로 원점 (없으면 매핑 원점) · 매핑 좌표계
+        o = D.get('origin') or {}
+        P = {'crs': M.get('crs', 'EPSG:5186')}
+        E0, N0 = float(o.get('E', M['origin'][0])), float(o.get('N', M['origin'][1]))
+    else:
+        P = _read_js(os.path.join(out, 'data', 'project.js'), 'RV_PROJECT')
+        E0, N0 = float(P['origin']['E']), float(P['origin']['N'])
     names = [l.get('name', '') for l in D.get('layers', [])]
     lines = []
     for ln in D.get('lines', []):

@@ -3,7 +3,8 @@
 차례 (1125 80장 시험으로 정함 · AI\\drone-mapping\\README.md):
   COLMAP 4.2.1  특징점(GPU) → GPS 이웃 맞추기(GPU) → RTK 위치 카메라 풀기(pose_prior_mapper) → 왜곡 펴기
   OpenMVS 2.4.0 촘촘한 점구름 → 3D 면 (CPU — CUDA 판은 RTX 50 커널 없음)
-  COLMAP        질감 (mesh_texturer — OpenMVS 질감은 이 판에서 좌표가 그림과 어긋남)
+  OpenMVS       질감 (1126 · 조각마다 · 원본 크기 사진 · 이음 고르기는 끄고 조각 색 맞춤 — 예전 «좌표 어긋남» 은 이음 고르기가
+                면 자리를 까맣게 칠한 것) · 안 되는 조각만 COLMAP mesh_texturer
   → 도면 좌표 (EPSG:5186 + EGM2008 표고) → 3D 보기 자료 · 정사영상 · DSM (GeoTIFF + tfw + prj) · Civil 3D 지표면 (LandXML)
 
     python -m roadview.mapping 사진폴더 --out 결과폴더 [--quality fast|normal|fine] [--names 목록.txt]
@@ -42,7 +43,11 @@ DENSE_PX_MESH = {'fast': 660, 'normal': 660, 'fine': 1320}
 OUTPUTS = ['mesh', 'ortho', 'dsm', 'dtm', 'las']
 OUTPUT_NAME = {'mesh': '3D 모델', 'ortho': '정사영상', 'dsm': 'DSM', 'dtm': 'DTM', 'las': '점구름(LAS)'}
 DTM_CELL = 0.5             # DTM 격자 m
-MAX_TEX = 8192             # 조각 질감 그림 한 변 최대 (보기 전용 · 대부분 그래픽 16384 · 시험 렌더러 8192)
+MAX_TEX = 4096             # 보기 조각 질감 tex 한 변 최대 (늘 읽음 · 1126 8192 → 4096 · 가까운 조각은 tex_hi 로 바꿔 읽음)
+MAX_TEX_HI = 16384         # 고해상도 질감 tex_hi 한 변 최대 (대부분 그래픽 한도 · OpenMVS 질감은 8192 안)
+# 질감 사진 폭(px) — 원본 크기 (M4E 5280 · 1126 Terra 견줌: 2640 은 흐림) · 질감 방식이 바뀌면 질감 단계만 다시 (stages params 'tex')
+TEX_PX = {'fast': 2640, 'normal': 5280, 'fine': 5280}
+TEX_METHOD = 'mvs1'        # mvs1 = 조각마다 OpenMVS TextureMesh (보는 사진만) + 조각 색 맞춤 · 안 되면 그 조각만 COLMAP mesh_texturer
 GLOBAL_MIN = 50            # 이 장수 이상이면 전역 카메라 풀기 (1125: 394장 26분 → 10분 · 80장 209 → 53초 · RTK 어긋남 같음)
 ENGINE_DIRS = [Path(os.environ.get('LOCALAPPDATA', str(Path.home()))) / 'DH.Roadview' / 'engines', Path(r'D:\매핑시험\engines')]
 if os.environ.get('RV_ENGINE_DIRS'):          # 시험 · 다른 PC 흉내 (처음 내려받기) — ; 로 나눈 폴더들
@@ -518,32 +523,272 @@ def split_mesh_tiles(mesh_ply, out_dir, max_faces=TILE_FACES):
     return tiles
 
 
-def read_textured_ply(td):
-    """COLMAP mesh_texturer 결과 → (꼭짓점 float64 n×3, 면 번호 m×3, 질감 좌표 m×3×2 (그림 위 = 0), 질감 그림 경로)."""
-    b = open(os.path.join(td, 'mesh.ply'), 'rb').read()
+_PLY_TY = {'char': 'i1', 'int8': 'i1', 'uchar': 'u1', 'uint8': 'u1', 'short': 'i2', 'int16': 'i2', 'ushort': 'u2', 'uint16': 'u2',
+           'int': 'i4', 'int32': 'i4', 'uint': 'u4', 'uint32': 'u4', 'float': 'f4', 'float32': 'f4', 'double': 'f8', 'float64': 'f8'}
+
+
+def read_tex_ply(path):
+    """질감 PLY (COLMAP mesh_texturer · OpenMVS TextureMesh · web.ply) → (꼭짓점 float64 n×3, 면 m×3, 질감 좌표 m×3×2 (그림 위 = 0),
+    질감 번호 m (OpenMVS 는 질감이 여러 장일 수 있음 · texnumber), 질감 그림 경로들 (comment TextureFile 차례))."""
+    b = open(path, 'rb').read()
     i = b.find(b'end_header'); h = b.index(b'\n', i) + 1
-    head = [l.strip() for l in b[:h].decode('latin1').splitlines()]
-    nv = int([l for l in head if l.startswith('element vertex')][0].split()[2])
-    nf = int([l for l in head if l.startswith('element face')][0].split()[2])
+    elems = []; texs = []
+    for l in b[:h].decode('latin1').splitlines():
+        p = l.split()
+        if p[:2] == ['comment', 'TextureFile'] and len(p) > 2:
+            texs.append(os.path.join(os.path.dirname(path), ' '.join(p[2:])))
+        elif p[:1] == ['element']:
+            elems.append((p[1], int(p[2]), []))
+        elif p[:1] == ['property']:
+            elems[-1][2].append(p[1:])
+    off = h; A = {}
+    for name, n, props in elems:                       # 목록 길이는 첫 줄 것 (세모 3 · 질감점 6) · 아래에서 모두 같은지 확인
+        dt = []; o = off
+        for pr in props:
+            if pr[0] == 'list':
+                ct, it = np.dtype(_PLY_TY[pr[1]]), np.dtype(_PLY_TY[pr[2]])
+                cnt = int(np.frombuffer(b, '<' + ct.str[1:], 1, o)[0])
+                dt += [(pr[3] + '#', '<' + ct.str[1:]), (pr[3], '<' + it.str[1:], (cnt,))]
+                o += ct.itemsize + cnt * it.itemsize
+            else:
+                dt.append((pr[1], '<' + _PLY_TY[pr[0]])); o += np.dtype(_PLY_TY[pr[0]]).itemsize
+        a = np.frombuffer(b, np.dtype(dt), n, off)
+        for nm in a.dtype.names:
+            if nm.endswith('#') and n and not (a[nm] == a[nm][0]).all():
+                raise RuntimeError('질감 면 형식이 다름 (%s 길이가 줄마다 다름)' % nm[:-1])
+        A[name] = a; off += n * a.dtype.itemsize
+    v, f = A['vertex'], A['face']
+    V = np.stack([v['x'], v['y'], v['z']], 1).astype(np.float64)
+    F = f['vertex_indices'].astype(np.int64)
+    tc = f['texcoord'].reshape(-1, 3, 2).astype(np.float32)
+    tc[..., 1] = 1.0 - tc[..., 1]                       # 그림 위쪽 = 0 (COLMAP · OpenMVS 둘 다 OBJ 꼴 · 1125 99.9 % · 1126 80장 확인)
+    TN = f['texnumber'].astype(np.int64) if 'texnumber' in f.dtype.names else np.zeros(len(F), np.int64)
+    if not texs:
+        texs = [os.path.join(os.path.dirname(path), 'texture.png')]
+    if len(F) and (TN.min() < 0 or TN.max() >= len(texs)):
+        raise RuntimeError('질감 번호가 그림 수(%d)와 안 맞음' % len(texs))
+    return V, F, tc, TN, texs
+
+
+def write_tex_ply(path, V, F, tc, TN, names):
+    """read_tex_ply 꼴 → 질감 PLY (질감 좌표는 OBJ 꼴로 되돌려 씀 · texnumber · comment TextureFile)."""
+    nf = len(F)
+    rec = np.zeros(nf, np.dtype([('n', 'u1'), ('f', '<i4', (3,)), ('m', 'u1'), ('t', '<f4', (6,)), ('k', '<i4')]))
+    rec['n'] = 3; rec['f'] = F; rec['m'] = 6; rec['k'] = TN
+    t2 = tc.astype(np.float32).copy(); t2[..., 1] = 1.0 - t2[..., 1]; rec['t'] = t2.reshape(nf, 6)
+    with open(path, 'wb') as fp:
+        fp.write(('ply\nformat binary_little_endian 1.0\n' + ''.join('comment TextureFile %s\n' % n for n in names) +
+                  'element vertex %d\nproperty float x\nproperty float y\nproperty float z\nelement face %d\n'
+                  'property list uchar int vertex_indices\nproperty list uchar float texcoord\nproperty int texnumber\nend_header\n'
+                  % (len(V), nf)).encode('latin1'))
+        fp.write(V.astype(np.float32).tobytes()); fp.write(rec.tobytes())
+
+
+def tile_views(ws, ply, margin=0.1, nsamp=4000, cap=160):
+    """조각 꼭짓점이 사진 안(가장자리 여유 margin)에 비치는 사진 이름들 — sparse_txt (왜곡 안 편 카메라 · 가림은 안 봄 → 넉넉히).
+    많으면 비치는 점 수 ÷ 거리² (가깝고 많이 보는 사진) 차례로 cap 장까지 — TextureMesh 는 사진을 다 메모리에 들고 있음
+    (5280 px 한 장 ≈ 61 MB · 394장 가운데 조각은 373장이 봄 → 23 GB · 1126)."""
+    b = open(ply, 'rb').read()
+    i = b.find(b'end_header'); h = b.index(b'\n', i) + 1
+    nv = int([l for l in b[:h].decode('latin1').splitlines() if l.startswith('element vertex')][0].split()[2])
     V = np.frombuffer(b, np.float32, nv * 3, h).reshape(nv, 3).astype(np.float64)
-    F = np.frombuffer(b, np.uint8, nf * 38, h + nv * 12).reshape(nf, 38)
-    if not ((F[:, 0] == 3).all() and (F[:, 13] == 6).all()):
-        raise RuntimeError('질감 면 형식이 다름 (세모 · 질감점 6개)')
-    fi = F[:, 1:13].copy().view(np.int32).reshape(nf, 3)
-    tc = F[:, 14:38].copy().view(np.float32).reshape(nf, 3, 2).copy()
-    tc[..., 1] = 1.0 - tc[..., 1]                       # 그림 위쪽 = 0 (COLMAP = OBJ 꼴 · 1125 99.9 %)
-    return V, fi, tc, os.path.join(td, 'texture.png')
+    if nv > nsamp:
+        V = V[np.linspace(0, nv - 1, nsamp).astype(np.int64)]
+    cams = {}
+    for l in open(os.path.join(ws, 'sparse_txt', 'cameras.txt'), encoding='utf-8'):
+        p = l.split()
+        if p and not l.startswith('#'):
+            cams[p[0]] = (float(p[2]), float(p[3]), [float(x) for x in p[4:8]])
+    L = [l for l in open(os.path.join(ws, 'sparse_txt', 'images.txt'), encoding='utf-8') if not l.startswith('#')]
+    out = []
+    for l in L[0::2]:
+        p = l.split(None, 9)
+        if len(p) < 10 or p[8] not in cams:
+            continue
+        X = V @ _qrot(*map(float, p[1:5])).T + np.array(list(map(float, p[5:8])))
+        w, hh, (fx, fy, cx, cy) = cams[p[8]]          # 모든 카메라 모형의 앞 넷 = fx fy cx cy (SIMPLE 꼴은 f f cx cy 아님 → 아래 넉넉히)
+        ok = X[:, 2] > 1e-6
+        u = fx * X[ok, 0] / X[ok, 2] + cx; v = fy * X[ok, 1] / X[ok, 2] + cy
+        ins = (u > -margin * w) & (u < (1 + margin) * w) & (v > -margin * hh) & (v < (1 + margin) * hh)
+        if ins.any():
+            out.append((ins.sum() / float(np.median(X[ok, 2][ins])) ** 2, p[9].rstrip('\r\n')))
+    out.sort(key=lambda x: -x[0])
+    return [n for _, n in out[:cap]]
 
 
-def tiles_to_web(tex_dirs, s, R, t, out, max_tex=8192, origin=None):
+def texture_tile_mvs(colmap, mvs, ws, tex_ws, ply, d, logp):
+    """조각 하나 → d/tex.ply + d/tex*.png (OpenMVS TextureMesh · 원본 크기 사진 · 그 조각을 보는 사진만 → 사진이 많아도 메모리 작게).
+    이음 고르기(전역 · 지역)는 끔 — 2.4.0 은 켜면 면 자리가 까맣게 칠해짐 (1126 80장 · 둘 다 · 대신 level_mvs_tile).
+    → 실패 사유 (없으면 None)."""
+    os.makedirs(d, exist_ok=True)
+    img_dir = os.path.join(tex_ws, 'images')
+    allnames = sorted(os.listdir(img_dir))
+    try:
+        names = set(tile_views(ws, ply))
+    except (OSError, ValueError, IndexError, KeyError) as ex:
+        names = set(allnames); log('  조각 사진 고르기 못 함 (%s) → 모든 사진' % ex)
+    names &= set(allnames)
+    if len(names) < 2:
+        return '이 조각을 보는 사진 %d장' % len(names)
+    try:                                               # 모형의 모든 사진 (폴더에 없는 사진도 빼야 TextureMesh 가 안 멈춤 · 1126)
+        L = [l for l in open(os.path.join(ws, 'sparse_txt', 'images.txt'), encoding='utf-8') if not l.startswith('#')]
+        model_names = {p[9].rstrip('\r\n') for p in (l.split(None, 9) for l in L[0::2]) if len(p) >= 10}
+    except OSError:
+        model_names = set()
+    with open(os.path.join(d, 'drop.txt'), 'w', encoding='utf-8') as fp:
+        fp.write(''.join(n + '\n' for n in sorted((model_names | set(allnames)) - names)))
+    sp = os.path.join(d, 'sparse')
+    shutil.rmtree(sp, ignore_errors=True); os.makedirs(sp)
+    rc = run([colmap, 'image_deleter', '--input_path', os.path.join(tex_ws, 'sparse'), '--output_path', sp,
+              '--image_names_path', os.path.join(d, 'drop.txt')], logp + '_a.log')
+    if rc != 0:
+        return 'image_deleter 종료코드 %d' % rc
+    rc = run([os.path.join(mvs, 'InterfaceCOLMAP.exe'), '-i', '.', '-o', 'scene.mvs', '--image-folder', os.path.abspath(img_dir), '-w', '.'],
+             logp + '_b.log', cwd=d)
+    if rc != 0 or not os.path.exists(os.path.join(d, 'scene.mvs')):
+        return 'InterfaceCOLMAP 종료코드 %d' % rc
+    rc = run([os.path.join(mvs, 'TextureMesh.exe'), 'scene.mvs', '-m', os.path.abspath(ply), '-o', 'tex.mvs', '--export-type', 'ply',
+              '--max-texture-size', '8192', '--global-seam-leveling', '0', '--local-seam-leveling', '0'] + mvs_cuda_opt(mvs) + ['-w', '.'],
+             logp + '_c.log', cwd=d)
+    for f in ('scene.mvs', 'tex.mvs', 'drop.txt'):
+        if os.path.exists(os.path.join(d, f)):
+            os.remove(os.path.join(d, f))
+    shutil.rmtree(sp, ignore_errors=True)
+    if rc != 0 or not os.path.exists(os.path.join(d, 'tex.ply')):
+        return 'TextureMesh 종료코드 %d' % rc
+    return None
+
+
+def level_mvs_tile(d, quality=92):
+    """OpenMVS 조각 질감 뒷손질 → d/web.ply + d/webN.jpg (tex.ply · tex*.png 는 지움) → 정보 dict.
+    ① 조각(patch = 한 사진에서 떼어 온 세모 묶음)마다 RGB 더하기 값 하나로 이음 양쪽 색을 맞춤 (OpenMVS 이음 고르기 대신 ·
+       가림 · 어긋남 표본은 Huber 로 약하게) ② 질감 그림에서 안 쓴 곳 잘라냄 (2의 거듭제곱 크기라 절반쯤 빔)
+    ③ 빈 칸을 이웃 색으로 메움 (줄인 그림 · 먼 거리에서 주황 테가 비치지 않게)."""
+    import cv2
+    t0 = time.time()
+    V, F, tc, TN, texs = read_tex_ply(os.path.join(d, 'tex.ply'))
+    m = len(F)
+    # 모서리를 함께 쓰는 세모 짝 → 같은 조각(같은 질감 · 모서리 두 끝 질감 좌표가 같음) 인지
+    e = np.concatenate([F[:, [0, 1]], F[:, [1, 2]], F[:, [2, 0]]]); fi = np.tile(np.arange(m), 3)
+    ej = np.repeat(np.array([[0, 1], [1, 2], [2, 0]]), m, axis=0)       # 세모 안 꼭짓점 자리
+    sw = e[:, 0] > e[:, 1]
+    e[sw] = e[sw][:, ::-1]; ej[sw] = ej[sw][:, ::-1]
+    key = e[:, 0] * (int(F.max()) + 1) + e[:, 1]
+    o = np.argsort(key, kind='stable'); k2 = key[o]
+    s = np.nonzero(k2[1:] == k2[:-1])[0]
+    f1, f2 = fi[o][s], fi[o][s + 1]
+    j1, j2 = ej[o][s], ej[o][s + 1]
+    ua1, ub1 = tc[f1, j1[:, 0]], tc[f1, j1[:, 1]]; ua2, ub2 = tc[f2, j2[:, 0]], tc[f2, j2[:, 1]]
+    same = (TN[f1] == TN[f2]) & (np.abs(ua1 - ua2).max(1) < 1e-6) & (np.abs(ub1 - ub2).max(1) < 1e-6)
+    lab = np.arange(m); p, q = f1[same], f2[same]
+    while True:                                          # 이어진 묶음 번호 (작은 번호로 모으고 포인터 뛰기)
+        lp, lq = lab[p], lab[q]; mn = np.minimum(lp, lq)
+        if not ((lp != mn) | (lq != mn)).any():
+            break
+        np.minimum.at(lab, lp, mn); np.minimum.at(lab, lq, mn); lab = lab[lab]
+    _, pid = np.unique(lab, return_inverse=True); npc = int(pid.max()) + 1 if m else 0
+    ims = [cv2.imdecode(np.fromfile(x, np.uint8), cv2.IMREAD_COLOR) for x in texs]
+    if any(x is None for x in ims):
+        raise RuntimeError('질감 그림 못 읽음')
+    # 이음 표본: 다른 조각끼리 붙은 모서리의 두 끝 + 가운데 · 양쪽 그림에서 3×3 평균
+    sm = ~same & (pid[f1] != pid[f2])
+    blur = [cv2.blur(x, (3, 3)).astype(np.float32) for x in ims]
+
+    def samp(tn, uv):
+        r = np.zeros((len(uv), 3), np.float32)
+        for k, im in enumerate(blur):
+            mk = tn == k
+            hh, ww = im.shape[:2]
+            r[mk] = im[np.clip((uv[mk, 1] * hh).astype(int), 0, hh - 1), np.clip((uv[mk, 0] * ww).astype(int), 0, ww - 1)]
+        return r
+    P1 = np.tile(pid[f1[sm]], 3); P2 = np.tile(pid[f2[sm]], 3)
+    dlt = (samp(np.tile(TN[f1[sm]], 3), np.concatenate([ua1[sm], ub1[sm], (ua1[sm] + ub1[sm]) / 2])) -
+           samp(np.tile(TN[f2[sm]], 3), np.concatenate([ua2[sm], ub2[sm], (ua2[sm] + ub2[sm]) / 2]))).astype(np.float64)
+    blur.clear()                                         # 큰 그림 메모리 풀기
+    # 조각마다 더하기 값 x: Σ w (x1 − x2 + d)² + 0.02·차수·x² 최소 → 대각 전처리 켤레 기울기 (Huber 다시 무게 2번)
+    x = np.zeros((npc, 3)); w = np.ones(len(dlt))
+    for _ in range(3 if len(dlt) else 0):
+        deg = np.bincount(P1, w, npc) + np.bincount(P2, w, npc); dg = deg + 0.02 * np.maximum(deg, 1.0)
+
+        def Ax(z):
+            y = dg[:, None] * z
+            for c in range(3):
+                y[:, c] -= np.bincount(P1, w * z[P2, c], npc) + np.bincount(P2, w * z[P1, c], npc)
+            return y
+        b_ = np.stack([np.bincount(P2, w * dlt[:, c], npc) - np.bincount(P1, w * dlt[:, c], npc) for c in range(3)], 1)
+        r = b_ - Ax(x); z = r / dg[:, None]; pp = z.copy(); rz = (r * z).sum(0)
+        for _ in range(400):
+            Ap = Ax(pp); al = rz / np.maximum((pp * Ap).sum(0), 1e-12)
+            x += al * pp; r -= al * Ap
+            if np.abs(r).max() < 1e-3:
+                break
+            z = r / dg[:, None]; rz2 = (r * z).sum(0); pp = z + rz2 / np.maximum(rz, 1e-12) * pp; rz = rz2
+        w = 1.0 / np.maximum(1.0, np.abs(x[P1] - x[P2] + dlt).mean(1) / 12.0)
+    names = []; tc2 = tc.copy(); info = {'patches': npc, 'seams': int(sm.sum()), 'shift': round(float(np.abs(x).mean()), 1) if npc else 0.0}
+    for k, im in enumerate(ims):
+        hh, ww = im.shape[:2]
+        fk = np.nonzero(TN == k)[0]
+        if not len(fk):
+            names.append(None); continue
+        uvp = tc[fk] * [ww, hh]
+        lo = np.floor(uvp.min(1)).astype(int) - 1; hi = np.ceil(uvp.max(1)).astype(int) + 2
+        pk = pid[fk]; od = np.argsort(pk, kind='stable'); pks = pk[od]
+        st = np.r_[0, np.nonzero(np.diff(pks))[0] + 1]
+        x0 = np.maximum(np.minimum.reduceat(lo[od, 0], st), 0); y0 = np.maximum(np.minimum.reduceat(lo[od, 1], st), 0)
+        x1 = np.maximum.reduceat(hi[od, 0], st); y1 = np.maximum.reduceat(hi[od, 1], st)
+        imf = im.astype(np.float32)
+        for P, a0, b0, a1, b1 in zip(pks[st], x0, y0, x1, y1):       # OpenMVS 는 조각 네모를 겹치지 않게 쌓음 (테두리 여유 안)
+            imf[b0:b1, a0:a1] += x[P].astype(np.float32)
+        used = np.zeros((hh, ww), np.uint8)
+        cv2.fillPoly(used, list(np.round(uvp * 16).astype(np.int32)), 255, lineType=cv2.LINE_8, shift=4)
+        used = cv2.dilate(used, np.ones((5, 5), np.uint8)) > 0
+        ys, xs = np.nonzero(used.any(1))[0], np.nonzero(used.any(0))[0]
+        cy0, cy1 = max(0, ys[0] - 4), min(hh, ys[-1] + 5); cx0, cx1 = max(0, xs[0] - 4), min(ww, xs[-1] + 5)
+        imf = imf[cy0:cy1, cx0:cx1]; used = used[cy0:cy1, cx0:cx1]
+        tc2[fk, :, 0] = (tc[fk, :, 0] * ww - cx0) / (cx1 - cx0); tc2[fk, :, 1] = (tc[fk, :, 1] * hh - cy0) / (cy1 - cy0)
+        acc = imf * used[..., None]; wm = used.astype(np.float32)
+        for sg in (2, 6, 18):                              # 빈 칸 메우기 (흐린 평균을 넓혀 가며)
+            num = cv2.GaussianBlur(acc, (0, 0), sg); den = cv2.GaussianBlur(wm, (0, 0), sg)
+            fill = (den > 1e-3) & ~used
+            imf[fill] = num[fill] / den[fill][:, None]
+            used = used | fill; wm = used.astype(np.float32); acc = imf * used[..., None]
+        imf[~used] = 128
+        nm = 'web%d.jpg' % k
+        ok, buf = cv2.imencode('.jpg', np.clip(imf + 0.5, 0, 255).astype(np.uint8), [cv2.IMWRITE_JPEG_QUALITY, quality])
+        if not ok:
+            raise RuntimeError('질감 그림 저장 실패')
+        buf.tofile(os.path.join(d, nm)); names.append(nm)
+        info.setdefault('size', []).append([int(cx1 - cx0), int(cy1 - cy0)])
+    keep = [k for k, n in enumerate(names) if n]          # 안 쓰인 질감은 빼고 번호 다시
+    remap = np.full(len(names), -1, np.int64); remap[keep] = np.arange(len(keep))
+    write_tex_ply(os.path.join(d, 'web.ply'), V, F, tc2, remap[TN], [names[k] for k in keep])
+    for f in [os.path.join(d, 'tex.ply')] + texs:
+        if os.path.exists(f):
+            os.remove(f)
+    info['sec'] = round(time.time() - t0, 1)
+    return info
+
+
+def read_textured_ply(td):
+    """조각 질감 폴더 → read_tex_ply 꼴 — web.ply (OpenMVS + 뒷손질 · 1126) 없으면 mesh.ply (COLMAP · 그 앞 판)."""
+    p = os.path.join(td, 'web.ply')
+    return read_tex_ply(p if os.path.exists(p) else os.path.join(td, 'mesh.ply'))
+
+
+def tex_ply_exists(td):
+    return os.path.exists(os.path.join(td, 'web.ply')) or os.path.exists(os.path.join(td, 'mesh.ply'))
+
+
+def tiles_to_web(tex_dirs, s, R, t, out, max_tex=MAX_TEX, origin=None, max_hi=MAX_TEX_HI):
     """조각마다 질감 면 → data/tiles/tNN.bin (위치 float32×3 · 질감 float32×2, 세모마다 셋) + tNN.jpg · data/mesh.json.
-    질감 그림이 max_tex 보다 크면 줄여 저장 (보기 전용 · 대부분 그래픽 한도 16384 · 시험용 8192)."""
+    한 조각에 질감이 여러 장이면 장마다 보기 조각 하나. tex = 한 변 max_tex 이하 (늘 읽음) ·
+    tex_hi = 원래 크기 (한 변 max_hi 이하 · tex 보다 클 때만 · 보기 화면이 가까운 조각만 바꿔 읽음) + texsize_hi."""
     from PIL import Image
     Image.MAX_IMAGE_PIXELS = None
     parts = [read_textured_ply(d) for d in tex_dirs]
     allE = []
     conv = []
-    for V, fi, tc, tex in parts:
+    for V, fi, tc, tn, texs in parts:
         E, N, H = to_5186_h(s * (V @ R.T) + t)
         conv.append((E, N, H)); allE.append((np.median(E), np.median(N), np.percentile(H, 5), len(E)))
     w = np.array([a[3] for a in allE], float)
@@ -553,17 +798,31 @@ def tiles_to_web(tex_dirs, s, R, t, out, max_tex=8192, origin=None):
     for f in glob.glob(os.path.join(tdir, '*')):
         os.remove(f)
     tiles = []; mn = np.full(3, np.inf); mx = np.full(3, -np.inf); tris = 0
-    for k, ((V, fi, tc, tex), (E, N, H)) in enumerate(zip(parts, conv)):
+    fit = lambda im, cap: im if max(im.size) <= cap else im.resize(           # noqa: E731
+        (max(1, int(im.size[0] * cap / max(im.size))), max(1, int(im.size[1] * cap / max(im.size)))), Image.LANCZOS)
+    for (V, fi, tc, tn, texs), (E, N, H) in zip(parts, conv):
         vpos = np.stack([E - o[0], N - o[1], H - o[2]], 1).astype(np.float32)
-        pos = vpos[fi.reshape(-1)]
-        with open(os.path.join(tdir, 't%02d.bin' % k), 'wb') as fp:
-            fp.write(pos.tobytes()); fp.write(tc.reshape(-1, 2).astype(np.float32).tobytes())
-        im = Image.open(tex).convert('RGB')
-        if max(im.size) > max_tex:
-            r = max_tex / max(im.size); im = im.resize((max(1, int(im.size[0] * r)), max(1, int(im.size[1] * r))), Image.LANCZOS)
-        im.save(os.path.join(tdir, 't%02d.jpg' % k), quality=90)
-        tiles.append({'bin': 'tiles/t%02d.bin' % k, 'tex': 'tiles/t%02d.jpg' % k, 'verts': int(len(pos)), 'tris': int(len(fi)), 'texsize': list(im.size)})
-        mn = np.minimum(mn, pos.min(0)); mx = np.maximum(mx, pos.max(0)); tris += len(fi)
+        for q in np.unique(tn):
+            sel = tn == q; k = len(tiles)
+            pos = vpos[fi[sel].reshape(-1)]
+            with open(os.path.join(tdir, 't%02d.bin' % k), 'wb') as fp:
+                fp.write(pos.tobytes()); fp.write(tc[sel].reshape(-1, 2).astype(np.float32).tobytes())
+            src = texs[q]
+            im = Image.open(src).convert('RGB')
+            ent = {'bin': 'tiles/t%02d.bin' % k, 'tex': 'tiles/t%02d.jpg' % k, 'verts': int(len(pos)), 'tris': int(sel.sum())}
+            if max(im.size) > max_tex:                     # 고해상도 = 원래 그림 (jpg 면 다시 누르지 않고 복사)
+                hi = fit(im, max_hi)
+                if hi is im and src.lower().endswith('.jpg'):
+                    shutil.copyfile(src, os.path.join(tdir, 't%02d_hi.jpg' % k))
+                else:
+                    hi.save(os.path.join(tdir, 't%02d_hi.jpg' % k), quality=90)
+                ent.update(tex_hi='tiles/t%02d_hi.jpg' % k, texsize_hi=list(hi.size))
+                del hi
+            im = fit(im, max_tex)
+            im.save(os.path.join(tdir, 't%02d.jpg' % k), quality=90)
+            ent['texsize'] = list(im.size)
+            tiles.append(ent)
+            mn = np.minimum(mn, pos.min(0)); mx = np.maximum(mx, pos.max(0)); tris += int(sel.sum())
     for f in ('mesh.bin', 'tex.jpg'):                   # 옛 한 덩어리 자료는 지움
         if os.path.exists(os.path.join(out, f)):
             os.remove(os.path.join(out, f))
@@ -675,6 +934,108 @@ def _read_js(path, var):
     return json.loads(s.split('=', 1)[1].strip().rstrip(';'))
 
 
+def ground_grid(out, cell=1.0):
+    """관로 땅 높이용 매끈한 땅 (1 m · JACK 1126 «관로가 울퉁불퉁») → (Z, mask, x0, y1) 또는 None.
+    결과물/DTM.tif 가 있으면 그것을 1 m 로, 없으면 data/지면.tif (옛 프로젝트 = 결과물/DSM.tif) 를 0.25 m 칸 최솟값으로 줄여
+    점진형 형태학 필터로 땅만 (풀 · 연석 · 차 · 도랑 사면 꼭대기를 빼서 관이 출렁이지 않게)."""
+    from PIL import Image
+    Image.MAX_IMAGE_PIXELS = None
+    src = None
+    for d, nm in ((os.path.join(out, '결과물'), 'DTM'), (os.path.join(out, 'data'), '지면'), (os.path.join(out, '결과물'), 'DSM')):
+        if os.path.exists(os.path.join(d, nm + '.tif')) and os.path.exists(os.path.join(d, nm + '.tfw')):
+            src = (d, nm); break
+    if not src:
+        return None
+    A = np.asarray(Image.open(os.path.join(src[0], src[1] + '.tif')), np.float32)
+    w = [float(x) for x in open(os.path.join(src[0], src[1] + '.tfw')).read().split()]
+    c0, xw, yn = w[0], w[4] - w[0] / 2, w[5] + w[0] / 2          # 칸 크기 · 서쪽 끝 · 북쪽 끝
+    A = np.where(A <= -9998, np.nan, A)
+    k = max(1, int(round((cell if src[1] == 'DTM' else 0.25) / c0)))
+    if k > 1:                                                     # 칸 묶기 (DTM = 평균 · 표면 = 최솟값)
+        h, wd = (A.shape[0] // k) * k, (A.shape[1] // k) * k
+        B = A[:h, :wd].reshape(h // k, k, wd // k, k)
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore', RuntimeWarning)
+            A = np.nanmean(B, axis=(1, 3)) if src[1] == 'DTM' else np.nanmin(B, axis=(1, 3))
+        c0 *= k
+    if src[1] == 'DTM':
+        return A, np.isfinite(A), xw, yn, c0
+    r, c = np.nonzero(np.isfinite(A))
+    if len(r) < 10:
+        return None
+    E = xw + (c + 0.5) * c0; N = yn - (r + 0.5) * c0
+    dtm, ground, cover, x0, y1 = dtm_from_points(E, N, A[r, c].astype(np.float64), cell=cell)
+    return dtm, cover, x0, y1, cell
+
+
+def write_dem_js(out, log=print):
+    """data/dem.js = 360 보기와 같은 꼴 (window.RV_DEM · 타일 128 · 한 줄 겹침 · 남→북 · x0/y0 = 매핑 원점 기준 · 표고 절대값).
+    보기 화면이 관 땅 높이(꼭짓점을 끌어도)를 여기서 읽음. → 칸 수 (못 만들면 0)."""
+    import base64
+    old = os.path.join(out, 'data', 'dem.js')
+    if os.path.exists(old):                                         # 못 만들어도 옛 원점 기준 파일이 남지 않게 (1126 검토)
+        os.remove(old)
+    try:
+        P = _read_js(os.path.join(out, 'data', 'mapping.js'), 'RV_MAPPING')
+        G = ground_grid(out)
+    except Exception as ex:                                         # noqa: BLE001
+        log('  땅 높이(dem.js) 못 만듦 · %s' % ex); return 0
+    if G is None:
+        return 0
+    Z, mask, x0, y1, cell = G
+    Zs = np.where(mask, Z, np.nan).astype('<f4')[::-1]              # 행 = 남 → 북
+    E0, N0 = float(P['origin'][0]), float(P['origin'][1])
+    T = 128
+    ny, nx = Zs.shape
+    tiles = {}
+    for iy in range((ny - 1) // T + 1):
+        for ix in range((nx - 1) // T + 1):
+            sub = np.full((T + 1, T + 1), np.nan, '<f4')
+            blk = Zs[iy * T:iy * T + T + 1, ix * T:ix * T + T + 1]
+            sub[:blk.shape[0], :blk.shape[1]] = blk
+            if np.isfinite(sub).any():
+                tiles['%d_%d' % (ix, iy)] = base64.b64encode(sub.tobytes()).decode('ascii')
+    dj = {'cell': cell, 'tile': T, 'x0': round(x0 + cell / 2 - E0, 3), 'y0': round(y1 - ny * cell + cell / 2 - N0, 3), 'tiles': tiles,
+          'kind': 'ground'}
+    with open(os.path.join(out, 'data', 'dem.js'), 'w', encoding='utf-8') as fp:
+        fp.write('window.RV_DEM = ' + json.dumps(dj) + ';\n')
+    return int(np.isfinite(Zs).sum())
+
+
+def ground_sampler(out):
+    """매끈한 땅 f(E, N) = 표고 (겹선형 · 빈칸 NaN) — ground_grid · 없으면 dsm_sampler."""
+    G = ground_grid(out)
+    if G is None:
+        return dsm_sampler(out)
+    Z, mask, x0, y1, cell = G
+    Zm = np.where(mask, Z, np.nan)
+
+    def f(E, N):
+        E = np.asarray(E, float); N = np.asarray(N, float)
+        fx = (E - x0) / cell - 0.5; fy = (y1 - N) / cell - 0.5
+        c = np.floor(fx).astype(int); r = np.floor(fy).astype(int); tx = fx - c; ty = fy - r
+        ok = (r >= 0) & (r + 1 < Zm.shape[0]) & (c >= 0) & (c + 1 < Zm.shape[1])
+        z = np.full(E.shape, np.nan)
+        rr, cc, ax, ay = r[ok], c[ok], tx[ok], ty[ok]
+        z[ok] = (Zm[rr, cc] * (1 - ax) + Zm[rr, cc + 1] * ax) * (1 - ay) + (Zm[rr + 1, cc] * (1 - ax) + Zm[rr + 1, cc + 1] * ax) * ay
+        return z
+    return f
+
+
+def smooth_along(pts, z, half=5.0):
+    """관 줄을 따라 측점 ±half m 이동평균 (빈 값은 빼고 · 다 비면 그대로)."""
+    P = np.asarray([[p[0], p[1]] for p in pts], float)
+    s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(P, axis=0).T))]
+    z = np.asarray(z, float); ok = np.isfinite(z)
+    if not ok.any():
+        return z
+    out = np.empty_like(z)
+    for i in range(len(z)):
+        m = ok & (np.abs(s - s[i]) <= half)
+        out[i] = z[m].mean() if m.any() else np.nan
+    return out
+
+
 def dsm_sampler(out):
     """땅 높이 f(E 배열, N 배열) = 표고 (빈칸 NaN) — data/지면.tif (1.0.15 · 늘 만듦) · 없으면 결과물/DSM.tif."""
     if os.path.exists(os.path.join(out, 'data', '지면.tif')):
@@ -697,26 +1058,32 @@ def import_pipes(out, path, dia_field=None, label_field=None, depth=None, layers
     lines = pipeload.densify(lines, 2.0)
     inside = lambda p: x0 - pad <= p[0] <= x1 + pad and y0 - pad <= p[1] <= y1 + pad   # noqa: E731
     cut = []
-    for ln in lines:                                   # 범위 안 덩어리마다 한 줄
-        run = []
-        for p in ln['pts']:
+    for ln in lines:                                   # 범위 안 덩어리마다 한 줄 · 원래 꼭짓점(ctrl)은 잘린 줄에서도 남김
+        cset = set(ln.get('ctrl') or range(len(ln['pts'])))   # (없애면 2 m 마다 손잡이 · 1126 관로 도구 도우미)
+        run, idx = [], []
+
+        def flush():
+            if len(run) >= 2:
+                c = [i for i, k in enumerate(idx) if k in cset]
+                c = sorted(set([0, len(run) - 1] + c))
+                cut.append(dict(ln, pts=list(run), ctrl=c))
+        for k, p in enumerate(ln['pts']):
             if inside(p):
-                run.append(p)
-            elif len(run) >= 2:
-                cut.append(dict(ln, pts=run, ctrl=None)); run = []
+                run.append(p); idx.append(k)
             else:
-                run = []
-        if len(run) >= 2:
-            cut.append(dict(ln, pts=run, ctrl=None if len(run) != len(ln['pts']) else ln.get('ctrl')))
-    g = dsm_sampler(out)
+                flush(); run, idx = [], []
+        flush()
+    g = ground_sampler(out)                           # 매끈한 땅 (DTM 1 m) — DSM 이면 풀 · 연석 · 도랑 사면에 관이 출렁임 (JACK 1126)
+    if not os.path.exists(os.path.join(out, 'data', 'dem.js')):
+        write_dem_js(out, log=log)                    # 보기 화면도 같은 땅 (꼭짓점을 끌어 옮길 때)
     geo = Geo(CRS)
     pl = []
     for ln in cut:
         pts = ln['pts']
         gz = g([p[0] for p in pts], [p[1] for p in pts])
-        if np.isfinite(gz).any():                     # 빈칸은 이웃 값으로
+        if np.isfinite(gz).any():                     # 빈칸은 이웃 값으로 · 줄을 따라 ±5 m 이동평균
             idx = np.arange(len(gz)); ok = np.isfinite(gz)
-            gz = np.interp(idx, idx[ok], gz[ok])
+            gz = smooth_along(pts, np.interp(idx, idx[ok], gz[ok]), 5.0)
         pl.append(dict(layer=ln['layer'], label=ln['label'], dia=round(ln['dia'], 4), hasZ=bool(ln['hasZ']),
                        pts=[[round(p[0] - E0, 3), round(p[1] - N0, 3), (round(p[2], 3) if (ln['hasZ'] and p[2] is not None) else None)] for p in pts],
                        g=[round(float(v), 3) if np.isfinite(v) else None for v in gz],
@@ -736,17 +1103,24 @@ def import_pipes(out, path, dia_field=None, label_field=None, depth=None, layers
 
 # ---------------------------------------------------------------- 차례
 class Eta:
-    """단계 무게(80장 시험 시간 비율)로 퍼센트 · 남은 초 → «@진행 퍼센트 남은초 글» (app.Job 이 읽음)."""
-    W0 = {'특징점': 2, '맞추기': 2, '카메라 풀기': 26, '왜곡 펴기': 2, '점구름 준비': 0, '점구름': 29, '측량 점구름': 29,
-          '3D 면': 11, '질감': 5, '결과물': 3}
+    """단계 무게(실측 초)로 퍼센트 · 남은 초 → «@진행 퍼센트 남은초 글» (app.Job 이 읽음).
+    무게 = 394장 보통 실측(1125) · 품질마다 무거운 단계는 배수 (80장 실측: 정밀 점구름 4.2배 · 면 4.3배 · 질감 3.7배 / 빠르게 0.2배 안팎).
+    1126 JACK «정밀인데 남은 33분» — 예전 무게(보통 80장 비율)는 정밀 점구름을 4배 작게 봤음."""
+    W0 = {'특징점': 60, '맞추기': 90, '카메라 풀기': 900, '왜곡 펴기': 36, '점구름 준비': 1, '점구름': 2800, '측량 점구름': 2800,
+          '3D 면': 1290, '질감': 1300, '결과물': 200}     # 질감 1126: 원본 크기 + OpenMVS 조각 (80장 ≈ 7분 · 394장 ≈ 20~25분)
+    QF = {'fast': {'점구름': 0.22, '측량 점구름': 0.22, '3D 면': 0.11, '질감': 0.3, '결과물': 0.3},
+          'normal': {},
+          'fine': {'점구름': 4.2, '측량 점구름': 4.2, '3D 면': 4.3, '질감': 2.0, '결과물': 2.6}}
 
-    def __init__(self, n):
-        self.t0 = time.time(); self.done = 0.0; self.n = n
+    def __init__(self, n, quality='normal'):
+        self.t0 = time.time(); self.done = 0.0; self.n = n; self.q = quality
         self.plan()
 
     def plan(self, skip=(), scale=None):
-        """안 할 단계는 무게 0 · 점구름 해상도에 따라 무게 줄임 (결과물 고르기 · 1.0.15)."""
+        """안 할 단계는 무게 0 · 점구름 해상도에 따라 무게 줄임 (결과물 고르기 · 1.0.15) · 품질 배수."""
         self.W = dict(self.W0)
+        for k, f in self.QF.get(self.q, {}).items():
+            self.W[k] = self.W[k] * f
         for k in skip:
             self.W[k] = 0
         for k, f in (scale or {}).items():
@@ -849,8 +1223,8 @@ def main(argv=None):
     log('시작 · 사진 %d장 · 품질 %s · RTK 고정 %d장 · 카메라 %s %s %d×%d' % (
         len(photos), QUALITY_NAME[a.quality], sum(p['rtk'] == 50 for p in photos),
         photos[0].get('model') or '?', photos[0].get('src') or '?', photos[0].get('w', 0), photos[0].get('h', 0)), fp)
-    eta = Eta(len(photos))
-    want_pts0 = bool({'ortho', 'dsm', 'dtm', 'las'} & outs_sel)
+    eta = Eta(len(photos), a.quality)
+    want_pts0 = bool({'dsm', 'dtm', 'las'} & outs_sel)     # 정사는 원본 사진 색 → 측량용 점구름이 없어도 됨 (1126)
     eta.plan(skip=(set() if 'mesh' in outs_sel else {'3D 면', '질감'}) | {'측량 점구름'},
              scale={'점구름': 1.0 if want_pts0 else (DENSE_PX_MESH[a.quality] / DENSE_PX_SURVEY[a.quality]) ** 2})
     T0 = time.time()
@@ -870,7 +1244,7 @@ def main(argv=None):
         stages = {}
     fresh = stages.get('sig') != sig
     if fresh:                                        # 사진 · 품질이 바뀜 → 처음부터
-        for p in ('db.db', 'sparse', 'sparse_txt', 'dense', 'tex_colmap'):
+        for p in ('db.db', 'sparse', 'sparse_txt', 'dense', 'dense_tex', 'tex_colmap'):
             q = os.path.join(ws, p)
             if os.path.isdir(q):
                 shutil.rmtree(q, ignore_errors=True)
@@ -989,7 +1363,7 @@ def main(argv=None):
     #   3D 만 = 점구름을 덜 촘촘하게(모양 · 질감은 그대로 선명한 사진) · 정사 · DSM · DTM · LAS 를 고르면 측량용 해상도
     #   나중에 더 고르면 사진 맞추기 · 카메라 · (있으면) 점구름 · 3D 는 그대로 쓰고 모자란 것만
     want_mesh = 'mesh' in outs_sel
-    want_pts = bool({'ortho', 'dsm', 'dtm', 'las'} & outs_sel)
+    want_pts = bool({'dsm', 'dtm', 'las'} & outs_sel)       # 정사만이면 가벼운 점구름 (색은 원본 사진 · 높이만 씀 · 1126)
     px_srv, px_mesh = DENSE_PX_SURVEY[a.quality], DENSE_PX_MESH[a.quality]
     if 'params' not in stages:                   # 1.0.14 까지 만든 프로젝트 = 측량용 점구름 · 지금 세모 한도
         stages['params'] = {'dense': px_srv, 'faces': TARGET_FACES[a.quality]} if '점구름' in stages['done'] else {}
@@ -1044,9 +1418,23 @@ def main(argv=None):
     def tex_list():                              # tiles.json = 조각 폴더 이름만 (결과 폴더를 옮겨도 · 1125 검토)
         try:
             L = [os.path.join(tex_root, os.path.basename(str(d).rstrip('/\\'))) for d in json.load(open(tl_json, encoding='utf-8'))]
-            return L if L and all(os.path.exists(os.path.join(d, 'mesh.ply')) for d in L) else None
+            return L if L and all(tex_ply_exists(d) for d in L) else None
         except (OSError, ValueError):
             return None
+    tex_ws = dense if TEX_PX[a.quality] == res_tex else os.path.join(ws, 'dense_tex')
+
+    def ensure_tex_images():                     # 질감용 원본 크기 왜곡 편 사진 (dense_tex · 질감 단계마다 새로 · 끝에 지움)
+        if tex_ws == dense:
+            return ensure_images()
+        shutil.rmtree(tex_ws, ignore_errors=True)
+        im = os.path.join(tex_ws, 'images')
+        rc = run([colmap, 'image_undistorter', '--image_path', a.photos, '--input_path', model, '--output_path', tex_ws,
+                  '--output_type', 'COLMAP', '--max_image_size', str(TEX_PX[a.quality])], os.path.join(ws, '7a_질감사진.log'))
+        if rc != 0 or not (os.path.isdir(im) and len(os.listdir(im)) >= nreg):
+            shutil.rmtree(tex_ws, ignore_errors=True)
+            log('  질감 사진 만들기 실패 (7a_질감사진.log)', fp)
+            return False
+        return True
     if ok and want_mesh:
         prm['faces'] = TARGET_FACES[a.quality]
         if not reuse('3D 면', lambda: has('dense', 'scene_cpu_mesh.ply')):   # 정사만 만든 뒤 3D 를 더할 때 (사진 머리말을 읽음)
@@ -1055,27 +1443,45 @@ def main(argv=None):
                   ['--target-face-num', str(TARGET_FACES[a.quality]), '-w', '.'], '6_면.log', cwd=dense,
                   check=lambda: has('dense', 'scene_cpu_mesh.ply'))
         # 질감 = 조각마다 (한 장이면 32768 폭까지 커져 그래픽 한도 16384 로 줄어 흐려짐 · 1125 394장)
-        if ok and reuse('질감', tex_list):
+        #   1126 Terra 견줌 (COLMAP 2640 px = 흐림 · 방지턱 끝 · 길 가장자리 깨짐): 원본 크기 사진 (TEX_PX) + OpenMVS TextureMesh
+        #   (조각을 보는 사진만 · 가림 검사 · 겉도는 사진 빼기) + 조각 색 맞춤 · 그 조각만 안 되면 COLMAP mesh_texturer (그 앞 판)
+        #   질감 방식 · 사진 폭이 다르면 (1.0.15 까지 만든 프로젝트 포함) 질감만 다시
+        tex_sig = '%s-%d' % (TEX_METHOD, TEX_PX[a.quality])
+        if ok and reuse('질감', tex_list) and prm.get('tex') == tex_sig:
             log('질감 · 지난번 것 씀', fp); eta.finish('질감'); tex_dirs = tex_list()
         elif ok:
             drop_from('질감'); save_stages()
             eta.start('질감'); t2 = time.time()
-            ok = ensure_images()
-            tiles = []
-            if ok:
-                shutil.rmtree(tex_root, ignore_errors=True); os.makedirs(tex_root, exist_ok=True)
-                tiles = split_mesh_tiles(os.path.join(dense, 'scene_cpu_mesh.ply'), os.path.join(ws, 'mesh_tiles'))
+            shutil.rmtree(tex_root, ignore_errors=True); os.makedirs(tex_root, exist_ok=True)
+            tiles = split_mesh_tiles(os.path.join(dense, 'scene_cpu_mesh.ply'), os.path.join(ws, 'mesh_tiles'))
+            mvs_ok = ensure_tex_images()
+            n_mvs = 0; t_lv = 0.0
             for k, (p, nf) in enumerate(tiles):
                 d = os.path.join(tex_root, 't%02d' % k); os.makedirs(d, exist_ok=True)
-                rc = run([colmap, 'mesh_texturer', '--workspace_path', dense, '--input_path', p, '--output_path', d], os.path.join(ws, '7_질감_t%02d.log' % k))
-                if rc != 0 or not os.path.exists(os.path.join(d, 'mesh.ply')):
-                    ok = False; log('  조각 %d 질감 실패 (7_질감_t%02d.log)' % (k, k), fp); break
+                err = texture_tile_mvs(colmap, mvs, ws, tex_ws, p, d, os.path.join(ws, '7_질감_t%02d' % k)) if mvs_ok else '질감 사진 없음'
+                if not err:
+                    try:
+                        t_lv += level_mvs_tile(d)['sec']
+                    except Exception as ex:           # noqa: BLE001 — 메모리 · 그림 읽기 · 형식
+                        err = '색 맞춤 %s' % ex
+                if err:
+                    log('  조각 %d OpenMVS 질감 안 됨 (%s) → COLMAP 질감' % (k, err), fp)
+                    shutil.rmtree(d, ignore_errors=True); os.makedirs(d, exist_ok=True)
+                    if not ensure_images():
+                        ok = False; break
+                    rc = run([colmap, 'mesh_texturer', '--workspace_path', dense, '--input_path', p, '--output_path', d], os.path.join(ws, '7_질감_t%02d.log' % k))
+                    if rc != 0 or not os.path.exists(os.path.join(d, 'mesh.ply')):
+                        ok = False; log('  조각 %d 질감 실패 (7_질감_t%02d.log)' % (k, k), fp); break
+                else:
+                    n_mvs += 1
                 tex_dirs.append(d)
+            if tex_ws != dense and not a.keep_work:   # 원본 크기 사진은 질감에만 씀 (394장 ≈ 5 GB) → 바로 지움
+                shutil.rmtree(tex_ws, ignore_errors=True)
             if ok:
                 json.dump([os.path.basename(d) for d in tex_dirs], open(tl_json, 'w', encoding='utf-8'))
-                stages['done'].append('질감')
+                stages['done'].append('질감'); prm['tex'] = tex_sig
             save_stages()
-            log('질감 %d초 · 조각 %d개' % (time.time() - t2, len(tex_dirs)), fp)
+            log('질감 %d초 · 조각 %d개 (OpenMVS %d · 사진 %d px · 색 맞춤 %d초)' % (time.time() - t2, len(tex_dirs), n_mvs, TEX_PX[a.quality], t_lv), fp)
             eta.finish('질감')
     save_stages()
     if not ok:
@@ -1095,7 +1501,7 @@ def main(argv=None):
         for f in glob.glob(os.path.join(outs, '*')):
             if os.path.basename(f).startswith(('정사영상', 'DSM', 'DTM', '지표면_', '점구름')):
                 os.remove(f)
-        for f in ('mesh.json', 'mesh.bin', 'tex.jpg', '지면.tif', '지면.tfw', '지면.prj', '미리보기.png') + (('pipes.js', 'pipes_orig.js') if crs_changed else ()):
+        for f in ('mesh.json', 'mesh.bin', 'tex.jpg', '지면.tif', '지면.tfw', '지면.prj', '미리보기.png') + (('pipes.js', 'pipes_orig.js', 'obstacles.js') if crs_changed else ()) + ('dem.js',):
             if os.path.exists(os.path.join(data_dir, f)):
                 os.remove(os.path.join(data_dir, f))
         shutil.rmtree(os.path.join(data_dir, 'tiles'), ignore_errors=True)
@@ -1109,8 +1515,22 @@ def main(argv=None):
     E, N, H, rgb = E[good], N[good], H[good], rgb[good]
     origin = P_old.get('origin') or [round(float(np.median(E)), 1), round(float(np.median(N)), 1), round(float(np.percentile(H, 5)), 1)]
     npt = ntri = None
+    ortho_meta = None
     if 'ortho' in outs_sel or 'dsm' in outs_sel:
-        dsm, filled, x0, y1 = ortho_dsm(E, N, H, rgb, outs, cell, write_ortho='ortho' in outs_sel, write_dsm='dsm' in outs_sel)
+        dsm, filled, x0, y1 = ortho_dsm(E, N, H, rgb, outs, cell, write_ortho=False, write_dsm='dsm' in outs_sel)
+        if 'ortho' in outs_sel:
+            # 정사 = 원본 사진 재투영 (JACK 1126 «탁함 · Terra 는 확대해도 깨끗» · ortho.py) · 안 되면 옛 점구름 색 정사
+            try:
+                from .ortho import true_ortho
+                oi = true_ortho(ws, a.photos, s, R, t, dsm, filled, x0, y1, cell, outs, a.quality, to_enh=to_5186_h, world=_world,
+                                fill=fill_pull_push, cell_out=a.cell, log=lambda m: log(m, fp))
+                ortho_meta = {'method': 'photo', 'cell': oi['cell'], 'gsd': round(oi['gsd'], 4)}
+                log('  정사영상 원본 사진 재투영 · 칸 %.1f cm · 사진 GSD %.1f cm · %d×%d · 사진 %d / %d장 · 빈칸 %.1f%% · %d초' % (
+                    100 * oi['cell'], 100 * oi['gsd'], oi['size'][0], oi['size'][1], oi['used'], oi['photos'], 100 * oi['empty'], oi['sec']), fp)
+            except Exception as ex:                  # noqa: BLE001 — 사진 폴더 없음 · 메모리 등
+                log('  정사영상 원본 사진 재투영 실패 (%s) → 점구름 색 정사' % ex, fp)
+                ortho_dsm(E, N, H, rgb, outs, cell, write_ortho=True, write_dsm=False)
+                ortho_meta = {'method': 'points', 'cell': cell, 'why': str(ex)[:200]}
         if 'dsm' in outs_sel:
             npt, ntri = landxml_from_dsm(dsm, filled, x0, y1, cell, outs, step_m=1.0)
         del dsm, filled
@@ -1159,9 +1579,13 @@ def main(argv=None):
     for k in ('cover',):                         # 관로 넣기에서 정한 값은 남김
         if k in P_old:
             proj[k] = P_old[k]
+    if have['ortho'] and (ortho_meta or P_old.get('ortho')):     # 정사 방식 · 칸 (정보.txt) — 이번에 안 만들었으면 지난번 것
+        proj['ortho'] = ortho_meta or P_old['ortho']
     with open(os.path.join(data_dir, 'mapping.js'), 'w', encoding='utf-8') as f3:
         f3.write('window.RV_MAPPING = ' + json.dumps(proj, ensure_ascii=False, indent=1) + ';\n')
     stages.pop('stale_outputs', None); save_stages()
+    t3 = time.time(); nd = write_dem_js(out, log=lambda m: log(m, fp))   # 관로 땅 높이 (보기 화면 · 1126)
+    log('  땅 높이 dem.js %d칸 · %.0f초' % (nd, time.time() - t3), fp)
     write_info(outs, proj, photos, a, cam, rms, s, npt, ntri, colmap, mvs, dtm_info=dtm_info,
                tiles=len(meta['tiles']) if meta and 'tiles' in meta else 0, px=(dense_px, px_srv if need_srv else 0))
     log('결과물 %d초 · 이번에 %s%s' % (time.time() - t1, ' · '.join(OUTPUT_NAME[k] for k in OUTPUTS if k in outs_sel),
@@ -1214,7 +1638,13 @@ def write_info(outs, proj, photos, a, cam, rms, scale, npt, ntri, colmap, mvs, d
     ]
     ex = lambda f: os.path.exists(os.path.join(outs, f))      # noqa: E731
     if ex('정사영상.tif'):
-        lines.append('정사영상.tif  RGBA · %.2f m 격자 · 투명 = 자료 없음' % proj['cell'])
+        om = proj.get('ortho') or {}
+        if om.get('method') == 'photo':
+            lines.append('정사영상.tif  RGBA · 원본 사진 재투영 (칸마다 가장 수직인 사진 · 가림 검사) · %.1f cm 격자 · 사진 GSD %.1f cm · 투명 = 자료 없음'
+                         % (100 * om['cell'], 100 * om['gsd']))
+        else:
+            lines.append('정사영상.tif  RGBA · 점구름 색 · %.2f m 격자 · 투명 = 자료 없음%s' % (
+                om.get('cell', proj['cell']), ' (원본 사진 재투영 실패: %s)' % om['why'] if om.get('why') else ''))
     if ex('DSM.tif'):
         lines.append('DSM.tif       표고(m) float32 · %.2f m 격자 · -9999 = 자료 없음 · 건물 · 나무 포함한 표면 모델 (DTM 아님)' % proj['cell'])
     if ex('지표면_DSM.xml'):
