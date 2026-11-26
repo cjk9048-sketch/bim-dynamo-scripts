@@ -257,7 +257,7 @@ def test_surface(ed, out_dir, shots_dir):
     write_data(out_dir, obst=False)
     load(ed, page_url(out_dir, v))
     none, _ = grab(ed, os.path.join(shots_dir, 'c_nofile.png'))
-    st = js_json(ed, "{hid: document.getElementById('tgObst').hidden, host: document.getElementById('hostTools').hidden, obst: typeof window.RV_OBST}")
+    st = js_json(ed, "{hid: document.getElementById('tgObst').hidden, host: document.getElementById('hHome').hidden && document.getElementById('hObst').hidden, obst: typeof window.RV_OBST}")
     report('c 파일 없음 → [지장물] 숨김 · 그림 = 끔', st['hid'] and st['host'] and st['obst'] == 'undefined' and np.abs(none - off).max() <= 2,
            json.dumps(st) + ' · 최대 차이 %d' % np.abs(none - off).max())
     errs(ed, 'c 파일 없음')
@@ -701,7 +701,7 @@ def test_host(ed, out_dir, shots_dir):
         ed.net(block=ci.BLOCK)
         v = V_SURF_A
         report('불러옴', load(ed, page_url(out_dir, v, page=HOST_PAGE)))
-        st = js_json(ed, "{tools: !document.getElementById('hostTools').hidden, ob: !document.getElementById('hObst').hidden,"
+        st = js_json(ed, "{tools: !document.getElementById('hHome').hidden, ob: !document.getElementById('hObst').hidden,"
                          " tg: document.getElementById('tgObst').hidden}")
         report('f 프로그램 단추 [지장물 넣기] 보임 · 지장물 없음 → [지장물] 숨김', st['tools'] and st['ob'] and st['tg'], json.dumps(st))
         ct.set_ov(ed, True)

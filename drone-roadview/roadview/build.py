@@ -877,7 +877,7 @@ def main(argv=None):
     # 보기 화면 복사 (맞춤 값 calib.js 는 건드리지 않음)
     if os.path.isdir(VIEWER_DIR):
         os.makedirs(os.path.join(out, 'viewer'), exist_ok=True)
-        for fn in ('app.js', 'style.css'):
+        for fn in ('app.js', 'style.css', 'river.js'):          # river.js = 하천 추진 · 횡단 셈 (3D 화면과 같은 셈 · 1126)
             src = os.path.join(VIEWER_DIR, fn)
             if os.path.exists(src):
                 shutil.copy2(src, os.path.join(out, 'viewer', fn))

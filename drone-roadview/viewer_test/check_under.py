@@ -340,7 +340,7 @@ def test_card(ed, out_dir, shots_dir):
 
 
 def aria(ed, label):
-    r = js_json(ed, "document.querySelector('[aria-label=\"%s\"]').getBoundingClientRect()" % label)
+    r = js_json(ed, "(function (e) { if (e.closest('#opts')) e.scrollIntoView({block: 'nearest'}); return e.getBoundingClientRect(); })(document.querySelector('[aria-label=\"%s\"]'))" % label)
     return r['left'] + r['width'] / 2, r['top'] + r['height'] / 2
 
 
@@ -422,9 +422,11 @@ def test_host(ed, out_dir, shots_dir):
         u = pathlib.Path(out_dir, page).resolve().as_uri() + '?t=none&' + ce.q_of(V_AREA)
         report('불러옴 (프로그램)', load(ed, u))
         ed.frames(4)
-        st = js_json(ed, "{tools: !document.getElementById('hostTools').hidden, icons: ['hPipes','hObst','hExport','hHome'].map((i) => !!document.getElementById(i).querySelector('svg') && document.getElementById(i).getBoundingClientRect().width > 20),"
-                         " tips: ['hPipes','hObst','hExport','hHome','tgEdit','tgQty','tgCal','tgMap'].map((i) => document.getElementById(i).title.length > 0),"
-                         " logo: (function(){ const i = document.getElementById('dohwa'); const r = i.getBoundingClientRect(); return [i.alt, i.naturalWidth, Math.round(r.height), r.left < 40, getComputedStyle(i).pointerEvents]; })(),"
+        # 1126 배치: 윗줄 [처음] · 관로 카테고리 [SHP 불러오기 · 지장물 · SHP 내보내기] · 결과물 · 웹 공유 카테고리 머리줄 (옛 윗줄 묶음 · [내보내기] · [맞춤] 대신)
+        st = js_json(ed, "{tools: !document.getElementById('hHome').hidden, icons: ['hPipes','hObst','bShpOut','hd_out','hd_web','hHome'].map((i) => !!document.getElementById(i).querySelector('svg') && document.getElementById(i).getBoundingClientRect().width > 20),"
+                         " tips: ['hPipes','hObst','bShpOut','hd_out','hd_web','hHome','tgEdit','tgQty','calHead','tgMap','bHelp'].map((i) => document.getElementById(i).title.length > 0),"
+                         # 로고 = 왼쪽 위 (프로그램에선 3D 화면처럼 맨 왼쪽 [처음] 32 px 바로 뒤 · 이름 앞)
+                         " logo: (function(){ const i = document.getElementById('dohwa'); const r = i.getBoundingClientRect(); return [i.alt, i.naturalWidth, Math.round(r.height), r.left < 70 && r.right < document.getElementById('title').getBoundingClientRect().left, getComputedStyle(i).pointerEvents]; })(),"
                          " top: document.getElementById('top').getBoundingClientRect().height}")
         report('그림 단추 (넣기 · 내보내기 · 처음) + 짧은 설명', st['tools'] and all(st['icons']) and all(st['tips']), json.dumps({k: st[k] for k in ('tools', 'icons', 'tips')}))
         report('DOHWA 로고 (왼쪽 위 · 18~20 px · 안 누름) · 윗줄 48 px', st['logo'][0] == 'DOHWA' and st['logo'][1] == 240 and 18 <= st['logo'][2] <= 20 and st['logo'][3]

@@ -364,7 +364,10 @@
 
   if (T === 'ui') {
     // 프로그램 (pywebview) 없음 → 프로그램 단추 · 창 숨김
-    check('프로그램 단추 숨김 (pywebview 없음)', !window.pywebview && !shown($('hostTools')) && !shown($('hPipes')) && !shown($('hExport')) && !shown($('hHome')) && !shown($('dlgBack')));
+    // 1126 배치: 윗줄 [처음] · 관로 카테고리 프로그램 단추 · 결과물 · 웹 공유 카테고리 (옛 윗줄 묶음 · [내보내기] 대신)
+    const catEl = (c) => document.querySelector('#opts .cat[data-cat="' + c + '"]');
+    check('프로그램 단추 숨김 (pywebview 없음)', !window.pywebview && !shown($('hPipes')) && !shown($('hObst')) && !shown($('bShpOut')) && !shown($('hHome'))
+      && !shown(catEl('out')) && !shown(catEl('web')) && !shown($('tgTrim')) && shown($('tgEdit')) && !shown($('dlgBack')));
     check('이름 단추 숨김 (VWorld 아님)', !shown($('mNames')));
     $('mDepth').click();
     check('깊이 on', $('mDepth').classList.contains('on') && !$('mSurf').classList.contains('on'));
@@ -578,13 +581,16 @@
     return n;
   }
   if (T === 'host' || T === 'host_late') {
+    // 1126 배치: 윗줄 [처음] · 관로 카테고리 [SHP 불러오기 · 지장물 · SHP 내보내기] · 결과물 · 웹 공유 카테고리 (옛 윗줄 묶음 hostTools · [내보내기] 대신)
+    const catEl = (c) => document.querySelector('#opts .cat[data-cat="' + c + '"]');
     if (T === 'host_late') {
-      check('준비 전 (api 없음) → 프로그램 단추 숨김', !!window.pywebview && !window.pywebview.api && !shown($('hostTools')));
-      await until(() => shown($('hostTools')), 6000);
+      check('준비 전 (api 없음) → 프로그램 단추 숨김', !!window.pywebview && !window.pywebview.api && !shown($('hHome')) && !shown($('hPipes')) && !shown(catEl('web')));
+      await until(() => shown($('hHome')), 6000);
     }
     const bName = (b) => b.getAttribute('aria-label') || b.textContent; // 그림 단추 = 이름은 aria-label
-    check('프로그램 단추 셋 보임', shown($('hostTools')) && [['hPipes', '관로 넣기'], ['hExport', '내보내기'], ['hHome', '처음']].every(([id, t]) => shown($(id)) && bName($(id)) === t),
-      [...$('hostTools').querySelectorAll('button')].map(bName).join(','));
+    check('프로그램 단추 보임 (처음 · 관로 넣기 · 지장물 넣기 · SHP 내보내기 · 결과물 · 웹 공유)', [['hPipes', '관로 넣기'], ['hObst', '지장물 넣기'], ['hHome', '처음']].every(([id, t]) => shown($(id)) && bName($(id)) === t)
+      && shown($('bShpOut')) && shown(catEl('out')) && shown(catEl('web')) && shown($('tgTrim')),
+      ['hPipes', 'hObst', 'hHome'].map((id) => bName($(id))).join(','));
   }
   if (T === 'host_late') { // 늦게 붙은 api 로도 맞춤 자동 저장
     $('calHead').click();
@@ -709,9 +715,10 @@
     const sv4 = hcalls('save_calib');
     check('짝 모두 지움 → 한 번 저장 (짝 없음)', sv4.length === 4 && sv4[3].arg.indexOf('"pairs"') < 0, sv4.length);
     $('alEnd').click();
-    // 6) 내보내기: 웹 주소 (진행 → 주소 → 복사) · 폴더
-    $('hExport').click();
-    check('내보내기 창', shown($('expDlg')) && !shown($('pipeDlg')) && !shown($('exProg')) && !shown($('exDone')));
+    // 6) 웹 공유 카테고리: 웹 주소 (진행 → 주소 → 복사 · 열기) · 결과물 카테고리: 폴더
+    $('hd_web').click();
+    check('웹 공유 카테고리 펼침 (창 없음 · 진행 · 주소 숨김 · 복사 · 열기 막힘)', shown($('exWeb')) && !shown($('dlgBack')) && !shown($('exProg')) && !shown($('exDone'))
+      && $('exCopy').disabled && $('exOpen').disabled && $('webState').textContent === '올리기 전', $('webState').textContent);
     const widths = [];
     $('exWeb').click();
     check('올리는 중 → 단추 막힘', $('exWeb').disabled);
@@ -726,13 +733,18 @@
     await until(() => hcalls('copy_text').length === 1);
     await sleep(50);
     check('주소 복사 → copy_text', hcalls('copy_text')[0].arg === 'https://nas.example.invalid/rv/test/' && $('toast').textContent === '주소 복사됨', $('toast').textContent);
+    check('올린 뒤 상태 · 머리줄 «올림» · [다시 올리기] · 열기 됨', $('webState').textContent === '올림' && $('webTag').textContent === '올림'
+      && $('exWeb').textContent === '다시 올리기' && !$('exOpen').disabled && !$('exCopy').disabled, $('webState').textContent + ' / ' + $('exWeb').textContent);
+    $('hd_out').click();
+    check('결과물 카테고리 → [폴더로 내보내기] 보임', shown($('exFolder')));
     $('exFolder').click();
     check('폴더로 내보내는 중', $('exFolder').disabled && $('exFolder').textContent === '내보내는 중');
     await until(() => $('toast').textContent.indexOf('내보냄') === 0, 5000);
     check('폴더로 내보내기 → 알림에 경로', hcalls('export_folder').length === 1 && $('toast').textContent === '내보냄 · C:\\시험\\내보내기' && !$('exFolder').disabled, $('toast').textContent);
     await snap('host_folder');
-    $('expDlg').querySelector('.dlgX').click();
-    check('× → 창 닫힘', !shown($('dlgBack')));
+    $('hd_web').click();
+    $('hd_out').click();
+    check('머리줄 → 웹 공유 · 결과물 접힘 (창 없음)', !shown($('exWeb')) && !shown($('exFolder')) && !shown($('dlgBack')));
     // 7) [처음]: 아직 안 쓴 맞춤을 먼저 저장 → go_home (두 번 저장 안 함)
     const nSave = hcalls('save_calib').length;
     tap(plusYaw, 0, 0);

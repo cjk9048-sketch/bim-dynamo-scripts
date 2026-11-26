@@ -118,6 +118,8 @@ class Inp:
         self.ed.frames(3)
 
     def el_click(self, eid):
+        # 오른쪽 칸 카테고리 (#opts · 굴림) 안 단추는 먼저 보이게 굴림 (1126 배치)
+        self.ed.js("(function (e) { if (e && e.closest('#opts')) e.scrollIntoView({block: 'nearest'}); })(document.getElementById('%s'))" % eid)
         r = rect(self.ed, eid)
         self.click(r['left'] + r['width'] / 2, r['top'] + r['height'] / 2)
 

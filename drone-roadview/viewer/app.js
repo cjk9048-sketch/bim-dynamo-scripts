@@ -34,6 +34,9 @@
   const MAT_T = ['ci', 'steel', 'plastic'];
   const MAT_NAME = { ci: '주철관', steel: '강관', plastic: '비금속관' }, MAT_SHORT = { ci: '주철', steel: '강관', plastic: '비금속' };
   const MAT_RGB = { ci: [0.25, 0.25, 0.26], steel: [0, 0.898, 1], plastic: [0.93, 0.93, 0.91] };
+  // 하천 추진 · 횡단 (JACK 1126): RV_PIPES.lines[i].river = [{ k: 'jack' | 'open', a, b, … }] · 셈 · 기하 = viewer/river.js (3D 매핑 화면과 같은 셈) ·
+  // 360 은 붙이는 코드만 (불러온 관 위 두 점 · 땅 = groundAt · 그물 = 터파기와 같은 셰이더 · 구멍) · river.js 가 없으면 그 카테고리 · 수량 갈래만 숨김
+  const RV = window.RVRiver || null;
   function guessMat(text) {
     const u = String(text || '').toUpperCase();
     if (/비금속|폴리|PVC|HDPE|GRP|(?<![A-Z])PE(?![A-Z])/.test(u)) return 'plastic';
@@ -112,7 +115,8 @@
   }
 
   // ---------------------------------------------------------------- 프로그램 연결 (pywebview · WebView2)
-  // 프로그램 안에서 열면 window.pywebview.api 가 있다 → 윗줄에 [관로 넣기] · [내보내기] · [처음]. 웹 공유 · 브라우저에서는 숨김.
+  // 프로그램 안에서 열면 window.pywebview.api 가 있다 → 윗줄 [처음] · 관로 [SHP 불러오기 · 내보내기 · 지장물] · 결과물 · 웹 공유 · 사진점 지우기.
+  // 웹 공유 · 브라우저에서는 숨김 ([data-host] · 3D 매핑 화면 map3d.js hostShow 와 같음).
   const HOST = () => (window.pywebview && window.pywebview.api) || null;
   function hostCall(name, arg) {
     const h = HOST();
@@ -120,7 +124,11 @@
     return Promise.resolve().then(() => (arg === undefined ? h[name]() : h[name](arg)));
   }
   const errText = (e) => String((e && e.message) || e || '오류');
-  function hostShow() { $('hostTools').hidden = !HOST(); $('tgTrim').hidden = !HOST(); } // 사진점 지우기는 프로그램에서만 (저장할 곳)
+  function hostShow() {
+    const h = !!HOST();
+    document.querySelectorAll('[data-host]').forEach((e) => { e.hidden = !h; });
+    document.body.classList.toggle('host', h);
+  }
   let beforeHome = () => Promise.resolve(); // [처음] 전에 할 일 (맞춤 저장)
   $('hHome').addEventListener('click', () => {
     beforeHome().catch(() => {}).then(() => hostCall('go_home')).catch((e) => toast(errText(e)));
@@ -129,12 +137,10 @@
 
   // ---------------------------------------------------------------- 자료
   const PRJ = window.RV_PROJECT;
-  function noData(text) { // 자료가 없어도 프로그램에서는 [처음] 으로 돌아갈 수 있게
+  function noData(text) { // 자료가 없어도 프로그램에서는 [처음] 으로 돌아갈 수 있게 (카테고리는 숨김)
     viewMsg(text);
-    $('hPipes').hidden = true;
-    $('hObst').hidden = true;
-    $('hExport').hidden = true;
     hostShow();
+    $('opts').hidden = true;
   }
   if (!PRJ || !Array.isArray(PRJ.shots) || !PRJ.shots.length) {
     noData('자료 없음 · data/project.js');
@@ -230,16 +236,53 @@
     const shore = (Array.isArray(l.shore) ? l.shore : []).map((q, i) => (q && isNum(q.a) && isNum(q.b) && SHORE_T.indexOf(q.t) >= 0
       ? { a: clamp(Math.min(+q.a, +q.b), 0, len), b: clamp(Math.max(+q.a, +q.b), 0, len), t: q.t, i: i } : null))
       .filter((q) => q && q.b - q.a > 1e-3).sort((x, y) => x.a - y.a);
+    // 하천 구간 (river.js clean = 줄 안으로 · 모자란 값 = 기본값 · i = RV_PIPES 의 river 번호)
+    const river = RV ? (Array.isArray(l.river) ? l.river : []).map((q, i) => { const c = RV.clean(q, len); return c ? Object.assign(c, { i: i }) : null; })
+      .filter((q) => q).sort((x, y) => x.a - y.a) : [];
     return {
       src: src, color: lay.color, rgb: rgb, rgbHi: rgbHi, colorHi: 'rgb(' + rgbHi.map((v) => Math.round(v * 255)).join(',') + ')',
       label: label, base: base, kind: kind, diaKnown: diaKnown, dia: dia, hasZ: hasZ, pts: Float64Array.from(p), g: Float64Array.from(g), bi: bi, ll: ll,
-      ctrl: ctrlOf(l).map((k) => at[k]).filter((k) => k >= 0), e0, e1, n0, n1, mx: null, my: null, cum: cum, len: len, shore: shore, mat: mat,
+      ctrl: ctrlOf(l).map((k) => at[k]).filter((k) => k >= 0), e0, e1, n0, n1, mx: null, my: null, cum: cum, len: len, shore: shore, mat: mat, river: river,
     };
   }
   // 측점 s 가 든 가시설 구간 (없으면 null)
   function shoreAt(L, s) {
     for (const q of L.shore) if (s > q.a && s < q.b) return q;
     return null;
+  }
+  // 하천 계획 (river.js plan): 땅 = groundAt (높이 타일 RV_DEM → 없으면 사진 땅 높이) · 줄마다 기억 (줄을 고치면 새 줄 = 새로 셈)
+  const rvMemo = new WeakMap();
+  function rvGround(e, n) { return groundAt(e, n); }
+  function rvPlans(L) {
+    if (!RV || !L.river || !L.river.length) return [];
+    const key = shots.length, m = rvMemo.get(L);
+    if (m && m.key === key) return m.p;
+    const xy = [];
+    for (let k = 0; k < L.pts.length; k += 3) xy.push([L.pts[k], L.pts[k + 1]]);
+    const P = RV.path(xy);
+    const p = L.river.map((q) => { const pl = RV.plan(q, P, rvGround, L.dia); if (pl) pl.i = q.i; return pl; }).filter((x) => x);
+    rvMemo.set(L, { key: key, p: p });
+    return p;
+  }
+  function rvAny() { return !!RV && lines.some((L) => L.river && L.river.length); }
+  function rvPipeZ(L) { return rvPlans(L).filter((p) => Number.isFinite(p.zc)).map((p) => ({ a: p.a, b: p.b, zc: p.zc })); }
+  // 관 줄 → [x, y, z, 측점] (하천 구간 안 = 그 깊이로 수평 · 구간 끝 = 같은 자리에서 수직으로 꺾임 · 3D 화면과 같음)
+  function rvPath(L, secs, zf) {
+    const P = L.pts, C = L.cum, cnt = P.length / 3, out = [];
+    const inSec = (s) => secs.find((q) => s > q.a && s < q.b);
+    for (let k = 0; k + 1 < cnt; k++) {
+      const s0 = C[k], l = C[k + 1] - s0, za = zf(L, k), zb = zf(L, k + 1), ts = [0, 1];
+      if (l > 1e-9) for (const q of secs) for (const s of [q.a, q.b]) if (s > s0 + 1e-6 && s < s0 + l - 1e-6) ts.push((s - s0) / l);
+      ts.sort((x, y) => x - y);
+      for (const t of ts) {
+        if (k > 0 && t === 0) continue;
+        const s = s0 + l * t, x = P[k * 3] + (P[k * 3 + 3] - P[k * 3]) * t, y = P[k * 3 + 1] + (P[k * 3 + 4] - P[k * 3 + 1]) * t, zn = za + (zb - za) * t;
+        const before = inSec(s - 1e-3), after = inSec(s + 1e-3), z0 = before ? before.zc : zn, z1 = after ? after.zc : zn;
+        out.push([x, y, z0, s]);
+        if (Math.abs(z1 - z0) > 1e-6) out.push([x, y, z1, s]);
+      }
+    }
+    return out;
   }
   let lines = buildLines(window.RV_PIPES);
 
@@ -565,7 +608,9 @@
     if (needMap) { needMap = false; drawMap(); }
     cfCheck(); // 지장물 간섭: 관로 · 깊이 · 이격이 바뀌었으면 (0.2 초 모아) 다시
     if (QT.on) qtyUI();
+    cfUI(); // 간섭 카테고리 (간섭 자리 바뀐 때만 다시)
     shUI(); // 가시설 목록 (바뀐 때만 다시)
+    rvUI(); // 하천 목록 · 설정 칸 · 종단 창 (바뀐 때만 다시)
     if (ED.on) $('edChip').dataset.sel = String(ED.sel); // 고른 관 (확인 · 시험)
   }
 
@@ -578,6 +623,7 @@
   // ns = 끝쪽 가시설 번호 수 (터파기)
   const meshNew = () => ({ vao: null, vbo: null, ibo: null, n: 0, no: 0, ns: 0, key: '', o: [0, 0, 0] });
   const tubeM = [meshNew(), meshNew()], pitM = [meshNew(), meshNew()], obM = meshNew(); // obM = 지장물 관
+  const rvM = meshNew(); // 하천 추진 · 횡단 (수직구 · 케이싱 · 가물막이 · 구멍 no = 수직구 입구 · 나머지 = 가시설처럼 ns)
   const NO_MESH = { o: [0, 0, 0], v: new Float32Array(0), i: new Uint32Array(0), no: 0, ns: 0 };
 
   const VS = '#version 300 es\n' +
@@ -804,6 +850,7 @@
       if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p) || 'link');
       ['u_off', 'u_f', 'u_r', 'u_u', 'u_tan', 'u_nf', 'u_fade', 'u_alpha', 'u_above', 'u_cam'].forEach((n) => { TU[n] = gl.getUniformLocation(p, n); });
       pitM.forEach(meshInit);
+      meshInit(rvM);
       tprog = p;
     } catch (e) { tprog = null; }
   }
@@ -890,7 +937,9 @@
     const sel = edSel(), base = camBase();
     if (S.pipes) tubesPut(sel, base);
     // 터파기: 구멍을 스텐실에 쓰고 안쪽 면 · 가시설을 그린 뒤, 관도 구멍 안에서만 (스텐실 시험은 관을 그린 뒤 끈다)
+    // 하천 (수직구 입구 = 구멍 · 수직구 · 가물막이 = 가시설처럼 땅 위만 밖에서) 도 같은 길 · 터파기 형상을 끄면 하천은 관처럼 다 보임
     const pit = trGL() && drawTrench(base, sel);
+    if (!trGL() && rvGL()) { rvPut(base); rvDrawAll(); }
     // 지장물: 구멍 안 = 불투명 (구덩이 벽 · 바닥 · 관과 깊이 견줌 → 드러난 것처럼) · 구멍 밖 땅 속 = 반투명 (X선)
     if (obShow()) obPut();
     const ob = obShow() && obM.n > 0;
@@ -961,16 +1010,27 @@
         }
         run = []; rs = [];
       };
-      const push = (k) => {
-        const x = P[k * 3] - o[0], y = P[k * 3 + 1] - o[1], z = zf(L, k) - o[2], n = run.length;
+      const pushP = (X, Y, Z, s) => {
+        const x = X - o[0], y = Y - o[1], z = Z - o[2], n = run.length;
         if (n && Math.abs(run[n - 3] - x) + Math.abs(run[n - 2] - y) + Math.abs(run[n - 1] - z) < 1e-6) return;
         run.push(x, y, z);
-        rs.push(L.cum ? L.cum[k] : 0);
+        rs.push(s);
       };
-      for (let k = 0; k + 1 < cnt; k++) {
-        if (distPtSeg(o[0], o[1], P[k * 3], P[k * 3 + 1], P[k * 3 + 3], P[k * 3 + 4]) > FADE1) { flush(); continue; }
-        if (!run.length) push(k);
-        push(k + 1);
+      const push = (k) => pushP(P[k * 3], P[k * 3 + 1], zf(L, k), L.cum ? L.cum[k] : 0);
+      const rz = !list && L.river && L.river.length ? rvPipeZ(L) : null; // 하천 구간 = 그 깊이로 수평 (구간 끝 = 수직구 · 둑에서 꺾여 내려감)
+      if (rz && rz.length) {
+        const q = rvPath(L, rz, zf);
+        for (let i = 0; i + 1 < q.length; i++) {
+          if (distPtSeg(o[0], o[1], q[i][0], q[i][1], q[i + 1][0], q[i + 1][1]) > FADE1) { flush(); continue; }
+          if (!run.length) pushP(q[i][0], q[i][1], q[i][2], q[i][3]);
+          pushP(q[i + 1][0], q[i + 1][1], q[i + 1][2], q[i + 1][3]);
+        }
+      } else {
+        for (let k = 0; k + 1 < cnt; k++) {
+          if (distPtSeg(o[0], o[1], P[k * 3], P[k * 3 + 1], P[k * 3 + 3], P[k * 3 + 4]) > FADE1) { flush(); continue; }
+          if (!run.length) push(k);
+          push(k + 1);
+        }
       }
       flush();
     }
@@ -1338,18 +1398,25 @@
         const L = c.nd[j * 2], k = c.nd[j * 2 + 1];
         gj[j] = gAt(L, k); zj[j] = zcAt(L, k);
       }
-      const V = { PE: [], PN: [], LX: [], LY: [], TX: [], TY: [], G: [], ZC: [], ST: [] }, pc = [];
+      // 하천 구간 (river.js · 3D 화면과 같음): 추진 = 터파기 없음 (띠를 끊음 · 끊긴 끝 = 끝벽) · 횡단 (개착) = 관 깊이를 하천 깊이로 (구간 끝 = 단차)
+      let V, pc;
+      const pieces = [], fresh = () => { V = { PE: [], PN: [], LX: [], LY: [], TX: [], TY: [], G: [], ZC: [], ST: [] }; pc = []; };
+      fresh();
       const put = (q, dx, dy, st) => {
         V.PE.push(q[0]); V.PN.push(q[1]); V.LX.push(q[2]); V.LY.push(q[3]); V.G.push(q[4]); V.ZC.push(q[5]);
         V.TX.push(dx); V.TY.push(dy); V.ST.push(st);
       };
+      const cut = (tail) => { if (V.PE.length >= 2) pieces.push({ V: V, pc: pc, head: !pieces.length && !cut.any, tail: tail }); cut.any = true; fresh(); };
+      cut.any = false;
+      const withZ = (q, rz) => (rz == null ? q : [q[0], q[1], q[2], q[3], q[4], rz]);
       let last = null;
       for (let j = 1; j < m; j++) {
         const L = c.nd[j * 2], sa = L.cum[c.k0[j]], sb = L.cum[c.nd[j * 2 + 1]], dx = tx[j - 1], dy = ty[j - 1];
-        const ts = [0, 1]; // 이 마디 안 가시설 끝 (그 관 측점 → 마디 매개)
-        if (L.shore.length && Math.abs(sb - sa) > 1e-9) {
+        const rp = L.river && L.river.length ? rvPlans(L) : [];
+        const ts = [0, 1]; // 이 마디 안 가시설 · 하천 구간 끝 (그 관 측점 → 마디 매개)
+        if ((L.shore.length || rp.length) && Math.abs(sb - sa) > 1e-9) {
           const lo = Math.min(sa, sb), hi = Math.max(sa, sb);
-          for (const q of L.shore) for (const s of [q.a, q.b]) if (s > lo + 1e-6 && s < hi - 1e-6) ts.push((s - sa) / (sb - sa));
+          for (const q of L.shore.concat(rp)) for (const s of [q.a, q.b]) if (s > lo + 1e-6 && s < hi - 1e-6) ts.push((s - sa) / (sb - sa));
           ts.sort((x, y) => x - y);
         }
         // 마디 매개 t 자리 [e, n, lx, ly, g, zc] (끝 = 원래 꼭짓점 · 사이 = 마디 수직)
@@ -1360,26 +1427,33 @@
         for (let i = 0; i + 1 < ts.length; i++) {
           const t0 = ts[i], t1 = ts[i + 1];
           if (t1 - t0 < 1e-9) continue;
-          const q = L.shore.length ? shoreAt(L, sa + (sb - sa) * (t0 + t1) / 2) : null, st = q ? q.t : '';
-          if (!last) put(at(t0), dx, dy, st);
-          else if (last.st !== st) put(last.q, dx, dy, st); // 기울기 바뀜 → 같은 자리 하나 더
-          const e = at(t1);
+          const sm = sa + (sb - sa) * (t0 + t1) / 2, rq = rp.length ? rp.find((p) => sm > p.a && sm < p.b) : null;
+          if (rq && rq.k === 'jack') { cut(false); last = null; continue; } // 추진 = 땅을 안 팜
+          const rz = rq && Number.isFinite(rq.zc) ? rq.zc : null;
+          const q = L.shore.length ? shoreAt(L, sm) : null, st = q ? q.t : '', key = st + (rz == null ? '' : '|' + rz);
+          if (!last) put(withZ(at(t0), rz), dx, dy, st);
+          else if (last.key !== key) put(withZ(last.raw, rz), dx, dy, st); // 기울기 · 깊이 바뀜 → 같은 자리 하나 더
+          const raw = at(t1), e = withZ(raw, rz);
           put(e, dx, dy, st);
-          last = { q: e, st: st };
+          last = { raw: raw, key: key };
           if (q) pc.push({ va: V.PE.length - 2, ls0: sa + (sb - sa) * t0, ls1: sa + (sb - sa) * t1, a: q.a, b: q.b, t: st });
         }
       }
-      const n = V.PE.length, F = () => new Float64Array(n);
-      const E = Float64Array.from(V.PE), N = Float64Array.from(V.PN), ZM = F(), ZS = F(), WV = F(), WS = F(), WB = F();
-      for (let v = 0; v < n; v++) {
-        const x = sectAt(D, V.G[v], V.ZC[v], 0, V.ST[v] ? 0 : undefined);
-        ZS[v] = x.zs; WV[v] = x.wv; ZM[v] = x.zm; WS[v] = x.ws; WB[v] = x.wb;
+      cut(true);
+      // 조각마다 단면 · 끝 (줄 처음 · 끝 조각만 더 파고 닿음 따름 · 추진에서 끊긴 끝 = 끝벽) · wall = 끝벽 [처음, 끝]
+      for (const pz of pieces) {
+        const W = pz.V, n = W.PE.length, F = () => new Float64Array(n);
+        const E = Float64Array.from(W.PE), N = Float64Array.from(W.PN), ZM = F(), ZS = F(), WV = F(), WS = F(), WB = F();
+        for (let v = 0; v < n; v++) {
+          const x = sectAt(D, W.G[v], W.ZC[v], 0, W.ST[v] ? 0 : undefined);
+          ZS[v] = x.zs; WV[v] = x.wv; ZM[v] = x.zm; WS[v] = x.ws; WB[v] = x.wb;
+        }
+        if (pz.head && c.ext[0]) { E[0] -= W.TX[0] * ext; N[0] -= W.TY[0] * ext; }
+        if (pz.tail && c.ext[1]) { E[n - 1] += W.TX[n - 1] * ext; N[n - 1] += W.TY[n - 1] * ext; }
+        const pad = ext + 10;
+        out.push({ c, m: n, D: D, E, N, LX: W.LX, LY: W.LY, TX: W.TX, TY: W.TY, G: W.G, ST: W.ST, wall: [pz.head ? c.wall[0] : true, pz.tail ? c.wall[1] : true],
+          ZM, ZS, WV, WS, WB, pc: pz.pc, e0: c.e0 - pad, e1: c.e1 + pad, n0: c.n0 - pad, n1: c.n1 + pad });
       }
-      if (c.ext[0]) { E[0] -= tx[0] * ext; N[0] -= ty[0] * ext; }
-      if (c.ext[1]) { E[n - 1] += tx[m - 2] * ext; N[n - 1] += ty[m - 2] * ext; }
-      const pad = ext + 10;
-      out.push({ c, m: n, D: D, E, N, LX: V.LX, LY: V.LY, TX: V.TX, TY: V.TY, G: V.G, ST: V.ST,
-        ZM, ZS, WV, WS, WB, pc, e0: c.e0 - pad, e1: c.e1 + pad, n0: c.n0 - pad, n1: c.n1 + pad });
     }
     out.of = ch;
     trSec = out;
@@ -1602,8 +1676,8 @@
       for (let j = 0; j + 1 < m; j++) {
         if (distPtSeg(o[0], o[1], T.E[j], T.N[j], T.E[j + 1], T.N[j + 1]) > FADE1) continue;
         B.seg(T, j, j + 1);
-        if (j === 0 && T.c.wall[0]) B.endWall(T, 0, unit3([T.E[1] - T.E[0], T.N[1] - T.N[0], 0]));
-        if (j === m - 2 && T.c.wall[1]) B.endWall(T, m - 1, unit3([T.E[m - 2] - T.E[m - 1], T.N[m - 2] - T.N[m - 1], 0]));
+        if (j === 0 && T.wall[0]) B.endWall(T, 0, unit3([T.E[1] - T.E[0], T.N[1] - T.N[0], 0]));
+        if (j === m - 2 && T.wall[1]) B.endWall(T, m - 1, unit3([T.E[m - 2] - T.E[m - 1], T.N[m - 2] - T.N[m - 1], 0]));
       }
       for (const p of T.pc) if (distPtSeg(o[0], o[1], T.E[p.va], T.N[p.va], T.E[p.va + 1], T.N[p.va + 1]) <= FADE1) B.shore(T, p.va, p);
     }
@@ -1615,7 +1689,8 @@
     const tb = base + '|' + [TR.tp, TR.n, TR.margin, TR.bed, TR.prot].join(',') + '|' + pipeGen + '|' + sel;
     meshPut(pitM[0], tb + '|' + (sel >= 0 ? trStaticSig(sel) : ''), () => buildTrench((c) => c.ids.indexOf(sel) < 0));
     meshPut(pitM[1], sel < 0 ? '' : tb + '|' + selGen, () => (sel < 0 ? NO_MESH : buildTrench((c) => c.ids.indexOf(sel) >= 0)));
-    return pitDraw(pitM);
+    rvPut(base);
+    return pitDraw(pitM.concat([rvM])); // 하천 = 수직구 입구도 구멍 · 수직구 · 가물막이는 가시설처럼
   }
   const tOff = (m) => {
     gl.bindVertexArray(m.vao);
@@ -1633,9 +1708,10 @@
     gl.uniform1f(TU.u_above, 0);
     gl.uniform3f(TU.u_cam, S.cam[0], S.cam[1], S.cam[2]); // 결 = 세계 좌표
   }
-  // 구멍 → 스텐실 1 · 안쪽 면 · 가시설 (구멍 안 · 깊이 씀) · 가시설이 땅 위로 나온 곳 (구멍 밖 · 지표 위만). 그린 것이 없으면 false.
+  // 구멍 → 스텐실 1 · 안쪽 면 · 가시설 (구멍 안 · 깊이 씀) · 가시설이 땅 위로 나온 곳 (구멍 밖 · 지표 위만). 구멍을 그린 것이 없으면 false (스텐실 끔).
+  // 구멍 없는 그물 (하천 가물막이만) 은 땅 위만 그림.
   function pitDraw(list) {
-    const ms = list.filter((m) => m.no);
+    const ms = list.filter((m) => m.n), hs = ms.filter((m) => m.no);
     if (!ms.length) return false;
     tUse(1);
     gl.enable(gl.STENCIL_TEST);
@@ -1648,7 +1724,7 @@
     gl.colorMask(false, false, false, false);
     gl.stencilFunc(gl.ALWAYS, 1, 0xff);
     gl.stencilOp(gl.KEEP, gl.KEEP, gl.REPLACE);
-    ms.forEach((m) => { tOff(m); gl.drawElements(gl.TRIANGLES, m.no, gl.UNSIGNED_INT, 0); });
+    hs.forEach((m) => { tOff(m); gl.drawElements(gl.TRIANGLES, m.no, gl.UNSIGNED_INT, 0); });
     // 2) 안쪽 면 + 가시설: 구멍 안에서만 · 깊이 씀 (관이 이 깊이와 견줌)
     gl.colorMask(true, true, true, true);
     gl.depthMask(true);
@@ -1671,7 +1747,80 @@
     gl.disable(gl.BLEND);
     gl.disable(gl.DEPTH_TEST);
     gl.bindVertexArray(null);
+    if (!hs.length) { gl.disable(gl.STENCIL_TEST); return false; }
     return true;
+  }
+
+  // ---------------------------------------------------------------- 하천 추진 · 횡단 그물 (river.js build3d 면 → 터파기 셰이더 · 가시설과 같은 결 · 3D 화면과 같은 모양)
+  // 수직구 입구 (땅 높이 · 내공) = 구멍 (스텐실) → 그 안에서 수직구 · 케이싱 끝 · 관이 보임 · 밖에서는 땅 위로 나온 것만 (흙막이 머리 · 가물막이).
+  // 덧값 = (재질, 어둡기, 99, 그 자리 땅 표고) → 셰이더 u_above 가 땅 아래를 버림. 터파기 형상을 끄면 관처럼 다 보임 (rvDrawAll).
+  const RV_MAT = { wood: [SH_WOOD, 9], steel: [SH_HP, 10], hpile: [SH_HP, 10], liner: [[0.56, 0.6, 0.63], 11], conc: [[0.66, 0.66, 0.63], 3],
+    case: [[0.42, 0.45, 0.5], 12], bag: [[0.86, 0.85, 0.8], 3], sheet: [SH_SHEET, 11] };
+  const rvGL = () => S.pipes && S.depth && !!pprog && !!tprog && rvAny();
+  function rvPut(base) { meshPut(rvM, rvGL() ? 'r|' + base + '|' + pipeGen + '|' + selGen : '', () => (rvGL() ? rvBuild() : NO_MESH)); }
+  function rvBuild() {
+    const o = S.cam.slice(), VB = [], OI = [], SI = [], gm = new Map();
+    const gAtXY = (x, y) => { const k = Math.round(x * 20) + ',' + Math.round(y * 20); let g = gm.get(k); if (g === undefined) { g = rvGround(x, y); gm.set(k, g); } return g; };
+    const vtx = (p, nr, c, x) => { VB.push(p[0] - o[0], p[1] - o[1], p[2] - o[2], nr[0], nr[1], nr[2], c[0], c[1], c[2], x[0], x[1], x[2], x[3]); };
+    const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+    const face = (ps, hint, kind) => {
+      const m = RV_MAT[kind] || [[0.7, 0.7, 0.7], 7];
+      let nr = ps.length === 4 ? cross3(sub(ps[2], ps[0]), sub(ps[3], ps[1])) : cross3(sub(ps[1], ps[0]), sub(ps[2], ps[0]));
+      const l = Math.hypot(nr[0], nr[1], nr[2]);
+      if (l < 1e-12) return;
+      const sg = dot3(nr, hint) < 0 ? -1 / l : 1 / l;
+      nr = [nr[0] * sg, nr[1] * sg, nr[2] * sg];
+      const b = VB.length / VF;
+      ps.forEach((p) => {
+        const g = gAtXY(p[0], p[1]), gz = Number.isFinite(g) ? g : p[2];
+        vtx(p, nr, m[0], [m[1], p[2] >= gz ? 1 : 1 - 0.32 * clamp((gz - p[2]) / 6, 0, 1), 99, gz]); // 깊을수록 어둡게
+      });
+      for (let i = 1; i + 1 < ps.length; i++) SI.push(b, b + i, b + i + 1);
+    };
+    const hole = (xy) => { // 땅 위 볼록 다각형 → 구멍 (부채꼴 · 법선 위)
+      const b = VB.length / VF;
+      xy.forEach((p) => { const g = gAtXY(p[0], p[1]); vtx([p[0], p[1], Number.isFinite(g) ? g : p[2]], TR_UP, TR_UP, TR_AUX0); });
+      for (let i = 1; i + 1 < xy.length; i++) OI.push(b, b + i, b + i + 1);
+    };
+    for (const L of lines) {
+      for (const pl of rvPlans(L)) {
+        if (!Number.isFinite(pl.gMin) || !pl.path) continue;
+        const ps = pl.path.between(pl.a, pl.b).map((q) => q[1]);
+        let d = Infinity;
+        for (let i = 0; i + 1 < ps.length; i++) d = Math.min(d, distPtSeg(o[0], o[1], ps[i].x, ps[i].y, ps[i + 1].x, ps[i + 1].y));
+        if (d > FADE1 + 30) continue;
+        RV.build3d(pl, face);
+        if (pl.k !== 'jack') continue;
+        for (const sh of pl.shafts) { // 수직구 입구 (내공 · 땅 높이)
+          if (sh.shape === 'rect') {
+            const hl = sh.l / 2, hw = sh.w / 2, at = (u, v) => [sh.x + sh.tx * u - sh.ty * v, sh.y + sh.ty * u + sh.tx * v, sh.g];
+            hole([at(-hl, -hw), at(hl, -hw), at(hl, hw), at(-hl, hw)]);
+          } else {
+            const r = sh.w / 2, c = [];
+            for (let i = 0; i < 36; i++) { const t = i / 36 * 2 * Math.PI; c.push([sh.x + r * Math.cos(t), sh.y + r * Math.sin(t), sh.g]); }
+            hole(c);
+          }
+        }
+      }
+    }
+    return { o: o, v: Float32Array.from(VB), i: Uint32Array.from(OI.concat(SI)), no: OI.length, ns: SI.length };
+  }
+  // 터파기 형상을 끈 깊이 보기: 하천 그물을 관처럼 다 (불투명 · 깊이 씀)
+  function rvDrawAll() {
+    const k = rvM.n - rvM.no;
+    if (k <= 0) return;
+    tUse(1);
+    gl.disable(gl.STENCIL_TEST);
+    gl.enable(gl.DEPTH_TEST);
+    gl.depthFunc(gl.LESS);
+    gl.depthMask(true);
+    gl.enable(gl.BLEND);
+    gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ZERO, gl.ONE);
+    tOff(rvM);
+    gl.drawElements(gl.TRIANGLES, k, gl.UNSIGNED_INT, rvM.no * 4);
+    gl.disable(gl.BLEND);
+    gl.disable(gl.DEPTH_TEST);
+    gl.bindVertexArray(null);
   }
 
   // ---------------------------------------------------------------- 사진 불러오기
@@ -1917,8 +2066,8 @@
           if (!zl) { put(0, L1); put(1, L2); put(2, R2); put(3, R1); const pg = projPoly(Q); if (pg) fill.push(pg); }
           addEdge({ edge: edge }, L1, L2);
           addEdge({ edge: edge }, R1, R2);
-          if (j === 0 && T.c.wall[0]) addEdge({ edge: edge }, L1, R1);
-          if (j === T.m - 2 && T.c.wall[1]) addEdge({ edge: edge }, L2, R2);
+          if (j === 0 && T.wall[0]) addEdge({ edge: edge }, L1, R1);
+          if (j === T.m - 2 && T.wall[1]) addEdge({ edge: edge }, L2, R2);
         }
       }
       if (fill.length) {
@@ -1938,6 +2087,36 @@
         ov.setLineDash([]);
       }
       ov.globalAlpha = 1;
+    }
+    // ---- 하천 추진 · 횡단 (영역 표현 = 땅 위 자리): 수직구 테두리 · 보이는 단계 가물막이 둑 · 공법 색 (터파기 표현 = 3D 그물)
+    if (S.mode === 'area' && S.pipes && RV && rvAny()) {
+      const ed = { jack: [], open: [] };
+      const ring = (bk, ps) => { for (let i = 0; i + 1 < ps.length; i++) addEdge(bk, ps[i], ps[i + 1]); };
+      const gp = (x, y, z0) => { const g = rvGround(x, y); return [x, y, Number.isFinite(g) ? g : z0]; };
+      for (const L of lines) {
+        if (!L.river.length || Math.max(L.e0 - Cx, 0, Cx - L.e1, L.n0 - Cy, Cy - L.n1) > FADE0) continue;
+        for (const pl of rvPlans(L)) {
+          if (!Number.isFinite(pl.gMin)) continue;
+          const bk = { edge: ed[pl.k] };
+          if (pl.k === 'jack') {
+            for (const sh of pl.shafts) {
+              const c = [];
+              if (sh.shape === 'rect') {
+                const hl = sh.l / 2, hw = sh.w / 2;
+                for (const [uu, vv] of [[-hl, -hw], [hl, -hw], [hl, hw], [-hl, hw], [-hl, -hw]]) c.push(gp(sh.x + sh.tx * uu - sh.ty * vv, sh.y + sh.ty * uu + sh.tx * vv, sh.g));
+              } else for (let i = 0; i <= 36; i++) { const t = i / 36 * 2 * Math.PI; c.push(gp(sh.x + sh.w / 2 * Math.cos(t), sh.y + sh.w / 2 * Math.sin(t), sh.g)); }
+              ring(bk, c);
+            }
+          } else for (const lg of pl.stages[pl.q.st - 1].legs) ring(bk, lg.pts.map((p) => [p[0], p[1], p[2]]));
+        }
+      }
+      ov.lineCap = 'round';
+      for (const kk of ['open', 'jack']) {
+        if (!ed[kk].length) continue;
+        path(ed[kk]);
+        ov.strokeStyle = 'rgba(8, 10, 14, 0.6)'; ov.lineWidth = 4.2; ov.stroke();
+        ov.strokeStyle = RV_COL[kk]; ov.lineWidth = 2.2; ov.stroke();
+      }
     }
 
     // ---- 지장물 (고치지 않음 · 관로 밑에): 노면 = 땅 위 띠 (폭 max(관경, 0.15 m) · 어두운 점선 테두리) ·
@@ -2205,7 +2384,7 @@
 
     // ---- 터파기 구멍: 안쪽 가장자리 그늘 + 밝은 자른 선 (WebGL 구멍과 같은 점 · 같은 투영)
     const rims = []; // [단면 묶음, 처음 끝벽, 끝 끝벽]
-    if (S.pipes && lines.length && trGL()) for (const T of trSecGet()) rims.push([T, T.c.wall[0], T.c.wall[1]]);
+    if (S.pipes && lines.length && trGL()) for (const T of trSecGet()) rims.push([T, T.wall[0], T.wall[1]]);
     if (rims.length) {
       ov.lineCap = 'round';
       ov.lineJoin = 'round';
@@ -2666,6 +2845,7 @@
     const t = e.target;
     if (dlgOpen()) { if (e.key === 'Escape') { e.preventDefault(); dlgClose(); } return; }
     if (e.key === 'Escape' && !secDlg.hidden) { e.preventDefault(); secShow(false); return; }
+    if (e.key === 'Escape' && !$('rvDlg').hidden && !SH.arm) { e.preventDefault(); rvShow(false); return; } // 하천 종단 창 (찍는 중이면 찍기 취소 먼저)
     if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
     if (e.key === 'Escape' && SH.arm) { e.preventDefault(); shCancel(); return; } // 가시설: 찍던 것 취소
     if (e.key === 'Escape' && TM.on) { e.preventDefault(); tmMode(false); return; } // 사진점 지우기 취소
@@ -2693,8 +2873,8 @@
     vid.textContent = s.video || '-';
     vid.title = videoName[s.video] || '';
     $('shotTime').textContent = fmtTime(s.time);
-    $('prev').disabled = S.cur <= 0;
-    $('next').disabled = S.cur >= shots.length - 1;
+    $('prev').disabled = $('vPrev').disabled = S.cur <= 0;
+    $('next').disabled = $('vNext').disabled = S.cur >= shots.length - 1;
   }
   function setOn(el, on) { el.classList.toggle('on', !!on); }
   $('title').textContent = String(PRJ.title || '드론 로드뷰');
@@ -2758,24 +2938,90 @@
     dirty();
   }
   $('tgPath').addEventListener('click', () => { S.path = !S.path; setOn($('tgPath'), S.path); mapDirty(); });
-  const calBtnUI = () => setOn($('tgCal'), $('calPane').classList.contains('open') && !$('side').classList.contains('hidden'));
-  function calOpen(on) {
-    $('calPane').classList.toggle('open', !!on);
-    lsSet('rv_ui:calOpen', !!on);
-    calBtnUI();
+  $('bTrDef').addEventListener('click', () => { trSet(Object.assign({}, TR_DEF)); toast('가시화 기본값'); });   // 터파기 · 점용 카테고리
+
+  // ---------------------------------------------------------------- 오른쪽 칸 = 지도 + 접는 카테고리 (JACK 1126 «윗줄 단추 → 옆 옵션 창 · 접이식 카테고리 · 360 도 3D 와 같게»)
+  // #opts > section.cat[data-cat] > .catH (머리줄 = 펴고 접기) + .catB (몸 · hidden = 접힘) · 펴고 접힌 상태 = 이 PC 에 기억 (rv_360:cats) · 틀은 map3d.js 와 같음.
+  // 몸이 예전 칸 그대로인 것: 가시설 (몸 = shBox · 머리줄 = tgShore) · 맞춤 (칸 = calPane · 머리줄 = calHead · 몸 = calBody · 펴짐 = calPane.open)
+  // hook(on) = 펴고 접을 때 그 카테고리가 할 일 · 새 카테고리 (하천 추진 · 횡단 등) 는 html 만 넣으면 됨. 펴고 접으면 지도 칸 크기가 바뀜 → resizeAll.
+  const CAT_KEY = 'rv_360:cats', CAT_DEF = { view: true, pipe: true, trench: true, cal: !!lsGet('rv_ui:calOpen') };
+  const CAT = {};
+  const catSaved = (() => { const v = lsGet(CAT_KEY); return v && typeof v === 'object' ? v : {}; })();
+  const catIs = (name) => !!CAT[name] && !CAT[name].body.hidden;
+  function catUI(c, on) {
+    c.body.hidden = !on;
+    c.head.setAttribute('aria-expanded', String(on));
+    c.sec.classList.toggle('open', on);
+  }
+  function catSet(name, on) {
+    const c = CAT[name];
+    if (!c) return;
+    on = !!on;
+    catUI(c, on);
+    catSaved[name] = on;
+    lsSet(CAT_KEY, catSaved);
+    if (on && $('side').classList.contains('hidden')) sideShow(true);
+    if (c.hook) c.hook(on);
     resizeAll();
   }
+  document.querySelectorAll('#opts .cat').forEach((sec) => {
+    const name = sec.dataset.cat, head = sec.querySelector('.catH'), body = sec.querySelector('.catB');
+    if (!name || !head || !body) return;
+    const c = CAT[name] = { sec: sec, head: head, body: body, hook: null };
+    catUI(c, name in catSaved ? !!catSaved[name] : !!CAT_DEF[name]);
+    head.setAttribute('aria-controls', body.id || (body.id = 'cb_' + name));
+    head.addEventListener('click', () => { const on = body.hidden; catSet(name, on); if (on) sec.scrollIntoView({ block: 'nearest' }); });   // 편 것이 칸 아래면 보이게
+  });
+  // 단추 id → 그 카테고리를 펴고 오른쪽 칸을 띄워 보이게 굴림 (시험)
+  function reveal(id) {
+    const el = typeof id === 'string' ? $(id) : id, sec = el && el.closest('#opts .cat');
+    if (!sec) return false;
+    if (!catIs(sec.dataset.cat) && el !== CAT[sec.dataset.cat].head) catSet(sec.dataset.cat, true);
+    if ($('side').classList.contains('hidden')) sideShow(true);
+    el.scrollIntoView({ block: 'nearest' });
+    return true;
+  }
+  CAT.cal.hook = (on) => lsSet('rv_ui:calOpen', on);
   function sideShow(on) {
     $('side').classList.toggle('hidden', !on);
     setOn($('tgMap'), on);
-    calBtnUI();
     resizeAll();
   }
   $('tgMap').addEventListener('click', () => sideShow($('side').classList.contains('hidden')));
-  $('tgCal').addEventListener('click', () => {
-    if ($('side').classList.contains('hidden')) { sideShow(true); calOpen(true); return; }
-    calOpen(!$('calPane').classList.contains('open'));
-  });
+  // 조작법 (윗줄 ? · 밖 누르기 · Esc = 닫기)
+  const helpPop = $('helpPop');
+  function helpShow(on) { helpPop.hidden = !on; setOn($('bHelp'), on); }
+  $('bHelp').addEventListener('click', () => helpShow(helpPop.hidden));
+  window.addEventListener('pointerdown', (e) => { if (!helpPop.hidden && !helpPop.contains(e.target) && !$('bHelp').contains(e.target)) helpShow(false); }, true);
+  window.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !helpPop.hidden) { helpShow(false); e.stopImmediatePropagation(); } }, true);
+  // 보기 카테고리 (360 에만: 사진 넘기기 · 바로 아래 · 처음 시점 = 찍은 방향 · 45° 아래 · 90° · 북쪽 · 그림 저장)
+  $('vPrev').addEventListener('click', () => stepShot(-1));
+  $('vNext').addEventListener('click', () => stepShot(1));
+  $('vDown').addEventListener('click', () => { S.pitch = -89; dirty(); });
+  $('vHome').addEventListener('click', () => { const s = shots[S.want >= 0 ? S.want : S.cur]; if (s) S.yaw = s.yaw; S.pitch = -45; S.fov = 90; dirty(); });
+  $('vNorth').addEventListener('click', () => { S.yaw = 0; dirty(); });
+  $('vShot').addEventListener('click', shotSave);
+  // 화면 그림 저장 (360 · 겹쳐 그린 관로 포함): 프로그램 = save_image (저장 창) · 브라우저 = 내려받기 (3D 화면과 같음)
+  function shotSave() {
+    needView = false; updView(); drawGL(); drawOverlay();   // 같은 차례에서 읽음 (WebGL 그림이 지워지기 전)
+    const c = document.createElement('canvas');
+    c.width = glc.width; c.height = glc.height;
+    const g = c.getContext('2d');
+    g.fillStyle = '#000'; g.fillRect(0, 0, c.width, c.height);
+    g.drawImage(glc, 0, 0); g.drawImage(ovc, 0, 0);
+    const url = c.toDataURL('image/png'), d = new Date(), z2 = (v) => String(v).padStart(2, '0'), s = shots[S.cur];
+    const name = String(PRJ.title || '로드뷰').replace(/[\\/:*?"<>|]+/g, '_') + '_' + (s ? s.id + '_' : '') + d.getFullYear() + z2(d.getMonth() + 1) + z2(d.getDate()) + '_' + z2(d.getHours()) + z2(d.getMinutes()) + '.png';
+    if (HOST()) {
+      hostCall('save_image', { name: name, data: url }).then((r) => {
+        if (r && r.ok) toast('저장 · ' + r.path, () => hostCall('copy_text', String(r.path)).then(() => toast('복사됨'), () => copyText(String(r.path))));
+        else if (r) toast(r.msg || '저장 안 됨');
+      }, (e) => toast(errText(e)));
+    } else {
+      const a = document.createElement('a');
+      a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
+      toast('내려받기 · ' + name);
+    }
+  }
 
   // ---------------------------------------------------------------- 터파기 설정 창
   // 고칠 때마다 단면 그림과 360 (터파기 구덩이 · 영역 테두리) 을 바로 다시 그린다. 값은 프로젝트 설정 (맞춤과 같이 저장).
@@ -2820,6 +3066,7 @@
   // ctx = 관 정보 칸에서 연 그 자리 단면 { src, k, t } (실제 표고 · 가시설) · 없으면 고른 관경 · 평균매설깊이 (관경을 바꾸면 이것으로)
   let secCtx = null;
   function secShow(on, ctx) {
+    if (on && RV && !$('rvDlg').hidden) rvShow(false); // 같은 자리 창 (하천 종단) 은 닫음
     secDlg.hidden = !on;
     setOn($('tgSec'), on);
     secCtx = on && ctx ? ctx : null;
@@ -3085,9 +3332,7 @@
       });
       inp.addEventListener('change', updCalUI);
     });
-    $('calHead').addEventListener('click', () => calOpen(!$('calPane').classList.contains('open')));
-    if (lsGet('rv_ui:calOpen')) $('calPane').classList.add('open');
-    calBtnUI();
+    // 맞춤 칸 펴고 접기 = 오른쪽 칸 카테고리 틀 (머리줄 calHead · 기억 rv_360:cats · 옛 rv_ui:calOpen 도 같이 적음)
     $('calReset').addEventListener('click', () => {
       const vid = curVid();
       CAL_F.forEach((k) => setCal(vid, k, 0));
@@ -3463,8 +3708,8 @@
           fillP.moveTo(pg[0][0], pg[0][1]); pg.slice(1).forEach((p) => fillP.lineTo(p[0], p[1])); fillP.closePath();
           edgeP.moveTo(L1[0], L1[1]); edgeP.lineTo(L2[0], L2[1]);
           edgeP.moveTo(R1[0], R1[1]); edgeP.lineTo(R2[0], R2[1]);
-          if (j === 0 && T.c.wall[0]) { edgeP.moveTo(L1[0], L1[1]); edgeP.lineTo(R1[0], R1[1]); }
-          if (j === T.m - 2 && T.c.wall[1]) { edgeP.moveTo(L2[0], L2[1]); edgeP.lineTo(R2[0], R2[1]); }
+          if (j === 0 && T.wall[0]) { edgeP.moveTo(L1[0], L1[1]); edgeP.lineTo(R1[0], R1[1]); }
+          if (j === T.m - 2 && T.wall[1]) { edgeP.moveTo(L2[0], L2[1]); edgeP.lineTo(R2[0], R2[1]); }
           any = true;
         }
       }
@@ -3493,6 +3738,42 @@
           mapSub(L, q.a, q.b, k, ox, oy);
           mx.strokeStyle = 'rgba(8, 10, 14, 0.75)'; mx.lineWidth = lw + 2.5; mx.stroke();
           mx.strokeStyle = SHORE_COL[q.t]; mx.lineWidth = lw; mx.stroke();
+        }
+      }
+      mx.lineCap = 'round';
+    }
+    // 하천 추진 · 횡단 (관 밑 굵은 띠 · 공법 색 · 추진 = 점선) + 수직구 테두리 · 보이는 단계 가물막이 둑 (땅 위 자리)
+    if (S.pipes && RV) {
+      mx.lineCap = 'butt';
+      const mp = (x, y) => { const m = en2m(x, y); return [m[0] * k + ox, m[1] * k + oy]; };
+      for (const L of lines) {
+        if (!L.mx || !L.river.length) continue;
+        const lw = clamp(L.dia * 10, 2, 8) + 7;
+        for (const q of L.river) {
+          mx.beginPath();
+          mapSub(L, q.a, q.b, k, ox, oy);
+          mx.setLineDash(q.k === 'jack' ? [7, 4] : []);
+          mx.strokeStyle = 'rgba(8, 10, 14, 0.75)'; mx.lineWidth = lw + 2.5; mx.stroke();
+          mx.strokeStyle = RV_COL[q.k]; mx.lineWidth = lw; mx.stroke();
+        }
+        mx.setLineDash([]);
+        if (!SIM) continue;
+        for (const pl of rvPlans(L)) {
+          if (!Number.isFinite(pl.gMin)) continue;
+          mx.beginPath();
+          const ring = (ps) => { ps.forEach((p, i) => { const s = mp(p[0], p[1]); if (i) mx.lineTo(s[0], s[1]); else mx.moveTo(s[0], s[1]); }); };
+          if (pl.k === 'jack') {
+            for (const sh of pl.shafts) {
+              const c = [];
+              if (sh.shape === 'rect') {
+                const hl = sh.l / 2, hw = sh.w / 2;
+                for (const [u, v] of [[-hl, -hw], [hl, -hw], [hl, hw], [-hl, hw], [-hl, -hw]]) c.push([sh.x + sh.tx * u - sh.ty * v, sh.y + sh.ty * u + sh.tx * v]);
+              } else for (let i = 0; i <= 36; i++) { const t = i / 36 * 2 * Math.PI; c.push([sh.x + sh.w / 2 * Math.cos(t), sh.y + sh.w / 2 * Math.sin(t)]); }
+              ring(c);
+            }
+          } else for (const lg of pl.stages[pl.q.st - 1].legs) ring(lg.pts);
+          mx.strokeStyle = 'rgba(8, 10, 14, 0.75)'; mx.lineWidth = 3.6; mx.stroke();
+          mx.strokeStyle = RV_COL[pl.k]; mx.lineWidth = 1.8; mx.stroke();
         }
       }
       mx.lineCap = 'round';
@@ -3982,12 +4263,12 @@
     toast('점 모두 지움');
   });
 
-  // ---------------------------------------------------------------- 프로그램 창: [관로 넣기] · [내보내기]
+  // ---------------------------------------------------------------- 프로그램 창: [관로 넣기] · [지장물 넣기] (관로 카테고리)
   const dlgBack = $('dlgBack');
   function dlgOpen() { return !dlgBack.hidden; }
   function dlgShow(id) {
     dlgBack.hidden = false;
-    ['pipeDlg', 'obstDlg', 'expDlg'].forEach((k) => { $(k).hidden = k !== id; });
+    ['pipeDlg', 'obstDlg'].forEach((k) => { $(k).hidden = k !== id; });
   }
   function dlgClose() { dlgBack.hidden = true; }
   dlgBack.addEventListener('click', (e) => { if (e.target === dlgBack) dlgClose(); });
@@ -4075,7 +4356,9 @@
     }).catch((e) => { pmBusy(false); pmMsg(errText(e)); });
   });
 
-  // 내보내기: 웹 주소 (export_web → job 을 0.5 초마다) · 폴더 (export_folder)
+  // 웹 공유 카테고리 (JACK 1126 «웹 공유 따로» · NAS · 프로그램 안에서만): 올리기 (export_web → job 을 0.5 초마다 → 진행 막대) · 주소 복사 · 열기 · 상태
+  // 상태 = 프로그램의 올린 기록 (list_shares · 열쇠 = 프로젝트 폴더) 에서 이 폴더를 찾음 · 없으면 «올리기 전» (3D 화면 map3d.js 와 같음)
+  // 결과물 카테고리: 폴더로 내보내기 (export_folder)
   const EX = { job: null, folder: false };
   function exState(st, pct, line, url) {
     $('exProg').hidden = false;
@@ -4083,9 +4366,9 @@
     $('exLine').textContent = line || '';
     $('exProg').classList.toggle('fail', st === 'fail');
     $('exProg').classList.toggle('done', st === 'done');
+    $('exProg').dataset.st = st;
     $('exWeb').disabled = st === 'run';
-    $('exDone').hidden = st !== 'done' || !url;
-    if (st === 'done' && url) $('exUrl').value = String(url);
+    if (st === 'done' && url) webSet(String(url), 0);
   }
   function exPoll() {
     setTimeout(() => {
@@ -4097,9 +4380,39 @@
       }, (e) => { EX.job = null; exState('fail', 0, errText(e)); });
     }, 500);
   }
-  $('hExport').addEventListener('click', () => dlgShow('expDlg'));
+  function projDir() { // 이 로드뷰 폴더 (file:// 일 때만 · 올린 기록의 열쇠)
+    try {
+      if (location.protocol !== 'file:') return '';
+      let p = decodeURIComponent(location.pathname).replace(/\/[^/]*$/, '');
+      if (/^\/[A-Za-z]:/.test(p)) p = p.slice(1);
+      return (location.host ? '//' + location.host : '') + p;
+    } catch (e) { return ''; }
+  }
+  const normPath = (s) => String(s || '').replace(/[\\/]+/g, '/').replace(/\/$/, '').toLowerCase();
+  function webSet(url, n) {
+    const u = String(url || ''), st = $('webState');
+    $('exUrl').value = u;
+    $('exDone').hidden = !u;
+    $('exCopy').disabled = !u; $('exOpen').disabled = !u;
+    st.textContent = u ? '올림' + (n ? ' · 파일 ' + n + '개' : '') : '올리기 전';
+    st.classList.toggle('on', !!u);
+    $('webTag').textContent = u ? '올림' : '';
+    $('exWeb').querySelector('span').textContent = u ? '다시 올리기' : '올리기';
+  }
+  function webGet() {
+    const h = HOST(), me = normPath(projDir());
+    if (!h || typeof h.list_shares !== 'function' || !me || EX.job != null) return Promise.resolve(null);
+    return Promise.resolve().then(() => h.list_shares()).then((L) => {
+      const hit = (Array.isArray(L) ? L : []).find((x) => x && normPath(x.path) === me);
+      if (hit && hit.url) webSet(hit.url, hit.files); else if (!$('exUrl').value) webSet('', 0);
+      return hit || null;
+    }, () => null);
+  }
+  CAT.web.hook = (on) => { if (on) webGet(); };
+  window.addEventListener('pywebviewready', webGet);
   $('exWeb').addEventListener('click', () => {
     if (EX.job != null) return;
+    if (!catIs('web')) catSet('web', true);
     $('exDone').hidden = true;
     exState('run', 0, '준비');
     pipesFlush().then(() => hostCall('export_web')).then((r) => {
@@ -4114,6 +4427,9 @@
     if (!u) return;
     hostCall('copy_text', u).then((r) => { if (r && r.ok !== false) toast('주소 복사됨'); else copyText(u); }, () => copyText(u));
   });
+  $('exOpen').addEventListener('click', () => { const u = $('exUrl').value; if (u) hostCall('open_url', u).catch(() => copyText(u)); });
+  webSet('', 0);
+  webGet();
   $('exFolder').addEventListener('click', () => {
     if (EX.folder) return;
     const b = $('exFolder'), done = () => { EX.folder = false; b.disabled = false; b.textContent = '폴더로 내보내기'; };
@@ -4199,6 +4515,12 @@
       l.shore = l.shore.filter((q) => q && isNum(q.a) && isNum(q.b)).map((q) => ({ a: round(clamp(Math.min(+q.a, +q.b), 0, len), 2), b: round(clamp(Math.max(+q.a, +q.b), 0, len), 2), t: q.t }))
         .filter((q) => q.b - q.a >= 0.01);
       if (!l.shore.length) delete l.shore;
+    }
+    if (Array.isArray(l.river) && RV) { // 하천 구간도 새 관 길이 안으로 (너무 짧아지면 뺌 · 3D 화면과 같음)
+      let len = 0;
+      for (let i = 1; i < pts.length; i++) len += Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]);
+      l.river = l.river.map((q) => RV.clean(q, len)).filter((q) => q);
+      if (!l.river.length) delete l.river;
     }
   }
   // 고른 그리기 줄 (관로 고치기 · 없으면 null)
@@ -4608,7 +4930,7 @@
   // SHP 로 내보내기 (프로그램만): 아직 안 쓴 고침을 먼저 저장 → export_pipes_shp
   function edShp() {
     if (!HOST() || ED.shpBusy) return;
-    const bs = [$('edShp'), $('pmShpOut')];
+    const bs = [$('edShp'), $('pmShpOut'), $('bShpOut')];
     const busy = (on) => { ED.shpBusy = on; bs.forEach((b) => { b.disabled = on; }); };
     busy(true);
     pipesFlush().then(() => hostCall('export_pipes_shp')).then((r) => {
@@ -4623,6 +4945,7 @@
   $('edEnd').addEventListener('click', () => edMode(false));
   $('edShp').addEventListener('click', edShp);
   $('pmShpOut').addEventListener('click', edShp);
+  $('bShpOut').addEventListener('click', edShp);   // 관로 카테고리 [SHP 내보내기]
   $('edDrop').addEventListener('click', () => toast('고친 관로 모두 버리기', edDiscard, '버리기'));
   const homeCal = beforeHome;
   beforeHome = () => Promise.all([homeCal(), pipesFlush()]); // [처음] 전에 안 쓴 고침도 저장
@@ -4656,14 +4979,15 @@
   // [가시설] → 종류 (조립식 간이흙막이 · 토류벽 흙막이 · 시트파일) → 관 위 시작점 → 같은 관 끝점 (360 · 지도) → RV_PIPES.lines[i].shore 에 { a, b, t }.
   // 측점 = 그 줄 첫 점부터 평면 길이 (0.01 m) · 저장 · 되돌리기 = 관로 고치기와 같음 (프로그램 save_pipes · 밖 = 이 브라우저).
   // 겹치면 새 구간이 이김 (옛 구간을 자름) · Esc = 찍던 것 취소.
+  // 가시설 카테고리 (머리줄 tgShore · 몸 shBox): 펴고 접기 = 카테고리 틀 · 접으면 찍던 것 취소
   const shBox = $('shBox'), shChip = $('shChip');
-  function shOpen(on) {
-    shBox.hidden = !on;
+  CAT.shore.hook = (on) => {
     setOn($('tgShore'), on);
-    if (!on) shCancel();
+    if (!on && SH.arm && SHORE_T.indexOf(SH.arm) >= 0) shCancel(); // 하천 찍기는 하천 카테고리가
     SH.sig = '';
     shUI();
-  }
+  };
+  setOn($('tgShore'), !shBox.hidden);
   function shArm(t) {
     if (SHORE_T.indexOf(t) < 0) return;
     if (!lines.length) { toast('관로 없음'); return; }
@@ -4692,10 +5016,11 @@
     if (!SH.a) { SH.a = { src: src, s: s, e: p[0], n: p[1], g: p[3] }; shUI(); dirty(); return; }
     if (src !== SH.a.src) { toast('같은 관 누르기'); return; }
     if (Math.abs(s - SH.a.s) < 0.1) { toast('너무 짧음'); return; }
-    const a = Math.min(s, SH.a.s), b = Math.max(s, SH.a.s), t = SH.arm;
+    const a = Math.min(s, SH.a.s), b = Math.max(s, SH.a.s), t = SH.arm, s0 = SH.a.s;
     SH.arm = null;
     SH.a = null;
     [ovc, mc].forEach((el) => el.classList.remove('point'));
+    if (t.indexOf('r:') === 0) { rvAdd(src, s0, s, t.slice(2)); shUI(); dirty(); return; } // 하천 추진 · 횡단 (시점 = 처음 누른 점)
     shEdit(src, (list) => {
       const out = [];
       for (const q of list) { // 새 구간과 겹친 곳은 자름
@@ -4752,8 +5077,9 @@
     shChip.classList.toggle('show', !!arm);
     $('app').classList.toggle('shOn', !!arm);
     if (arm) {
-      $('shTip').textContent = SH.a ? '끝점' : '시작점';
-      $('shName').textContent = SHORE_NAME[arm];
+      const rk = arm.indexOf('r:') === 0 ? arm.slice(2) : ''; // 하천 추진 · 횡단 (3D 화면과 같은 안내)
+      $('shTip').textContent = rk === 'jack' ? (SH.a ? '종점 (도달구)' : '시점 (발진구)') : rk ? (SH.a ? '종점' : '시점') : SH.a ? '끝점' : '시작점';
+      $('shName').textContent = rk ? RV.NAME[rk] : SHORE_NAME[arm];
     }
     shChip.dataset.a = SH.a ? String(SH.a.s) : '';
     document.querySelectorAll('#shTypes button').forEach((b) => setOn(b, b.dataset.t === arm));
@@ -4793,15 +5119,232 @@
       box.appendChild(row);
     }
   }
-  $('tgShore').addEventListener('click', () => {
-    shOpen(shBox.hidden);
-    // 좁은 화면(휴대폰)은 오른쪽 칸이 아래로 이어짐 → 연 가시설 칸이 보이게 내림 (1124 JACK)
-    if (!shBox.hidden && window.matchMedia('(max-width: 860px)').matches) {
-      try { shBox.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); } catch (e) { shBox.scrollIntoView(false); }
-    }
-  });
+  // 좁은 화면(휴대폰)은 오른쪽 칸이 아래로 이어짐 → 편 카테고리가 보이게 내림 (1124 JACK · 카테고리 머리줄 누르기가 scrollIntoView)
   document.querySelectorAll('#shTypes button').forEach((b) => b.addEventListener('click', () => (SH.arm === b.dataset.t ? shCancel() : shArm(b.dataset.t))));
   $('shCancel').addEventListener('click', shCancel);
+
+  // ---------------------------------------------------------------- 하천 추진 · 횡단 (JACK 1126 · 3D 매핑 화면 map3d.js rv* 와 같은 꼴 · 셈 = viewer/river.js)
+  // 360 = 그리기 없음 → 불러온 관 위 두 점 (360 관 누르기 · 오른쪽 지도 관 위 누르기 · 가시설과 같은 길: SH.arm = 'r:jack' · 'r:open' · 시점 노란 고리 · Esc)
+  // 시점 = 처음 누른 점 (추진 = 발진구) · 목록 줄 누르기 = 그 구간 고름 → 설정 칸 (값 바꾸면 3D · 수량 · 종단 바로) · 새 구간 = 그 종류에 마지막으로 쓴 값 (이 PC 기억 · 3D 화면과 같은 열쇠)
+  // 저장 · 되돌리기 = 관로 고치기와 같음 (프로그램 save_pipes · 밖 = 이 브라우저) → 3D 화면에서 만든 구간도 같은 pipes.js 로 읽힘
+  const RV_DEF_KEY = 'rv_river:def';
+  const RV_COL = { jack: '#22d3ee', open: '#60a5fa' };
+  const RV_SHAPE = { rect: '사각', circ: '원형' }, RV_DAM = { bag: '톤마대', sheet: '시트파일' };
+  const RVS = { cur: null, sig: '', setK: '', setV: '', dlgSig: '' };
+  const rvName = (q) => (q.k === 'jack' ? '추진 · ' + RV_SHAPE[q.shape] : '횡단 · ' + RV_DAM[q.dam]);
+  function rvDefs() { const v = lsGet(RV_DEF_KEY); return v && typeof v === 'object' ? v : {}; }
+  const rvSame = (q, c) => !!q && Math.abs(q.a - c.a) < 1e-6 && Math.abs(q.b - c.b) < 1e-6;
+  function rvCur() {
+    const c = RVS.cur;
+    if (!c) return null;
+    const L = lines.find((x) => x.src === c.src), q = L && L.river.find((r) => rvSame(r, c));
+    return q ? { L: L, q: q } : null;
+  }
+  function rvCurPlan() { const c = rvCur(); return c ? rvPlans(c.L).find((p) => p.i === c.q.i) || null : null; }
+  // 한 줄의 하천 구간 고치기: f(옛 목록) → 새 목록 → river.js clean · 측점 차례 → 저장 · 되돌리기 · 다시 그림
+  function rvEdit(src, f) {
+    const raw = window.RV_PIPES && Array.isArray(window.RV_PIPES.lines) ? window.RV_PIPES.lines[src] : null;
+    if (!raw || !RV) return;
+    const before = JSON.stringify(raw);
+    const next = f((Array.isArray(raw.river) ? raw.river : []).map((q) => Object.assign({}, q))).map((q) => RV.clean(q)).filter((q) => q).sort((p, q) => p.a - q.a);
+    if (next.length) raw.river = next; else delete raw.river;
+    const after = JSON.stringify(raw);
+    if (after === before) return;
+    edPut(src);
+    edCommit(src, before, after);
+    RVS.sig = '';
+  }
+  function rvArm(k) {
+    if (!RV || RV.KINDS.indexOf(k) < 0) return;
+    if (!lines.length) { toast('관로 없음'); return; }
+    if (ED.on) edMode(false);
+    if (AL.on) alMode(false);
+    if (!S.pipes) setPipes(true);
+    SH.arm = 'r:' + k;
+    SH.a = null;
+    cardHide();
+    shUI();
+    rvUI();
+    dirty();
+  }
+  function rvAdd(src, s0, s1, k) {
+    const L = lines.find((x) => x.src === src);
+    const q = L && RV.fresh(k, Math.min(s0, s1), Math.min(Math.max(s0, s1), L.len), rvDefs()[k]);
+    if (!q) { toast('너무 짧음'); return; }
+    if (k === 'jack') q.rev = s0 > s1;                                  // 시점 (처음 누른 점) = 발진구
+    rvEdit(src, (list) => list.filter((r) => !(Math.max(+r.a, +r.b) > q.a && Math.min(+r.a, +r.b) < q.b)).concat([q]));   // 겹친 옛 구간은 뺌
+    RVS.cur = { src: src, a: q.a, b: q.b };
+    if (!catIs('river')) catSet('river', true);
+    rvUI();
+    const pl = rvCurPlan();
+    toast(RV.NAME[k] + ' · ' + (q.b - q.a).toFixed(2) + ' m' + (pl && !pl.ok ? ' · ' + pl.msg : ''));
+  }
+  function rvSet(patch) {
+    const c = rvCur();
+    if (!c) return;
+    rvEdit(c.L.src, (list) => list.map((r) => (rvSame(RV.clean(r, c.L.len), c.q) ? Object.assign(r, patch) : r)));
+    const n = rvCur();
+    if (n) {                                                             // 이 종류 새 구간 기본값 = 지금 값
+      const d = rvDefs(), keep = Object.assign({}, n.q);
+      ['a', 'b', 'i', 'k', 'rev'].forEach((x) => { delete keep[x]; });
+      d[n.q.k] = keep;
+      lsSet(RV_DEF_KEY, d);
+    }
+    rvUI();
+  }
+  function rvDel(L, q) {
+    rvEdit(L.src, (list) => list.filter((r) => !rvSame(RV.clean(r, L.len), q)));
+    if (RVS.cur && RVS.cur.src === L.src && rvSame(q, RVS.cur)) RVS.cur = null;
+    rvUI();
+  }
+  function rvGo(L, q) { // 목록에서 누름: 그 구간 가운데를 봄 (가까운 사진에서 그쪽으로)
+    const p = pickPoint(L, lineAtS(L, (q.a + q.b) / 2));
+    cfGo({ e: p[0], n: p[1], g: p[3] });
+  }
+  // 설정 칸 (고른 구간) = [열쇠, 이름, 단계, 단위, 설명] · 사각 = 폭 × 길이 두 칸 (3D 화면과 같음)
+  const RV_F = {
+    jack: [['cover', '토피', 0.1, 'm', '하상 (구간 가장 낮은 땅) → 관 윗면 · 관은 수평'], ['base', '기초 여유', 0.1, 'm', '관 바닥 → 수직구 바닥'],
+      ['cas', '케이싱 Ø', 0.05, 'm', '강관 케이싱 바깥지름 · 0 = 관 바깥지름 + 0.2 m']],
+    rect: [[['lw', 'll'], '발진', 0.5, 'm', '발진구 내공 폭 × 길이 (길이 = 관 방향)'], [['aw', 'al'], '도달', 0.5, 'm', '도달구 내공 폭 × 길이 (길이 = 관 방향)']],
+    circ: [['ld', '발진 Ø', 0.5, 'm', '발진구 안지름 (라이너 플레이트)'], ['ad', '도달 Ø', 0.5, 'm', '도달구 안지름 (라이너 플레이트)']],
+    open: [['cover', '토피', 0.1, 'm', '하상 (구간 가장 낮은 땅) → 관 윗면 · 관은 수평'], ['h', '높이', 0.1, 'm', '가물막이 천단 = 구간 가장 낮은 땅 + 높이 (수평)'],
+      ['w', '간격', 0.5, 'm', '관 → 가물막이 둑 (양쪽 · 물 흐름은 관에 직각)']],
+    sheet: [['emb', '근입', 0.5, 'm', '시트파일 땅속 길이']],
+  };
+  const RV_IN = {};
+  function rvChips(lab, items, title) {
+    const row = document.createElement('div');
+    row.className = 'lrow';
+    const k = document.createElement('span'); k.className = 'lk'; k.textContent = lab;
+    const ch = document.createElement('div'); ch.className = 'chips';
+    items.forEach(([id, t, fn, tt]) => {
+      const b = document.createElement('button');
+      b.type = 'button'; b.className = 'tg'; b.id = id; b.textContent = t; b.title = tt || title || t;
+      b.addEventListener('click', fn);
+      ch.appendChild(b);
+    });
+    row.append(k, ch);
+    return row;
+  }
+  function rvNum(spec) {
+    const [key, name, step, unit, title] = spec, keys = Array.isArray(key) ? key : [key];
+    const lab = document.createElement('label');
+    lab.className = 'numbox'; lab.title = title;
+    lab.appendChild(document.createTextNode(name));
+    keys.forEach((k, i) => {
+      if (i) { const x = document.createElement('span'); x.className = 'xx'; x.textContent = '×'; lab.appendChild(x); }
+      const inp = document.createElement('input');
+      inp.type = 'number'; inp.step = String(step); inp.id = 'rv_' + k; inp.inputMode = 'decimal';
+      inp.min = String(RV.LIM[k][0]); inp.max = String(RV.LIM[k][1]);
+      inp.addEventListener('input', () => { if (isNum(inp.value)) rvSet({ [k]: Number(inp.value) }); });
+      inp.addEventListener('change', () => { RVS.setV = ''; rvUI(); });
+      RV_IN[k] = inp;
+      lab.appendChild(inp);
+    });
+    lab.appendChild(document.createTextNode(unit));
+    return lab;
+  }
+  function rvSetUI(cur) {
+    const box = $('rvSet');
+    if (!cur) { box.hidden = true; RVS.setK = ''; return; }
+    const q = cur.q, sk = [cur.L.src, q.a, q.b, q.k, q.shape, q.dam].join(':');
+    box.hidden = false;
+    if (RVS.setK !== sk) {
+      RVS.setK = sk; RVS.setV = '';
+      box.textContent = '';
+      Object.keys(RV_IN).forEach((k) => { delete RV_IN[k]; });
+      if (q.k === 'jack') {
+        box.appendChild(rvChips('수직구', [['rvRect', '사각', () => rvSet({ shape: 'rect' }), '사각 = H-파일 + 토류판'], ['rvCirc', '원형', () => rvSet({ shape: 'circ' }), '원형 = 라이너 플레이트'],
+          ['rvRev', '발진 ⇄', () => { const c = rvCur(); if (c) rvSet({ rev: !c.q.rev }); }, '발진구 · 도달구 바꾸기']]));
+        RV_F.jack.concat(RV_F[q.shape]).forEach((f) => box.appendChild(rvNum(f)));
+      } else {
+        box.appendChild(rvChips('가물막이', [['rvBag', '톤마대', () => rvSet({ dam: 'bag' })], ['rvSheet', '시트파일', () => rvSet({ dam: 'sheet' })]]));
+        box.appendChild(rvChips('단계', [['rvSt1', '1단계', () => rvSet({ st: 1 }), '1단계 = 시점 둑 → 가운데 (반폭)'], ['rvSt2', '2단계', () => rvSet({ st: 2 }), '2단계 = 가운데 → 종점 둑 (반폭)']]));
+        RV_F.open.concat(q.dam === 'sheet' ? RV_F.sheet : []).forEach((f) => box.appendChild(rvNum(f)));
+      }
+    }
+    const pl = rvCurPlan(), vs = JSON.stringify(q) + '|' + (pl ? pl.cas : '');
+    if (RVS.setV === vs) return;
+    RVS.setV = vs;
+    Object.keys(RV_IN).forEach((k) => {
+      const inp = RV_IN[k];
+      if (document.activeElement === inp) return;
+      inp.value = String(round(k === 'cas' && pl && pl.cas ? pl.cas : q[k], 3));
+    });
+    const on = (id, v) => { const b = $(id); if (b) setOn(b, v); };
+    on('rvRect', q.shape === 'rect'); on('rvCirc', q.shape === 'circ'); on('rvBag', q.dam === 'bag'); on('rvSheet', q.dam === 'sheet'); on('rvSt1', q.st === 1); on('rvSt2', q.st === 2);
+    const rv = $('rvRev');
+    if (rv) rv.title = '발진구 · 도달구 바꾸기 (지금 발진 = ' + (q.rev ? '종점' : '시점') + ')';
+  }
+  // 종류 단추 · 머리줄 수 · 목록 (바뀐 때만 다시) · 설정 칸 · 열린 종단 창 (그림마다 · 지문으로 거름)
+  function rvUI() {
+    if (!RV) return;
+    const arm = SH.arm && SH.arm.indexOf('r:') === 0 ? SH.arm.slice(2) : '';
+    document.querySelectorAll('#rvKinds [data-k]').forEach((b) => setOn(b, b.dataset.k === arm));
+    const rows = [];
+    for (const L of lines) for (const q of L.river) rows.push([L, q]);
+    const tg = $('rvTag'), tt = rows.length ? String(rows.length) : '';
+    if (tg.textContent !== tt) tg.textContent = tt;
+    if (RVS.cur && !rvCur()) RVS.cur = null;
+    const cur = rvCur();
+    const sig = rows.map(([L, q]) => [L.src, q.a, q.b, q.k, q.shape, q.dam].join(':')).join('|') + '#' + (cur ? [cur.L.src, cur.q.a, cur.q.b].join(':') : '');
+    if (sig !== RVS.sig) {
+      RVS.sig = sig;
+      const box = $('rvList');
+      box.textContent = '';
+      for (const [L, q] of rows) {
+        const row = document.createElement('div');
+        row.className = 'shRow' + (cur && cur.q === q ? ' sel' : '');
+        row.style.setProperty('--c', RV_COL[q.k]);
+        Object.assign(row.dataset, { src: L.src, a: q.a, b: q.b, k: q.k });
+        const go = document.createElement('button');
+        go.type = 'button'; go.className = 'shGo'; go.title = '고르기 · 그쪽 보기';
+        go.textContent = (L.label || dTxt(L.dia)) + ' · ' + rvName(q) + ' · ' + (q.b - q.a).toFixed(2) + ' m';
+        go.addEventListener('click', () => { RVS.cur = { src: L.src, a: q.a, b: q.b }; rvUI(); rvGo(L, q); });
+        const del = document.createElement('button');
+        del.type = 'button'; del.className = 'shDel'; del.title = '지우기'; del.setAttribute('aria-label', '하천 구간 지우기'); del.textContent = '×';
+        del.addEventListener('click', () => rvDel(L, q));
+        row.append(go, del);
+        box.appendChild(row);
+      }
+    }
+    rvSetUI(cur);
+    if (!$('rvDlg').hidden) rvDlgDraw();
+  }
+  function rvShow(on) {
+    if (on && !rvCur()) { const L = lines.find((x) => x.river && x.river.length); if (L) RVS.cur = { src: L.src, a: L.river[0].a, b: L.river[0].b }; }
+    if (on && !rvCur()) { toast('하천 구간 없음 · 추진 · 횡단 → 관 위 두 점'); on = false; }
+    $('rvDlg').hidden = !on;
+    setOn($('rvSec'), on);
+    if (on) { if (!secDlg.hidden) secShow(false); RVS.dlgSig = ''; rvUI(); }
+  }
+  // 종단 창 (river.js svg · rows · 터파기 설정 창과 같은 자리)
+  function rvDlgDraw() {
+    const c = rvCur(), pl = rvCurPlan();
+    if (!c || !pl) { rvShow(false); return; }
+    const sig = [pipeGen, selGen, c.L.src, c.q.a, c.q.b].join('|');
+    if (sig === RVS.dlgSig) return;
+    RVS.dlgSig = sig;
+    const g = RV.svg(pl, { W: 380, col: c.L.color }), svg = $('rvSvg');
+    svg.setAttribute('viewBox', '0 0 ' + g.w + ' ' + g.h);
+    svg.innerHTML = g.body;
+    $('rvDTag').textContent = rvName(c.q) + ' · ' + (c.q.b - c.q.a).toFixed(2) + ' m';
+    const box = $('rvRows');
+    box.textContent = '';
+    for (const [k, v] of RV.rows(pl)) {
+      const a = document.createElement('span'), b = document.createElement('span');
+      a.className = 'k'; a.textContent = k; b.className = 'v'; b.textContent = v;
+      box.append(a, b);
+    }
+    Object.assign($('rvDlg').dataset, { k: c.q.k, a: c.q.a, b: c.q.b });
+  }
+  if (RV) {
+    CAT.river.hook = (on) => { if (!on && SH.arm && SH.arm.indexOf('r:') === 0) shCancel(); RVS.sig = ''; RVS.setK = ''; rvUI(); };
+    document.querySelectorAll('#rvKinds [data-k]').forEach((b) => b.addEventListener('click', () => (SH.arm === 'r:' + b.dataset.k ? shCancel() : rvArm(b.dataset.k))));
+    $('rvSec').addEventListener('click', () => rvShow($('rvDlg').hidden));
+    $('rvX').addEventListener('click', () => rvShow(false));
+    rvUI();
+  } else { CAT.river.sec.hidden = true; $('qkRiver').hidden = true; }   // river.js 못 읽음 = 하천 카테고리 · 수량 갈래 숨김
 
   // ---------------------------------------------------------------- 지장물 (data/obstacles.js, 없어도 됨 · 고치지 않음 · 터파기 없음)
   // RV_OBST = { layers: [{ name, color }], lines: [{ layer, kind, label, dia (m | null), depth (m | null = 지표 → 윗면), pts: [[e, n, null]], g, ll }], defaultDepth }
@@ -4957,13 +5500,19 @@
   // 연장 = 평면 길이 · 터파기 = 단면적 (포장 직각 2·wv·tp + 기울기 사다리꼴 wb ~ wv · 포장이 바닥보다 깊으면 2·wb·깊이) 을
   // 꼭짓점 사이 심프슨으로 적분 (가시설 구간 = 기울기 0 · 구간 끝에서 나눔) · 포장 깨기 = ∫ 2·wv · 모래 기초 = 2·wb·bed · 연장 · 되메우기 = 터파기 − 관 부피 − 모래.
   // 땅 높이는 사진과 무관하게 (g, 없으면 groundAt) · 관 끝 더 판 곳 · 꺾인 곳 겹침은 넣지 않음.
-  const QT = { on: false, memo: new WeakMap(), row: {}, txt: new Map(), cfv: -1 };
+  // 수량 카테고리 = 갈래 단추 (전체 · 관로 · 토공 · 포장 · 점용 · 가시설) → 아래 표 (그 갈래 줄만 · 이 관 / 전체) · 같은 단추 다시 = 닫기 (3D 화면과 같음)
+  const QT = { on: false, view: 'all', memo: new WeakMap(), row: {}, rowEl: {}, txt: new Map() };
   // 지장물 간섭 상태 (아래 «지장물 간섭»): gap = 이격 기준 m (이 브라우저에 기억) · list = 간섭 자리
   const CF_KEY = 'rv_gap:' + String(PRJ.title || 'project'), CF_CELL = 10, CF_STEP = 0.5;
   const CF = { gap: 0.3, list: [], of: null, key: '', t: 0, ver: 0, memo: new WeakMap(), grid: null, gridOf: -1 };
   if (isNum(lsGet(CF_KEY))) CF.gap = clamp(Number(lsGet(CF_KEY)), 0, 5);
   const Q_ROWS = [['len', '연장', 'm'], ['cut', '터파기', 'm³'], ['pav', '포장 깨기', 'm²'], ['sand', '모래 기초', 'm³'], ['fill', '되메우기', 'm³'],
-    ['tmp', '임시점용', 'm²'], ['perm', '영구점용', 'm²']];
+    ['tmp', '임시점용', 'm²'], ['perm', '영구점용', 'm²']].concat(SHORE_T.map((t) => ['sh_' + t, { panel: '간이흙막이', hpile: '토류벽', sheet: '시트파일' }[t], 'm']));
+  const RV_Q = RV ? RV.QROWS.map(([k, n, u]) => ['rv_' + k, n, u]) : [];          // 하천 추진 · 횡단 (river.js qty · 3D 화면과 같은 줄)
+  const RV_QINT = new Set(['rv_shaft', 'rv_hp', 'rv_bag']);                        // 개수 = 소수 없이
+  Q_ROWS.push(...RV_Q);
+  const Q_KIND = { all: ['수량', null], pipe: ['관로', ['len']], earth: ['토공', ['cut', 'sand', 'fill']], pave: ['포장', ['pav']], occ: ['점용', ['tmp', 'perm']],
+    shore: ['가시설', SHORE_T.map((t) => 'sh_' + t)], river: ['하천', RV_Q.map((r) => r[0])] };
   function gQ(L, k) { const g = L.g[k]; return Number.isFinite(g) ? g : groundAt(L.pts[k * 3], L.pts[k * 3 + 1]); }
   function zcQ(L, k) { const z = L.pts[k * 3 + 2]; return L.hasZ && Number.isFinite(z) ? z : gQ(L, k) - S.cover - L.dia / 2; }
   function secQ(D, g, zc, n) { // → [단면적 m², 지표 반폭 wv] · n = 기울기 (가시설 구간 = 0)
@@ -4976,26 +5525,34 @@
     const m = QT.memo.get(L);
     if (m && m.key === key) return m.q;
     const P = L.pts, D = L.dia, cnt = P.length / 3, C = L.cum;
-    let len = 0, cut = 0, pav = 0, g0 = gQ(L, 0), z0 = zcQ(L, 0);
+    let len = 0, tlen = 0, cut = 0, pav = 0, g0 = gQ(L, 0), z0 = zcQ(L, 0);
+    const rp = rvPlans(L); // 하천: 추진 = 터파기 없음 · 횡단 = 관 깊이 = 하천 깊이 (3D 화면과 같음)
     for (let k = 1; k < cnt; k++) {
       const g1 = gQ(L, k), z1 = zcQ(L, k), l = Math.hypot(P[k * 3] - P[k * 3 - 3], P[k * 3 + 1] - P[k * 3 - 2]);
       if (l > 0) {
-        const ts = [0, 1]; // 가시설 구간 끝에서 나눔 (구간 안 = 기울기 0)
-        for (const q of L.shore) for (const s of [q.a, q.b]) if (s > C[k - 1] + 1e-9 && s < C[k] - 1e-9) ts.push((s - C[k - 1]) / l);
+        const ts = [0, 1]; // 가시설 · 하천 구간 끝에서 나눔 (가시설 안 = 기울기 0)
+        for (const q of L.shore.concat(rp)) for (const s of [q.a, q.b]) if (s > C[k - 1] + 1e-9 && s < C[k] - 1e-9) ts.push((s - C[k - 1]) / l);
         ts.sort((a, b) => a - b);
         for (let i = 0; i + 1 < ts.length; i++) {
-          const ta = ts[i], tb = ts[i + 1], tm = (ta + tb) / 2, h = (tb - ta) * l;
-          const n = shoreAt(L, C[k - 1] + tm * l) ? 0 : TR.n, sq = (t) => secQ(D, g0 + (g1 - g0) * t, z0 + (z1 - z0) * t, n);
+          const ta = ts[i], tb = ts[i + 1], tm = (ta + tb) / 2, h = (tb - ta) * l, sm = C[k - 1] + tm * l;
+          const rq = rp.length ? rp.find((p) => sm > p.a && sm < p.b) : null, rz = rq && Number.isFinite(rq.zc) ? rq.zc : null;
+          if (rq && rq.k === 'jack') continue;
+          const n = shoreAt(L, sm) ? 0 : TR.n, sq = (t) => secQ(D, g0 + (g1 - g0) * t, rz == null ? z0 + (z1 - z0) * t : rz, n);
           const A = sq(ta), M = sq(tm), B = sq(tb);
           cut += h / 6 * (A[0] + 4 * M[0] + B[0]);
           pav += h / 3 * (A[1] + 4 * M[1] + B[1]);
+          tlen += h;
         }
         len += l;
       }
       g0 = g1; z0 = z1;
     }
-    const sand = 2 * (D / 2 + TR.margin) * TR.bed * len, pipe = Math.PI * D * D / 4 * len;
+    const sand = 2 * (D / 2 + TR.margin) * TR.bed * tlen, pipe = Math.PI * D * D / 4 * tlen; // 터파기 길이만 (추진 구간 빼고)
     const q = { len: len, cut: cut, pav: pav, sand: sand, fill: cut - pipe - sand, tmp: pav, perm: D * len }; // 임시점용 = 터파기 위 폭 × 길이 · 영구점용 = 관 바깥지름 × 길이
+    SHORE_T.forEach((t) => { q['sh_' + t] = 0; });
+    for (const s of L.shore) if (q['sh_' + s.t] != null) q['sh_' + s.t] += s.b - s.a;     // 가시설 연장 (관 측점 구간 b − a)
+    RV_Q.forEach(([k]) => { q[k] = 0; });
+    for (const pl of rp) { const z = RV.qty(pl); RV.QROWS.forEach(([k]) => { q['rv_' + k] += z[k]; }); }   // 하천 (구간마다 river.js)
     QT.memo.set(L, { key: key, q: q });
     return q;
   }
@@ -5017,33 +5574,34 @@
   }
   function qTxt(el, t) { if (QT.txt.get(el) !== t) { QT.txt.set(el, t); el.textContent = t; } }
   const qFmt = (v) => (Number.isFinite(v) ? v.toLocaleString('ko-KR', { minimumFractionDigits: 1, maximumFractionDigits: 1 }) : '-');
+  const qFmt0 = (v) => (Number.isFinite(v) ? Math.round(v).toLocaleString('ko-KR') : '-');
   function qtyUI() {
-    const L = qtyLine(), one = L ? lineQty(L) : null, tot = { len: 0, cut: 0, pav: 0, sand: 0, fill: 0, tmp: 0, perm: 0 };
+    const L = qtyLine(), one = L ? lineQty(L) : null, tot = {};
+    Q_ROWS.forEach(([k]) => { tot[k] = 0; });
     lines.forEach((M) => { const q = lineQty(M); Q_ROWS.forEach(([k]) => { tot[k] += q[k]; }); });
     qTxt($('qLine'), L ? L.label || 'D' + Math.round(L.dia * 1000) : '관로 없음');
     Q_ROWS.forEach(([k]) => {
-      const [a, b] = QT.row[k], va = String(one ? one[k] : NaN), vb = String(lines.length ? tot[k] : NaN);
-      if (a.dataset.v !== va) { a.dataset.v = va; a.textContent = qFmt(Number(va)); } // data-v = 반올림 전 값
-      if (b.dataset.v !== vb) { b.dataset.v = vb; b.textContent = qFmt(Number(vb)); }
+      const [a, b] = QT.row[k], va = String(one ? one[k] : NaN), vb = String(lines.length ? tot[k] : NaN), fm = RV_QINT.has(k) ? qFmt0 : qFmt;
+      if (a.dataset.v !== va) { a.dataset.v = va; a.textContent = fm(Number(va)); } // data-v = 반올림 전 값
+      if (b.dataset.v !== vb) { b.dataset.v = vb; b.textContent = fm(Number(vb)); }
     });
-    qTxt($('qNote'), ['tp', 'n', 'margin', 'bed'].every((k) => TR[k] === TR_DEF[k]) ? '가시화 기본값 기준' : '');
-    $('qClr').hidden = !obst.length;
-    $('qList').hidden = !obst.length;
-    if (QT.cfv === CF.ver) return;
-    QT.cfv = CF.ver;
-    const n = CF.list.length, hit = $('qHit'), box = $('qList');
-    hit.textContent = n ? '간섭 ' + n + '곳' : '간섭 없음';
-    hit.classList.toggle('bad', n > 0);
-    box.textContent = '';
-    CF.list.forEach((sp, i) => {
-      const b = document.createElement('button');
-      b.type = 'button';
-      b.textContent = (i + 1) + ' · ' + sp.p + ' ↔ ' + sp.o + ' · ' + sp.c.toFixed(2) + ' m';
-      b.title = '그쪽 보기';
-      b.dataset.at = [sp.e, sp.n, sp.c].map((v) => round(v, 4)).join(','); // 자리 · 이격 (반올림 전)
-      b.addEventListener('click', () => cfGo(sp));
-      box.appendChild(b);
-    });
+    if (QT.view === 'all') { const h = !rvAny(); RV_Q.forEach(([k]) => QT.rowEl[k].forEach((e) => { if (e.hidden !== h) e.hidden = h; })); } // 전체 = 하천 구간 있을 때만 하천 줄
+    qTxt($('qNote'), QT.view === 'river' ? (rvAny() ? '수직구 = 내공 × 깊이 · H-파일 근입 ' + RV.HP_EMB + ' m' : '하천 구간 없음') :
+      QT.view !== 'pipe' && QT.view !== 'shore' && ['tp', 'n', 'margin', 'bed'].every((k) => TR[k] === TR_DEF[k]) ? '가시화 기본값 기준' : '');
+  }
+  // 수량 표 열기 · 닫기 (view = 갈래 · 그 갈래 단추 켜짐 · 표 = 그 갈래 줄만)
+  function qShow(on, view) {
+    QT.on = !!on;
+    if (view && Q_KIND[view]) QT.view = view;
+    const ks = Q_KIND[QT.view][1];
+    $('qtyBox').hidden = !QT.on;
+    $('qtyBox').dataset.view = QT.view;
+    document.querySelectorAll('[data-q]').forEach((b) => setOn(b, QT.on && b.dataset.q === QT.view));
+    const noRv = !rvAny(); // 전체 = 하천 구간 있을 때만 하천 줄
+    Q_ROWS.forEach(([k]) => { QT.rowEl[k].forEach((e) => { e.hidden = ks ? ks.indexOf(k) < 0 : noRv && k.indexOf('rv_') === 0; }); });
+    qTxt($('qTitle'), Q_KIND[QT.view][0]);
+    if (QT.on) { if (!catIs('qty')) catSet('qty', true); qtyUI(); $('qtyBox').scrollIntoView({ block: 'nearest' }); }
+    dirty();
   }
   (function buildQty() {
     const tab = $('qTab');
@@ -5055,15 +5613,9 @@
       a.className = 'qv'; b.className = 'qv'; a.id = 'q_' + k; b.id = 'qt_' + k;
       tab.append(lab, a, b);
       QT.row[k] = [a, b];
+      QT.rowEl[k] = [lab, a, b];
     });
-    const qShow = (on) => {
-      QT.on = !!on;
-      $('qtyBox').hidden = !QT.on;
-      setOn($('tgQty'), QT.on);
-      QT.cfv = -1;
-      dirty();
-    };
-    $('tgQty').addEventListener('click', () => qShow(!QT.on));
+    document.querySelectorAll('[data-q]').forEach((b) => b.addEventListener('click', () => (QT.on && QT.view === b.dataset.q ? qShow(false) : qShow(true, b.dataset.q))));
     $('qX').addEventListener('click', () => qShow(false));
     const gap = $('qGap');
     gap.value = String(CF.gap);
@@ -5075,6 +5627,49 @@
     });
     gap.addEventListener('change', () => { gap.value = String(round(CF.gap, 3)); });
   })();
+  // 간섭 카테고리: 이격 · 간섭 수 (머리줄 이름표도) · 지장물 종류 단추 (전체 · 가스 …· 간섭 있는 종류만) · 목록 (누르면 그쪽 보기 · 간섭 자리 바뀔 때만 다시 그림)
+  const CFV = { kind: '', ver: -1, has: null };
+  const cfKind = (sp) => (obst[sp.oi] && obst[sp.oi].kind) || '지장물';
+  function cfUI() {
+    const has = obst.length > 0;
+    if (CFV.has !== has) {
+      CFV.has = has; CFV.ver = -1;
+      $('cfNone').hidden = has; $('qClr').hidden = !has; $('cfKinds').hidden = !has; $('qList').hidden = !has;
+    }
+    if (CFV.ver === CF.ver) return;
+    CFV.ver = CF.ver;
+    const n = CF.list.length, hit = $('qHit'), tag = $('cfTag'), kb = $('cfKinds'), box = $('qList');
+    hit.textContent = n ? '간섭 ' + n + '곳' : '간섭 없음';
+    hit.classList.toggle('bad', n > 0);
+    tag.textContent = has ? (n ? n + '곳' : '없음') : '';
+    tag.classList.toggle('bad', n > 0);
+    tag.classList.toggle('ok', has && !n);
+    const cnt = new Map();
+    CF.list.forEach((sp) => { const k = cfKind(sp); cnt.set(k, (cnt.get(k) || 0) + 1); });
+    if (CFV.kind && !cnt.has(CFV.kind)) CFV.kind = '';
+    kb.textContent = '';
+    if (cnt.size) {
+      [['', '전체', n]].concat([...cnt].map(([k, c]) => [k, k, c])).forEach(([k, t, c]) => {
+        const b = document.createElement('button');
+        b.type = 'button'; b.className = 'tg' + (CFV.kind === k ? ' on' : ''); b.dataset.k = k; b.title = k ? '관로 ↔ ' + k : '관로 ↔ 지장물 전체';
+        b.append(t);
+        const ni = document.createElement('i'); ni.className = 'n'; ni.textContent = String(c); b.appendChild(ni);
+        b.addEventListener('click', () => { CFV.kind = k; CFV.ver = -1; cfUI(); });
+        kb.appendChild(b);
+      });
+    }
+    box.textContent = '';
+    CF.list.forEach((sp, i) => {
+      if (CFV.kind && cfKind(sp) !== CFV.kind) return;
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = (i + 1) + ' · ' + sp.p + ' ↔ ' + sp.o + ' · ' + sp.c.toFixed(2) + ' m';
+      b.title = '그쪽 보기';
+      b.dataset.at = [sp.e, sp.n, sp.c].map((v) => round(v, 4)).join(','); // 자리 · 이격 (반올림 전)
+      b.addEventListener('click', () => cfGo(sp));
+      box.appendChild(b);
+    });
+  }
 
   // ---------------------------------------------------------------- 지장물 간섭
   // 관마다 0.5 m 조각 (3D 선분 · 관 중심 = zcQ) ↔ 지장물 선분 (10 m 칸 격자): 두 선분의 가장 가까운 거리 − 두 반지름 = 이격.
@@ -5240,6 +5835,11 @@
   window.addEventListener('resize', resizeAll);
 
   // ---------------------------------------------------------------- 시작
+  window.__rv360 = { reveal: reveal, catSet: catSet, catIs: catIs,   // 시험 (3D 화면 window.__map3d 와 같은 꼴)
+    SH: SH, lineQty: (src) => { const L = lines.find((q) => q.src === src); return L ? lineQty(L) : null; },
+    rv: { ok: !!RV, arm: rvArm, set: rvSet, show: rvShow, ground: rvGround, plans: (src) => { const L = lines.find((q) => q.src === src); return L ? rvPlans(L) : []; },
+      cur: () => { const c = rvCur(); return c ? { src: c.L.src, q: c.q } : null; }, pick: (src, a, b) => { RVS.cur = { src: src, a: a, b: b }; rvUI(); },
+      tris: () => (rvM.n - rvM.no) / 3, holes: () => rvM.no / 3 } };
   initGL();
   buildCal();
   hostShow();

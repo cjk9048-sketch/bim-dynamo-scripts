@@ -146,8 +146,8 @@ def chip(ed):
 
 
 def aria(ed, label):
-    """aria-label 로 단추 자리 (가운데 client)."""
-    r = js_json(ed, "document.querySelector('[aria-label=\"%s\"]').getBoundingClientRect()" % label)
+    """aria-label 로 단추 자리 (가운데 client) · 오른쪽 칸 카테고리 (#opts) 안이면 먼저 보이게 굴림."""
+    r = js_json(ed, "(function (e) { if (e.closest('#opts')) e.scrollIntoView({block: 'nearest'}); return e.getBoundingClientRect(); })(document.querySelector('[aria-label=\"%s\"]'))" % label)
     return r['left'] + r['width'] / 2, r['top'] + r['height'] / 2
 
 
