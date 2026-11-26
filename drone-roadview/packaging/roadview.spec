@@ -16,7 +16,7 @@ shutil.copy2(imageio_ffmpeg.get_ffmpeg_exe(), FF)          # 이름을 ffmpeg.ex
 import subprocess
 SNAP = os.path.join(WORK, 'viewer')
 os.makedirs(SNAP, exist_ok=True)
-for fn in ('index.html', 'app.js', 'style.css', 'map3d.html', 'map3d.js'):
+for fn in ('index.html', 'app.js', 'style.css', 'map3d.html', 'map3d.js', 'river.js'):     # river.js = 하천 추진 · 횡단 셈 (1126 · 커밋돼 있어야 함)
     data = subprocess.run(['git', 'show', 'HEAD:drone-roadview/viewer/' + fn], cwd=ROOT, capture_output=True, check=True).stdout
     open(os.path.join(SNAP, fn), 'wb').write(data)
 datas = [
@@ -25,13 +25,15 @@ datas = [
     (os.path.join(SNAP, 'style.css'), 'viewer'),
     (os.path.join(SNAP, 'map3d.html'), 'viewer'),
     (os.path.join(SNAP, 'map3d.js'), 'viewer'),
+    (os.path.join(SNAP, 'river.js'), 'viewer'),
     (os.path.join(ROOT, 'roadview', 'app_home'), 'app_home'),
     (os.path.join(ROOT, 'roadview', 'rig_avata360.json'), 'roadview'),
+    (os.path.join(ROOT, 'roadview', 'ai_worker.py'), 'roadview'),      # AI 부대공 인식 작업 (AI 엔진 python 이 파일로 돌림 · 앱에 import 안 함)
     (FF, 'ffmpeg'),
 ]
 hidden = ['roadview.build', 'roadview.share', 'roadview.pipes_update', 'roadview.terrain', 'roadview.photos',
           'roadview.keys', 'roadview.media', 'roadview.mapping', 'roadview.ortho', 'roadview.photo_at', 'roadview.shp', 'roadview.pipeload', 'roadview.pipes', 'roadview.height',
-          'roadview.cluster', 'roadview.gsplat', 'matplotlib.tri', 'pg8000', 'pg8000.native', 'ezdxf', 'pyproj', 'webview', 'clr', 'cv2']
+          'roadview.cluster', 'roadview.gsplat', 'roadview.ai_budae', 'matplotlib.tri', 'pg8000', 'pg8000.native', 'ezdxf', 'pyproj', 'webview', 'clr', 'cv2']
 excludes = ['tkinter', 'roadview.gui', 'IPython', 'pytest']
 
 a = Analysis([os.path.join(ROOT, 'rv_app.py'), os.path.join(ROOT, 'rv_cli.py')],

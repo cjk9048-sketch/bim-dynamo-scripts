@@ -35,24 +35,25 @@ eq('새 구간 = 이전 값', R.fresh('jack', 1, 9, { cover: 3.2 }).cover, 3.2);
 console.log('== 추진 · 사각 (발진 3×6 · 도달 2.5×3 · 토피 2 · 여유 0.5)');
 let pl = R.plan({ k: 'jack', a: 30, b: 70 }, P, ground, OD);
 eq('하상 (가장 낮은 땅)', pl.gMin, 7);
-eq('관 윗면 = 7 − 2', pl.top, 5);
-eq('수직구 바닥 = 관 바닥 4.5 − 0.5', pl.zb, 4.0);
-eq('발진구 깊이 = 10 − 4', pl.shafts[0].depth, 6);
+eq('케이싱 윗면 = 7 − 2 (토피 = 케이싱 기준)', pl.casTop, 5, 1e-9);
+eq('관 윗면 = 5 − 0.1', pl.top, 4.9, 1e-9);
+eq('수직구 바닥 = 케이싱 바닥 4.3 − 0.5', pl.zb, 3.8, 1e-9);
+eq('발진구 깊이 = 10 − 3.8', pl.shafts[0].depth, 6.2, 1e-9);
 eq('발진구 = 시점 (30)', pl.shafts[0].s, 30);
 eq('추진 길이 = 40 − 3 − 1.5', pl.jackLen, 35.5);
 eq('케이싱 = 관 + 0.2', pl.cas, 0.7);
 let Z = R.qty(pl);
 eq('수직구 수', Z.shaft, 2);
-eq('굴착 = 3·6·6 + 2.5·3·6', Z.exc, 153);
+eq('굴착 = (18 + 7.5) × 6.2', Z.exc, 25.5 * 6.2, 1e-6);
 eq('H-파일 = (8+4) + (4+4)', Z.hp, 20);
-eq('H-파일 m = 20 × (6 + 1.5)', Z.hpm, 150);
-eq('토류판 = 18·6 + 11·6', Z.lag, 174);
+eq('H-파일 m = 20 × (6.2 + 1.5)', Z.hpm, 154, 1e-6);
+eq('토류판 = (18 + 11) × 6.2', Z.lag, 29 * 6.2, 1e-6);
 eq('라이너 = 0', Z.liner, 0);
 
 pl = R.plan({ k: 'jack', a: 30, b: 70, cover: 3, base: 0.8 }, P, ground, OD);
-eq('토피 3 · 여유 0.8 → 바닥 = (7 − 3) − 0.5 − 0.8', pl.zb, 2.7);
-eq('깊이 = 10 − 2.7', pl.shafts[1].depth, 7.3);
-eq('굴착 = (18 + 7.5) × 7.3', R.qty(pl).exc, 25.5 * 7.3, 1e-6);
+eq('토피 3 · 여유 0.8 → 바닥 = (7 − 3) − 0.7 − 0.8', pl.zb, 2.5, 1e-9);
+eq('깊이 = 10 − 2.5', pl.shafts[1].depth, 7.5, 1e-9);
+eq('굴착 = (18 + 7.5) × 7.5', R.qty(pl).exc, 25.5 * 7.5, 1e-6);
 
 pl = R.plan({ k: 'jack', a: 30, b: 70, rev: true }, P, ground, OD);
 eq('바꾸기 → 발진 = 종점 (70)', pl.shafts[0].s, 70);
@@ -63,9 +64,9 @@ console.log('== 추진 · 원형 (발진 Ø6 · 도달 Ø4)');
 pl = R.plan({ k: 'jack', a: 30, b: 70, shape: 'circ' }, P, ground, OD);
 Z = R.qty(pl);
 eq('추진 길이 = 40 − 3 − 2', pl.jackLen, 35);
-eq('굴착 = π(9 + 4)·6', Z.exc, Math.PI * 13 * 6, 1e-6);
-eq('라이너 m = 6 + 6', Z.liner, 12);
-eq('라이너 m² = π(6 + 4)·6', Z.linerA, Math.PI * 60, 1e-6);
+eq('굴착 = π(9 + 4)·6.2 (케이싱 기준 깊이)', Z.exc, Math.PI * 13 * 6.2, 1e-6);
+eq('라이너 m = 6.2 + 6.2', Z.liner, 12.4, 1e-9);
+eq('라이너 m² = π(6 + 4)·6.2', Z.linerA, Math.PI * 10 * 6.2, 1e-6);
 eq('H-파일 = 0', Z.hp, 0);
 pl = R.plan({ k: 'jack', a: 30, b: 70, shape: 'circ', ld: 8, cas: 1.2 }, P, ground, OD);
 eq('발진 Ø8 → 추진 길이 = 40 − 4 − 2', pl.jackLen, 34);
@@ -110,6 +111,24 @@ for (const q of [{ k: 'jack', a: 30, b: 70 }, { k: 'jack', a: 30, b: 70, shape: 
 }
 eq('땅 없음 → 그림 = 알림', R.svg(R.plan({ k: 'open', a: 30, b: 70 }, P, () => NaN, OD)).body.indexOf('땅 높이 없음') >= 0, true);
 eq('표 줄 (추진)', R.rows(R.plan({ k: 'jack', a: 30, b: 70 }, P, ground, OD)).length >= 7, true);
+
+console.log('== 검토 고침 (1126 밤)');
+{
+  const Pb = R.path([[0, 0], [50, 0], [50, 50]]), flat = () => 10;
+  let q = R.plan({ k: 'jack', a: 10, b: 50 }, Pb, flat, OD);
+  eq('꺾인 점 끝 도달구 방향 = 추진 방향 (1, 0)', [Math.round(q.shafts[1].tx), Math.round(q.shafts[1].ty)].join(','), '1,0');
+  q = R.plan({ k: 'jack', a: 10, b: 50, rev: true }, Pb, flat, OD);
+  eq('바꾸기 → 꺾인 점 발진구 방향 = (−1, 0)', [Math.round(q.shafts[0].tx), Math.round(q.shafts[0].ty)].join(','), '-1,0');
+  q = R.plan({ k: 'jack', a: 10, b: 80 }, Pb, flat, OD);
+  eq('추진 구간 안 꺾임 = 못 셈', q.ok, false);
+  eq('못 셈 구간 수량 = 0', R.qty(q).shaft, 0);
+  q = R.plan({ k: 'jack', a: 30, b: 70 }, P, ground, OD);
+  eq('곧게 이어진 꼭짓점(40) 은 꺾임 아님', q.ok, true);
+  q = R.plan({ k: 'jack', a: 30, b: 34 }, P, ground, OD);
+  eq('짧은 구간 수량 = 0', R.qty(q).exc, 0);
+  q = R.plan({ k: 'jack', a: 30, b: 70 }, P, (x) => (x < 32 ? NaN : 7), OD);
+  eq('수직구 자리 땅 없음 = 못 셈', q.ok, false);
+}
 
 console.log('\n%s (%d 개)', ok ? '모두 통과' : '실패 있음', n);
 process.exit(ok ? 0 : 1);

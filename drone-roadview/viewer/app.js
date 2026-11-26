@@ -2979,6 +2979,9 @@
     if (!catIs(sec.dataset.cat) && el !== CAT[sec.dataset.cat].head) catSet(sec.dataset.cat, true);
     if ($('side').classList.contains('hidden')) sideShow(true);
     el.scrollIntoView({ block: 'nearest' });
+    // 편 카테고리 안 내용이 다음 순간에 채워지면 단추가 칸 아래로 밀림 → 그린 뒤 한 번 더 (1126 · 3D 화면과 같음)
+    requestAnimationFrame(() => el.scrollIntoView({ block: 'nearest' }));
+    setTimeout(() => el.scrollIntoView({ block: 'nearest' }), 150);
     return true;
   }
   CAT.cal.hook = (on) => lsSet('rv_ui:calOpen', on);

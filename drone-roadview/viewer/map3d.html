@@ -5,14 +5,15 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>3D 매핑 · 드론 로드뷰</title>
 <style>
-/* 360 보기 화면 (viewer/style.css) 과 같은 모양 · 결과 폴더엔 이 파일과 map3d.js 만 복사되므로 여기에 넣음 */
+/* 도화 꼴 (매핑 화면 roadview/app_home/edit.css «도화 꼴» 과 같은 색) · 결과 폴더엔 이 파일과 map3d.js 만 복사되므로 여기에 넣음
+   윗줄 = 청록 띠 (처음 · 이름 · 조작법 · 오른쪽 칸) · 오른쪽 칸 = 접는 카테고리 (JACK 1126 «윗줄 단추 → 옆 옵션 창 · 접이식 카테고리») · 3D 바탕은 그대로 */
 :root {
-  --bg: #181818; --panel: #1f1f1f; --panel-2: #2b2b2b; --panel-3: #363636;
-  --line: rgba(255, 255, 255, 0.06); --line-2: rgba(255, 255, 255, 0.1);
-  --text: #e9e9e9; --dim: #8b8b8b; --acc: #2f81f7; --acc-soft: rgba(47, 129, 247, 0.22); --yel: #facc15;
-  --r: 8px; --r-s: 6px;
+  --dh: #00484E; --dhHi: #0A6269; --dhDim: #E3ECEC; --dhLn: #A9C9CB; --ink: #1B2628; --sub: #6B7A7C; --wall: #F5F8F8;
+  --bg: #fff; --panel: #fff; --panel-2: #EEF3F3; --panel-3: #E3ECEC;
+  --line: #DCE3E4; --line-2: #C9D6D7; --text: #1B2628; --dim: #6B7A7C; --acc: #00484E; --acc-soft: rgba(0, 72, 78, .12); --yel: #f2b33d; --red: #dc2626;
+  --r: 10px; --r-s: 7px; --topH: 48px;
   --font: "Pretendard", "Malgun Gothic", "Apple SD Gothic Neo", "Segoe UI", system-ui, sans-serif;
-  color-scheme: dark;
+  color-scheme: light;
 }
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
@@ -27,367 +28,566 @@ svg { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; 
 #c.move:not(.drag) { cursor: move; }
 #c.pick:not(.drag) { cursor: crosshair; }
 #ov { pointer-events: none; }
+input[type=number], input[type=text], select { background: #fff; border: 1px solid var(--line); border-radius: 6px; color: var(--ink); outline: none; }
+input[type=number] { -moz-appearance: textfield; appearance: textfield; width: 56px; height: 26px; padding: 0 6px; text-align: right; font-variant-numeric: tabular-nums; }
+input[type=number]:hover, input[type=text]:hover, select:hover { border-color: var(--dhLn); }
+input[type=number]:focus, input[type=text]:focus, select:focus { border-color: var(--dh); box-shadow: 0 0 0 2px rgba(0, 72, 78, .14); }
+input[type=number]::-webkit-outer-spin-button, input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
 
-/* 윗줄 */
-#top { position: absolute; left: 10px; top: 10px; right: 10px; display: flex; align-items: center; gap: 10px; height: 48px; padding: 0 7px 0 8px;
-  background: rgba(31, 31, 31, .92); border-radius: var(--r); backdrop-filter: blur(6px); overflow-x: auto; overflow-y: hidden; scrollbar-width: none; z-index: 3; }
-#top::-webkit-scrollbar { display: none; }
-.brand { display: flex; align-items: center; gap: 9px; min-width: 0; flex: 0 1 auto; }
-.logo { flex: none; width: 16px; height: 16px; border-radius: 50%; background: radial-gradient(circle at 35% 35%, #9cc9ff, var(--acc) 60%, #173a73); }
-#title { font-weight: 700; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 30vw; }
-.spacer { flex: 1; min-width: 8px; }
-.tools { display: flex; align-items: center; gap: 2px; flex: none; }
-.tools.host { padding-right: 8px; margin-right: 6px; border-right: 1px solid var(--line-2); }
+/* 단추 (작은 아이콘) */
 .ib { flex: none; width: 32px; height: 32px; padding: 0; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: var(--r-s);
-  background: transparent; color: #bdbdbd; transition: background .12s, color .12s; }
+  background: transparent; color: var(--sub); transition: background .12s, color .12s; }
 .ib svg { width: 19px; height: 19px; }
-.ib:hover { background: var(--panel-2); color: #fff; }
-.ib.on { background: var(--acc-soft); color: #fff; }
-.ib.on svg { color: #8bb8ff; }
+.ib:hover { background: var(--dhDim); color: var(--dh); }
+.ib.on { background: var(--dhDim); color: var(--dh); }
 .ib.s { width: 26px; height: 26px; }
 .ib.s svg { width: 16px; height: 16px; }
 .ib:disabled { opacity: .4; pointer-events: none; }
-.tg { height: 26px; padding: 0 10px; border: 0; border-radius: var(--r-s); background: var(--panel-2); color: var(--dim); font-weight: 600; font-size: 12px; white-space: nowrap; transition: background .12s, color .12s; }
-.tg:hover { color: var(--text); background: var(--panel-3); }
-.tg.on { background: var(--acc-soft); color: #fff; }
-.numbox { display: flex; align-items: center; gap: 6px; height: 28px; color: var(--dim); font-weight: 600; font-size: 12px; white-space: nowrap; }
-.numbox input[type=number] { margin-left: auto; }
-input[type=number] { -moz-appearance: textfield; appearance: textfield; width: 52px; height: 24px; padding: 0 6px; background: var(--bg); border: 1px solid var(--line-2); border-radius: 5px; outline: none; text-align: right; font-variant-numeric: tabular-nums; }
-input[type=number]:focus { border-color: var(--acc); }
-input[type=number]::-webkit-outer-spin-button, input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
-.tag { flex: none; padding: 1px 7px; border-radius: 999px; background: rgba(250, 204, 21, .13); color: #e7c35a; font-size: 11px; font-weight: 600; white-space: nowrap; }
-.tag.user { background: var(--panel-2); color: var(--dim); }
+.x { flex: none; width: 24px; height: 24px; padding: 0; border: 0; border-radius: 5px; background: transparent; color: var(--sub); font-size: 16px; line-height: 1; }
+.x:hover { background: var(--dhDim); color: var(--ink); }
+.tag { flex: none; padding: 1px 7px; border-radius: 999px; background: #FFF1D6; color: #8A5A00; font-size: 11px; font-weight: 600; white-space: nowrap; }
+.tag.user { background: var(--dhDim); color: var(--dh); }
+.tag.bad { background: #FDE2E2; color: #B91C1C; }
+.tag.ok { background: #DCF2E3; color: #15803D; }
 .tag:empty { display: none; }
+.pb2 { flex: none; height: 26px; padding: 0 10px; border: 0; border-radius: var(--r-s); background: var(--wall); box-shadow: inset 0 0 0 1px var(--line); color: var(--ink); font-size: 12px; font-weight: 600; white-space: nowrap; }
+.pb2:hover { background: var(--dhDim); }
+.pb2:disabled { opacity: .45; pointer-events: none; }
 
-/* 오른쪽 칸 (지하 시설물 · 검사점) */
-#side { position: absolute; right: 10px; top: 68px; width: var(--sideW, 300px); max-height: calc(100% - 78px); display: flex; flex-direction: column; gap: 10px; overflow-y: auto; z-index: 2; scrollbar-width: thin; }
-.pane { flex: none; position: relative; background: rgba(31, 31, 31, .94); border-radius: var(--r); backdrop-filter: blur(6px); }
-#ugPane { padding: 8px 10px 10px; display: flex; flex-direction: column; gap: 8px; }
-.ugHead { display: flex; align-items: center; gap: 8px; height: 26px; }
-.ugHead b { font-size: 13px; }
-.ugHead .ib.s { margin-left: auto; }
-.ugHead .ib.s + .ib.s { margin-left: 0; }
-.seg4 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
-.seg4 button { height: 48px; padding: 4px 2px 3px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; border: 0; border-radius: var(--r-s); background: var(--panel-2); color: var(--dim); font-size: 11.5px; font-weight: 600; white-space: nowrap; }
-.seg4 button svg { width: 21px; height: 21px; stroke-width: 1.8; }
-.seg4 button:hover { color: var(--text); background: var(--panel-3); }
-.seg4 button.on { background: var(--acc); color: #fff; }
-.seg4.off { opacity: .45; }
-.seg4 button.act { box-shadow: inset 0 0 0 1px var(--line-2); background: transparent; }
-.seg4 button.act.on { background: var(--acc-soft); color: #fff; }
+/* 윗줄 = 청록 띠 */
+#top { position: absolute; left: 0; top: 0; right: 0; height: var(--topH); display: flex; align-items: center; gap: 8px; padding: 0 10px 0 8px;
+  background: var(--dh); color: #fff; box-shadow: 0 2px 8px rgba(0, 40, 44, .28); z-index: 5; }
+#top .ib { color: #cfe6e6; }
+#top .ib:hover { background: rgba(255, 255, 255, .14); color: #fff; }
+#top .ib.on { background: rgba(255, 255, 255, .2); color: #fff; }
+.brand { display: flex; align-items: center; gap: 9px; min-width: 0; flex: 0 1 auto; padding-left: 4px; }
+.logo { flex: none; width: 16px; height: 16px; border-radius: 50%; background: radial-gradient(circle at 35% 35%, #d8f5f5, #2A9DA4 60%, #00363a); box-shadow: 0 0 0 2px rgba(255, 255, 255, .25); }
+#title { font-weight: 700; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 50vw; }
+.spacer { flex: 1; min-width: 8px; }
+/* 조작법 */
+#helpPop { position: absolute; right: 10px; top: calc(var(--topH) + 6px); z-index: 12; width: 300px; max-width: calc(100% - 20px); padding: 8px 12px 10px; background: #fff; color: var(--ink);
+  border: 1px solid var(--dhLn); border-left: 3px solid var(--dh); border-radius: 8px; box-shadow: 0 6px 18px rgba(0, 40, 44, .22); font-size: 12px; }
+#helpPop b { display: block; margin: 4px 0 3px; color: var(--dh); font-size: 12px; }
+#helpPop dl { display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; margin: 0; }
+#helpPop dt { color: var(--ink); font-weight: 700; white-space: nowrap; }
+#helpPop dd { margin: 0; color: var(--sub); }
+
+/* 오른쪽 옵션 칸 = 접는 카테고리 (머리줄 누르기 = 펴고 접기 · 이 PC 에 기억)
+   틀 (360 화면 viewer/index.html 에도 그대로 옮길 수 있게 id 없이 클래스만):
+   #side > section.cat[data-cat=이름] > button.catH (svg · b 이름 · .tag 상태 · i.chev) + div.catB (몸 · hidden = 접힘)
+   몸 안: .fgrid (.c3 = 세 칸) > button.fb (svg + span 이름 · .on 켜짐 · .act = 창 여는 단추 · .sh = 가시설 노랑) · .lrow (.lk 이름 + .chips > button.tg) · .numbox · .row · .pb2
+   [data-host] = 프로그램 안에서만 (map3d.js hostShow) · [data-flat] = 3D 없는 프로젝트에서도 보임 */
+#side { position: absolute; right: 0; top: var(--topH); bottom: 0; width: var(--sideW, 300px); display: flex; flex-direction: column; gap: 8px; padding: 10px 10px 14px;
+  overflow-y: auto; background: var(--wall); color: var(--ink); border-left: 1px solid var(--line); box-shadow: -4px 0 14px rgba(0, 40, 44, .12); z-index: 2; scrollbar-width: thin; }
+.cat { flex: none; background: #fff; border: 1px solid var(--line); border-radius: var(--r); box-shadow: 0 1px 2px rgba(0, 40, 44, .05); }
+.catH { display: flex; align-items: center; gap: 8px; width: 100%; height: 38px; padding: 0 12px 0 11px; border: 0; border-radius: var(--r); background: transparent; color: var(--ink); text-align: left; }
+.catH:hover { background: #F7FAFA; }
+.cat.open > .catH { border-radius: var(--r) var(--r) 0 0; }
+.catH > svg { flex: none; width: 17px; height: 17px; color: var(--dh); stroke-width: 1.9; }
+.catH b { flex: none; font-size: 13px; }
+.catH .chev { flex: none; margin-left: auto; width: 7px; height: 7px; border-right: 2px solid var(--sub); border-bottom: 2px solid var(--sub); transform: translateY(-1px) rotate(-45deg); transition: transform .15s; }
+.cat.open > .catH .chev { transform: translateY(-3px) rotate(45deg); }
+.catB { display: flex; flex-direction: column; gap: 8px; padding: 2px 10px 10px; }
+/* 기능 단추 격자 (아이콘 + 짧은 이름) */
+.fgrid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 5px; }
+.fgrid.c3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.fgrid.off { opacity: .45; }
+.fb { min-width: 0; height: 56px; padding: 5px 3px 4px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; border: 0; border-radius: var(--r-s);
+  background: var(--wall); box-shadow: inset 0 0 0 1px var(--line); color: var(--ink); font-size: 11.5px; font-weight: 600; line-height: 1.15; text-align: center; word-break: keep-all; transition: background .12s; }
+.fb svg { flex: none; width: 20px; height: 20px; stroke-width: 1.8; color: var(--dh); }
+.fb span { max-width: 100%; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.fb:hover { background: var(--dhDim); }
+.fb.on { background: var(--dh); color: #fff; box-shadow: none; }
+.fb.on svg { color: #fff; }
+.fb.act.on { background: var(--dhDim); color: var(--dh); box-shadow: inset 0 0 0 1.5px var(--dh); }
+.fb.act.on svg { color: var(--dh); }
+.fb.sh.on { background: var(--yel); color: #1B2628; }
+.fb.sh.on svg { color: #1B2628; }
+.fb:disabled { opacity: .45; pointer-events: none; }
+.fb:focus-visible, .catH:focus-visible, .tg:focus-visible, .pb2:focus-visible { outline: 2px solid var(--dhLn); outline-offset: 1px; }
+.fgrid.off .fb.on { background: var(--dhDim); color: var(--dh); }
+.fgrid.off .fb.on svg { color: var(--dh); }
+/* 켜고 끄는 작은 이름표 (레이어 · 점용 · 지장물 갈래) */
+.lrow { display: flex; align-items: flex-start; gap: 8px; }
+.lk { flex: none; width: 44px; padding-top: 5px; color: var(--sub); font-size: 12px; font-weight: 600; }
+.chips { display: flex; flex-wrap: wrap; gap: 5px; min-width: 0; }
+.chips:empty { display: none; }
+.tg { height: 26px; padding: 0 10px; border: 0; border-radius: 999px; background: #fff; box-shadow: inset 0 0 0 1px var(--line); color: var(--sub); font-weight: 600; font-size: 12px; white-space: nowrap; transition: background .12s, color .12s; }
+.tg:hover { background: var(--dhDim); color: var(--dh); }
+.tg.on { background: var(--dh); color: #fff; box-shadow: none; }
 .tg .sw { display: inline-block; width: 14px; height: 8px; margin-right: 6px; vertical-align: 0; border-radius: 2px; }
 .tg .sw.tmp { background: rgba(255, 154, 31, .22); border: 1.5px dashed #ff9a1f; }
 .tg .sw.perm { background: #00b8d4; }
-.tg:not(.on) .sw { opacity: .35; }
-.chips { display: flex; flex-wrap: wrap; gap: 4px; }
-.seg3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
-.seg3 button { height: 44px; padding: 4px 2px 3px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; border: 0; border-radius: var(--r-s); background: var(--panel-2); color: var(--dim); font-size: 11.5px; font-weight: 600; white-space: nowrap; }
-.seg3 button svg { width: 20px; height: 20px; stroke-width: 1.8; }
-.seg3 button:hover { color: var(--text); background: var(--panel-3); }
-.seg3 button.on { background: var(--yel); color: #11141a; }
-#shList { display: flex; flex-direction: column; gap: 3px; margin-top: 6px; max-height: 104px; overflow-y: auto; }
+.tg:not(.on) .sw { opacity: .45; }
+.tg i.n { font-style: normal; margin-left: 5px; opacity: .75; }
+.numbox { display: flex; align-items: center; gap: 6px; height: 28px; color: var(--sub); font-weight: 600; font-size: 12px; white-space: nowrap; }
+.numbox input[type=number] { margin-left: auto; }
+.numbox .pb2 { margin-left: 6px; }
+.row { display: flex; align-items: center; gap: 8px; min-height: 26px; }
+.dimTxt { color: var(--sub); font-size: 12px; }
+/* 가시설 목록 */
+#shList { display: flex; flex-direction: column; gap: 3px; max-height: 132px; overflow-y: auto; }
 #shList:empty { display: none; }
-.shRow { display: flex; align-items: center; gap: 6px; flex: none; height: 26px; padding: 0 2px 0 8px; background: var(--panel-2); border-radius: 5px; box-shadow: inset 3px 0 0 var(--c, var(--dim)); }
-.shRow select { height: 22px; max-width: 128px; padding: 0 2px; background: var(--bg); border: 1px solid var(--line-2); border-radius: 4px; font-size: 11.5px; }
+.shRow { display: flex; align-items: center; gap: 6px; flex: none; height: 28px; padding: 0 2px 0 8px; background: var(--wall); border-radius: 6px; box-shadow: inset 3px 0 0 var(--c, var(--sub)), inset 0 0 0 1px var(--line); }
+.shRow select { height: 22px; max-width: 128px; padding: 0 2px; border-radius: 4px; font-size: 11.5px; }
 .shGo { flex: 1; min-width: 0; height: 22px; padding: 0 2px; border: 0; background: transparent; text-align: left; font-size: 11.5px; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.shGo:hover { color: #fff; text-decoration: underline; }
-.shDel { flex: none; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: var(--dim); font-size: 14px; line-height: 1; }
-.shDel:hover { background: var(--panel-3); color: var(--text); }
-.cl { color: var(--dim); font-weight: 600; white-space: nowrap; }
-.cb { width: 28px; height: 26px; padding: 0; border: 0; border-radius: 5px; background: var(--panel-2); font-size: 15px; font-weight: 700; line-height: 1; user-select: none; }
-.cb:hover { background: var(--panel-3); }
-.cb:active { background: var(--acc); }
-.cu { color: var(--dim); }
+.shGo:hover { color: var(--dh); text-decoration: underline; }
+.shDel { flex: none; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: var(--sub); font-size: 14px; line-height: 1; }
+.shDel:hover { background: var(--dhDim); color: var(--ink); }
+/* 하천 추진 · 횡단 (목록 = 가시설 줄 꼴 · 고른 줄 = 테두리 · 설정 칸 = 고른 구간) */
+#rvList { display: flex; flex-direction: column; gap: 3px; max-height: 132px; overflow-y: auto; }
+#rvList:empty { display: none; }
+.shRow.sel { background: var(--dhDim); box-shadow: inset 3px 0 0 var(--c, var(--sub)), inset 0 0 0 1.5px var(--dh); }
+#rvSet { display: flex; flex-direction: column; gap: 4px; padding: 6px 8px 8px; background: var(--wall); border-radius: var(--r-s); box-shadow: inset 0 0 0 1px var(--line); }
+#rvSet .lk { width: 52px; }
+#rvSet .numbox input[type=number] ~ input[type=number] { margin-left: 0; }
+#rvSet .numbox .xx { color: var(--sub); font-weight: 400; }
+#rvDlg { position: fixed; right: 12px; top: calc(var(--topH) + 10px); z-index: 8; width: min(408px, calc(100% - 24px)); max-height: calc(100% - var(--topH) - 20px); }
+#rvDlg .dlgHead b { flex: none; }
+#rvDlg .dlgHead .dlgX { margin-left: auto; }
+#rvSvg { width: 100%; height: auto; display: block; background: #141414; border-radius: 6px; stroke: none; stroke-width: 1; }
+#rvRows { display: grid; grid-template-columns: 1fr auto; gap: 3px 12px; font-size: 12px; font-variant-numeric: tabular-nums; }
+#rvRows .k { color: var(--sub); }
+#rvRows .v { text-align: right; white-space: nowrap; }
+body.sideOn #rvDlg { right: calc(var(--sideW, 300px) + 12px); }
+/* AI 부대공 (JACK 1126 · 결과 = data/ai_budae.js · 종류 단추 = 보이기 + 개수 · 후보 줄 = 두 줄 (이름 · 값 / 맞음 · 아님 · 종류 · 사진)) */
+#aiNone { padding: 2px 2px 0; }
+#aiProg { display: flex; flex-direction: column; gap: 5px; }
+#aiProg.done .bar i { background: #22c55e; }
+#aiProg.fail .bar i { background: #f87171; }
+#aiProg.fail #aiLine { color: var(--red); }
+#aiLine { color: var(--sub); font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#ai360Name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#aiKinds .tg .sw { border-radius: 2px; }
+#aiKinds .tg:disabled { opacity: .45; pointer-events: none; }
+#aiSum { flex: 1; min-width: 0; color: var(--sub); font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#aiSave { color: var(--sub); font-size: 11px; white-space: nowrap; }
+#aiSave.bad { color: var(--red); font-weight: 600; }
+#aiList { display: flex; flex-direction: column; gap: 3px; max-height: 300px; overflow-y: auto; }
+#aiList:empty { display: none; }
+.aiRow { flex: none; display: flex; flex-direction: column; gap: 3px; padding: 4px 4px 4px 9px; background: var(--wall); border-radius: 6px; box-shadow: inset 3px 0 0 var(--c, var(--sub)), inset 0 0 0 1px var(--line); }
+.aiRow.sel { background: var(--dhDim); box-shadow: inset 3px 0 0 var(--c, var(--sub)), inset 0 0 0 1.5px var(--dh); }
+.aiRow[data-st=no] { opacity: .6; }
+.aiL1, .aiL2 { display: flex; align-items: center; gap: 5px; min-width: 0; }
+.aiGo { flex: 1; min-width: 0; height: 22px; padding: 0; border: 0; background: transparent; text-align: left; font-size: 11.5px; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.aiGo b { font-weight: 700; color: var(--ink); }
+.aiGo:hover { color: var(--dh); }
+.aiL2 button { flex: none; height: 22px; padding: 0 9px; border: 0; border-radius: 999px; background: #fff; box-shadow: inset 0 0 0 1px var(--line); color: var(--sub); font-size: 11.5px; font-weight: 600; }
+.aiL2 button:hover { background: var(--dhDim); color: var(--dh); }
+.aiL2 button.aiOk.on { background: #15803D; color: #fff; box-shadow: none; }
+.aiL2 button.aiNo.on { background: #B91C1C; color: #fff; box-shadow: none; }
+.aiL2 select { height: 22px; max-width: 96px; padding: 0 2px; border-radius: 4px; font-size: 11.5px; }
+.aiL2 .aiPh { margin-left: auto; }
+#aiMore { color: var(--sub); font-size: 11px; text-align: center; }
+#aiMore:empty { display: none; }
+.cl { color: var(--sub); font-weight: 600; white-space: nowrap; }
+.cb { width: 28px; height: 26px; padding: 0; border: 0; border-radius: 5px; background: var(--wall); box-shadow: inset 0 0 0 1px var(--line); font-size: 15px; font-weight: 700; line-height: 1; user-select: none; }
+.cb:hover { background: var(--dhDim); }
+.cb:active { background: var(--dh); color: #fff; }
+.cu { color: var(--sub); }
 
-/* 검사점 */
-#ck { padding: 8px 10px 10px; display: flex; flex-direction: column; max-height: 50vh; }
-#ck .ckh { display: flex; align-items: center; gap: 8px; height: 26px; margin-bottom: 6px; }
-#ck .ckh b { color: #ffb86b; }
-#ckRms { flex: 1; color: var(--dim); font-size: 11.5px; }
+/* 수량 표 (수량 카테고리 안) */
+#qtyBox { display: flex; flex-direction: column; gap: 4px; padding: 6px 8px 8px; background: var(--wall); border-radius: var(--r-s); box-shadow: inset 0 0 0 1px var(--line); font-size: 12px; font-variant-numeric: tabular-nums; }
+.qHead { display: flex; align-items: center; gap: 8px; height: 24px; }
+.qHead b { flex: none; font-size: 12.5px; color: var(--dh); }
+#qLine { flex: 1; min-width: 0; color: var(--sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#qTab { display: grid; grid-template-columns: auto 1fr 1fr; gap: 3px 10px; }
+#qTab .qh { color: var(--sub); text-align: right; font-size: 11px; }
+#qTab .ql { color: var(--sub); white-space: nowrap; }
+#qTab .qv { text-align: right; white-space: nowrap; }
+#qNote { color: var(--sub); font-size: 11px; }
+#qNote:empty { display: none; }
+/* 간섭 (간섭 카테고리 안) */
+#qClr { display: flex; align-items: center; gap: 10px; }
+#qClr label { display: flex; align-items: center; gap: 5px; color: var(--sub); font-weight: 600; font-size: 12px; }
+#qClr input[type=number] { width: 52px; }
+#qHit { margin-left: auto; color: #15803D; font-size: 12px; }
+#qHit.bad { color: var(--red); }
+#qList { display: flex; flex-direction: column; gap: 3px; max-height: 180px; overflow-y: auto; }
+#qList:empty { display: none; }
+#qList button { flex: none; height: 26px; padding: 0 8px; border: 0; border-radius: 6px; background: var(--wall); box-shadow: inset 0 0 0 1px var(--line); text-align: left; font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
+#qList button:hover { background: #FEF2F2; box-shadow: inset 0 0 0 1px #f87171; }
+
+/* 검사점 (재기 · 검사 카테고리 안) */
+#ck { flex-direction: column; max-height: 46vh; padding: 6px 8px 8px; background: var(--wall); border-radius: var(--r-s); box-shadow: inset 0 0 0 1px var(--line); }
+#ck .ckh { display: flex; align-items: center; gap: 8px; height: 26px; margin-bottom: 4px; }
+#ck .ckh b { color: #C2581B; }
+#ckRms { flex: 1; color: var(--sub); font-size: 11.5px; }
 #ck .ckl { overflow: auto; flex: 1; }
-#ck .ci { display: flex; gap: 6px; padding: 4px 6px; border-radius: 5px; cursor: pointer; font-size: 12px; color: #ccc; }
-#ck .ci:hover { background: var(--panel-2); }
-#ck .ci.on { outline: 1px solid #ff9a1f; background: #2a2014; color: #fff; }
+#ck .ci { display: flex; gap: 6px; padding: 4px 6px; border-radius: 5px; cursor: pointer; font-size: 12px; color: var(--ink); }
+#ck .ci:hover { background: var(--dhDim); }
+#ck .ci.on { outline: 1px solid #ff9a1f; background: #FFF4E5; }
 #ck .ci .nm { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-#ck .ci .r { color: #9fb6d8; font-family: Consolas, monospace; font-size: 11px; }
-#ck .row { display: flex; align-items: center; gap: 6px; margin-top: 8px; }
-#ckHint { color: var(--dim); font-size: 11px; }
-#ck .x { width: 24px; height: 24px; padding: 0; border: 0; border-radius: 5px; background: transparent; color: var(--dim); font-size: 16px; line-height: 1; }
-#ck .x:hover { background: var(--panel-3); color: var(--text); }
-#ckSave { height: 28px; padding: 0 12px; border: 0; border-radius: var(--r-s); background: var(--acc); color: #fff; font-weight: 600; }
+#ck .ci .r { color: #2f6f8f; font-family: Consolas, monospace; font-size: 11px; }
+#ck .row { margin-top: 6px; }
+#ckHint { flex: 1; color: var(--sub); font-size: 11px; }
+#ckSave { flex: none; height: 28px; padding: 0 12px; border: 0; border-radius: var(--r-s); background: var(--dh); color: #fff; font-weight: 600; }
+#ckSave:hover { background: var(--dhHi); }
 
-/* 아래 안내 줄 (고치기 · 가시설) */
-#edChip, #shChip { position: absolute; left: 50%; bottom: 44px; transform: translateX(-50%); display: none; align-items: center; gap: 8px; height: 36px; padding: 0 6px 0 14px; max-width: calc(100% - 24px);
-  background: rgba(24, 24, 24, .88); border-radius: 999px; backdrop-filter: blur(6px); white-space: nowrap; font-variant-numeric: tabular-nums; z-index: 3; }
-#edChip { box-shadow: inset 0 0 0 1px rgba(34, 211, 238, .6); }
-#edChip.show, #shChip.show { display: flex; }
-#shChip { box-shadow: inset 0 0 0 1px rgba(242, 179, 61, .7); }
-#shTip { color: var(--yel); }
-#shName { color: var(--dim); }
-#shChip button, #edChip button { flex: none; height: 26px; padding: 0 12px; border: 0; border-radius: 999px; background: var(--panel-2); color: var(--text); font-weight: 600; }
-#shChip button:hover, #edChip button:hover { background: var(--panel-3); }
-#edChip button:disabled { opacity: .5; pointer-events: none; }
-#edTip { color: var(--text); min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-#edChip #edEnd { background: #22d3ee; color: #11141a; font-weight: 700; }
-#edChip #edEnd:hover { filter: brightness(1.1); }
+/* 결과물 · 웹 공유 */
+#tbState, #ngState, #webState { flex: 1; min-width: 0; color: var(--sub); font-size: 12px; font-variant-numeric: tabular-nums; }
+#ngState.on { color: #B91C1C; }
+#webState.on { color: #15803D; font-weight: 600; }
+.bar { height: 6px; border-radius: 999px; background: var(--dhDim); overflow: hidden; }
+.bar i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, #00484E, #2A9DA4); transition: width .3s; }
+#tbProg { display: flex; flex-direction: column; gap: 5px; }
+#tbProg.done .bar i { background: #22c55e; }
+#tbProg.fail .bar i { background: #f87171; }
+#tbProg.fail #tbLine { color: var(--red); }
+#tbLine { color: var(--sub); font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.urlRow { display: flex; gap: 6px; }
+#tbUrl { flex: 1; min-width: 0; height: 28px; padding: 0 8px; color: var(--dh); font-size: 12px; }
 
-/* 관 정보 */
-.card { position: absolute; padding: 6px 10px 10px; background: rgba(24, 24, 24, .94); border-radius: var(--r); box-shadow: 0 10px 30px rgba(0, 0, 0, .45); font-size: 12px; font-variant-numeric: tabular-nums; z-index: 4; }
+/* 아래 안내 줄 (고치기 · 가시설 · 재기) = 흰 알약 */
+#edChip, #shChip, #msChip { position: absolute; left: 50%; bottom: 44px; transform: translateX(-50%); display: none; align-items: center; gap: 8px; height: 38px; padding: 0 6px 0 14px; max-width: calc(100% - 24px);
+  background: rgba(255, 255, 255, .97); color: var(--ink); border-radius: 999px; white-space: nowrap; font-variant-numeric: tabular-nums; z-index: 3; }
+#edChip { box-shadow: 0 4px 14px rgba(0, 0, 0, .35), inset 0 0 0 1.5px #0E9FB4; }
+#shChip { box-shadow: 0 4px 14px rgba(0, 0, 0, .35), inset 0 0 0 1.5px var(--yel); }
+#msChip { box-shadow: 0 4px 14px rgba(0, 0, 0, .35), inset 0 0 0 1.5px #E0B400; }
+#edChip.show, #shChip.show, #msChip.show { display: flex; }
+#shTip { color: #9A6A00; }
+#shName { color: var(--sub); }
+#edChip button, #shChip button, #msChip button { flex: none; height: 26px; padding: 0 12px; border: 0; border-radius: 999px; background: var(--wall); box-shadow: inset 0 0 0 1px var(--line); color: var(--ink); font-weight: 600; }
+#edChip button:hover, #shChip button:hover, #msChip button:hover { background: var(--dhDim); }
+#edChip button:disabled, #msChip button:disabled { opacity: .45; pointer-events: none; }
+#edTip, #msTip { color: var(--ink); min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+#edChip #edEnd { background: var(--dh); color: #fff; box-shadow: none; font-weight: 700; }
+#edChip #edEnd:hover { background: var(--dhHi); }
+#msChip.crop { box-shadow: 0 4px 14px rgba(0, 0, 0, .35), inset 0 0 0 1.5px #f87171; padding-left: 6px; }
+#msChip #msEnd { background: #facc15; color: #11141a; box-shadow: none; }
+#msChip.crop #msEnd { background: #ef4444; color: #fff; }
+#msSeg { display: inline-flex; gap: 2px; padding: 2px; border-radius: 999px; background: var(--dhDim); }
+#msChip #msSeg button { height: 24px; padding: 0 10px; background: transparent; box-shadow: none; color: var(--dh); }
+#msChip #msSeg button.on { background: var(--dh); color: #fff; }
+body.edOn #toast, body.shOn #toast, body.msOn #toast { bottom: 92px; }
+
+/* 카드 (관 정보 · 재기 결과) */
+.card { position: absolute; padding: 6px 10px 10px; background: #fff; color: var(--ink); border-radius: var(--r); box-shadow: 0 10px 30px rgba(0, 0, 0, .4); font-size: 12px; font-variant-numeric: tabular-nums; z-index: 4; }
 .cHead { display: flex; align-items: center; gap: 8px; height: 28px; }
 .cHead b { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
-.card .x { margin-left: auto; width: 24px; height: 24px; padding: 0; border: 0; border-radius: 5px; background: transparent; color: var(--dim); font-size: 16px; line-height: 1; }
-.card .x:hover { background: var(--panel-3); color: var(--text); }
+.card .x { margin-left: auto; }
 .card .ib.s { margin-left: auto; }
 .card .ib.s + .x { margin-left: 0; }
 .kv { display: grid; grid-template-columns: auto auto; gap: 3px 14px; }
-.kv .k { color: var(--dim); white-space: nowrap; }
+.kv .k { color: var(--sub); white-space: nowrap; }
 .kv .v { text-align: right; white-space: nowrap; }
 #pipeCard { width: 236px; }
 .pcMat { display: inline-flex; gap: 2px; justify-content: flex-end; }
-.pcMat button { height: 20px; padding: 0 6px; border: 0; border-radius: 4px; background: var(--panel-2); color: var(--dim); font-size: 11px; font-weight: 600; }
-.pcMat button:hover { color: var(--text); }
-.pcMat button.on { background: var(--acc); color: #fff; }
+.pcMat button { height: 20px; padding: 0 6px; border: 0; border-radius: 4px; background: var(--wall); box-shadow: inset 0 0 0 1px var(--line); color: var(--sub); font-size: 11px; font-weight: 600; }
+.pcMat button:hover { color: var(--ink); }
+.pcMat button.on { background: var(--dh); color: #fff; box-shadow: none; }
+#msBox { left: 10px; bottom: 38px; width: 250px; max-width: calc(100% - 20px); }
+#msBox.wide { width: 420px; }
+#msBox .cHead button.pb { margin-left: auto; height: 22px; padding: 0 10px; border: 0; border-radius: 999px; background: var(--wall); box-shadow: inset 0 0 0 1px var(--line); font-size: 11.5px; font-weight: 600; }
+#msBox .cHead button.pb:hover { background: var(--dhDim); }
+#msSegs { display: grid; grid-template-columns: auto 1fr 1fr; gap: 2px 12px; max-height: 96px; margin-top: 6px; padding-top: 5px; border-top: 1px solid var(--line); overflow-y: auto; font-size: 11.5px; }
+#msSegs:empty { display: none; }
+#msSegs span { text-align: right; white-space: nowrap; }
+#msSegs span.h { color: var(--sub); }
+#msSvg { width: 100%; height: auto; display: block; margin-top: 6px; background: #141414; border-radius: 6px; stroke: none; stroke-width: 1; }
 
-/* 수량 · 지장물 간섭 (왼쪽 위) */
-#qtyBox { position: absolute; left: 10px; top: 68px; width: 250px; max-width: calc(100% - 24px); max-height: calc(100% - 110px); overflow-y: auto; padding: 6px 10px 10px;
-  background: rgba(24, 24, 24, .9); border-radius: var(--r); backdrop-filter: blur(6px); font-size: 12px; font-variant-numeric: tabular-nums; z-index: 2; }
-.qHead { display: flex; align-items: center; gap: 8px; height: 28px; }
-.qHead b { font-size: 13px; }
-#qLine { flex: 1; min-width: 0; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-#qX { width: 24px; height: 24px; padding: 0; border: 0; border-radius: 5px; background: transparent; color: var(--dim); font-size: 16px; line-height: 1; }
-#qX:hover { background: var(--panel-3); color: var(--text); }
-#qTab { display: grid; grid-template-columns: auto 1fr 1fr; gap: 3px 10px; margin-top: 2px; }
-#qTab .qh { color: var(--dim); text-align: right; font-size: 11px; }
-#qTab .ql { color: var(--dim); white-space: nowrap; }
-#qTab .qv { text-align: right; white-space: nowrap; }
-#qNote { margin-top: 5px; color: var(--dim); font-size: 11px; }
-#qNote:empty { display: none; }
-#qClr { display: flex; align-items: center; gap: 10px; margin-top: 8px; padding-top: 7px; border-top: 1px solid var(--line); }
-#qClr label { display: flex; align-items: center; gap: 5px; color: var(--dim); font-weight: 600; }
-#qClr input[type=number] { width: 48px; }
-#qHit { margin-left: auto; color: #4ade80; }
-#qHit.bad { color: #f87171; }
-#qList { display: flex; flex-direction: column; gap: 3px; margin-top: 6px; max-height: 132px; overflow-y: auto; }
-#qList:empty { display: none; }
-#qList button { height: 24px; padding: 0 8px; border: 0; border-radius: 5px; background: var(--panel-2); text-align: left; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-#qList button:hover { background: var(--panel-3); box-shadow: inset 0 0 0 1px #f87171; }
-
-/* 창 (관로 넣기 · 지장물 넣기 · 터파기 설정) */
-#dlgBack { position: fixed; inset: 0; z-index: 9; display: flex; align-items: center; justify-content: center; padding: 16px; background: rgba(0, 0, 0, .55); }
-.dlg { width: min(380px, 100%); max-height: 100%; overflow-y: auto; background: #222; border-radius: 10px; box-shadow: 0 16px 40px rgba(0, 0, 0, .55); }
-.dlgHead { display: flex; align-items: center; gap: 8px; height: 44px; padding: 0 8px 0 16px; }
-.dlgHead b { flex: 1; font-size: 14px; }
-.dlgX { width: 30px; height: 30px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--dim); font-size: 20px; line-height: 1; }
-.dlgX:hover { background: var(--panel-3); color: var(--text); }
-.dlgBody { display: flex; flex-direction: column; gap: 10px; padding: 4px 16px 14px; }
+/* 창 (관로 넣기 · 지장물 넣기 · 새 관 · 터파기 설정 · 원본 사진) */
+#dlgBack { position: fixed; inset: 0; z-index: 9; display: flex; align-items: center; justify-content: center; padding: 16px; background: rgba(0, 30, 33, .45); }
+.dlg { width: min(380px, 100%); max-height: 100%; overflow-y: auto; background: #fff; color: var(--ink); border-radius: 12px; box-shadow: 0 16px 40px rgba(0, 0, 0, .45); }
+.dlgHead { display: flex; align-items: center; gap: 8px; height: 46px; padding: 0 8px 0 16px; border-bottom: 1px solid var(--line); }
+.dlgHead b { flex: 1; font-size: 14px; color: var(--dh); }
+.dlgX { flex: none; width: 30px; height: 30px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--sub); font-size: 20px; line-height: 1; }
+.dlgX:hover { background: var(--dhDim); color: var(--ink); }
+.dlgBody { display: flex; flex-direction: column; gap: 10px; padding: 12px 16px 14px; }
 .dlgFoot { display: flex; justify-content: flex-end; gap: 8px; padding: 0 16px 14px; }
 #pipeDlg .dlgFoot { justify-content: space-between; }
-.dlg button:not(.dlgX) { height: 30px; padding: 0 14px; border: 0; border-radius: var(--r-s); background: var(--panel-2); font-weight: 600; white-space: nowrap; }
-.dlg button:not(.dlgX):hover { background: var(--panel-3); }
-.dlg button.primary { background: var(--acc); color: #fff; }
-.dlg button.primary:hover { background: var(--acc); filter: brightness(1.1); }
+.dlg button:not(.dlgX):not(.ib) { height: 30px; padding: 0 14px; border: 0; border-radius: var(--r-s); background: var(--wall); box-shadow: inset 0 0 0 1px var(--line); color: var(--ink); font-weight: 600; white-space: nowrap; }
+.dlg button:not(.dlgX):not(.ib):hover { background: var(--dhDim); }
+.dlg button.primary { background: var(--dh); color: #fff; box-shadow: none; }
+.dlg button.primary:hover { background: var(--dhHi); }
 .dlg button:disabled { opacity: .5; pointer-events: none; }
 .fileRow { display: flex; align-items: center; gap: 10px; min-width: 0; }
-#pmFile, #omFile { min-width: 0; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#pmFile, #omFile { min-width: 0; color: var(--sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .fields { display: flex; flex-direction: column; gap: 8px; }
-.fields label { display: grid; grid-template-columns: 1fr 160px; align-items: center; gap: 10px; color: var(--dim); font-weight: 600; }
-.fields select, .fields input { width: 100%; height: 30px; padding: 0 8px; background: var(--bg); border: 1px solid var(--line-2); border-radius: 6px; outline: none; color: var(--text); font: inherit; text-align: left; }
-.fields select:focus, .fields input:focus { border-color: var(--acc); }
-.hint { color: var(--dim); font-size: 12px; }
+.fields label { display: grid; grid-template-columns: 1fr 160px; align-items: center; gap: 10px; color: var(--sub); font-weight: 600; }
+.fields select, .fields input { width: 100%; height: 30px; padding: 0 8px; font: inherit; text-align: left; }
+.hint { color: var(--sub); font-size: 12px; }
 .hint:empty, .err:empty { display: none; }
 .fields .hint { margin-top: -4px; text-align: right; }
-.err { color: #f87171; font-weight: 600; }
-#secDlg { position: fixed; right: 18px; top: 66px; z-index: 8; width: min(408px, calc(100% - 24px)); max-height: calc(100% - 78px); }
+.err { color: var(--red); font-weight: 600; }
+.fields .frow { display: grid; grid-template-columns: 1fr 160px; align-items: center; gap: 10px; color: var(--sub); font-weight: 600; }
+#npMat { display: flex; gap: 3px; }
+.dlg #npMat button { flex: 1; height: 30px; padding: 0; color: var(--sub); }
+.dlg #npMat button.on { background: var(--dh); color: #fff; box-shadow: none; }
+#secDlg { position: fixed; right: 12px; top: calc(var(--topH) + 10px); z-index: 8; width: min(408px, calc(100% - 24px)); max-height: calc(100% - var(--topH) - 20px); }
 #secDlg .dlgHead b { flex: none; }
 #secDlg .dlgHead .dlgX { margin-left: auto; }
 .secTop { display: flex; align-items: center; gap: 14px; }
-.secTop label { display: flex; align-items: center; gap: 8px; color: var(--dim); font-weight: 600; }
-#secDia { height: 28px; padding: 0 8px; background: var(--bg); color: var(--text); border: 1px solid var(--line-2); border-radius: 6px; font: inherit; outline: none; }
-.secTop .chk { margin-left: auto; color: var(--text); cursor: pointer; }
-.chk input { width: 16px; height: 16px; margin: 0; accent-color: var(--acc); }
+.secTop label { display: flex; align-items: center; gap: 8px; color: var(--sub); font-weight: 600; }
+#secDia { height: 28px; padding: 0 8px; font: inherit; }
+.secTop .chk { margin-left: auto; color: var(--ink); cursor: pointer; }
+.chk input { width: 16px; height: 16px; margin: 0; accent-color: var(--dh); }
 #secSvg { width: 100%; height: auto; display: block; background: #141414; border-radius: 6px; stroke: none; stroke-width: 1; }
 #secRows { display: grid; grid-template-columns: 1fr auto auto auto 18px; gap: 6px; align-items: center; }
 #secRows input[type=number] { width: 70px; height: 26px; }
 .dlg #secRows button.cb { width: 28px; height: 26px; padding: 0; font-size: 15px; }
 #secDlg .dlgFoot { justify-content: space-between; }
 #secDlg.off #secSvg, #secDlg.off #secRows { opacity: .45; }
+#phBox { position: fixed; right: 12px; top: calc(var(--topH) + 10px); z-index: 8; width: min(760px, calc(100% - 24px)); max-height: calc(100% - var(--topH) - 20px); display: flex; flex-direction: column; }
+body.sideOn #secDlg, body.sideOn #phBox { right: calc(var(--sideW, 300px) + 12px); }
+body.sideOn #phBox { width: min(760px, calc(100% - var(--sideW, 300px) - 24px)); }
+#phBox .dlgHead { gap: 6px; }
+#phBox .dlgHead b { flex: none; }
+#phBox .dlgHead .ib.s { width: 30px; height: 30px; }
+#phBox .dlgHead .ib.s svg { width: 17px; height: 17px; }
+#phName { flex: 1; min-width: 0; color: var(--sub); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#phNum { color: var(--sub); font-size: 12px; font-variant-numeric: tabular-nums; }
+#phWrap { position: relative; display: flex; align-items: center; justify-content: center; min-height: 200px; margin: 10px 12px 12px; background: #111; border-radius: 6px; overflow: hidden; }
+#phPic { position: relative; display: inline-block; line-height: 0; }
+#phImg { display: block; max-width: 100%; max-height: calc(100vh - 170px); }
+#phMark { position: absolute; width: 30px; height: 30px; margin: -15px 0 0 -15px; border: 2.5px solid #ef4444; border-radius: 50%; box-shadow: 0 0 0 2px rgba(0, 0, 0, .55), inset 0 0 0 2px rgba(0, 0, 0, .55); pointer-events: none; }
+#phMsg { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); padding: 8px 14px; background: #fff; color: var(--ink); border-radius: 8px; font-weight: 600; white-space: nowrap; }
+#phMsg:empty { display: none; }
 
-#info { position: absolute; left: 10px; bottom: 10px; background: rgba(24, 24, 24, .8); padding: 5px 10px; border-radius: var(--r-s); color: #aab; font-size: 11.5px; z-index: 1; }
-#load { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); background: rgba(24, 24, 24, .92); padding: 12px 18px; border-radius: 10px; font-weight: 600; }
-#toast { position: fixed; left: 50%; bottom: 22px; transform: translate(-50%, 12px); max-width: calc(100% - 32px); padding: 10px 16px; background: rgba(43, 43, 43, .97); border-radius: var(--r);
-  box-shadow: 0 10px 30px rgba(0, 0, 0, .45); font-weight: 600; font-variant-numeric: tabular-nums; opacity: 0; pointer-events: none; transition: opacity .15s, transform .15s; z-index: 10; }
-#toast.show { opacity: 1; transform: translate(-50%, 0); pointer-events: auto; }
-body.edOn #toast, body.shOn #toast { bottom: 90px; }
-#toast.click { cursor: pointer; }
-#toast button { margin-left: 12px; height: 26px; padding: 0 12px; border: 0; border-radius: 999px; background: var(--acc); color: #fff; font-weight: 700; }
 /* 오른쪽 메뉴 (오른쪽 눌렀다 떼기 · JACK 1126) */
-#ctxMenu { position: fixed; z-index: 11; min-width: 208px; max-width: 290px; padding: 4px; background: rgba(31, 31, 31, .97); border-radius: var(--r);
-  box-shadow: 0 10px 30px rgba(0, 0, 0, .5), inset 0 0 0 1px var(--line-2); overflow-y: auto; }
-#ctxMenu .cHd { padding: 5px 8px 6px; color: var(--dim); font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#ctxMenu { position: fixed; z-index: 11; min-width: 208px; max-width: 290px; padding: 4px; background: #fff; color: var(--ink); border-radius: var(--r);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, .4), inset 0 0 0 1px var(--line); overflow-y: auto; }
+#ctxMenu .cHd { padding: 5px 8px 6px; color: var(--sub); font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #ctxMenu .ci { display: flex; align-items: center; gap: 9px; width: 100%; height: 30px; padding: 0 10px 0 8px; border: 0; border-radius: var(--r-s); background: transparent; text-align: left; white-space: nowrap; }
 #ctxMenu .ci span { overflow: hidden; text-overflow: ellipsis; }
-#ctxMenu .ci svg { flex: none; width: 16px; height: 16px; stroke-width: 1.8; color: #9aa3b2; }
-#ctxMenu .ci:hover, #ctxMenu .ci:focus-visible { background: var(--acc-soft); outline: none; }
-#ctxMenu .ci:hover svg { color: #fff; }
-#ctxMenu .ci.warn:hover { background: rgba(248, 113, 113, .2); }
-#ctxMenu .sep { height: 1px; margin: 4px 6px; background: var(--line-2); }
+#ctxMenu .ci svg { flex: none; width: 16px; height: 16px; stroke-width: 1.8; color: var(--dh); }
+#ctxMenu .ci:hover, #ctxMenu .ci:focus-visible { background: var(--dhDim); outline: none; }
+#ctxMenu .ci.warn:hover { background: #FDE2E2; }
+#ctxMenu .ci.warn:hover svg { color: var(--red); }
+#ctxMenu .sep { height: 1px; margin: 4px 6px; background: var(--line); }
 #ctxMenu .sub { display: flex; gap: 4px; padding: 2px 6px 6px 33px; }
-#ctxMenu .sub button { flex: 1; height: 24px; padding: 0 6px; border: 0; border-radius: 5px; background: var(--panel-2); font-size: 11.5px; font-weight: 600; white-space: nowrap; }
-#ctxMenu .sub button:hover { background: var(--panel-3); }
+#ctxMenu .sub button { flex: 1; height: 24px; padding: 0 6px; border: 0; border-radius: 5px; background: var(--wall); box-shadow: inset 0 0 0 1px var(--line); font-size: 11.5px; font-weight: 600; white-space: nowrap; }
+#ctxMenu .sub button:hover { background: var(--dhDim); }
 
-/* 재기 · 새 관 · 잘라내기: 아래 안내 줄 · 결과 칸 */
-#msChip { position: absolute; left: 50%; bottom: 44px; transform: translateX(-50%); display: none; align-items: center; gap: 8px; height: 36px; padding: 0 6px 0 14px; max-width: calc(100% - 24px);
-  background: rgba(24, 24, 24, .9); border-radius: 999px; backdrop-filter: blur(6px); white-space: nowrap; box-shadow: inset 0 0 0 1px rgba(250, 204, 21, .6); z-index: 3; }
-#msChip.show { display: flex; }
-#msChip.crop { box-shadow: inset 0 0 0 1px rgba(248, 113, 113, .7); padding-left: 6px; }
-#msTip { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-#msChip button { flex: none; height: 26px; padding: 0 12px; border: 0; border-radius: 999px; background: var(--panel-2); font-weight: 600; }
-#msChip button:hover { background: var(--panel-3); }
-#msChip button:disabled { opacity: .45; pointer-events: none; }
-#msChip #msEnd { background: var(--yel); color: #11141a; }
-#msChip.crop #msEnd { background: #f87171; color: #fff; }
-#msSeg { display: inline-flex; gap: 2px; padding: 2px; border-radius: 999px; background: var(--bg); }
-#msSeg button { height: 24px; padding: 0 10px; background: transparent; color: var(--dim); }
-#msSeg button.on { background: var(--acc); color: #fff; }
-body.msOn #toast { bottom: 90px; }
-#msBox { left: 10px; bottom: 38px; width: 250px; max-width: calc(100% - 20px); }
-#msBox.wide { width: 420px; }
-#msBox .cHead button.pb { margin-left: auto; height: 22px; padding: 0 10px; border: 0; border-radius: 999px; background: var(--panel-2); font-size: 11.5px; font-weight: 600; }
-#msBox .cHead button.pb:hover { background: var(--panel-3); }
-#msSegs { display: grid; grid-template-columns: auto 1fr 1fr; gap: 2px 12px; max-height: 96px; margin-top: 6px; padding-top: 5px; border-top: 1px solid var(--line); overflow-y: auto; font-size: 11.5px; }
-#msSegs:empty { display: none; }
-#msSegs span { text-align: right; white-space: nowrap; }
-#msSegs span.h { color: var(--dim); }
-#msSvg { width: 100%; height: auto; display: block; margin-top: 6px; background: #141414; border-radius: 6px; stroke: none; stroke-width: 1; }
-.fields .frow { display: grid; grid-template-columns: 1fr 160px; align-items: center; gap: 10px; color: var(--dim); font-weight: 600; }
-#npMat { display: flex; gap: 3px; }
-#npMat button { flex: 1; height: 30px; padding: 0; background: var(--panel-2); color: var(--dim); }
-#npMat button.on { background: var(--acc); color: #fff; }
-
-/* 결과물 다듬기 (잘라내기 · DEM · 웹 공유) */
-#trimBox { position: absolute; right: 10px; top: 64px; width: 300px; max-width: calc(100% - 20px); padding: 8px 10px 10px; display: flex; flex-direction: column; gap: 8px; z-index: 5; box-shadow: 0 10px 30px rgba(0, 0, 0, .45); }
 /* 오른쪽 칸 폭 손잡이 (JACK 1126 · map3d.js sideGripInit) */
 #sideGrip { position: absolute; width: 8px; cursor: col-resize; z-index: 3; border-radius: 4px; }
-#sideGrip:hover, #sideGrip.on { background: rgba(47, 129, 247, .35); }
-#side #trimBox { position: relative; right: auto; top: auto; width: auto; max-width: none; box-shadow: none; z-index: auto; }
-#trimBox .ugHead .x { margin-left: auto; width: 24px; height: 24px; padding: 0; border: 0; border-radius: 5px; background: transparent; color: var(--dim); font-size: 16px; line-height: 1; }
-#trimBox .ugHead .x:hover { background: var(--panel-3); color: var(--text); }
-.tbRow { display: flex; align-items: center; gap: 8px; min-height: 26px; }
-#tbState { flex: 1; min-width: 0; color: var(--dim); font-size: 12px; font-variant-numeric: tabular-nums; }
-.pb2 { flex: none; height: 26px; padding: 0 10px; border: 0; border-radius: var(--r-s); background: var(--panel-2); font-size: 12px; font-weight: 600; white-space: nowrap; }
-.pb2:hover { background: var(--panel-3); }
-.pb2:disabled { opacity: .45; pointer-events: none; }
-#tbBtns button:disabled { opacity: .45; pointer-events: none; }
-.bar { height: 6px; border-radius: 999px; background: var(--panel-3); overflow: hidden; }
-.bar i { display: block; height: 100%; width: 0; background: var(--acc); transition: width .3s; }
-#tbProg { display: flex; flex-direction: column; gap: 5px; }
-#tbProg.done .bar i { background: #22c55e; }
-#tbProg.fail .bar i { background: #f87171; }
-#tbProg.fail #tbLine { color: #f87171; }
-#tbLine { color: var(--dim); font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.urlRow { display: flex; gap: 6px; }
-#tbUrl { flex: 1; min-width: 0; height: 28px; padding: 0 8px; background: var(--bg); border: 1px solid var(--line-2); border-radius: 6px; outline: none; }
-#tbHint { color: var(--dim); font-size: 11px; }
-#ngState { flex: 1; min-width: 0; color: var(--dim); font-size: 12px; font-variant-numeric: tabular-nums; }
-#ngState.on { color: #fca5a5; }
+#sideGrip:hover, #sideGrip.on { background: rgba(0, 72, 78, .32); }
 
 /* 맨땅 보기 범례 (높이 색 · 메운 곳 빗금 · 등고선) */
 #dtLeg { position: absolute; left: 10px; bottom: 40px; display: flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px; max-width: calc(100% - 20px);
-  background: rgba(24, 24, 24, .86); border-radius: var(--r-s); color: #d4d4d4; font-size: 11.5px; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; z-index: 1; }
+  background: rgba(255, 255, 255, .94); color: var(--ink); border-radius: var(--r-s); box-shadow: 0 1px 6px rgba(0, 0, 0, .3); font-size: 11.5px; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; z-index: 1; }
 #msBox:not([hidden]) ~ #dtLeg { display: none; }
 #dtLeg .sw { flex: none; display: inline-block; width: 22px; height: 10px; border-radius: 2px; }
 #dtLeg .sw.ramp { background: linear-gradient(90deg, #2b6b52, #6b9e5c, #d9cc80, #b8804d, #ede8e0); }
 #dtLeg .sw.fill { width: 14px; margin-left: 6px; background: repeating-linear-gradient(135deg, #d2cbc6 0 2.2px, #75696e 2.2px 3.6px); }
 #dtMt { display: inline-flex; align-items: center; gap: 6px; }
-#dtTx { color: var(--dim); }
+#dtTx { color: var(--sub); }
 
-/* 원본 사진 */
-#phBox { position: fixed; right: 18px; top: 66px; z-index: 8; width: min(760px, calc(100% - 24px)); max-height: calc(100% - 78px); display: flex; flex-direction: column; }
-#phBox .dlgHead { gap: 6px; }
-#phBox .dlgHead b { flex: none; }
-#phBox .dlgHead .ib.s { width: 30px; height: 30px; padding: 0; background: transparent; }
-#phBox .dlgHead .ib.s:hover { background: var(--panel-2); }
-#phBox .dlgHead .ib.s.on { background: var(--acc-soft); }
-#phBox .dlgHead .ib.s svg { width: 17px; height: 17px; }
-#phName { flex: 1; min-width: 0; color: var(--dim); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-#phNum { color: var(--dim); font-size: 12px; font-variant-numeric: tabular-nums; }
-#phWrap { position: relative; display: flex; align-items: center; justify-content: center; min-height: 200px; margin: 0 12px 12px; background: #111; border-radius: 6px; overflow: hidden; }
-#phPic { position: relative; display: inline-block; line-height: 0; }
-#phImg { display: block; max-width: 100%; max-height: calc(100vh - 170px); }
-#phMark { position: absolute; width: 30px; height: 30px; margin: -15px 0 0 -15px; border: 2.5px solid #ef4444; border-radius: 50%; box-shadow: 0 0 0 2px rgba(0, 0, 0, .55), inset 0 0 0 2px rgba(0, 0, 0, .55); pointer-events: none; }
-#phMsg { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); padding: 8px 14px; background: rgba(24, 24, 24, .9); border-radius: 8px; font-weight: 600; white-space: nowrap; }
-#phMsg:empty { display: none; }
-#flat { position: fixed; inset: 66px 0 28px 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; }
+#info { position: absolute; left: 10px; bottom: 10px; background: rgba(255, 255, 255, .9); padding: 4px 10px; border-radius: var(--r-s); color: var(--sub); font-size: 11.5px; z-index: 1; }
+#load { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); background: #fff; color: var(--dh); padding: 12px 18px; border-radius: 10px; box-shadow: 0 8px 24px rgba(0, 0, 0, .35); font-weight: 600; }
+#toast { position: fixed; left: 50%; bottom: 22px; transform: translate(-50%, 12px); max-width: calc(100% - 32px); padding: 10px 16px; background: #fff; color: var(--ink); border-radius: var(--r); border-left: 3px solid var(--dh);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, .4); font-weight: 600; font-variant-numeric: tabular-nums; opacity: 0; pointer-events: none; transition: opacity .15s, transform .15s; z-index: 10; }
+#toast.show { opacity: 1; transform: translate(-50%, 0); pointer-events: auto; }
+#toast.click { cursor: pointer; }
+#toast button { margin-left: 12px; height: 26px; padding: 0 12px; border: 0; border-radius: 999px; background: var(--dh); color: #fff; font-weight: 700; }
+/* 3D 없는 프로젝트 (결과물 · 웹 공유 카테고리만) */
+#flat { position: fixed; inset: calc(var(--topH) + 10px) 0 28px 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; }
+body.flat.host.sideOn #flat { right: var(--sideW, 300px); }
 #flat img { max-width: 92%; max-height: calc(100% - 40px); object-fit: contain; background: #0c0c0c; }
-#flat .fl { color: #aaa; font-size: 12.5px; }
-@media (max-width: 860px) { #side { width: min(300px, calc(100% - 20px)); max-height: 45vh; top: auto; bottom: 40px; } }
+#flat .fl { color: #c9d3d4; font-size: 12.5px; }
+body.flat #side .cat:not([data-flat]) { display: none; }
+body.flat:not(.host) #side, body.flat:not(.host) #tgSide, body.flat #bHelp { display: none; }
+@media (max-width: 860px) {
+  #side { top: auto; left: 0; bottom: 0; width: auto; max-height: 45vh; border-left: 0; border-top: 1px solid var(--line); }
+  body.sideOn #secDlg, body.sideOn #phBox, body.sideOn #rvDlg { right: 12px; }
+  body.sideOn #phBox { width: min(760px, calc(100% - 24px)); }
+}
 </style>
 </head>
-<body>
+<body class="sideOn">
 <canvas id="c"></canvas>
 <canvas id="ov"></canvas>
 <header id="top">
-  <button class="ib" id="bHome" type="button" title="처음 화면" aria-label="처음"><svg viewBox="0 0 24 24"><path d="M3 11l9-7 9 7"/><path d="M5.5 9.5V20h4.5v-6h4v6h4.5V9.5"/></svg></button>
+  <button class="ib" id="bHome" type="button" title="처음 화면" aria-label="처음" data-host hidden><svg viewBox="0 0 24 24"><path d="M3 11l9-7 9 7"/><path d="M5.5 9.5V20h4.5v-6h4v6h4.5V9.5"/></svg></button>
   <div class="brand"><span class="logo"></span><span id="title">3D 매핑</span></div>
   <div class="spacer"></div>
-  <div id="hostTools" class="tools host">
-    <button class="ib" id="bPipes" type="button" title="관로 넣기 (SHP · DXF)" aria-label="관로 넣기"><svg viewBox="0 0 24 24"><path d="M3 8h9M3 16h9"/><path d="M12 8a2.2 4 0 0 1 0 8"/><path d="M18 8v8M14 12h8"/></svg></button>
-    <button class="ib" id="hObst" type="button" title="지장물 넣기 (SHP)" aria-label="지장물 넣기"><svg viewBox="0 0 24 24"><path d="M2 12h2.5M7 12h2.5M12 12h0.5"/><path d="M2 7.5h10M2 16.5h10" opacity=".45"/><path d="M18 8v8M14 12h8"/></svg></button>
-    <button class="ib" id="bTrim" type="button" title="결과물 다듬기 (잘라내기 · DEM · 웹 공유)" aria-label="결과물 다듬기"><svg viewBox="0 0 24 24"><path d="M6 2v14a2 2 0 0 0 2 2h14"/><path d="M18 22V8a2 2 0 0 0-2-2H2"/></svg></button>
-    <button class="ib" id="bFiles" type="button" title="결과물 폴더 (정사영상 · DSM · 지표면)" aria-label="결과물"><svg viewBox="0 0 24 24"><path d="M4 6h5l2 2h9v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/></svg></button>
-  </div>
-  <div class="tools">
-    <button class="ib" id="tgEdit" type="button" title="관로 고치기 (Esc 끝)" aria-label="관로 고치기"><svg viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13 7l4 4"/></svg></button>
-    <button class="ib" id="tgQty" type="button" title="수량 · 간섭" aria-label="수량"><svg viewBox="0 0 24 24"><path d="M17 5H7l6 7-6 7h10"/></svg></button>
-    <button class="ib on" id="bXray" type="button" title="투시 (땅 너머 관로)" aria-label="투시"><svg viewBox="0 0 24 24"><path d="M2 9h20"/><path d="M4 15h16" stroke-dasharray="2.5 2.5"/><path d="M2 9c3-4.5 17-4.5 20 0" opacity=".5"/></svg></button>
-    <button class="ib" id="bCheck" type="button" title="검사점 정확도 (검사점 파일 → 3D 에서 그 점 찍기 → 잔차 · RMSE)" aria-label="검사점"><svg viewBox="0 0 24 24"><path d="M12 3 4 21h16z"/><path d="M12 10v5"/></svg></button>
-    <button class="ib" id="bDtm" type="button" title="맨땅 보기 (나무 · 건물 뺀 땅 · DTM)" aria-label="맨땅" hidden><svg viewBox="0 0 24 24"><path d="M2 19l6-9 4 5 3-4 7 8z"/><path d="M6.5 15h3.2M13.5 15.5h3.5" opacity=".55"/></svg></button>
-    <button class="ib" id="bGs" type="button" title="가우시안 보기 (가우시안 스플래팅)" aria-label="가우시안" hidden><svg viewBox="0 0 24 24"><ellipse cx="9.5" cy="10" rx="6" ry="3.4" transform="rotate(-28 9.5 10)"/><ellipse cx="16" cy="15" rx="4.2" ry="2.4" transform="rotate(18 16 15)" opacity=".7"/><circle cx="7" cy="17.5" r="2" opacity=".5"/></svg></button>
-    <button class="ib" id="bTop" type="button" title="위에서 보기" aria-label="위에서 보기"><svg viewBox="0 0 24 24"><path d="M12 3 4 8l8 5 8-5zM4 12l8 5 8-5M4 16l8 5 8-5"/></svg></button>
-    <button class="ib on" id="tgSide" type="button" title="오른쪽 칸 (지하 시설물)" aria-label="오른쪽 칸"><svg viewBox="0 0 24 24"><rect x="3" y="4.5" width="18" height="15" rx="2"/><path d="M14.5 4.5v15"/></svg></button>
-  </div>
+  <button class="ib" id="bHelp" type="button" title="조작법" aria-label="조작법"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.6 9.4a2.5 2.5 0 1 1 3.6 2.3c-.8.4-1.2 1-1.2 1.8v.4"/><path d="M12 17.3v.2"/></svg></button>
+  <button class="ib on" id="tgSide" type="button" title="오른쪽 칸 (기능)" aria-label="오른쪽 칸"><svg viewBox="0 0 24 24"><rect x="3" y="4.5" width="18" height="15" rx="2"/><path d="M14.5 4.5v15"/></svg></button>
 </header>
+<div id="helpPop" role="dialog" aria-label="조작법" hidden>
+  <b>마우스</b>
+  <dl><dt>왼쪽 끌기</dt><dd>돌리기 · 위에서 보기면 옮기기</dd><dt>휠 끌기 · Shift</dt><dd>옮기기</dd><dt>휠</dt><dd>확대 · 축소 (마우스 쪽)</dd>
+    <dt>오른쪽 누르기</dt><dd>메뉴 · 재기 · 좌표 · 사진</dd><dt>두 번 누르기</dt><dd>그 자리 가운데 · 관 = 고치기</dd></dl>
+  <b>키</b>
+  <dl><dt>Esc</dt><dd>취소 · 닫기</dd><dt>Enter</dt><dd>끝 · 닫기</dd><dt>Backspace</dt><dd>마지막 점 빼기</dd><dt>Delete</dt><dd>고치기 · 점 지우기</dd>
+    <dt>Ctrl+Z · Y</dt><dd>고치기 · 되돌리기 · 다시</dd><dt>← →</dt><dd>원본 사진 넘기기</dd></dl>
+</div>
 <aside id="side">
-  <section id="ugPane" class="pane">
-    <div class="ugHead"><b>지하 시설물</b><span id="ugTag" class="tag" title="설계값 아님 · 보기용 값"></span><button id="tgShore" class="ib s" type="button" title="가시설 (흙막이)" aria-label="가시설"><svg viewBox="0 0 24 24"><path d="M2 5h4M18 5h4"/><path d="M6 5v15M18 5v15"/><path d="M6 10h12"/></svg></button></div>
-    <div id="ugMode" class="seg4" role="group" aria-label="표현">
-      <button id="mSurf" type="button" title="터파기 영역 · 임시점용 · 영구점용 (땅 위)"><svg viewBox="0 0 24 24"><path d="M2 8h20M2 16h20" stroke-dasharray="3 2.5"/><path d="M2 12h20" stroke-width="3"/></svg><span>터파기 영역</span></button>
-      <button id="mDepth" type="button" title="터파기 · 시공 구덩이 3D"><svg viewBox="0 0 24 24"><path d="M2 8h4l2.5 10h7L18 8h4"/><circle cx="12" cy="15" r="2"/></svg><span>터파기</span></button>
-      <button id="tgSec" class="act" type="button" title="터파기 단면 설정" aria-label="단면"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M4 9.5h16"/><circle cx="12" cy="14.5" r="2.5"/></svg><span>단면</span></button>
+  <!-- 보기 -->
+  <section class="cat" data-cat="view">
+    <button class="catH" id="hd_view" type="button"><svg viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg><b>보기</b><i class="chev"></i></button>
+    <div class="catB">
+      <div class="fgrid">
+        <button class="fb" id="bTop" type="button" title="위에서 보기"><svg viewBox="0 0 24 24"><path d="M12 3 4 8l8 5 8-5zM4 12l8 5 8-5M4 16l8 5 8-5"/></svg><span>위에서</span></button>
+        <button class="fb" id="vHome" type="button" title="처음 시점 (전체)"><svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/><circle cx="12" cy="12" r="2.5"/></svg><span>처음 시점</span></button>
+        <button class="fb" id="vNorth" type="button" title="북쪽 보기"><svg viewBox="0 0 24 24"><path d="M12 3l5 17-5-4-5 4z"/></svg><span>북쪽</span></button>
+        <button class="fb on" id="bXray" type="button" title="투시 (땅 너머 관로)"><svg viewBox="0 0 24 24"><path d="M2 9h20"/><path d="M4 15h16" stroke-dasharray="2.5 2.5"/><path d="M2 9c3-4.5 17-4.5 20 0" opacity=".5"/></svg><span>투시</span></button>
+        <button class="fb" id="bDtm" type="button" title="맨땅 보기 (나무 · 건물 뺀 땅 · DTM)" hidden><svg viewBox="0 0 24 24"><path d="M2 19l6-9 4 5 3-4 7 8z"/><path d="M6.5 15h3.2M13.5 15.5h3.5" opacity=".55"/></svg><span>맨땅</span></button>
+        <button class="fb" id="bGs" type="button" title="가우시안 보기 (가우시안 스플래팅)" hidden><svg viewBox="0 0 24 24"><ellipse cx="9.5" cy="10" rx="6" ry="3.4" transform="rotate(-28 9.5 10)"/><ellipse cx="16" cy="15" rx="4.2" ry="2.4" transform="rotate(18 16 15)" opacity=".7"/><circle cx="7" cy="17.5" r="2" opacity=".5"/></svg><span>가우시안</span></button>
+        <button class="fb" id="vShot" type="button" title="화면 그림 저장"><svg viewBox="0 0 24 24"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg><span>그림 저장</span></button>
+      </div>
+      <div id="lyRow" class="lrow"><span class="lk">레이어</span>
+        <div class="chips">
+          <button id="tgPipes" class="tg on" type="button" title="관로 본체">관로</button>
+          <button id="tgObst" class="tg on" type="button" title="지장물" hidden>지장물</button>
+          <button id="tgLbl" class="tg" type="button" title="이름표 (관경 · 토피)">이름표</button>
+        </div>
+      </div>
     </div>
-    <div id="ugLegend" class="chips" hidden>
-      <button id="lgTmp" class="tg on" type="button" title="임시점용 = 터파기 폭 (켜고 끄기)"><i class="sw tmp"></i>임시점용</button>
-      <button id="lgPerm" class="tg on" type="button" title="영구점용 = 관 바깥지름 (켜고 끄기)"><i class="sw perm"></i>영구점용</button>
+  </section>
+  <!-- 관로 -->
+  <section class="cat" data-cat="pipe">
+    <button class="catH" id="hd_pipe" type="button"><svg viewBox="0 0 24 24"><path d="M3 8h9M3 16h9"/><path d="M12 8a2.2 4 0 0 1 0 8"/><path d="M16 12h6"/></svg><b>관로</b><i class="chev"></i></button>
+    <div class="catB">
+      <div class="fgrid c3">
+        <button class="fb" id="bPipes" type="button" title="관로 불러오기 (SHP · DXF)" data-host hidden><svg viewBox="0 0 24 24"><path d="M3 8h9M3 16h9"/><path d="M12 8a2.2 4 0 0 1 0 8"/><path d="M18 8v8M14 12h8"/></svg><span>SHP 불러오기</span></button>
+        <button class="fb" id="pNew" type="button" data-ms="pipe" title="새 관 직접 그리기 · 점 찍기 · 두 번 누르기 = 끝"><svg viewBox="0 0 24 24"><path d="M3 19l6-7 4 3 4-5"/><circle cx="3" cy="19" r="1.4"/><circle cx="9" cy="12" r="1.4"/><circle cx="13" cy="15" r="1.4"/><path d="M19 3v6M16 6h6"/></svg><span>직접 그리기</span></button>
+        <button class="fb" id="tgEdit" type="button" title="관로 고치기 (Esc 끝)"><svg viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13 7l4 4"/></svg><span>고치기</span></button>
+        <button class="fb" id="bShpOut" type="button" title="지금 관로 (고친 것 포함) 를 SHP 로" data-host hidden><svg viewBox="0 0 24 24"><path d="M12 15V3M7 8l5-5 5 5"/><path d="M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/></svg><span>SHP 내보내기</span></button>
+        <button class="fb" id="hObst" type="button" title="지장물 가져오기 (SHP)" data-host hidden><svg viewBox="0 0 24 24"><path d="M2 12h2.5M7 12h2.5M12 12h.5"/><path d="M2 7.5h10M2 16.5h10" opacity=".45"/><path d="M18 8v8M14 12h8"/></svg><span>지장물 가져오기</span></button>
+      </div>
     </div>
-    <div id="ugShow" class="chips">
-      <button id="tgPipes" class="tg on" type="button" title="관로 본체">관로</button>
-      <button id="tgPit" class="tg" type="button" title="터파기 형상">터파기</button>
-      <button id="tgObst" class="tg on" type="button" title="지장물" hidden>지장물</button>
-      <button id="tgLbl" class="tg" type="button" title="이름표 (관경 · 토피)">이름표</button>
+  </section>
+  <!-- 터파기 · 점용 -->
+  <section class="cat" data-cat="trench">
+    <button class="catH" id="hd_trench" type="button"><svg viewBox="0 0 24 24"><path d="M2 8h4l2.5 10h7L18 8h4"/><circle cx="12" cy="15" r="2"/></svg><b>터파기 · 점용</b><span id="ugTag" class="tag" title="설계값 아님 · 보기용 값"></span><i class="chev"></i></button>
+    <div class="catB">
+      <div id="ugMode" class="fgrid c3" role="group" aria-label="표현">
+        <button class="fb" id="mSurf" type="button" title="터파기 영역 · 임시점용 · 영구점용 (땅 위)"><svg viewBox="0 0 24 24"><path d="M2 8h20M2 16h20" stroke-dasharray="3 2.5"/><path d="M2 12h20" stroke-width="3"/></svg><span>터파기 영역</span></button>
+        <button class="fb" id="mDepth" type="button" title="터파기 · 시공 구덩이 3D"><svg viewBox="0 0 24 24"><path d="M2 8h4l2.5 10h7L18 8h4"/><circle cx="12" cy="15" r="2"/></svg><span>터파기</span></button>
+        <button class="fb act" id="tgSec" type="button" title="터파기 단면 설정" aria-label="단면"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M4 9.5h16"/><circle cx="12" cy="14.5" r="2.5"/></svg><span>단면</span></button>
+      </div>
+      <div id="ugLegend" class="chips" hidden>
+        <button id="lgTmp" class="tg on" type="button" title="임시점용 = 터파기 폭 (켜고 끄기)"><i class="sw tmp"></i>임시점용</button>
+        <button id="lgPerm" class="tg on" type="button" title="영구점용 = 관 바깥지름 (켜고 끄기)"><i class="sw perm"></i>영구점용</button>
+      </div>
+      <div id="ugShow" class="chips">
+        <button id="tgPit" class="tg" type="button" title="터파기 형상 (켜고 끄기)">터파기 형상</button>
+      </div>
+      <label class="numbox" title="지표 → 관 윗면 (관 표고 없을 때)">평균매설깊이<input id="cover" type="number" step="0.1" min="0" max="20" inputmode="decimal">m<button id="bTrDef" class="pb2" type="button" title="터파기 단면 = 가시화 기본값 (SAC)">기본값</button></label>
     </div>
-    <label class="numbox" title="지표 → 관 윗면 (관 표고 없을 때)">평균매설깊이<input id="cover" type="number" step="0.1" min="0" max="20" inputmode="decimal">m</label>
-    <div id="shBox" hidden>
-      <div id="shTypes" class="seg3" role="group" aria-label="가시설 종류">
-        <button id="shPanel" data-t="panel" type="button" title="조립식 간이흙막이 (판 + 보강대) · 관 위 두 점" aria-label="조립식 간이흙막이"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="6" height="14" rx="1"/><rect x="15" y="5" width="6" height="14" rx="1"/><path d="M9 10h6M9 15h6"/></svg><span>간이흙막이</span></button>
-        <button id="shHpile" data-t="hpile" type="button" title="토류벽 흙막이 (H형강 + 토류판) · 관 위 두 점" aria-label="토류벽 흙막이"><svg viewBox="0 0 24 24"><path d="M3 4v16M7 4v16M3 12h4M17 4v16M21 4v16M17 12h4"/><path d="M7 8h10M7 12h10M7 16h10" opacity=".55"/></svg><span>토류벽</span></button>
-        <button id="shSheet" data-t="sheet" type="button" title="시트파일 · 관 위 두 점" aria-label="시트파일"><svg viewBox="0 0 24 24"><path d="M2 8h3l2 8h4l2-8h4l2 8h3"/></svg><span>시트파일</span></button>
+  </section>
+  <!-- 가시설 (머리줄 id = tgShore · 몸 = shBox) -->
+  <section class="cat" data-cat="shore">
+    <button class="catH" id="tgShore" type="button" title="가시설 (흙막이)"><svg viewBox="0 0 24 24"><path d="M2 5h4M18 5h4"/><path d="M6 5v15M18 5v15"/><path d="M6 10h12"/></svg><b>가시설</b><i class="chev"></i></button>
+    <div class="catB" id="shBox">
+      <div id="shTypes" class="fgrid c3" role="group" aria-label="가시설 종류">
+        <button class="fb sh" id="shPanel" data-t="panel" type="button" title="조립식 간이흙막이 (판 + 보강대) · 관 위 두 점" aria-label="조립식 간이흙막이"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="6" height="14" rx="1"/><rect x="15" y="5" width="6" height="14" rx="1"/><path d="M9 10h6M9 15h6"/></svg><span>간이흙막이</span></button>
+        <button class="fb sh" id="shHpile" data-t="hpile" type="button" title="토류벽 흙막이 (H형강 + 토류판) · 관 위 두 점" aria-label="토류벽 흙막이"><svg viewBox="0 0 24 24"><path d="M3 4v16M7 4v16M3 12h4M17 4v16M21 4v16M17 12h4"/><path d="M7 8h10M7 12h10M7 16h10" opacity=".55"/></svg><span>토류벽</span></button>
+        <button class="fb sh" id="shSheet" data-t="sheet" type="button" title="시트파일 · 관 위 두 점" aria-label="시트파일"><svg viewBox="0 0 24 24"><path d="M2 8h3l2 8h4l2-8h4l2 8h3"/></svg><span>시트파일</span></button>
       </div>
       <div id="shList"></div>
     </div>
   </section>
-  <section id="ck" class="pane" style="display:none">
-    <div class="ckh"><b>검사점</b><span id="ckRms"></span><button class="x" id="ckClose" type="button" title="닫기">×</button></div>
-    <div id="ckList" class="ckl"></div>
-    <div class="row"><span id="ckHint"></span><div class="spacer"></div><button id="ckSave" type="button">보고서 저장</button></div>
+  <!-- 하천 추진 · 횡단 (JACK 1126 · 셈 = viewer/river.js · 관 위 시점 → 종점 · 몸 = rvBox · 설정 칸 rvSet = 목록에서 고른 구간) -->
+  <section class="cat" data-cat="river">
+    <button class="catH" id="hd_river" type="button" title="하천 추진 · 횡단 (관 위 시점 → 종점)"><svg viewBox="0 0 24 24"><path d="M2 8c2.5-2 4.5 2 7 0s4.5 2 7 0 4.5 2 6 0"/><path d="M4 12v9M20 12v9"/><path d="M4 17h16" stroke-dasharray="2.5 2"/></svg><b>하천 추진 · 횡단</b><span id="rvTag" class="tag user"></span><i class="chev"></i></button>
+    <div class="catB" id="rvBox">
+      <div id="rvKinds" class="fgrid c3" role="group" aria-label="하천 공법">
+        <button class="fb sh" id="rvJack" data-k="jack" type="button" title="하천 추진 · 관 위 시점 (발진구) → 종점 (도달구)"><svg viewBox="0 0 24 24"><rect x="2" y="7" width="5" height="13" rx="1"/><rect x="17" y="10" width="5" height="10" rx="1"/><path d="M7 16h10"/><path d="M8 4.5c1.5-1 3 1 4.5 0s3 1 4.5 0" opacity=".6"/></svg><span>추진</span></button>
+        <button class="fb sh" id="rvOpen" data-k="open" type="button" title="하천 횡단 (개착 · 가물막이) · 관 위 시점 → 종점"><svg viewBox="0 0 24 24"><path d="M3 9h4v10H3zM17 9h4v10h-4z"/><path d="M7 14c2-1.5 3.5 1.5 5 0s3 1.5 5 0"/><path d="M2 21h20"/></svg><span>횡단</span></button>
+        <button class="fb act" id="rvSec" type="button" title="하천 종단 · 수량 (고른 구간)"><svg viewBox="0 0 24 24"><path d="M3 9l4 2 3-1 4 5 3-2 4 1"/><path d="M3 20h18"/><path d="M10 13v7M14 15v5" opacity=".6"/></svg><span>종단</span></button>
+      </div>
+      <div id="rvList"></div>
+      <div id="rvSet" hidden></div>
+    </div>
+  </section>
+  <!-- AI 부대공 (JACK 1126 · 결과 = data/ai_budae.js · 엔진 = 프로그램 ai_status · ai_setup · ai_run · ai_save · 셈 = map3d.js «AI 부대공») -->
+  <section class="cat" data-cat="ai">
+    <button class="catH" id="hd_ai" type="button" title="AI 부대공 (연석 · 석축 · 보도 · 포장 인식 → 확인 → 수량)"><svg viewBox="0 0 24 24"><path d="M3 21l4.5-13M14.5 21L10 8"/><path d="M2.5 21h13" opacity=".55"/><path d="M18.5 2.5l.9 2.4 2.4.9-2.4.9-.9 2.4-.9-2.4-2.4-.9 2.4-.9z"/></svg><b>AI 부대공</b><span id="aiTag" class="tag"></span><i class="chev"></i></button>
+    <div class="catB" id="aiBox">
+      <div class="fgrid c3" role="group" aria-label="AI 부대공">
+        <button class="fb" id="aiRun" type="button" title="AI 인식 (3D 매핑 + 같은 구간 360) · 처음이면 AI 엔진 받기" data-host hidden><svg viewBox="0 0 24 24"><path d="M12 2.5l1.6 4.3 4.3 1.6-4.3 1.6L12 14.3l-1.6-4.3-4.3-1.6 4.3-1.6z"/><path d="M18.5 14l.8 2.1 2.1.8-2.1.8-.8 2.1-.8-2.1-2.1-.8 2.1-.8zM6 15.5l.6 1.6 1.6.6-1.6.6L6 19.9l-.6-1.6-1.6-.6 1.6-.6z" opacity=".7"/></svg><span>AI 인식</span></button>
+        <button class="fb act" id="ai360" type="button" title="같은 구간 360 프로젝트 (고르면 함께 판단 · 안 고르면 3D 만)" data-host hidden><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><ellipse cx="12" cy="12" rx="8.5" ry="3.2"/><path d="M12 3.5v17" opacity=".5"/></svg><span>360 고르기</span></button>
+        <button class="fb" id="aiQty" type="button" title="부대공 수량 (임시점용 테두리 안 · 이 관 / 전체)"><svg viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="12" rx="1.5" stroke-dasharray="3 2.5"/><path d="M6 15l4-5 3 3 2-2 3 4"/></svg><span>부대공 수량</span></button>
+      </div>
+      <div id="ai360Row" class="row" hidden><span id="ai360Name" class="dimTxt"></span><button id="ai360X" class="pb2" type="button" title="360 빼기 (3D 만으로 인식)">빼기</button></div>
+      <div id="aiProg" hidden><div class="bar"><i id="aiBar"></i></div><div id="aiLine"></div></div>
+      <div id="aiNone" class="dimTxt">AI 인식 안 함</div>
+      <div id="aiKinds" class="chips" role="group" aria-label="부대공 종류 (보이기)"></div>
+      <div id="aiHead" class="row" hidden><span id="aiSum"></span><span id="aiSave"></span></div>
+      <div id="aiList"></div>
+      <div id="aiMore"></div>
+    </div>
+  </section>
+  <!-- 수량 (갈래마다 단추 → 아래 표) -->
+  <section class="cat" data-cat="qty">
+    <button class="catH" id="hd_qty" type="button"><svg viewBox="0 0 24 24"><path d="M17 5H7l6 7-6 7h10"/></svg><b>수량</b><i class="chev"></i></button>
+    <div class="catB">
+      <div class="fgrid c3" role="group" aria-label="수량 갈래">
+        <button class="fb" id="tgQty" type="button" data-q="all" title="수량 전체 (이 관 · 전체)"><svg viewBox="0 0 24 24"><path d="M17 5H7l6 7-6 7h10"/></svg><span>전체</span></button>
+        <button class="fb" id="qkPipe" type="button" data-q="pipe" title="관로 연장"><svg viewBox="0 0 24 24"><path d="M3 12h18"/><path d="M6 8l-3 4 3 4M18 8l3 4-3 4"/><path d="M8 7h8M8 17h8" opacity=".5"/></svg><span>관로</span></button>
+        <button class="fb" id="qkEarth" type="button" data-q="earth" title="터파기 · 모래 기초 · 되메우기"><svg viewBox="0 0 24 24"><path d="M2 7h4l2.5 11h7L18 7h4"/><path d="M9.5 14h5" opacity=".55"/></svg><span>토공</span></button>
+        <button class="fb" id="qkPave" type="button" data-q="pave" title="포장 깨기"><svg viewBox="0 0 24 24"><path d="M2 8h20v4H2z"/><path d="M5 18l2-4M11 18l2-4M17 18l2-4" opacity=".6"/></svg><span>포장</span></button>
+        <button class="fb" id="qkOcc" type="button" data-q="occ" title="임시점용 · 영구점용"><svg viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="12" rx="1.5" stroke-dasharray="3 2.5"/><path d="M3 12h18" stroke-width="3"/></svg><span>점용</span></button>
+        <button class="fb" id="qkShore" type="button" data-q="shore" title="가시설 연장 (종류마다)"><svg viewBox="0 0 24 24"><path d="M2 5h4M18 5h4"/><path d="M6 5v15M18 5v15"/><path d="M6 10h12"/></svg><span>가시설</span></button>
+        <button class="fb" id="qkRiver" type="button" data-q="river" title="하천 추진 · 횡단 (추진 길이 · 수직구 · 흙막이 · 가물막이)"><svg viewBox="0 0 24 24"><path d="M2 8c2.5-2 4.5 2 7 0s4.5 2 7 0 4.5 2 6 0"/><path d="M4 12v9M20 12v9"/><path d="M4 17h16" stroke-dasharray="2.5 2"/></svg><span>하천</span></button>
+        <button class="fb" id="qkBudae" type="button" data-q="budae" title="부대공 (AI 후보 · 임시점용 테두리 안 · 아님 뺌)"><svg viewBox="0 0 24 24"><path d="M3 21l4.5-13M14.5 21L10 8"/><path d="M2.5 21h13" opacity=".55"/><path d="M18.5 2.5l.9 2.4 2.4.9-2.4.9-.9 2.4-.9-2.4-2.4-.9 2.4-.9z"/></svg><span>부대공</span></button>
+      </div>
+      <div id="qtyBox" hidden>
+        <div class="qHead"><b id="qTitle">수량</b><span id="qLine"></span><button id="qX" class="x" type="button" title="닫기">×</button></div>
+        <div id="qTab"></div>
+        <div id="qNote"></div>
+      </div>
+    </div>
+  </section>
+  <!-- 간섭 (지장물 종류마다 단추 → 아래 목록) -->
+  <section class="cat" data-cat="cf">
+    <button class="catH" id="hd_cf" type="button"><svg viewBox="0 0 24 24"><path d="M12 3 2 20h20z"/><path d="M12 10v4.5M12 17.2v.3"/></svg><b>간섭</b><span id="cfTag" class="tag"></span><i class="chev"></i></button>
+    <div class="catB">
+      <div id="cfNone" class="dimTxt">지장물 없음</div>
+      <div id="qClr"><label title="관 바깥 ↔ 지장물 바깥 이 거리 안 = 간섭">이격<input id="qGap" type="number" step="0.05" min="0" max="5" inputmode="decimal">m</label><b id="qHit"></b></div>
+      <div id="cfKinds" class="chips" role="group" aria-label="지장물 갈래"></div>
+      <div id="qList"></div>
+    </div>
+  </section>
+  <!-- 재기 · 검사 -->
+  <section class="cat" data-cat="meas">
+    <button class="catH" id="hd_meas" type="button"><svg viewBox="0 0 24 24"><path d="M3 17 17 3l4 4L7 21z"/><path d="M7 13l2 2M10 10l2 2M13 7l2 2"/></svg><b>재기 · 검사</b><i class="chev"></i></button>
+    <div class="catB">
+      <div class="fgrid">
+        <button class="fb" id="msDist" type="button" data-ms="dist" title="거리 재기 · 점 찍기 · 두 번 누르기 = 끝"><svg viewBox="0 0 24 24"><path d="M4 18 20 6"/><circle cx="4" cy="18" r="1.8"/><circle cx="20" cy="6" r="1.8"/><circle cx="12" cy="12" r="1.8"/></svg><span>거리</span></button>
+        <button class="fb" id="msArea" type="button" data-ms="area" title="면적 재기 · 점 찍기 · 두 번 누르기 = 닫기"><svg viewBox="0 0 24 24"><path d="M5 6l13 2 2 10-14 1z"/></svg><span>면적</span></button>
+        <button class="fb" id="msHeight" type="button" data-ms="height" title="높이 차 · 두 점"><svg viewBox="0 0 24 24"><path d="M7 4v16M4 7l3-3 3 3M4 17l3 3 3-3"/><path d="M13 18l7-9"/></svg><span>높이 차</span></button>
+        <button class="fb" id="msProf" type="button" data-ms="prof" title="지형 단면 · 두 점"><svg viewBox="0 0 24 24"><path d="M3 17l4-6 4 3 4-7 6 8"/><path d="M3 21h18"/></svg><span>지형 단면</span></button>
+        <button class="fb" id="bCheck" type="button" title="검사점 정확도 (검사점 파일 → 3D 에서 그 점 찍기 → 잔차 · RMSE)" data-host hidden><svg viewBox="0 0 24 24"><path d="M12 3 4 21h16z"/><path d="M12 10v5"/></svg><span>검사점</span></button>
+      </div>
+      <div id="ck" style="display:none">
+        <div class="ckh"><b>검사점</b><span id="ckRms"></span><button class="x" id="ckClose" type="button" title="닫기">×</button></div>
+        <div id="ckList" class="ckl"></div>
+        <div class="row"><span id="ckHint"></span><button id="ckSave" type="button">보고서 저장</button></div>
+      </div>
+    </div>
+  </section>
+  <!-- 결과물 (머리줄 id = bTrim · 몸 = trimBox · 프로그램 안에서만) -->
+  <section class="cat" data-cat="out" data-flat data-host hidden>
+    <button class="catH" id="bTrim" type="button" title="결과물 (폴더 · 잘라내기 · DEM · 땅 아님)"><svg viewBox="0 0 24 24"><path d="M4 6h5l2 2h9v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/></svg><b>결과물</b><i class="chev"></i></button>
+    <div class="catB" id="trimBox">
+      <div id="tbBtns" class="fgrid" role="group" aria-label="결과물">
+        <button class="fb" id="bFiles" type="button" title="결과물 폴더 (정사영상 · DSM · 지표면)"><svg viewBox="0 0 24 24"><path d="M4 6h5l2 2h9v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/></svg><span>결과물 폴더</span></button>
+        <button class="fb" id="tbCut" type="button" title="네모 · 다각형으로 그려 바깥을 잘라냄 · 결과물 다시 만듦 (사진 394장 3~5분)"><svg viewBox="0 0 24 24"><path d="M6 2v14a2 2 0 0 0 2 2h14"/><path d="M18 22V8a2 2 0 0 0-2-2H2"/></svg><span>잘라내기</span></button>
+        <button class="fb" id="tbDem" type="button" title="땅만 남긴 높이 (DTM) · 결과물 다시 만듦 (3D · 정사 · DSM · DTM · LAS · 등고선)"><svg viewBox="0 0 24 24"><path d="M3 18l5-7 4 4 3-5 6 8z"/></svg><span>DEM 만들기</span></button>
+        <button class="fb" id="ngDraw" type="button" title="땅 아님 · DTM 이 놓친 건물 등 · 다각형으로 그려 땅에서 뺌" hidden><svg viewBox="0 0 24 24"><path d="M4 7l9-3 7 6-3 10-12-2z" stroke-dasharray="3 2.2"/><path d="M9.5 10.5l5 5M14.5 10.5l-5 5"/></svg><span>땅 아님</span></button>
+      </div>
+      <div class="row"><span id="tbState">잘린 곳 없음</span><button id="tbClear" class="pb2" type="button" hidden>잘라내기 없앰</button></div>
+      <div id="ngRow" class="row" hidden><span id="ngState">땅 아님 없음</span><button id="ngClear" class="pb2" type="button" hidden>모두 없앰</button></div>
+      <div id="tbProg" hidden><div class="bar"><i id="tbBar"></i></div><div id="tbLine"></div></div>
+    </div>
+  </section>
+  <!-- 웹 공유 (프로그램 안에서만 · NAS) -->
+  <section class="cat" data-cat="web" data-flat data-host hidden>
+    <button class="catH" id="hd_web" type="button" title="웹 공유 (NAS 웹 주소)"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3.5 3 14.5 0 18M12 3c-3 3.5-3 14.5 0 18"/></svg><b>웹 공유</b><span id="webTag" class="tag ok"></span><i class="chev"></i></button>
+    <div class="catB" id="webBox">
+      <div class="fgrid c3">
+        <button class="fb" id="tbWeb" type="button" title="웹 주소로 올리기 (NAS · 바뀐 파일만)"><svg viewBox="0 0 24 24"><path d="M7 18a4.5 4.5 0 0 1-.6-9 6 6 0 0 1 11.4 1.6A3.8 3.8 0 0 1 17.5 18"/><path d="M12 12v8M9 15l3-3 3 3"/></svg><span>올리기</span></button>
+        <button class="fb" id="tbCopy" type="button" title="웹 주소 복사" disabled><svg viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg><span>주소 복사</span></button>
+        <button class="fb" id="tbOpen" type="button" title="브라우저로 열기" disabled><svg viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-9 9"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg><span>열기</span></button>
+      </div>
+      <div class="row"><span id="webState"></span></div>
+      <div id="tbUrlRow" class="urlRow" hidden><input id="tbUrl" type="text" readonly spellcheck="false" aria-label="웹 주소"></div>
+    </div>
   </section>
 </aside>
-<div id="qtyBox" hidden>
-  <div class="qHead"><b>수량</b><span id="qLine"></span><button id="qX" type="button" title="닫기">×</button></div>
-  <div id="qTab"></div>
-  <div id="qNote"></div>
-  <div id="qClr"><label>이격<input id="qGap" type="number" step="0.05" min="0" max="5" inputmode="decimal">m</label><b id="qHit"></b></div>
-  <div id="qList"></div>
-</div>
 <div id="edChip"><span id="edTip">관로 고치기 · 점 끌기 · 두 번 누르기 = 점 추가 · Delete = 삭제 · Shift 끌기 = 통째로</span><button id="edShp" type="button" hidden>SHP로 내보내기</button><button id="edDrop" type="button" hidden>고친 것 버리기</button><button id="edEnd" type="button">끝</button></div>
 <div id="shChip"><b id="shTip">시작점</b><span id="shName"></span><button id="shCancel" type="button" title="취소 (Esc)">취소</button></div>
 <div id="msChip"><span id="msSeg" hidden><button id="msRect" type="button" title="두 구석 끌기">네모</button><button id="msPoly" type="button" title="점 찍기">다각형</button></span><span id="msTip"></span><button id="msEnd" type="button">끝</button><button id="msX" type="button" title="취소 (Esc)">취소</button></div>
@@ -399,19 +599,6 @@ body.msOn #toast { bottom: 90px; }
 </div>
 <div id="dtLeg" hidden><i class="sw ramp"></i><span id="dtMt"><span>땅으로 잰 곳</span><i class="sw fill"></i><span>메운 곳</span></span><span id="dtTx"></span></div>
 <div id="ctxMenu" role="menu" hidden></div>
-<section id="trimBox" class="pane" hidden>
-  <div class="ugHead"><b>결과물 다듬기</b><button id="tbX" class="x" type="button" title="닫기">×</button></div>
-  <div class="tbRow"><span id="tbState">잘린 곳 없음</span><button id="tbClear" class="pb2" type="button" hidden>잘라내기 없앰</button></div>
-  <div id="ngRow" class="tbRow" hidden><span id="ngState">땅 아님 없음</span><button id="ngDraw" class="pb2" type="button" title="DTM 이 놓친 건물 등 · 다각형으로 그려 땅에서 뺌">그리기</button><button id="ngClear" class="pb2" type="button" hidden>모두 없앰</button></div>
-  <div id="tbBtns" class="seg4" role="group" aria-label="결과물 다듬기">
-    <button id="tbCut" type="button" title="네모 · 다각형으로 그려 바깥을 잘라냄"><svg viewBox="0 0 24 24"><path d="M6 2v14a2 2 0 0 0 2 2h14"/><path d="M18 22V8a2 2 0 0 0-2-2H2"/></svg><span>잘라내기</span></button>
-    <button id="tbDem" type="button" title="땅만 남긴 높이 (DTM)"><svg viewBox="0 0 24 24"><path d="M3 18l5-7 4 4 3-5 6 8z"/></svg><span>DEM 만들기</span></button>
-    <button id="tbWeb" type="button" title="웹 주소로 올리기 (NAS)"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3.5 3 14.5 0 18M12 3c-3 3.5-3 14.5 0 18"/></svg><span>웹 공유</span></button>
-  </div>
-  <div id="tbProg" hidden><div class="bar"><i id="tbBar"></i></div><div id="tbLine"></div></div>
-  <div id="tbUrlRow" class="urlRow" hidden><input id="tbUrl" type="text" readonly spellcheck="false"><button id="tbCopy" class="pb2" type="button">주소 복사</button></div>
-  <div id="tbHint">잘라내기 · DEM = 결과물 다시 만듦 (3D · 정사 · DSM · DTM · LAS · 등고선) · 사진 394장이면 3~5분</div>
-</section>
 <section id="phBox" class="dlg" role="dialog" aria-label="원본 사진" hidden>
   <div class="dlgHead"><b>원본 사진</b><span id="phName"></span><span id="phNum"></span>
     <button id="phPrev" class="ib s" type="button" title="이전 (←)" aria-label="이전"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button>
@@ -482,6 +669,13 @@ body.msOn #toast { bottom: 90px; }
   </div>
   <div class="dlgFoot"><button id="secDef" type="button" title="가시화 기본값 (SAC)">기본값</button><button id="secClose" class="primary" type="button">닫기</button></div>
 </section>
+<section id="rvDlg" class="dlg" role="dialog" aria-label="하천 종단" hidden>
+  <div class="dlgHead"><b>하천 종단</b><span id="rvDTag" class="tag user"></span><button id="rvX" class="dlgX" type="button" title="닫기 (Esc)">×</button></div>
+  <div class="dlgBody">
+    <svg id="rvSvg" viewBox="0 0 380 236" role="img" aria-label="하천 종단 그림"></svg>
+    <div id="rvRows"></div>
+  </div>
+</section>
 <div id="load">불러오는 중…</div>
 <div id="info"></div>
 <div id="toast"></div>
@@ -490,6 +684,8 @@ body.msOn #toast { bottom: 90px; }
 <script src="data/obstacles.js" onerror="void 0"></script>
 <script src="data/calib.js" onerror="void 0"></script>
 <script src="data/dem.js" onerror="void 0"></script>
+<script src="data/ai_budae.js" onerror="void 0"></script>
+<script src="viewer/river.js" onerror="void 0"></script>
 <script src="viewer/map3d.js"></script>
 </body>
 </html>

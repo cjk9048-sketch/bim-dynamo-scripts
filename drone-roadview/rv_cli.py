@@ -5,6 +5,7 @@
     rv_cli pipes 결과폴더 관로.shp --dia-field 관경
     rv_cli map 사진폴더 --out 결과폴더 --quality normal   (3D 매핑 · --cluster 공유폴더 = 옆 PC 와 함께 처리)
     rv_cli helper --board 공유폴더                          (함께 처리 도우미 · 앱 «도우미 모드»)
+    rv_cli ai setup | ai run 매핑폴더 [--p360 360폴더] | ai status   (AI 부대공 인식 · 엔진은 처음 쓸 때 내려받기)
 """
 import multiprocessing
 import sys
@@ -24,6 +25,8 @@ def main():
         from roadview.mapping import main as m
     elif cmd == 'helper':
         from roadview.cluster import helper_main as m
+    elif cmd == 'ai':
+        from roadview.ai_budae import main as m
     else:
         print(__doc__)
         return 2

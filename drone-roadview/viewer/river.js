@@ -113,23 +113,37 @@
       if (Number.isFinite(g) && g < gMin) { gMin = g; sMin = s; }
     }
     if (!Number.isFinite(gMin)) { out.ok = false; out.msg = '땅 높이 없음'; return out; }
-    const top = gMin - q.cover, zc = top - od / 2, bot = zc - od / 2;
-    Object.assign(out, { gMin: gMin, sMin: sMin, top: top, zc: zc, bot: bot });
+    // 추진 = 토피를 케이싱 윗면에서 잼 (하천 아래 토피는 바깥 구조물 기준 · 1126 검토) · 개착 = 관 윗면에서
+    const cas = q.k === 'jack' ? (q.cas > 0 ? q.cas : round(od + 0.2, 3)) : od;
+    const zc = gMin - q.cover - Math.max(cas, od) / 2, top = zc + od / 2, bot = zc - od / 2;
+    Object.assign(out, { gMin: gMin, sMin: sMin, top: top, zc: zc, bot: bot, casTop: zc + cas / 2 });
     let ext = 3;
+    const bends = (pts) => {                       // 2° 넘게 꺾인 꼭짓점이 있는지 (곧게 이어진 꼭짓점은 괜찮음)
+      for (let i = 1; i + 1 < pts.length; i++) {
+        const a = pts[i - 1][1], b = pts[i][1], c = pts[i + 1][1];
+        const ux = b.x - a.x, uy = b.y - a.y, vx = c.x - b.x, vy = c.y - b.y, lu = Math.hypot(ux, uy), lv = Math.hypot(vx, vy);
+        if (lu > 1e-6 && lv > 1e-6 && (ux * vx + uy * vy) / (lu * lv) < Math.cos(2 * Math.PI / 180)) return true;
+      }
+      return false;
+    };
     if (q.k === 'jack') {
-      const sL = q.rev ? q.b : q.a, sA = q.rev ? q.a : q.b, dir = sA > sL ? 1 : -1, zb = bot - q.base;
+      const sL = q.rev ? q.b : q.a, sA = q.rev ? q.a : q.b, dir = sA > sL ? 1 : -1, zb = zc - Math.max(cas, od) / 2 - q.base;
+      let noGround = false;
       const mk = (s, launch) => {
-        const p = P.at(s), rect = q.shape === 'rect';
+        // 방향은 구간 안쪽에서 잼 (끝 수직구가 꺾인 점에 서면 다음 관 방향으로 돌던 것 · 1126 검토)
+        const p = P.at(s), pd = P.at(s >= q.b ? s - 0.01 : s + 0.01), rect = q.shape === 'rect';
         const w = rect ? (launch ? q.lw : q.aw) : (launch ? q.ld : q.ad), l = rect ? (launch ? q.ll : q.al) : w;
         let g = G(p.x, p.y);
-        if (!Number.isFinite(g)) g = gMin;
-        return { s: s, x: p.x, y: p.y, tx: p.tx * dir, ty: p.ty * dir, g: g, launch: launch, shape: q.shape, w: w, l: l, zb: zb, depth: g - zb,
+        if (!Number.isFinite(g)) { g = gMin; noGround = true; }
+        return { s: s, x: p.x, y: p.y, tx: pd.tx * dir, ty: pd.ty * dir, g: g, launch: launch, shape: q.shape, w: w, l: l, zb: zb, depth: g - zb,
           area: rect ? w * l : Math.PI * w * w / 4, per: rect ? 2 * (w + l) : Math.PI * w, hp: rect ? 2 * ceilN(l / HP_PITCH) + 2 * ceilN(w / HP_PITCH) : 0 };
       };
       const L = mk(sL, true), A = mk(sA, false);
       const c0 = sL + dir * L.l / 2, c1 = sA - dir * A.l / 2;
-      Object.assign(out, { shafts: [L, A], zb: zb, dir: dir, c0: c0, c1: c1, jackLen: Math.max(0, (c1 - c0) * dir), cas: q.cas > 0 ? q.cas : round(od + 0.2, 3) });
+      Object.assign(out, { shafts: [L, A], zb: zb, dir: dir, c0: c0, c1: c1, jackLen: Math.max(0, (c1 - c0) * dir), cas: cas });
       if (!(out.jackLen > 0)) { out.ok = false; out.msg = '구간이 수직구보다 짧음'; }
+      else if (noGround) { out.ok = false; out.msg = '수직구 자리 땅 높이 없음'; }
+      else if (bends(P.between(c0, c1))) { out.ok = false; out.msg = '추진 구간 안에서 관이 꺾임 · 곧은 구간으로'; }
       ext = Math.max(L.l, A.l) / 2 + 2;
     } else {
       const sm = (q.a + q.b) / 2, damTop = gMin + q.h;
@@ -156,7 +170,6 @@
         const s0 = st === 1 ? q.a : q.b, legs = [side(s0, sm, q.w), cross(sm, q.w), side(sm, s0, -q.w)];
         let len = 0, bags = 0, sheet = 0;
         for (const L of legs) {
-          len += L.len;
           const nc = L.len > 1e-6 ? ceilN(L.len / BAG_W) : 0;
           L.cols = [];
           for (let i = 0; i < nc; i++) {
@@ -166,7 +179,7 @@
           }
           for (let i = 1; i < L.pts.length; i++) {
             const a = L.pts[i - 1], b = L.pts[i], dl = b[3] - a[3], ha = Math.max(0, damTop - a[2]), hb = Math.max(0, damTop - b[2]);
-            if (ha > 0 || hb > 0) sheet += dl * ((ha + hb) / 2 + q.emb);
+            if (ha > 0 || hb > 0) { sheet += dl * ((ha + hb) / 2 + q.emb); len += dl; }   // 마른 둔치는 길이에서 뺌 (1126 검토)
           }
         }
         return { st: st, s0: s0, sm: sm, legs: legs, len: len, bags: bags, sheet: sheet };
@@ -197,7 +210,7 @@
   function qty(pl) {
     const z = {};
     QK.forEach((k) => { z[k] = 0; });
-    if (!pl || !Number.isFinite(pl.gMin)) return z;
+    if (!pl || !pl.ok || !Number.isFinite(pl.gMin)) return z;      // 못 셈 구간은 합계에 넣지 않음 (1126 검토)
     if (pl.k === 'jack') {
       z.jack = pl.jackLen;
       for (const sh of pl.shafts) {

@@ -20,7 +20,7 @@ import uuid
 from pathlib import Path
 
 APP_NAME = '드론 로드뷰'
-APP_VERSION = '1.0.19'
+APP_VERSION = '1.0.20'
 FROZEN = getattr(sys, 'frozen', False)
 BASE = Path(sys._MEIPASS) if FROZEN else Path(__file__).resolve().parent.parent      # noqa: SLF001
 HOME_HTML = (BASE / 'roadview' / 'app_home' / 'index.html') if not FROZEN else (BASE / 'app_home' / 'index.html')
@@ -52,7 +52,8 @@ def _cli(cmd, args):
         cand = py[:-len('pythonw.exe')] + 'python.exe'
         if os.path.exists(cand):
             py = cand
-    mod = {'build': 'roadview.build', 'share': 'roadview.share', 'map': 'roadview.mapping', 'helper': 'roadview.cluster'}[cmd]
+    mod = {'build': 'roadview.build', 'share': 'roadview.share', 'map': 'roadview.mapping', 'helper': 'roadview.cluster',
+           'ai': 'roadview.ai_budae'}[cmd]
     return [py, '-u', '-m', mod] + args, str(BASE)
 
 
@@ -143,7 +144,7 @@ class Job:
 
     def _parse(self, s):
         el = time.time() - self.t0
-        if self.kind == 'map':                      # 진행 · 남은 시간은 «@진행» 줄 (mapping.Eta)
+        if self.kind in ('map', 'ai'):              # 진행 · 남은 시간은 «@진행» 줄 (mapping.Eta · ai_budae)
             self.line = s.split(' ', 1)[-1].strip()[:100]
             return
         if self.kind == 'share':
@@ -354,9 +355,11 @@ class Api:
             return
         dst = Path(folder)
         pairs = [(src / 'app.js', dst / 'viewer' / 'app.js'), (src / 'style.css', dst / 'viewer' / 'style.css'),
+                 (src / 'river.js', dst / 'viewer' / 'river.js'),     # 하천 추진 · 횡단 셈 (360 도 같은 셈 · 1126)
                  (src / 'index.html', dst / 'index.html'), (src / 'index.html', dst / '로드뷰.html')]
         if (dst / 'data' / 'mapping.js').exists():      # 3D 매핑 프로젝트 = 3D 보기 화면
-            pairs = [(src / 'map3d.js', dst / 'viewer' / 'map3d.js'), (src / 'map3d.html', dst / 'index.html')]
+            pairs = [(src / 'map3d.js', dst / 'viewer' / 'map3d.js'), (src / 'river.js', dst / 'viewer' / 'river.js'),   # river.js = 하천 추진 · 횡단 셈 (1126)
+                     (src / 'map3d.html', dst / 'index.html')]
             if not (dst / 'data' / 'dem.js').exists():  # 1.0.15 까지 만든 프로젝트: 관로 땅 높이(매끈한 땅) 를 지금 만듦 (몇 초)
                 try:
                     from .mapping import write_dem_js
@@ -1201,6 +1204,52 @@ class Api:
         j = Job('share', cmd, cwd, out=self._project)
         self._jobs[j.id] = j
         return {'ok': True, 'job': j.id}
+
+    # ------------------------------------------------------------ AI 부대공 인식 (ai_budae.py · AI 엔진은 따로 · 처음 쓸 때 내려받기)
+    def ai_status(self):
+        """{ready, gpu, torch, cuda, msg, dir} — 가볍게 (내려받지 않음)."""
+        try:
+            from . import ai_budae
+            return ai_budae.status()
+        except Exception as ex:                          # noqa: BLE001
+            return {'ready': False, 'msg': str(ex)[:160]}
+
+    def ai_setup(self):
+        """AI 엔진 내려받기 · 설치 (Job · 약 6 GB)."""
+        if any(j.kind == 'ai' and j.state == 'run' for j in self._jobs.values()):
+            return {'ok': False, 'msg': 'AI 작업이 이미 돌고 있음'}
+        cmd, cwd = _cli('ai', ['setup'])
+        j = Job('ai', cmd, cwd, out=self._project)
+        self._jobs[j.id] = j
+        return {'ok': True, 'job': j.id}
+
+    def ai_run(self, opts=None):
+        """{project, project360} → 인식 (Job · 엔진 없으면 먼저 설치) → data/ai_budae.js · json."""
+        o = opts if isinstance(opts, dict) else {}
+        proj = o.get('project') or self._project
+        if not proj or not os.path.isdir(proj):
+            return {'ok': False, 'msg': '매핑 프로젝트 없음'}
+        if any(j.kind == 'ai' and j.state == 'run' for j in self._jobs.values()):
+            return {'ok': False, 'msg': 'AI 작업이 이미 돌고 있음'}
+        args = ['run', proj]
+        if o.get('project360'):
+            args += ['--p360', str(o['project360'])]
+        cmd, cwd = _cli('ai', args)
+        j = Job('ai', cmd, cwd, out=proj)
+        self._jobs[j.id] = j
+        return {'ok': True, 'job': j.id}
+
+    def ai_save(self, project, data):
+        """화면이 확인한 결과 (status ok · no) 저장 — ai_budae.json + ai_budae.js 둘 다."""
+        proj = project or self._project
+        if not proj or not isinstance(data, dict) or not isinstance(data.get('features'), list):
+            return {'ok': False, 'msg': '저장할 자료가 이상함'}
+        try:
+            from . import ai_budae
+            ai_budae.save(proj, data)
+            return {'ok': True}
+        except Exception as ex:                          # noqa: BLE001
+            return {'ok': False, 'msg': str(ex)[:160]}
 
     def export_folder(self):
         if not self._project:

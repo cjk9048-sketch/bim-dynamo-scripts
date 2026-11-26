@@ -269,7 +269,7 @@ def main():
         A, B = pl['a'], pl['b']
         gmin = J(ed, '__rc.gmin(%d, %f, %f)' % (src0, A, B))
         report('j 하상 = 360 땅 높이 가장 낮은 곳 (따로 셈)', near(pl['gMin'], gmin, 0.02), '%.3f / %.3f' % (pl['gMin'], gmin))
-        report('j 관 윗면 = 하상 − 2 · 바닥 = 관 바닥 − 0.5', near(pl['top'], pl['gMin'] - 2.0, 1e-6) and near(pl['zb'], pl['gMin'] - 2.0 - T1_D - 0.5, 1e-6), '윗면 %.3f · 바닥 %.3f' % (pl['top'], pl['zb']))
+        report('j 관 윗면 = 하상 − 2 · 바닥 = 관 바닥 − 0.5', near(pl['zc'] + (T1_D + 0.2) / 2, pl['gMin'] - 2.0, 1e-6) and near(pl['zb'], pl['gMin'] - 2.0 - (T1_D + 0.2) - 0.5, 1e-6), '윗면 %.3f · 바닥 %.3f' % (pl['top'], pl['zb']))
         dL, dA = J(ed, '__rc.gs(%d, %f)' % (src0, A)) - pl['zb'], J(ed, '__rc.gs(%d, %f)' % (src0, B)) - pl['zb']
         report('j 발진 · 도달 깊이 = 그 자리 땅 − 바닥', near(pl['shafts'][0]['depth'], dL, 0.01) and near(pl['shafts'][1]['depth'], dA, 0.01), '%.2f · %.2f' % (dL, dA))
         report('j 추진 길이 = 구간 − 3 − 1.5', near(pl['jackLen'], (B - A) - 4.5, 1e-6), '%.3f' % pl['jackLen'])
@@ -445,7 +445,7 @@ def main():
         pls = J(ed, '__rc.plans(%d)' % src0)
         pj = next(x for x in pls if x['k'] == 'jack')
         gm = J(ed, '__rc.gmin(%d, 20, 42)' % src0)
-        report('p 추진 셈 (토피 2.5 · 발진 = 종점 · 원형 Ø6 · Ø4)', near(pj['top'], gm - 2.5, 0.02) and near(pj['shafts'][0]['s'], 42.0, 1e-6) and pj['shafts'][0]['shape'] == 'circ'
+        report('p 추진 셈 (토피 2.5 · 발진 = 종점 · 원형 Ø6 · Ø4)', near(pj['top'], gm - 2.5 - 0.1, 0.02) and near(pj['shafts'][0]['s'], 42.0, 1e-6) and pj['shafts'][0]['shape'] == 'circ'
                and near(pj['jackLen'], 22.0 - 5.0, 1e-6), '%.2f · %s' % (pj['top'], json.dumps(pj['shafts'])))
         lq = J(ed, '__rv360.lineQty(%d)' % src0)
         report('p 수량 (수직구 2 · 라이너 · 시트파일 · 개착)', lq['rv_shaft'] == 2 and lq['rv_liner'] > 0 and lq['rv_sheet'] > 0 and near(lq['rv_open'], 18.0, 1e-6), json.dumps({k: round(v, 2) for k, v in lq.items() if k.startswith('rv_')}))

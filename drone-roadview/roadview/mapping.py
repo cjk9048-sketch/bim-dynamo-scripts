@@ -55,7 +55,8 @@ MAX_TEX = 4096             # 보기 조각 질감 tex 한 변 최대 (늘 읽음
 MAX_TEX_HI = 16384         # 고해상도 질감 tex_hi 한 변 최대 (대부분 그래픽 한도 · OpenMVS 질감은 8192 안)
 # 질감 사진 폭(px) — 원본 크기 (M4E 5280 · 1126 Terra 견줌: 2640 은 흐림) · 질감 방식이 바뀌면 질감 단계만 다시 (stages params 'tex')
 TEX_PX = {'fast': 2640, 'normal': 5280, 'fine': 5280}
-TEX_METHOD = 'mvs1'        # mvs1 = 조각마다 OpenMVS TextureMesh (보는 사진만) + 조각 색 맞춤 · 안 되면 그 조각만 COLMAP mesh_texturer
+TEX_METHOD = 'mvs2'        # mvs1 = 조각마다 OpenMVS TextureMesh (보는 사진만) + 조각 색 맞춤 · 안 되면 그 조각만 COLMAP mesh_texturer
+                           # mvs2 (1126 이음매) = + 나디르 먼저 · 선명하게 하기 끔 · 이음 가까이 섞기 (옛 결과는 질감만 다시)
 GLOBAL_MIN = 50            # 이 장수 이상이면 전역 카메라 풀기 (1125: 394장 26분 → 10분 · 80장 209 → 53초 · RTK 어긋남 같음)
 ENGINE_DIRS = [Path(os.environ.get('LOCALAPPDATA', str(Path.home()))) / 'DH.Roadview' / 'engines', Path(r'D:\매핑시험\engines')]
 if os.environ.get('RV_ENGINE_DIRS'):          # 시험 · 다른 PC 흉내 (처음 내려받기) — ; 로 나눈 폴더들
@@ -779,10 +780,86 @@ def tile_views(ws, ply, margin=0.1, nsamp=4000, cap=160):
     return [n for _, n in out[:cap]]
 
 
+def _read_face_ply(path):
+    """split_mesh_tiles 조각 PLY (xyz float32 · 면 uint8 3 + uint32 ×3) → (꼭짓점 float32 n×3, 면 int64 m×3)."""
+    b = open(path, 'rb').read()
+    i = b.find(b'end_header'); h = b.index(b'\n', i) + 1
+    head = [l.strip() for l in b[:h].decode('latin1').splitlines()]
+    nv = int([l for l in head if l.startswith('element vertex')][0].split()[2])
+    nf = int([l for l in head if l.startswith('element face')][0].split()[2])
+    V = np.frombuffer(b, np.float32, nv * 3, h).reshape(nv, 3)
+    Fb = np.frombuffer(b, np.uint8, nf * 13, h + nv * 12).reshape(nf, 13)
+    return V, Fb[:, 1:13].copy().view(np.uint32).reshape(nf, 3).astype(np.int64)
+
+
+def _write_face_ply(path, V, F):
+    """면 일부만 PLY 로 (쓰는 꼭짓점만 · split_mesh_tiles 꼴)."""
+    u, inv = np.unique(F.reshape(-1), return_inverse=True)
+    with open(path, 'wb') as fp:
+        fp.write(('ply\nformat binary_little_endian 1.0\nelement vertex %d\nproperty float x\nproperty float y\nproperty float z\n'
+                  'element face %d\nproperty list uchar uint vertex_indices\nend_header\n' % (len(u), len(F))).encode('ascii'))
+        fp.write(V[u].astype(np.float32).tobytes())
+        rec = np.empty((len(F), 13), np.uint8); rec[:, 0] = 3
+        rec[:, 1:13] = inv.reshape(-1, 3).astype(np.uint32).view(np.uint8).reshape(-1, 12)
+        fp.write(rec.tobytes())
+
+
+def _vert_map(V, Vq):
+    """Vq 꼭짓점마다 값(float32)이 같은 V 번호 · 없으면 -1 (TextureMesh 가 내보낸 면을 원래 조각 꼭짓점 번호로 되돌림)."""
+    _, inv = np.unique(np.concatenate([V.astype(np.float32), Vq.astype(np.float32)]), axis=0, return_inverse=True)
+    inv = inv.reshape(-1)
+    first = np.full(int(inv.max()) + 1, -1, np.int64)
+    first[inv[:len(V)][::-1]] = np.arange(len(V))[::-1]
+    return first[inv[len(V):]]
+
+
+def nadir_faces(ws, V, F, names, nadir_deg=15.0, ground_deg=60.0):
+    """나디르 먼저 질감 (1126 이음매 견줌): 땅 쪽 면 = 위를 보는 면(연직에서 ground_deg 안) 이면서 나디르 사진(광축이 연직 아래에서
+    nadir_deg 안)에 비치는 면. → (땅 쪽 면 bool, 나디르 사진 이름 집합) · 나디르가 없거나 · 모두 나디르거나 · 땅 쪽 면이 거의 없으면 None.
+    까닭: 경사 사진(M4E 스마트 경사 33°)은 땅을 비스듬히 봐 흐리고 밝기가 달라, 섞이면 조각마다 선명도 · 밝기가 달라 이음이 보임."""
+    s, R, t, _, _ = model_to_ecef(ws)
+    cams = {}
+    for l in open(os.path.join(ws, 'sparse_txt', 'cameras.txt'), encoding='utf-8'):
+        p = l.split()
+        if p and not l.startswith('#'):
+            cams[p[0]] = (float(p[2]), float(p[3]), [float(x) for x in p[4:8]])
+    L = [l for l in open(os.path.join(ws, 'sparse_txt', 'images.txt'), encoding='utf-8') if not l.startswith('#')]
+    pose = {}
+    for l in L[0::2]:
+        p = l.split(None, 9)
+        if len(p) >= 10 and p[9].rstrip('\r\n') in names and p[8] in cams:
+            pose[p[9].rstrip('\r\n')] = (_qrot(*map(float, p[1:5])), np.array(list(map(float, p[5:8]))), cams[p[8]])
+    if not pose:
+        return None
+    X = s * (R @ np.mean([-Rc.T @ tc for Rc, tc, _ in pose.values()], 0)) + t
+    up = R.T @ (X / np.linalg.norm(X))                  # 모형 좌표의 위 (지구 중심 → 사진 가운데 · 0.2° 안)
+    nad = {n for n, (Rc, tc, _) in pose.items() if (Rc.T @ np.array([0, 0, 1.0])) @ -up > math.cos(math.radians(nadir_deg))}
+    if not nad or len(nad) == len(pose):
+        return None
+    P = V[F].astype(np.float64)
+    nrm = np.cross(P[:, 1] - P[:, 0], P[:, 2] - P[:, 0])
+    cu = nrm @ up / np.maximum(np.linalg.norm(nrm, axis=1), 1e-12)
+    if np.median(cu) < 0:                                # 면 감긴 방향이 아래로 (OpenMVS 판에 따라)
+        cu = -cu
+    cen = P.mean(1); seen = np.zeros(len(F), bool)
+    for n in nad:                                        # 가운데가 나디르 사진 안에 비침 (가림은 TextureMesh 가 봄 → 못 칠한 면은 둘째 차례로)
+        Rc, tc, (w, hh, (fx, fy, cx, cy)) = pose[n]
+        Xc = cen @ Rc.T + tc
+        ok = Xc[:, 2] > 1e-6; z = np.where(ok, Xc[:, 2], 1.0)
+        u = fx * Xc[:, 0] / z + cx; v = fy * Xc[:, 1] / z + cy
+        seen |= ok & (u > 0) & (u < w) & (v > 0) & (v < hh)
+    g = (cu > math.cos(math.radians(ground_deg))) & seen
+    return (g, nad) if g.sum() > 0.05 * len(F) else None
+
+
 def texture_tile_mvs(colmap, mvs, ws, tex_ws, ply, d, logp):
-    """조각 하나 → d/tex.ply + d/tex*.png (OpenMVS TextureMesh · 원본 크기 사진 · 그 조각을 보는 사진만 → 사진이 많아도 메모리 작게).
-    이음 고르기(전역 · 지역)는 끔 — 2.4.0 은 켜면 면 자리가 까맣게 칠해짐 (1126 80장 · 둘 다 · 대신 level_mvs_tile).
-    → 실패 사유 (없으면 None)."""
+    """조각 하나 → d/tex.ply + 질감 그림 (OpenMVS TextureMesh · 원본 크기 사진 · 그 조각을 보는 사진만 → 사진이 많아도 메모리 작게).
+    이음 고르기(전역 · 지역)는 끔 — 2.4.0 은 켜면 면이 까맣게 칠해짐 (1126 80장 · 1126 47장 다시: 전역 99.9 % · 지역 83 % · 둘 다 92 % ·
+    그래픽 카드로 해도 같음 · 대신 level_mvs_tile). 선명하게 하기도 끔 (--sharpness-weight 0 · 기본 0.5 는 조각마다 잡티 · 까만 점이 커져
+    이음이 더 보임 · 47장 이음 차 16.5 → 14.0).
+    나디르 먼저 (nadir_faces · 1126 JACK 확대 화면 이음매): 땅 쪽 면은 나디르 사진만으로 (n/) · 나머지(벽 · 나디르로 못 칠한 면)는
+    모든 사진으로 (o/) 칠해 한 tex.ply 로 합침 — 47장 조각 4: 조각(patch) 15,326 → 3,321 · 이음 모서리 −68 % · 58 → 24초.
+    나눠 칠하기가 안 되면 예전처럼 모든 사진 한 번에. → 실패 사유 (없으면 None)."""
     os.makedirs(d, exist_ok=True)
     img_dir = os.path.join(tex_ws, 'images')
     allnames = sorted(os.listdir(img_dir))
@@ -798,35 +875,116 @@ def texture_tile_mvs(colmap, mvs, ws, tex_ws, ply, d, logp):
         model_names = {p[9].rstrip('\r\n') for p in (l.split(None, 9) for l in L[0::2]) if len(p) >= 10}
     except OSError:
         model_names = set()
-    with open(os.path.join(d, 'drop.txt'), 'w', encoding='utf-8') as fp:
-        fp.write(''.join(n + '\n' for n in sorted((model_names | set(allnames)) - names)))
-    sp = os.path.join(d, 'sparse')
-    shutil.rmtree(sp, ignore_errors=True); os.makedirs(sp)
-    rc = run([colmap, 'image_deleter', '--input_path', os.path.join(tex_ws, 'sparse'), '--output_path', sp,
-              '--image_names_path', os.path.join(d, 'drop.txt')], logp + '_a.log')
-    if rc != 0:
-        return 'image_deleter 종료코드 %d' % rc
-    rc = run([os.path.join(mvs, 'InterfaceCOLMAP.exe'), '-i', '.', '-o', 'scene.mvs', '--image-folder', os.path.abspath(img_dir), '-w', '.'],
-             logp + '_b.log', cwd=d)
-    if rc != 0 or not os.path.exists(os.path.join(d, 'scene.mvs')):
-        return 'InterfaceCOLMAP 종료코드 %d' % rc
-    rc = run([os.path.join(mvs, 'TextureMesh.exe'), 'scene.mvs', '-m', os.path.abspath(ply), '-o', 'tex.mvs', '--export-type', 'ply',
-              '--max-texture-size', '8192', '--global-seam-leveling', '0', '--local-seam-leveling', '0'] + mvs_cuda_opt(mvs) + ['-w', '.'],
-             logp + '_c.log', cwd=d)
-    for f in ('scene.mvs', 'tex.mvs', 'drop.txt'):
-        if os.path.exists(os.path.join(d, f)):
-            os.remove(os.path.join(d, f))
-    shutil.rmtree(sp, ignore_errors=True)
-    if rc != 0 or not os.path.exists(os.path.join(d, 'tex.ply')):
-        return 'TextureMesh 종료코드 %d' % rc
+
+    def scene(sd, keep, tag):                          # keep 사진만 든 OpenMVS 장면 sd/scene.mvs (사진 경로가 이 폴더 기준 → 여기서 칠함)
+        os.makedirs(sd, exist_ok=True)
+        with open(os.path.join(sd, 'drop.txt'), 'w', encoding='utf-8') as fp:
+            fp.write(''.join(n + '\n' for n in sorted((model_names | set(allnames)) - keep)))
+        sp = os.path.join(sd, 'sparse')
+        shutil.rmtree(sp, ignore_errors=True); os.makedirs(sp)
+        rc = run([colmap, 'image_deleter', '--input_path', os.path.join(tex_ws, 'sparse'), '--output_path', sp,
+                  '--image_names_path', os.path.join(sd, 'drop.txt')], logp + '_a%s.log' % tag)
+        if rc != 0:
+            return 'image_deleter 종료코드 %d' % rc
+        rc = run([os.path.join(mvs, 'InterfaceCOLMAP.exe'), '-i', '.', '-o', 'scene.mvs', '--image-folder', os.path.abspath(img_dir), '-w', '.'],
+                 logp + '_b%s.log' % tag, cwd=sd)
+        shutil.rmtree(sp, ignore_errors=True)
+        if rc != 0 or not os.path.exists(os.path.join(sd, 'scene.mvs')):
+            return 'InterfaceCOLMAP 종료코드 %d' % rc
+        return None
+
+    def tex(sd, mesh, tag, extra=()):
+        rc = run([os.path.join(mvs, 'TextureMesh.exe'), 'scene.mvs', '-m', os.path.abspath(mesh), '-o', 'tex.mvs', '--export-type', 'ply',
+                  '--max-texture-size', '8192', '--global-seam-leveling', '0', '--local-seam-leveling', '0', '--sharpness-weight', '0']
+                 + list(extra) + mvs_cuda_opt(mvs) + ['-w', '.'], logp + '_c%s.log' % tag, cwd=sd)
+        for f in ('scene.mvs', 'tex.mvs', 'drop.txt'):
+            if os.path.exists(os.path.join(sd, f)):
+                os.remove(os.path.join(sd, f))
+        return None if rc == 0 and os.path.exists(os.path.join(sd, 'tex.ply')) else 'TextureMesh 종료코드 %d' % rc
+
+    try:
+        V, F = _read_face_ply(ply)
+        split = nadir_faces(ws, V, F, names)
+    except Exception as ex:                            # noqa: BLE001 — 자료 읽기 · 좌표 맞춤 → 한 번에 칠하기로
+        split = None; log('  나디르 먼저 못 함 (%s) → 모든 사진 한 번에' % ex)
+    if split is not None:
+        try:                                           # 그림 파일 · 메모리 · 파일 잡힘 예외도 예전 방식으로 (매핑이 멈추지 않게 · 1126 검토)
+            err = _texture_nadir_first(scene, tex, V, F, split, names, d)
+        except Exception as ex:                        # noqa: BLE001
+            err = str(ex)[:200] or type(ex).__name__
+        if not err:
+            return None
+        log('  나디르 먼저 질감 안 됨 (%s) → 모든 사진 한 번에' % err)
+        for sub in ('n', 'o'):
+            shutil.rmtree(os.path.join(d, sub), ignore_errors=True)
+        if os.path.exists(os.path.join(d, 'tex.ply')):
+            os.remove(os.path.join(d, 'tex.ply'))
+    return scene(d, names, '') or tex(d, ply, '')
+
+
+def _texture_nadir_first(scene, tex, V, F, split, names, d):
+    """texture_tile_mvs 의 나디르 먼저 두 차례 → d/tex.ply (질감 그림은 n/ · o/ 에 · 꼭짓점 = 원래 조각 그대로라 이음 짝을
+    level_mvs_tile 이 찾음) → 실패 사유 (없으면 None)."""
+    import cv2
+    G, nad = split
+    dn, do = os.path.join(d, 'n'), os.path.join(d, 'o')
+    err = scene(dn, nad, '_n')
+    if err:
+        return err
+    _write_face_ply(os.path.join(dn, 'g.ply'), V, F[G])
+    # 못 칠한 면(가림 · 사진 밖)은 자홍(255, 0, 255)으로 칠하게 해 찾음 · 구멍 메우기(--close-holes)는 끔 (나눈 경계를 메우면 겹침)
+    err = tex(dn, os.path.join(dn, 'g.ply'), '_n', ['--empty-color', str(0xFF00FF), '--close-holes', '0'])
+    os.remove(os.path.join(dn, 'g.ply'))
+    if err:
+        return err
+    V1, F1, tc1, TN1, tx1 = read_tex_ply(os.path.join(dn, 'tex.ply'))
+    emp = np.ones(len(F1), bool)
+    for k, x in enumerate(tx1):                          # 세모 안 세 점이 모두 자홍 = 못 칠한 면
+        im = cv2.imdecode(np.fromfile(x, np.uint8), cv2.IMREAD_COLOR)
+        if im is None:
+            return '질감 그림 못 읽음'
+        mk = TN1 == k; hh, ww = im.shape[:2]
+        for bw in ((1 / 3., 1 / 3., 1 / 3.), (0.6, 0.2, 0.2), (0.2, 0.2, 0.6)):
+            uv = np.einsum('j,fjk->fk', np.array(bw, np.float32), tc1[mk])
+            c = im[np.clip((uv[:, 1] * hh).astype(int), 0, hh - 1), np.clip((uv[:, 0] * ww).astype(int), 0, ww - 1)]
+            emp[mk] &= (c == [255, 0, 255]).all(1)
+        del im
+    F1m = _vert_map(V, V1)[F1]
+    if (F1m < 0).any():
+        return '나디르 질감 꼭짓점을 원래 조각에서 못 찾음'
+    Fo = np.concatenate([F[~G], F1m[emp]])
+    parts = [(F1m[~emp], tc1[~emp], TN1[~emp], tx1)]
+    if len(Fo):
+        err = scene(do, names, '_o')
+        if err:
+            return err
+        _write_face_ply(os.path.join(do, 'o.ply'), V, Fo)
+        err = tex(do, os.path.join(do, 'o.ply'), '_o', ['--close-holes', '0'])
+        os.remove(os.path.join(do, 'o.ply'))
+        if err:
+            return err
+        V2, F2, tc2, TN2, tx2 = read_tex_ply(os.path.join(do, 'tex.ply'))
+        F2m = _vert_map(V, V2)[F2]
+        if (F2m < 0).any():
+            return '나머지 질감 꼭짓점을 원래 조각에서 못 찾음'
+        parts.append((F2m, tc2, TN2, tx2))
+        os.remove(os.path.join(do, 'tex.ply'))
+    os.remove(os.path.join(dn, 'tex.ply'))
+    names_out, Fs, Ts, Ks = [], [], [], []
+    for Fp, tcp, TNp, txp in parts:
+        Fs.append(Fp); Ts.append(tcp); Ks.append(TNp + len(names_out))
+        names_out += [os.path.relpath(x, d).replace('\\', '/') for x in txp]
+    write_tex_ply(os.path.join(d, 'tex.ply'), V.astype(np.float64), np.concatenate(Fs), np.concatenate(Ts), np.concatenate(Ks), names_out)
+    log('  나디르 먼저 · 땅 쪽 면 %d (나디르 %d장 · 못 칠함 %d) · 나머지 %d (사진 %d장)' % (int(G.sum()), len(nad), int(emp.sum()), len(Fo), len(names)))
     return None
 
 
-def level_mvs_tile(d, quality=92):
+def level_mvs_tile(d, quality=92, sigma=8.0):
     """OpenMVS 조각 질감 뒷손질 → d/web.ply + d/webN.jpg (tex.ply · tex*.png 는 지움) → 정보 dict.
     ① 조각(patch = 한 사진에서 떼어 온 세모 묶음)마다 RGB 더하기 값 하나로 이음 양쪽 색을 맞춤 (OpenMVS 이음 고르기 대신 ·
        가림 · 어긋남 표본은 Huber 로 약하게) ② 질감 그림에서 안 쓴 곳 잘라냄 (2의 거듭제곱 크기라 절반쯤 빔)
-    ③ 빈 칸을 이웃 색으로 메움 (줄인 그림 · 먼 거리에서 주황 테가 비치지 않게)."""
+    ③ 빈 칸을 이웃 색으로 메움 (줄인 그림 · 먼 거리에서 주황 테가 비치지 않게)
+    ④ (②보다 먼저) 이음 가까이 섞기 — ①로 못 맞춘 이음 차를 이음에서 sigma 텍셀 안쪽으로 부드럽게 (47장 조각 4 이음 세모 색 차 18.3 → 16.8)."""
     import cv2
     t0 = time.time()
     V, F, tc, TN, texs = read_tex_ply(os.path.join(d, 'tex.ply'))
@@ -867,7 +1025,6 @@ def level_mvs_tile(d, quality=92):
     P1 = np.tile(pid[f1[sm]], 3); P2 = np.tile(pid[f2[sm]], 3)
     dlt = (samp(np.tile(TN[f1[sm]], 3), np.concatenate([ua1[sm], ub1[sm], (ua1[sm] + ub1[sm]) / 2])) -
            samp(np.tile(TN[f2[sm]], 3), np.concatenate([ua2[sm], ub2[sm], (ua2[sm] + ub2[sm]) / 2]))).astype(np.float64)
-    blur.clear()                                         # 큰 그림 메모리 풀기
     # 조각마다 더하기 값 x: Σ w (x1 − x2 + d)² + 0.02·차수·x² 최소 → 대각 전처리 켤레 기울기 (Huber 다시 무게 2번)
     x = np.zeros((npc, 3)); w = np.ones(len(dlt))
     for _ in range(3 if len(dlt) else 0):
@@ -887,7 +1044,21 @@ def level_mvs_tile(d, quality=92):
                 break
             z = r / dg[:, None]; rz2 = (r * z).sum(0); pp = z + rz2 / np.maximum(rz, 1e-12) * pp; rz = rz2
         w = 1.0 / np.maximum(1.0, np.abs(x[P1] - x[P2] + dlt).mean(1) / 12.0)
-    names = []; tc2 = tc.copy(); info = {'patches': npc, 'seams': int(sm.sum()), 'shift': round(float(np.abs(x).mean()), 1) if npc else 0.0}
+    # ④ 이음 가까이 섞기 (1126 · mvs-texturing 지역 이음 고르기 꼴): 이음 모서리를 텍셀마다 짚어 더하기 값 뒤에도 남은 차 r →
+    #    이쪽 −r/2 · 저쪽 +r/2 (양쪽이 가운데 색에서 만남) · 조각 네모 안에서 가우스 σ 로 퍼뜨리고 이음에서 멀어질수록 0 (조각 안쪽은 그대로)
+    sz = np.array([im.shape[1::-1] for im in ims], np.float64)
+    i_s = np.nonzero(sm)[0]
+    ln = np.maximum(np.linalg.norm((ub1[i_s] - ua1[i_s]) * sz[TN[f1[i_s]]], axis=1), np.linalg.norm((ub2[i_s] - ua2[i_s]) * sz[TN[f2[i_s]]], axis=1))
+    ns = np.clip(np.ceil(ln).astype(np.int64) + 1, 2, 256)
+    ei = np.repeat(i_s, ns)
+    tt = ((np.arange(len(ei)) - np.repeat(np.cumsum(ns) - ns, ns)) / np.repeat(ns - 1, ns).astype(np.float64))[:, None].astype(np.float32)
+    uv1 = ua1[ei] + tt * (ub1[ei] - ua1[ei]); uv2 = ua2[ei] + tt * (ub2[ei] - ua2[ei])
+    rr = np.clip((samp(TN[f1[ei]], uv1) + x[pid[f1[ei]]] - samp(TN[f2[ei]], uv2) - x[pid[f2[ei]]]).astype(np.float32), -40.0, 40.0)
+    loc = [(TN[f1[ei]], uv1, -0.5 * rr), (TN[f2[ei]], uv2, 0.5 * rr)]
+    blur.clear()                                         # 큰 그림 메모리 풀기
+    g0 = math.sqrt(2 * math.pi) * sigma                  # 텍셀마다 표본 하나인 곧은 이음 위 den = 1 / g0
+    names = []; tc2 = tc.copy(); info = {'patches': npc, 'seams': int(sm.sum()), 'shift': round(float(np.abs(x).mean()), 1) if npc else 0.0,
+                                         'local': round(float(np.abs(rr).mean()), 1) if len(rr) else 0.0}
     for k, im in enumerate(ims):
         hh, ww = im.shape[:2]
         fk = np.nonzero(TN == k)[0]
@@ -900,8 +1071,21 @@ def level_mvs_tile(d, quality=92):
         x0 = np.maximum(np.minimum.reduceat(lo[od, 0], st), 0); y0 = np.maximum(np.minimum.reduceat(lo[od, 1], st), 0)
         x1 = np.maximum.reduceat(hi[od, 0], st); y1 = np.maximum.reduceat(hi[od, 1], st)
         imf = im.astype(np.float32)
+        acc = np.zeros((hh, ww, 3), np.float32); cnt = np.zeros((hh, ww), np.float32)
+        for kk, uv, cv in loc:
+            mk = kk == k
+            if mk.any():
+                fl = (np.clip((uv[mk, 1] * hh).astype(np.int64), 0, hh - 1) * ww + np.clip((uv[mk, 0] * ww).astype(np.int64), 0, ww - 1))
+                for c in range(3):
+                    acc[..., c] += np.bincount(fl, cv[mk, c], hh * ww).reshape(hh, ww).astype(np.float32)
+                cnt += np.bincount(fl, None, hh * ww).reshape(hh, ww).astype(np.float32)
         for P, a0, b0, a1, b1 in zip(pks[st], x0, y0, x1, y1):       # OpenMVS 는 조각 네모를 겹치지 않게 쌓음 (테두리 여유 안)
             imf[b0:b1, a0:a1] += x[P].astype(np.float32)
+            cn = cnt[b0:b1, a0:a1]
+            if cn.any():                                   # 이 조각 표본만 (네모 안에서 흐림 → 이웃 조각으로 안 샘)
+                num = cv2.GaussianBlur(acc[b0:b1, a0:a1], (0, 0), sigma); den = cv2.GaussianBlur(cn, (0, 0), sigma)
+                imf[b0:b1, a0:a1] += num * (np.minimum(1.0, den * g0) / np.maximum(den, 1e-6))[..., None]
+        del acc, cnt
         used = np.zeros((hh, ww), np.uint8)
         cv2.fillPoly(used, list(np.round(uvp * 16).astype(np.int32)), 255, lineType=cv2.LINE_8, shift=4)
         used = cv2.dilate(used, np.ones((5, 5), np.uint8)) > 0
@@ -2251,6 +2435,8 @@ def copy_viewer(out):
     os.makedirs(os.path.join(out, 'viewer'), exist_ok=True)
     shutil.copy2(base / 'map3d.html', os.path.join(out, 'index.html'))
     shutil.copy2(base / 'map3d.js', os.path.join(out, 'viewer', 'map3d.js'))
+    if (base / 'river.js').exists():                 # 하천 추진 · 횡단 (JACK 1126 · 없으면 그 카테고리만 숨음)
+        shutil.copy2(base / 'river.js', os.path.join(out, 'viewer', 'river.js'))
 
 
 if __name__ == '__main__':

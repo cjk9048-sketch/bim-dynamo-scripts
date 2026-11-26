@@ -65,6 +65,29 @@ def J(ed, expr):
     return json.loads(ed.js('JSON.stringify(%s)' % expr))
 
 
+# 오른쪽 옵션 칸 = 접는 카테고리 (JACK 1126 배치) — 단추가 접힌 카테고리 안이거나 칸 아래로 굴러 있으면 진짜 마우스가 못 누름
+HOST_HIDDEN = "[...document.querySelectorAll('[data-host]')].every((e) => e.hidden)"      # 프로그램 전용 단추 · 카테고리 모두 숨김
+HOST_SHOWN = "[...document.querySelectorAll('[data-host]')].every((e) => !e.hidden)"
+
+
+def ui_click(ed, inp, eid):
+    """오른쪽 칸 기능 단추: 그 단추가 든 카테고리를 펴고 (__map3d.reveal = 머리줄과 같은 catSet) 보이게 굴린 뒤 진짜 마우스로 누름."""
+    ed.js("window.__map3d && window.__map3d.reveal && window.__map3d.reveal('%s')" % eid)
+    ed.frames(2)
+    inp.el_click(eid)
+
+
+def cat_open(ed, inp, hid, fresh=False):
+    """카테고리 머리줄을 진짜 마우스로 눌러 폄 (접혀 있을 때만 · fresh = 펴져 있으면 접었다 다시 펴서 상태를 새로 읽게)."""
+    ed.js("(() => { if (document.getElementById('side').hidden) document.getElementById('tgSide').click(); document.getElementById('%s').scrollIntoView({ block: 'nearest' }); })()" % hid)
+    ed.frames(2)
+    if J(ed, "document.getElementById('%s').getAttribute('aria-expanded')" % hid) == 'true':
+        if not fresh:
+            return
+        inp.el_click(hid)
+    inp.el_click(hid)
+
+
 class _Quiet(http.server.SimpleHTTPRequestHandler):
     def log_message(self, *a):
         pass
@@ -182,6 +205,7 @@ def main():
     os.makedirs(os.path.join(out, 'viewer'), exist_ok=True)
     shutil.copy2(os.path.join(REPO, 'viewer', 'map3d.html'), os.path.join(out, 'index.html'))
     shutil.copy2(os.path.join(REPO, 'viewer', 'map3d.js'), os.path.join(out, 'viewer', 'map3d.js'))
+    shutil.copy2(os.path.join(REPO, 'viewer', 'river.js'), os.path.join(out, 'viewer', 'river.js'))   # 하천 추진 · 횡단 셈
     shutil.copy2(os.path.join(HERE, 'hostmock.js'), os.path.join(out, 'viewer', 'hostmock.js'))
     html = open(os.path.join(out, 'index.html'), encoding='utf-8').read()
     open(os.path.join(out, 'index_host.html'), 'w', encoding='utf-8').write(
@@ -267,8 +291,8 @@ def main():
         errs(ed, '단면')
 
         print('== h 가시설')
-        inp.el_click('tgShore')
-        inp.el_click('shHpile')
+        cat_open(ed, inp, 'tgShore')
+        ui_click(ed, inp, 'shHpile')
         sa, sb = round(L0 * 0.25, 1), round(L0 * 0.25 + 9.0, 1)
         ed.js('__t.look(0, %f, 26, 48, 60)' % ((sa + sb) / 2))
         ed.frames(3)
@@ -292,7 +316,7 @@ def main():
         print('== e 관로 고치기')
         ed.js("__map3d.setMode('area')")
         ed.js('__t.look(1, 15, 34, 55, 20)')
-        inp.el_click('tgEdit')
+        ui_click(ed, inp, 'tgEdit')
         q = J(ed, '__t.at(1, 9, false)')
         inp.click(q[0], q[1])
         hn = J(ed, '__map3d.hnd().map((h) => [h.i, h.sx, h.sy])')
@@ -328,7 +352,7 @@ def main():
         ca = np.array([Pa['pts'][k][:2] for k in Pa['ctrl']]); cb = np.array([Pb['pts'][k][:2] for k in Pb['ctrl']])
         dv = cb - ca
         report('e Shift 끌기 → 통째로 (같은 만큼)', len(ca) == len(cb) and np.ptp(dv, 0).max() < 0.011 and np.abs(dv).max() > 0.3, str(dv[0].round(2)))
-        inp.el_click('bTop')
+        ui_click(ed, inp, 'bTop')
         ed.frames(3)
         hn = [h for h in J(ed, '__map3d.hnd().map((h) => [h.i, h.sx, h.sy])') if 40 < h[1] < 1240 and 120 < h[2] < 820]   # 칸 · 윗줄에 안 가린 손잡이
         h2 = min(hn, key=lambda h: math.hypot(h[1] - 640, h[2] - 450))
@@ -337,7 +361,7 @@ def main():
         Pd = J(ed, 'window.RV_PIPES.lines[1]')
         report('e 위에서 보기 · 끌기', J(ed, '__map3d.V.el') > 80 and Pc['pts'][Pc['ctrl'][h2[0]]] != Pd['pts'][Pd['ctrl'][h2[0]]], '손잡이 %d' % h2[0])
         shot(ed, SD, '07_고치기_위에서.png')
-        inp.el_click('bTop')
+        ui_click(ed, inp, 'bTop')
         inp.key('Escape', 'Escape', 27)
         report('e Esc → 고치기 끝', J(ed, '__map3d.ED.on') is False)
         saved = J(ed, "Object.keys(localStorage).some((k) => k.indexOf('rv_pipes:') === 0)")
@@ -348,7 +372,7 @@ def main():
         ed.js('localStorage.clear()')
         setup_page(ed, base + 'index.html')
         report('q 지장물 단추', J(ed, "!document.getElementById('tgObst').hidden"))
-        inp.el_click('tgQty')
+        ui_click(ed, inp, 'tgQty')
         ed.wait_js('document.getElementById("qHit").textContent !== ""', 5)
         cf = J(ed, '__map3d.cf().length')
         report('q 간섭 자리 (가스 · 주 관)', cf >= 1, '%d 곳' % cf)
@@ -359,15 +383,15 @@ def main():
         ed.js('(() => { const M = __map3d, T = M.T(); M.V.tgt = [%f + T[0], %f + T[1], %f + T[2]]; M.V.d = 20; M.V.el = 45; M.redraw(); })()' % (sp['e'], sp['n'], sp['g']))
         ed.js("__map3d.setMode('trench')")
         shot(ed, SD, '08_지장물_간섭.png')
-        inp.el_click('tgQty')
+        ui_click(ed, inp, 'tgQty')
         errs(ed, '지장물')
 
         print('== p 프로그램 (hostmock)')
         ed.js('localStorage.clear()')
         setup_page(ed, base + 'index_host.html')
-        report('p 프로그램 단추 보임', J(ed, "!document.getElementById('hostTools').hidden"))
+        report('p 프로그램 단추 보임', J(ed, HOST_SHOWN))
         ed.js('__t.look(1, 15, 34, 55, 20)')
-        inp.el_click('tgEdit')
+        ui_click(ed, inp, 'tgEdit')
         q = J(ed, '__t.at(1, 9, false)')
         inp.click(q[0], q[1])
         hn = J(ed, '__map3d.hnd().map((h) => [h.i, h.sx, h.sy])')
@@ -385,12 +409,12 @@ def main():
         cal = J(ed, "__host.calls.filter((c) => c.name === 'save_calib').map((c) => c.arg)")
         okc = len(cal) >= 1 and '"trench"' in cal[-1] and json.loads(cal[-1].split('=', 1)[1].strip().rstrip(';'))['trench']['margin'] == 0.4
         report('p save_calib (calib.js 의 trench)', okc, '%d 번' % len(cal))
-        inp.el_click('tgEdit')
+        ui_click(ed, inp, 'tgEdit')
         inp.el_click('edShp')
         time.sleep(0.3)
         report('p SHP 내보내기 부름', J(ed, "__host.calls.some((c) => c.name === 'export_pipes_shp')"))
         inp.key('Escape', 'Escape', 27)
-        inp.el_click('bPipes')
+        ui_click(ed, inp, 'bPipes')
         report('p 관로 넣기 창', J(ed, "!document.getElementById('dlgBack').hidden && !document.getElementById('pipeDlg').hidden"))
         # 넣기: 파일 고르기 (pick_pipes) → 넣기 (import_pipes = 프로그램이 data/pipes.js 를 새로 씀) → 다시 읽음
         pj = os.path.join(out, 'data', 'pipes.js')
@@ -417,8 +441,8 @@ def main():
         ed.net(block=['*pipes.js*', '*obstacles.js*'])
         setup_page(ed, base + 'index.html')
         report('관로 없음 · 열림', J(ed, '__map3d.lines().length') == 0 and J(ed, '!window.__pipes || window.__pipes.lines === 0'))
-        inp.el_click('tgEdit')
-        inp.el_click('mDepth')
+        ui_click(ed, inp, 'tgEdit')
+        ui_click(ed, inp, 'mDepth')
         report('관로 없음 · 고치기 안 켜짐 · 터파기 표현', J(ed, '__map3d.ED.on') is False and J(ed, "__map3d.S.mode") == 'trench')
         shot(ed, SD, '_관로없음.png')
         errs(ed, '관로 없음')
@@ -481,6 +505,7 @@ def main():
         os.makedirs(os.path.join(fd, 'data'), exist_ok=True); os.makedirs(os.path.join(fd, 'viewer'), exist_ok=True)
         shutil.copy2(os.path.join(REPO, 'viewer', 'map3d.html'), os.path.join(fd, 'index.html'))
         shutil.copy2(os.path.join(REPO, 'viewer', 'map3d.js'), os.path.join(fd, 'viewer', 'map3d.js'))
+        shutil.copy2(os.path.join(REPO, 'viewer', 'river.js'), os.path.join(fd, 'viewer', 'river.js'))
         shutil.copy2(os.path.join(out, 'data', '미리보기.png'), os.path.join(fd, 'data', '미리보기.png'))
         Mf = json.loads(open(os.path.join(out, 'data', 'mapping.js'), encoding='utf-8').read().split('=', 1)[1].strip().rstrip(';'))
         Mf['outputs'] = ['ortho', 'dsm']
