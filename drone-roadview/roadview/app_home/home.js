@@ -14,14 +14,15 @@
     window.addEventListener('pywebviewready', fn, { once: true });
   }
   const fmtDate = (s) => (s || '').replace(/^\d{4}-/, '').replace('-', '.');
-  window.RV = { call, toast, $ };
+  window.RV = { call, toast, $, page: showPage };
 
   // ------------------------------------------------------------ 메뉴
   function showPage(p) {
     document.querySelectorAll('.nav').forEach((a) => a.classList.toggle('on', a.dataset.page === p));
     $('pageHome').classList.toggle('hide', p !== 'home');
     $('pageShare').classList.toggle('hide', p !== 'share');
-    if (p === 'home') loadList(); else loadShares();
+    $('pageCluster').classList.toggle('hide', p !== 'cluster');
+    if (p === 'home') loadList(); else if (p === 'share') loadShares(); else if (window.RVCluster) window.RVCluster.show();
   }
 
   // ------------------------------------------------------------ 최근 프로젝트
@@ -93,5 +94,6 @@
     $('bMapping').addEventListener('click', () => window.RVMap && window.RVMap.open());
     if (window.RVEdit) window.RVEdit.init(info);
     if (window.RVMap) window.RVMap.init(info);
+    if (window.RVCluster) window.RVCluster.init();
   });
 })();

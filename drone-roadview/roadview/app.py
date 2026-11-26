@@ -20,12 +20,14 @@ import uuid
 from pathlib import Path
 
 APP_NAME = '드론 로드뷰'
-APP_VERSION = '1.0.17'
+APP_VERSION = '1.0.18'
 FROZEN = getattr(sys, 'frozen', False)
 BASE = Path(sys._MEIPASS) if FROZEN else Path(__file__).resolve().parent.parent      # noqa: SLF001
 HOME_HTML = (BASE / 'roadview' / 'app_home' / 'index.html') if not FROZEN else (BASE / 'app_home' / 'index.html')
 CFG_DIR = Path(os.environ.get('APPDATA', str(Path.home()))) / 'DH.Roadview'
 PROJ_LIST = CFG_DIR / 'projects.json'
+CLUSTER_CFG = CFG_DIR / 'cluster.json'     # 함께 처리 (공유 폴더 · 내 매핑에 쓰기 · 도우미 모드)
+TPL_DIR = CFG_DIR / 'map_templates'        # 매핑 화면 «매개변수를 템플릿으로 저장» (이름.json · Terra 꼴 · JACK 1126)
 NO_WINDOW = 0x08000000 if os.name == 'nt' else 0
 # 파일 창 종류 이름은 글자 · 숫자 · 빈칸만 (pywebview 검사 [\w ]+ — «·» 하나로 창이 안 열렸음 · 1123)
 FILTER_INPUTS = ('DJI 360 영상 사진 (*.osv;*.OSV;*.jpg;*.JPG)', '모든 파일 (*.*)')
@@ -34,6 +36,10 @@ FILTER_OBST = ('지장물 SHP (*.shp;*.SHP)', '모든 파일 (*.*)')
 FILTER_SHP_SAVE = ('SHP (*.shp)',)
 FILTER_GCP = ('GCP CSV TXT (*.csv;*.CSV;*.txt;*.TXT)', '모든 파일 (*.*)')
 FILTER_PNG_SAVE = ('PNG (*.png)',)
+FILTER_MAPPHOTO = ('매핑 사진 JPG (*.jpg;*.JPG;*.jpeg;*.JPEG)', '모든 파일 (*.*)')
+MAP_OUTS = ('mesh', 'gs', 'ortho', 'dsm', 'dtm', 'las', 'contour')    # 매핑 결과물 열쇠 (gs = 가우시안 스플래팅 · gsplat.py)
+MAP_OPT_KEYS = ('feat', 'ortho_res', 'ortho_fill', 'mesh_ratio', 'mesh_formats', 'las_density', 'las_classify', 'dem_cell',
+                'contour_base', 'contour_label', 'contour_clean', 'tin_step')   # 매핑 세부 설정 (화면 · args.json · _opt_args)
 
 
 def _cli(cmd, args):
@@ -46,7 +52,7 @@ def _cli(cmd, args):
         cand = py[:-len('pythonw.exe')] + 'python.exe'
         if os.path.exists(cand):
             py = cand
-    mod = {'build': 'roadview.build', 'share': 'roadview.share', 'map': 'roadview.mapping'}[cmd]
+    mod = {'build': 'roadview.build', 'share': 'roadview.share', 'map': 'roadview.mapping', 'helper': 'roadview.cluster'}[cmd]
     return [py, '-u', '-m', mod] + args, str(BASE)
 
 
@@ -162,12 +168,51 @@ class Job:
                 'url': self.url, 'out': self.out, 'log': self.lines[-12:]}
 
 
+class HelperProc:
+    """도우미 모드 (rv_cli helper · cluster.py) — «@도우미 {상태}» 줄을 읽음 · 앱이 꺼지면 도우미도 끝 (--parent-pid)."""
+
+    def __init__(self, args, cwd):
+        self.st = {'state': 'idle', 'job': '', 'pct': 0, 'done': 0, 'msg': '시작'}
+        self.lines = []
+        env = dict(os.environ, PYTHONIOENCODING='utf-8')
+        self.proc = subprocess.Popen(args, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                     creationflags=NO_WINDOW, env=env)
+        threading.Thread(target=self._read, daemon=True).start()
+
+    def _read(self):
+        for raw in iter(self.proc.stdout.readline, b''):
+            s = raw.decode('utf-8', errors='replace').rstrip()
+            if s.startswith('@도우미 '):
+                try:
+                    self.st.update(json.loads(s.split(' ', 1)[1]))
+                except ValueError:
+                    pass
+                continue
+            self.lines = (self.lines + [s])[-40:]
+        self.proc.wait()
+
+    def alive(self):
+        return self.proc.poll() is None
+
+    def stop(self):
+        if self.alive():
+            subprocess.run(['taskkill', '/PID', str(self.proc.pid), '/T', '/F'], capture_output=True, creationflags=NO_WINDOW)
+
+    def info(self):
+        d = dict(self.st)
+        if not self.alive():
+            d.update(state='off', msg=(self.lines[-1] if self.lines else '꺼짐')[:100])
+        d['log'] = self.lines[-8:]
+        return d
+
+
 class Api:
     def __init__(self):
         self._window = None
         self._project = None
         self._jobs = {}
         self._media = {}
+        self._helper = None      # 도우미 모드 (HelperProc)
 
     # ------------------------------------------------------------ 공통
     def app_info(self):
@@ -617,6 +662,116 @@ class Api:
         d = self.pick_folder()
         return self.scan_mapping(d) if d else None
 
+    def scan_mapping_files(self, files):
+        """고른 사진 파일들만 (매핑 화면 «사진 선택» · Terra 꼴) — 폴더 = 첫 파일의 폴더 · 다른 폴더 파일은 뺌."""
+        files = [str(f) for f in (files or []) if f]
+        if not files:
+            return {'ok': False, 'msg': '고른 사진 없음'}
+        folder = os.path.dirname(files[0])
+        same = [f for f in files if os.path.normcase(os.path.dirname(f)) == os.path.normcase(folder)]
+        from .mapping import scan_folder
+        try:
+            ps = scan_folder(folder, names=[os.path.basename(f) for f in same])
+        except Exception as ex:                          # noqa: BLE001
+            return {'ok': False, 'msg': str(ex)[:160]}
+        out = os.path.join(os.path.dirname(folder.rstrip('\\/')), '매핑_' + os.path.basename(folder.rstrip('\\/')))
+        return {'ok': True, 'folder': folder, 'photos': ps, 'out': out, 'picked': len(same), 'other_dir': len(files) - len(same)}
+
+    def pick_mapping_files(self):
+        import webview
+        r = self._window.create_file_dialog(webview.FileDialog.OPEN, allow_multiple=True, file_types=FILTER_MAPPHOTO)
+        return self.scan_mapping_files(list(r)) if r else None
+
+    # ---- 템플릿 (매핑 세부 설정 묶음 · 앱 설정 폴더/map_templates/이름.json)
+    @staticmethod
+    def _tpl_name(name):
+        n = re.sub(r'[\\/:*?"<>|\x00-\x1f]', '', str(name or '')).strip().strip('.')[:40].strip()
+        return n
+
+    def templates_list(self):
+        try:
+            return sorted(p.stem for p in TPL_DIR.glob('*.json'))
+        except OSError:
+            return []
+
+    def template_save(self, name, values):
+        n = self._tpl_name(name)
+        if not n:
+            return {'ok': False, 'msg': '이름 넣기'}
+        if n == '일반':
+            return {'ok': False, 'msg': '«일반» = 기본값 · 다른 이름'}
+        if not isinstance(values, dict):
+            return {'ok': False, 'msg': '설정 값 없음'}
+        TPL_DIR.mkdir(parents=True, exist_ok=True)
+        (TPL_DIR / (n + '.json')).write_text(json.dumps({'name': n, 'made': time.strftime('%Y-%m-%d %H:%M'), 'values': values},
+                                                        ensure_ascii=False, indent=1), encoding='utf-8')
+        return {'ok': True, 'name': n}
+
+    def template_load(self, name):
+        n = self._tpl_name(name)
+        try:
+            d = json.loads((TPL_DIR / (n + '.json')).read_text(encoding='utf-8'))
+        except (OSError, ValueError):
+            return {'ok': False, 'msg': '템플릿 못 읽음 · ' + n}
+        v = d.get('values')
+        return {'ok': True, 'name': n, 'values': v if isinstance(v, dict) else {}}
+
+    # ---- 장치 성능 (매핑 화면 아래 줄 · Terra 꼴): CPU · RAM · 그래픽카드 · 엔진 · 가우시안 스플래팅
+    def sysinfo(self):
+        if getattr(self, '_sys', None) is None:                # 바뀌지 않는 것은 한 번만 (nvidia-smi 가 1초 남짓)
+            d = {'cores': os.cpu_count() or 0, 'cpu': '', 'ram_gb': 0.0, 'gpu': '', 'vram_gb': 0.0, 'gpu_nvidia': False}
+            try:
+                import winreg
+                with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r'HARDWARE\DESCRIPTION\System\CentralProcessor\0') as k:
+                    d['cpu'] = ' '.join(str(winreg.QueryValueEx(k, 'ProcessorNameString')[0]).split())
+            except (OSError, ImportError):
+                pass
+            try:
+                r = subprocess.run(['nvidia-smi', '--query-gpu=name,memory.total', '--format=csv,noheader,nounits'], capture_output=True,
+                                   text=True, encoding='utf-8', errors='replace', timeout=10, creationflags=NO_WINDOW)
+                ln = (r.stdout or '').strip().splitlines()
+                if r.returncode == 0 and ln:
+                    nm, _, mem = ln[0].rpartition(',')
+                    d.update(gpu=nm.strip(), vram_gb=round(float(mem) / 1024.0, 1), gpu_nvidia=True)
+            except (OSError, ValueError, subprocess.SubprocessError):
+                pass
+            self._sys = d
+        d = dict(self._sys)
+        try:
+            import ctypes
+
+            class MS(ctypes.Structure):
+                _fields_ = [('dwLength', ctypes.c_ulong), ('dwMemoryLoad', ctypes.c_ulong), ('ullTotalPhys', ctypes.c_ulonglong),
+                            ('ullAvailPhys', ctypes.c_ulonglong), ('ullTotalPageFile', ctypes.c_ulonglong), ('ullAvailPageFile', ctypes.c_ulonglong),
+                            ('ullTotalVirtual', ctypes.c_ulonglong), ('ullAvailVirtual', ctypes.c_ulonglong), ('ullAvailExtendedVirtual', ctypes.c_ulonglong)]
+            m = MS(); m.dwLength = ctypes.sizeof(MS)
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(m)):
+                d.update(ram_gb=round(m.ullTotalPhys / 2 ** 30, 1), ram_free_gb=round(m.ullAvailPhys / 2 ** 30, 1))
+        except Exception:                                    # noqa: BLE001
+            pass
+        try:
+            from .mapping import find_engines
+            d['engines'] = bool(find_engines()[0])
+        except Exception:                                    # noqa: BLE001
+            d['engines'] = False
+        d['gs_ok'], d['gs_why'] = False, '이 판에 가우시안 스플래팅 엔진 없음'
+        try:                                                 # gsplat.available() → bool · (ok, why) · {'ok', 'why'}
+            from . import gsplat
+            g = gsplat.available()
+            if isinstance(g, dict):
+                d['gs_ok'], d['gs_why'] = bool(g.get('ok')), str(g.get('why') or '')
+            elif isinstance(g, (tuple, list)):
+                d['gs_ok'], d['gs_why'] = bool(g[0]), str(g[1] if len(g) > 1 else '')
+            else:
+                d['gs_ok'], d['gs_why'] = bool(g), ''
+            if not d['gs_ok'] and not d['gs_why']:
+                d['gs_why'] = '가우시안 스플래팅 엔진을 쓸 수 없음'
+        except ImportError:
+            pass
+        except Exception as ex:                              # noqa: BLE001 — 엔진 확인이 화면을 멈추지 않게
+            d['gs_why'] = '가우시안 스플래팅 확인 실패 · ' + str(ex)[:100]
+        return d
+
     # ---- 결과물 다듬기 (JACK 1126: 다 만든 결과물에서 잘라내기 · DEM 더하기 · 웹 공유) — 같은 설정으로 결과물 단계만 다시
     def _map_args(self):
         """열린 3D 매핑 프로젝트를 다시 돌릴 설정 (work/args.json · 없으면 mapping.js · 정보.txt · 사진 목록으로)."""
@@ -636,31 +791,87 @@ class Api:
         names = A.get('names')
         if not names or not Path(names).exists():
             names = next((str(q) for q in (pj / 'work' / 'pick.txt', pj / 'work' / 'names.txt') if q.exists()), None)
-        return {'photos': photos, 'quality': A.get('quality') or M.get('quality') or 'normal', 'names': names,
-                'title': A.get('title') or M.get('title') or pj.name, 'crs': A.get('crs') or M.get('crs') or 'EPSG:5186',
-                'outputs': list(M.get('outputs') or A.get('outputs') or ['mesh']), 'contour': A.get('contour') or (M.get('contour') or {}).get('minor') or 1.0,
-                'cell': A.get('cell') or 0}
+        D = {'photos': photos, 'quality': A.get('quality') or M.get('quality') or 'normal', 'names': names,
+             'title': A.get('title') or M.get('title') or pj.name, 'crs': A.get('crs') or M.get('crs') or 'EPSG:5186',
+             'outputs': list(M.get('outputs') or A.get('outputs') or ['mesh']), 'contour': A.get('contour') or (M.get('contour') or {}).get('minor') or 1.0,
+             'cell': A.get('cell') or 0}
+        for k in MAP_OPT_KEYS + ('gs_quality', 'gs_dom'):        # 매핑 화면 세부 설정 (없으면 기본 = 1.0.17 까지)
+            if A.get(k) is not None:
+                D[k] = A[k]
+        return D
+
+    @staticmethod
+    def _opt_args(d):
+        """매핑 세부 설정 (매핑 화면 · work/args.json 같은 열쇠) → rv_cli map 옵션. 없거나 틀린 값은 빼서 기본(= 1.0.17 까지 동작)."""
+        d = d or {}
+        a = []
+
+        def num(k, lo, hi):
+            try:
+                v = float(d.get(k))
+            except (TypeError, ValueError):
+                return None
+            return min(hi, max(lo, v)) if math.isfinite(v) else None
+
+        def on(k):
+            v = d.get(k)
+            return None if v is None or v == 'auto' else ('1' if v in (True, 1, '1', 'true') else '0')
+        if d.get('feat') in ('high', 'normal', 'low'):
+            a += ['--feat', d['feat']]
+        if d.get('ortho_res') in ('auto', 'high', 'mid', 'low'):
+            a += ['--ortho-res', d['ortho_res']]
+        if on('ortho_fill') is not None:
+            a += ['--ortho-fill', on('ortho_fill')]
+        if num('mesh_ratio', 1, 100) is not None:
+            a += ['--mesh-ratio', '%g' % num('mesh_ratio', 1, 100)]
+        fm = d.get('mesh_formats') or []
+        fm = [f for f in (fm.split(',') if isinstance(fm, str) else fm) if f in ('ply', 'obj')]
+        if fm:
+            a += ['--mesh-formats', ','.join(fm)]
+        if num('las_density', 0, 100) in (100, 50, 25, 10):
+            a += ['--las-density', '%d' % num('las_density', 0, 100)]
+        if on('las_classify') is not None:
+            a += ['--las-classify', on('las_classify')]
+        if num('dem_cell', 0, 10) in (0.25, 0.5, 1.0, 2.0):
+            a += ['--dem-cell', '%g' % num('dem_cell', 0, 10)]
+        if num('contour_base', -1000, 9000) is not None:
+            a += ['--contour-base', '%g' % num('contour_base', -1000, 9000)]
+        if num('contour_label', -1, 1000) is not None:
+            a += ['--contour-label', '%g' % num('contour_label', -1, 1000)]
+        if on('contour_clean') is not None:
+            a += ['--contour-clean', on('contour_clean')]
+        if num('tin_step', 0.1, 50) is not None:
+            a += ['--tin-step', '%g' % num('tin_step', 0.1, 50)]
+        return a
+
+    @staticmethod
+    def _gs_args(d):
+        """가우시안 스플래팅 (결과물 gs 를 고를 때만 · gsplat.py 쪽 옵션)."""
+        q = d.get('gs_quality') if d.get('gs_quality') in ('low', 'normal', 'high', 'ultra') else 'normal'
+        return ['--gs-quality', q, '--gs-dom', '1' if d.get('gs_dom') in (True, 1, '1', 'true') else '0']
 
     def _busy(self, folder):
         """같은 결과 폴더에 매핑 작업이 돌고 있으면 True (stages · tiles 가 엉키지 않게 · 1126 검토)."""
         f = os.path.normcase(os.path.abspath(folder))
         return any(j.kind == 'map' and j.state == 'run' and os.path.normcase(os.path.abspath(j.out or '')) == f for j in self._jobs.values())
 
-    def _rerun(self, add=(), A=None):
+    def _rerun(self, add=(), A=None, only=None):
         if self._busy(self._project):
             return {'ok': False, 'msg': '이 결과물을 만드는 작업이 이미 돌고 있음'}
         try:
             A = A or self._map_args()
         except Exception as ex:                          # noqa: BLE001
             return {'ok': False, 'msg': str(ex)[:160]}
-        outs = [o for o in ('mesh', 'ortho', 'dsm', 'dtm', 'las', 'contour') if o in set(A['outputs']) | set(add)]
+        want = set(only) if only else set(A['outputs']) | set(add)       # only = 이것만 다시 (나머지 결과물은 그대로 둠)
+        outs = [o for o in MAP_OUTS if o in want]
         args = [A['photos'], '--out', self._project, '--quality', A['quality'], '--title', A['title'], '--crs', A['crs'],
                 '--outputs', ','.join(outs or ['mesh']), '--contour', str(min(50.0, max(0.1, float(A['contour'])))), '--reuse-only']
         if A['names']:
             args += ['--names', A['names']]
         if A['cell']:
             args += ['--cell', str(A['cell'])]
-        cmd, cwd = _cli('map', args)
+        args += self._opt_args(A) + (self._gs_args(A) if 'gs' in outs else [])
+        cmd, cwd = _cli('map', args + self._cluster_args())
         j = Job('map', cmd, cwd, out=self._project)
         self._jobs[j.id] = j
         return {'ok': True, 'job': j.id}
@@ -695,7 +906,7 @@ class Api:
         if self._busy(self._project):
             return {'ok': False, 'msg': '이 결과물을 만드는 작업이 이미 돌고 있음'}
         f = Path(self._project) / 'data' / 'crop.json'
-        f.write_text(json.dumps({'polygon': poly, 'made': time.strftime('%Y-%m-%d %H:%M')}, ensure_ascii=False), encoding='utf-8')
+        f.write_text(json.dumps({'polygon': poly, 'made': time.strftime('%Y-%m-%d %H:%M'), 'crs': A.get('crs')}, ensure_ascii=False), encoding='utf-8')
         return self._rerun(A=A)
 
     def crop_clear(self):
@@ -712,11 +923,110 @@ class Api:
             f.unlink()
         return self._rerun(A=A)
 
+    def nonground_get(self):
+        """«땅 아님» 다각형 (DTM 필터가 놓친 큰 건물 등 · JACK 1126) → {polygons: [[[E, N], …], …]}."""
+        if not self._project:
+            return {'polygons': []}
+        try:
+            d = json.loads((Path(self._project) / 'data' / 'nonground.json').read_text(encoding='utf-8'))
+            return {'polygons': d.get('polygons') or []}
+        except (OSError, ValueError):
+            return {'polygons': []}
+
+    def nonground_set(self, p):
+        """«땅 아님» 다각형을 바꾸고 DTM · 등고선 · 땅 높이를 다시 (빈 목록 = 모두 없앰)."""
+        if not self._project:
+            return {'ok': False, 'msg': '열린 프로젝트 없음'}
+        polys = []
+        for pg in ((p or {}).get('polygons') or []):
+            q = [[float(a[0]), float(a[1])] for a in pg if len(a) >= 2]
+            if len(q) >= 3:
+                area = 0.5 * abs(sum(q[i][0] * q[i - 1][1] - q[i - 1][0] * q[i][1] for i in range(len(q))))
+                if area >= 1:
+                    polys.append(q)
+        try:                                             # 설정 · 사진 폴더를 먼저 확인 (안 되면 파일을 바꾸지 않음)
+            A = self._map_args()
+        except Exception as ex:                          # noqa: BLE001
+            return {'ok': False, 'msg': str(ex)[:160]}
+        if self._busy(self._project):
+            return {'ok': False, 'msg': '이 결과물을 만드는 작업이 이미 돌고 있음'}
+        f = Path(self._project) / 'data' / 'nonground.json'
+        if polys:
+            f.write_text(json.dumps({'polygons': polys, 'made': time.strftime('%Y-%m-%d %H:%M'), 'crs': A.get('crs')}, ensure_ascii=False), encoding='utf-8')
+        elif f.exists():
+            f.unlink()
+        # 땅 아님이 바꾸는 것만 다시: DTM + (있으면) 등고선 · LAS 땅 분류 — 3D · 정사는 그대로 (1126 검토 · 몇 분 줄임)
+        return self._rerun(A=A, only=['dtm'] + [o for o in ('contour', 'las') if o in A['outputs']])
+
     def add_outputs(self, add):
         if not self._project:
             return {'ok': False, 'msg': '열린 프로젝트 없음'}
-        add = [o for o in (add or []) if o in ('mesh', 'ortho', 'dsm', 'dtm', 'las', 'contour')]
+        add = [o for o in (add or []) if o in MAP_OUTS]
         return self._rerun(add)
+
+    # ---- 함께 처리 (JACK 1126 · cluster.py: 공유 폴더 = 작업 게시판 · 옆 PC 도우미와 점구름 깊이 지도를 나눠 만듦)
+    def _cluster_cfg(self):
+        try:
+            c = json.loads(CLUSTER_CFG.read_text(encoding='utf-8'))
+        except (OSError, ValueError):
+            c = {}
+        return {'board': str(c.get('board') or ''), 'use': bool(c.get('use')), 'helper': bool(c.get('helper'))}
+
+    def _cluster_save(self, c):
+        CFG_DIR.mkdir(parents=True, exist_ok=True)
+        CLUSTER_CFG.write_text(json.dumps({k: c[k] for k in ('board', 'use', 'helper')}, ensure_ascii=False), encoding='utf-8')
+
+    def _cluster_args(self):
+        c = self._cluster_cfg()
+        return ['--cluster', c['board']] if c['use'] and c['board'] else []
+
+    def helper_status(self):
+        """이 PC 도우미 (공유 폴더는 안 읽음 · 가벼움)."""
+        h = self._helper
+        return h.info() if h else {'state': 'off', 'job': '', 'pct': 0, 'done': 0, 'msg': ''}
+
+    def cluster_get(self):
+        """설정 · 공유 폴더의 도우미 목록 (살아 있음 = 45초 안 심장박동) · 이 PC 도우미."""
+        c = self._cluster_cfg()
+        c.update(me=self.helper_status(), helpers=[], board_ok=False, why='')
+        if c['board']:
+            from . import cluster
+            c['board_ok'], c['why'] = cluster.board_ok(c['board'])
+            if c['board_ok']:
+                c['helpers'] = [{k: x.get(k) for k in ('id', 'host', 'cores', 'ram_gb', 'state', 'job', 'pct', 'done', 'alive')}
+                                for x in cluster.list_helpers(c['board'])]
+                c['workers'] = sum(1 for x in c['helpers'] if x['alive'] and (x['host'] != cluster.HOST or cluster.SAME_HOST))
+        return c
+
+    def cluster_set(self, p):
+        c = self._cluster_cfg()
+        if 'use' in (p or {}):
+            c['use'] = bool(p['use'])
+        if 'board' in (p or {}):
+            c['board'] = str(p['board'] or '').strip()
+        self._cluster_save(c)
+        if self._helper and 'board' in (p or {}):    # 공유 폴더를 바꾸면 도우미도 새 폴더로
+            self.helper_toggle(c['helper'])
+        return self.cluster_get()
+
+    def cluster_pick(self):
+        d = self.pick_folder()
+        return self.cluster_set({'board': d}) if d else None
+
+    def helper_toggle(self, on):
+        """도우미 모드 = 이 PC 가 공유 폴더의 일감을 받음 (rv_cli helper · 엔진은 낮은 우선순위 · 앱을 끄면 같이 끝)."""
+        c = self._cluster_cfg()
+        if self._helper:
+            self._helper.stop()
+            self._helper = None
+        if on:
+            if not c['board']:
+                return {'ok': False, 'msg': '공유 폴더 먼저'}
+            cmd, cwd = _cli('helper', ['--board', c['board'], '--parent-pid', str(os.getpid())])
+            self._helper = HelperProc(cmd, cwd)
+        c['helper'] = bool(on)
+        self._cluster_save(c)
+        return {'ok': True, 'me': self.helper_status()}
 
     def start_mapping(self, p):
         folder, out = p.get('folder'), (p.get('out') or '').strip()
@@ -730,6 +1040,22 @@ class Api:
             return {'ok': False, 'msg': '로드뷰 폴더 → 다른 결과 폴더'}
         if self._busy(out):
             return {'ok': False, 'msg': '이 결과 폴더에 작업이 이미 돌고 있음'}
+        # 매핑 화면에서 그린 범위 (위경도 네 구석) → 결과물도 그 안만 = data/crop.json (결과물 다듬기 잘라내기와 같은 파일 · JACK 1126)
+        #   범위를 안 그렸으면 옛 잘라내기를 지움 (이번 매핑은 고른 사진 전체)
+        crop_f = Path(out) / 'data' / 'crop.json'
+        rng = p.get('range')
+        if rng and len(rng) >= 3:
+            try:
+                import pyproj
+                crs = p.get('crs') if p.get('crs') in ('EPSG:5186', 'EPSG:5185', 'EPSG:5187', 'EPSG:5188', 'EPSG:5179') else 'EPSG:5186'
+                tr = pyproj.Transformer.from_crs('EPSG:4326', crs, always_xy=True)
+                poly = [[round(v, 3) for v in tr.transform(float(q[1]), float(q[0]))] for q in rng]
+                crop_f.parent.mkdir(parents=True, exist_ok=True)
+                crop_f.write_text(json.dumps({'polygon': poly, 'made': time.strftime('%Y-%m-%d %H:%M'), 'from': 'range', 'crs': crs}, ensure_ascii=False), encoding='utf-8')
+            except Exception as ex:                      # noqa: BLE001
+                return {'ok': False, 'msg': '범위 좌표 바꾸기 실패 · ' + str(ex)[:80]}
+        elif crop_f.exists():
+            crop_f.unlink()
         work = Path(out) / 'work'
         work.mkdir(parents=True, exist_ok=True)
         lst = work / 'pick.txt'
@@ -738,16 +1064,17 @@ class Api:
         if p.get('crs') in ('EPSG:5186', 'EPSG:5185', 'EPSG:5187', 'EPSG:5188', 'EPSG:5179'):
             args += ['--crs', p['crs']]
         sel = p.get('outputs')
-        outs = [o for o in (['mesh'] if sel is None else sel) if o in ('mesh', 'ortho', 'dsm', 'dtm', 'las', 'contour')]
+        outs = [o for o in (['mesh'] if sel is None else sel) if o in MAP_OUTS]
         if not outs:
-            return {'ok': False, 'msg': '만들 것 고르기'}
+            return {'ok': False, 'msg': '만들 결과물 켜기'}
         args += ['--outputs', ','.join(outs)]
         try:                                             # 등고선 주곡선 간격 (m · 계곡선 = 5배)
             ct = float(p.get('contour') or 1.0)
         except (TypeError, ValueError):
             ct = 1.0
         args += ['--contour', str(min(50.0, max(0.1, ct)))]
-        cmd, cwd = _cli('map', args)
+        args += self._opt_args(p) + (self._gs_args(p) if 'gs' in outs else [])     # 세부 설정 (Terra 꼴 칸 · JACK 1126)
+        cmd, cwd = _cli('map', args + self._cluster_args())
         j = Job('map', cmd, cwd, out=out)
         self._jobs[j.id] = j
         return {'ok': True, 'job': j.id}
@@ -957,7 +1284,13 @@ def main():
         webview.start(_selftest, (api, w, st, os.environ.get('RV_SELFTEST_PROJECT')), gui='edgechromium',
                       private_mode=False, storage_path=str(CFG_DIR / 'webview'))
     else:
-        webview.start(gui='edgechromium', private_mode=False, storage_path=str(CFG_DIR / 'webview'))
+        if api._cluster_cfg()['helper']:            # 지난번에 도우미 모드를 켜 두었으면 다시 켬 (옆 PC 는 앱만 켜 두면 됨)
+            api.helper_toggle(True)
+        try:
+            webview.start(gui='edgechromium', private_mode=False, storage_path=str(CFG_DIR / 'webview'))
+        finally:
+            if api._helper:
+                api._helper.stop()
 
 
 if __name__ == '__main__':

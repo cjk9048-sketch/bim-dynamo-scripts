@@ -33,16 +33,24 @@ CRS = 'EPSG:5186'
 PIPELINE_VERSION = '4'      # 2 = 3D 면 세모 한도 · 3 = 사진 많으면 전역 카메라 풀기 · 4 = 조각 질감      # 차례 · 옵션을 바꾸면 올림 → 지난번 중간 자료를 다시 쓰지 않음
 # 품질: 질감용 사진 크기 · 특징점 사진 크기 (점구름은 질감용의 절반 · normal = 1125 80장 시험 값)
 QUALITY = {'fast': (1320, 2000), 'normal': (2640, 3200), 'fine': (5280, 4000)}
-QUALITY_NAME = {'fast': '빠르게', 'normal': '보통', 'fine': '정밀'}
+QUALITY_NAME = {'fast': '단순', 'normal': '보통', 'fine': '정밀'}   # JACK 1126: 빠르게 → 단순
 # 3D 보기 면 세모 수 한도 (보기 전용 · 정사 · DSM · 지표면은 점구름 그대로라 정확도는 안 바뀜 — 설계서 10.4)
 TARGET_FACES = {'fast': 1000000, 'normal': 3000000, 'fine': 6000000}
 # 점구름 깊이 지도 폭(px) — 측량용(정사 · DSM · DTM · LAS) / 3D 만 (모양은 한 단계 덜 촘촘 · 질감은 QUALITY 폭 그대로)
 # OpenMVS 는 640 px 아래로 안 줄임 (--min-resolution) → 빠르게는 둘이 같음
 DENSE_PX_SURVEY = {'fast': 660, 'normal': 1320, 'fine': 2640}
 DENSE_PX_MESH = {'fast': 660, 'normal': 660, 'fine': 1320}
-OUTPUTS = ['mesh', 'ortho', 'dsm', 'dtm', 'las', 'contour']
-OUTPUT_NAME = {'mesh': '3D 모델', 'ortho': '정사영상', 'dsm': 'DSM', 'dtm': 'DTM', 'las': '점구름(LAS)', 'contour': '등고선 DXF'}
-DTM_CELL = 0.5             # DTM 격자 m
+# 화면 · 기록에 보이는 단계 이름 (stages.json 열쇠는 그대로) — «점구름» 이 LAS 를 만드는 줄로 보여 바꿈 (JACK 1126)
+STAGE_LABEL = {'점구름 준비': '모양 계산 준비', '점구름': '모양 계산 (점구름)', '측량 점구름': '측량용 모양 계산',
+               '3D 면': '3D 면 만들기', '질감': '질감 입히기', '결과물': '결과물 만들기', '가우시안': '가우시안 스플래팅'}
+OUTPUTS = ['mesh', 'ortho', 'dsm', 'dtm', 'las', 'contour', 'gs']
+OUTPUT_NAME = {'mesh': '3D 모델', 'ortho': '정사영상', 'dsm': 'DSM', 'dtm': 'DTM', 'las': '점구름(LAS)', 'contour': '등고선 DXF',
+               'gs': '가우시안 스플래팅'}     # gs = gsplat.py (Brush · JACK 1126)
+DTM_CELL = 0.5             # DTM 격자 m (기본 · 매핑 화면 DEM «크기(스케일)» = --dem-cell)
+FEAT_MUL = {'high': 1.5, 'normal': 1.0, 'low': 0.5}       # 특징 포인트 밀도 = 특징점 사진 크기 배수 (QUALITY 둘째 값 ×)
+ORTHO_RES_MUL = {'high': 1.0, 'mid': 2.0, 'low': 4.0}     # 정사 해상도 = 사진 GSD × (높음 100 % · 중간 50 % · 낮음 25 %)
+FEAT_NAME = {'high': '높음', 'normal': '보통', 'low': '낮음'}
+ORTHO_RES_NAME = {'auto': '자동', 'high': '높음', 'mid': '중간', 'low': '낮음'}
 MAX_TEX = 4096             # 보기 조각 질감 tex 한 변 최대 (늘 읽음 · 1126 8192 → 4096 · 가까운 조각은 tex_hi 로 바꿔 읽음)
 MAX_TEX_HI = 16384         # 고해상도 질감 tex_hi 한 변 최대 (대부분 그래픽 한도 · OpenMVS 질감은 8192 안)
 # 질감 사진 폭(px) — 원본 크기 (M4E 5280 · 1126 Terra 견줌: 2640 은 흐림) · 질감 방식이 바뀌면 질감 단계만 다시 (stages params 'tex')
@@ -178,10 +186,14 @@ def camera_params(p):
     return '%.3f,%.3f,%.1f,%.1f,0,0,0,0' % (p['fcal'], p['fcal'], w / 2, h / 2)
 
 
-def scan_folder(folder):
-    """폴더의 매핑 사진 목록 + 바라보는 땅 지점(평평한 땅 · 짐벌 방향) — 지도에 범위 고르기용."""
+def scan_folder(folder, names=None):
+    """폴더의 매핑 사진 목록 + 바라보는 땅 지점(평평한 땅 · 짐벌 방향) — 지도에 범위 고르기용.
+    names = 이 이름들만 (매핑 화면 «사진 선택» · 대소문자 무시)."""
     out = []
+    want = {n.lower() for n in names} if names is not None else None
     for f in sorted(glob.glob(os.path.join(folder, '*.JPG')) + glob.glob(os.path.join(folder, '*.jpg'))):
+        if want is not None and os.path.basename(f).lower() not in want:
+            continue
         try:
             p = photo_info(f)
         except OSError:
@@ -369,7 +381,7 @@ def fill_pull_push(Z, mask):
     return np.where(mask, Z, est).astype(np.float32)
 
 
-def dtm_from_points(E, N, H, cell=0.5, max_win_m=33.0, slope=0.25, dh0=0.3, dhmax=2.5):
+def dtm_from_points(E, N, H, cell=0.5, max_win_m=33.0, slope=0.25, dh0=0.3, dhmax=2.5, exclude=None):
     """점진형 형태학 필터(PMF · Zhang 2003): 칸마다 가장 낮은 점 → 창을 키우며 열림(opening) → 창 크기에 맞는 높이 차보다
     솟은 칸 = 땅 아님(건물 · 비닐하우스 · 나무). 땅 칸만 남겨 빈칸을 메운 것 = DTM. → (dtm, 땅, 자료 있음, x0, y1)."""
     import cv2
@@ -397,6 +409,8 @@ def dtm_from_points(E, N, H, cell=0.5, max_win_m=33.0, slope=0.25, dh0=0.3, dhma
         flag |= (surf - opened) > dh
         surf = opened; w_prev = w; k += 1
     ground = valid & ~flag
+    for pg in exclude or []:                                   # «땅 아님» 다각형 (결과물 다듬기 · JACK 1126) → 그 안은 둘레 땅으로 메움
+        ground &= ~crop_grid(pg, x0, y1, cell, ground.shape)
     dtm = fill_pull_push(np.nan_to_num(Z0), ground)
     # 땅이 안 보인 곳(숲 · 건물 밑)은 둘레 땅에 맞춘 막 면(조화 보간)으로 매끄럽게 — 땅 칸은 고정 (1125: 메운 곳이 네모 덩어리)
     hole = ~ground
@@ -437,6 +451,20 @@ def write_las(path, E, N, H, rgb, ground=None, chunk=4000000):
             c = rgb[i:j].astype(np.uint16) * 257
             rec['r'] = c[:, 0]; rec['g'] = c[:, 1]; rec['b'] = c[:, 2]
             fp.write(rec.tobytes())
+
+
+def read_nonground(out):
+    """data/nonground.json → «땅 아님» 다각형 목록 [[[E, N], …], …] (DTM 필터가 놓친 큰 건물 등 · JACK 1126)."""
+    try:
+        d = json.load(open(os.path.join(out, 'data', 'nonground.json'), encoding='utf-8'))
+        out_ = []
+        for pg in d.get('polygons') or []:
+            q = [[float(p[0]), float(p[1])] for p in pg]
+            if len(q) >= 3:
+                out_.append(q)
+        return out_
+    except Exception:                                        # noqa: BLE001 — 손으로 고친 파일 하나에 작업 전체가 멈추지 않게
+        return []
 
 
 def read_crop(out):
@@ -484,9 +512,13 @@ def crop_grid(poly, x0, y1, cell, shape):
     return m > 0
 
 
-def write_contour_dxf(path, Z, mask, x0, y1, cell, minor=1.0, major=5.0, smooth_m=1.0, log=print):
+def write_contour_dxf(path, Z, mask, x0, y1, cell, minor=1.0, major=5.0, smooth_m=1.0, base=0.0, label_m=-1.0, clean=False, log=print):
     """땅(DTM) 격자 → 등고선 DXF (R12 · 한글 도면층 = ANSI_949): 등고선_주곡선 · 등고선_계곡선 (표고 = 높이값 · 2D 폴리선)
-    + 등고선_표고 (계곡선 가운데 표고 글). 거친 칸 잡음은 smooth_m 가우시안으로 펴고 점은 2 cm 안으로 솎음. → (주곡선 수, 계곡선 수)."""
+    + 등고선_표고 (계곡선 표고 글). 거친 칸 잡음은 smooth_m 가우시안으로 펴고 점은 2 cm 안으로 솎음. → (주곡선 수, 계곡선 수).
+    매핑 화면 등고선 칸 (JACK 1126 Terra 꼴):
+      base = 고도 기준면 (등고선 높이 = base + k × minor · 계곡선 = base + k × major)
+      label_m = 고도 주석 간격 (계곡선 따라 이 거리마다 표고 글 · 0 = 글 없음 · 음수 = 1.0.17 까지 = 30 m 넘는 계곡선 가운데 하나)
+      clean = 잘못된 등고선 제거 (짧은 열린 조각 < max(2 m, 3 × 간격) · 작은 닫힌 고리 둘레 < max(5 m, 8 × 간격) — 칸 잡음 · 풀 · 돌)."""
     import cv2
     import contourpy
     Zf = fill_pull_push(np.where(mask, Z, 0).astype(np.float32), mask)
@@ -500,24 +532,39 @@ def write_contour_dxf(path, Z, mask, x0, y1, cell, minor=1.0, major=5.0, smooth_
     zv = Zf[mask]
     if not len(zv):
         return 0, 0
-    lo, hi = math.ceil(float(zv.min()) / minor) * minor, float(zv.max())
+    lo = base + math.ceil((float(zv.min()) - base) / minor - 1e-9) * minor
+    hi = float(zv.max())
     L = []                                                        # DXF 줄 (코드 · 값)
 
     def ent(*kv):
         for k, v in zip(kv[::2], kv[1::2]):
             L.append('%d\n%s\n' % (k, v))
-    n_minor = n_major = 0
-    lv = lo
-    while lv <= hi + 1e-9:
-        is_major = abs(lv / major - round(lv / major)) < 1e-6
+
+    def label(px, py, d, lv):                                     # 표고 글 (선 방향 · 거꾸로 서지 않게)
+        ang = math.degrees(math.atan2(d[1], d[0]))
+        ang = ang + 180 if ang > 90 or ang < -90 else ang
+        ent(0, 'TEXT', 8, '등고선_표고', 10, '%.3f' % px, 20, '%.3f' % py, 30, '%.3f' % lv,
+            40, '0.8', 1, ('%.0f' % lv) if abs(lv - round(lv)) < 1e-6 else ('%.1f' % lv), 50, '%.2f' % ang, 72, 1, 11,
+            '%.3f' % px, 21, '%.3f' % py, 31, '%.3f' % lv)
+    n_minor = n_major = n_drop = n_lab = 0
+    min_open, min_ring = max(2.0, 3 * minor), max(5.0, 8 * minor)
+    i = 0
+    while True:
+        lv = round(lo + i * minor, 6); i += 1                    # 기준면에서 곱으로 (더해 가면 소수 오차가 쌓임)
+        if lv > hi + 1e-9:
+            break
+        is_major = abs((lv - base) / major - round((lv - base) / major)) < 1e-6
         lay = '등고선_계곡선' if is_major else '등고선_주곡선'
         for seg in gen.lines(lv):
             if len(seg) < 2:
                 continue
+            closed = len(seg) > 3 and np.hypot(*(seg[0] - seg[-1])) < cell * 0.5
+            if clean and float(np.sum(np.hypot(*np.diff(seg, axis=0).T))) < (min_ring if closed else min_open):
+                n_drop += 1
+                continue
             ap = cv2.approxPolyDP(seg.astype(np.float32).reshape(-1, 1, 2), 0.02, False).reshape(-1, 2) if len(seg) > 2 else seg
             if len(ap) < 2:
                 continue
-            closed = len(seg) > 3 and np.hypot(*(seg[0] - seg[-1])) < cell * 0.5
             ent(0, 'POLYLINE', 8, lay, 66, 1, 10, '0.0', 20, '0.0', 30, '%.3f' % lv, 70, 1 if closed else 0)
             for x, y in ap[:-1] if closed else ap:
                 ent(0, 'VERTEX', 8, lay, 10, '%.3f' % x, 20, '%.3f' % y, 30, '%.3f' % lv)
@@ -525,16 +572,23 @@ def write_contour_dxf(path, Z, mask, x0, y1, cell, minor=1.0, major=5.0, smooth_
             if is_major:
                 n_major += 1
                 ln = float(np.sum(np.hypot(*np.diff(ap, axis=0).T)))
-                if ln >= 30:                                      # 계곡선 가운데 표고 글
-                    k = len(ap) // 2; d = ap[min(k + 1, len(ap) - 1)] - ap[max(k - 1, 0)]
-                    ang = math.degrees(math.atan2(d[1], d[0]))
-                    ang = ang + 180 if ang > 90 or ang < -90 else ang
-                    ent(0, 'TEXT', 8, '등고선_표고', 10, '%.3f' % ap[k][0], 20, '%.3f' % ap[k][1], 30, '%.3f' % lv,
-                        40, '0.8', 1, ('%.0f' % lv) if abs(lv - round(lv)) < 1e-6 else ('%.1f' % lv), 50, '%.2f' % ang, 72, 1, 11,
-                        '%.3f' % ap[k][0], 21, '%.3f' % ap[k][1], 31, '%.3f' % lv)
+                if label_m < 0:
+                    if ln >= 30:                                  # 1.0.17 까지: 계곡선 가운데 표고 글 하나
+                        k = len(ap) // 2
+                        label(ap[k][0], ap[k][1], ap[min(k + 1, len(ap) - 1)] - ap[max(k - 1, 0)], lv); n_lab += 1
+                elif label_m > 0 and ln >= min(30.0, label_m):    # 간격마다 (첫 글 = 반 간격) · 짧으면 가운데 하나
+                    cs = np.r_[0.0, np.cumsum(np.hypot(*np.diff(ap, axis=0).T))]
+                    for s_ in (np.arange(label_m / 2, ln, label_m) if ln >= label_m else [ln / 2]):
+                        j = min(len(ap) - 2, max(0, int(np.searchsorted(cs, s_)) - 1))
+                        f = (s_ - cs[j]) / max(1e-9, cs[j + 1] - cs[j])
+                        p = ap[j] + f * (ap[j + 1] - ap[j])
+                        label(p[0], p[1], ap[j + 1] - ap[j], lv); n_lab += 1
             else:
                 n_minor += 1
-        lv = round(lv + minor, 6)
+    if clean:
+        log('  등고선 정리: 짧은 조각 · 작은 고리 %d개 뺌 (열린 선 < %.1f m · 닫힌 고리 둘레 < %.1f m)' % (n_drop, min_open, min_ring))
+    if label_m >= 0:
+        log('  등고선 표고 글 %d개 (%s)' % (n_lab, '%g m 마다' % label_m if label_m > 0 else '없음'))
     head = ['0\nSECTION\n2\nHEADER\n9\n$ACADVER\n1\nAC1009\n9\n$DWGCODEPAGE\n3\nANSI_949\n',
             '9\n$EXTMIN\n10\n%.3f\n20\n%.3f\n30\n%.3f\n' % (xs[0], ys[-1], lo),
             '9\n$EXTMAX\n10\n%.3f\n20\n%.3f\n30\n%.3f\n' % (xs[-1], ys[0], hi), '0\nENDSEC\n',
@@ -946,6 +1000,77 @@ def tiles_to_web(tex_dirs, s, R, t, out, max_tex=MAX_TEX, origin=None, max_hi=MA
     return meta
 
 
+MESH_X = '3D_model'        # 3D 내보내기 파일 이름 (PLY · OBJ · MTL 안에서 서로 가리키는 이름은 영문 — 한글 경로를 못 읽는 프로그램이 있음)
+
+
+def export_mesh(tex_dirs, s, R, t, outs, formats, crop=None):
+    """질감 3D (work/tex_tiles 조각) → 결과물 좌표 (CRS · EGM2008 표고 · m · 원점 안 뺌) 한 덩어리 파일 (매핑 화면 3D 메시 «파일 형식»):
+      ply = 3D_model.ply (이진 · 꼭짓점 double · 세모마다 질감 좌표 + texnumber · comment TextureFile — MeshLab · CloudCompare)
+      obj = 3D_model.obj + 3D_model.mtl (질감 그림마다 재질 — Blender · 3ds Max · Civil 3D/InfraWorks 3D 모델 가져오기)
+    질감 그림은 3D_model_tex 폴더에 그대로 복사 (다시 누르지 않음). 잘라내기(crop) = 세모 가운데가 안인 것만. 옛 내보내기는 먼저 지움.
+    → {'faces', 'verts', 'tex', 'files'} 또는 None (고른 형식 없음 · 세모 없음)."""
+    tdir = os.path.join(outs, MESH_X + '_tex')
+    shutil.rmtree(tdir, ignore_errors=True)
+    for f in glob.glob(os.path.join(outs, MESH_X + '.*')):
+        os.remove(f)
+    formats = [f for f in formats if f in ('ply', 'obj')]
+    if not formats or not tex_dirs:
+        return None
+    os.makedirs(tdir, exist_ok=True)                 # 다른 프로그램이 옛 질감을 잡고 있어 다 못 지워도 (1126 검토)
+    Vs, Fs, Ts, Ks, names = [], [], [], [], []
+    nv = 0
+    for i, d in enumerate(tex_dirs):
+        V, F, tc, TN, texs = read_textured_ply(d)
+        E, N, H = to_5186_h(s * (V @ R.T) + t)
+        if crop:
+            keep = crop_points(E[F].mean(1), N[F].mean(1), crop)
+            F, tc, TN = F[keep], tc[keep], TN[keep]
+        if not len(F):
+            continue
+        remap = np.full(len(texs), -1, np.int64)
+        for q in np.unique(TN):
+            nm = 't%02d_%d%s' % (i, q, os.path.splitext(texs[q])[1].lower() or '.jpg')
+            shutil.copyfile(texs[q], os.path.join(tdir, nm))
+            remap[q] = len(names); names.append(nm)
+        u, inv = np.unique(F.reshape(-1), return_inverse=True)     # 이 조각에서 쓰는 꼭짓점만
+        Vs.append(np.stack([E[u], N[u], H[u]], 1)); Fs.append(inv.reshape(-1, 3) + nv); nv += len(u)
+        Ts.append(tc.astype(np.float32)); Ks.append(remap[TN])
+    if not Fs:
+        shutil.rmtree(tdir, ignore_errors=True)
+        return None
+    V = np.concatenate(Vs); F = np.concatenate(Fs); tc = np.concatenate(Ts); K = np.concatenate(Ks)
+    nf = len(F)
+    files = []
+    if 'ply' in formats:
+        rec = np.zeros(nf, np.dtype([('n', 'u1'), ('f', '<i4', (3,)), ('m', 'u1'), ('t', '<f4', (6,)), ('k', '<i4')]))
+        rec['n'] = 3; rec['f'] = F; rec['m'] = 6; rec['k'] = K
+        t2 = tc.copy(); t2[..., 1] = 1.0 - t2[..., 1]; rec['t'] = t2.reshape(nf, 6)   # PLY 질감 좌표 = 아래가 0 (OBJ 꼴)
+        with open(os.path.join(outs, MESH_X + '.ply'), 'wb') as fp:
+            fp.write(('ply\nformat binary_little_endian 1.0\ncomment DH.Roadview 3D mapping, %s + EGM2008 height (m)\n' % CRS
+                      + ''.join('comment TextureFile %s_tex/%s\n' % (MESH_X, n) for n in names)
+                      + 'element vertex %d\nproperty double x\nproperty double y\nproperty double z\nelement face %d\n'
+                      'property list uchar int vertex_indices\nproperty list uchar float texcoord\nproperty int texnumber\nend_header\n'
+                      % (len(V), nf)).encode('ascii', 'replace'))
+            fp.write(V.astype('<f8').tobytes()); fp.write(rec.tobytes())
+        files.append(MESH_X + '.ply')
+    if 'obj' in formats:
+        with open(os.path.join(outs, MESH_X + '.mtl'), 'w', encoding='ascii', newline='\n') as fp:
+            for k, n in enumerate(names):
+                fp.write('newmtl m%d\nKa 1 1 1\nKd 1 1 1\nKs 0 0 0\nd 1\nillum 1\nmap_Kd %s_tex/%s\n\n' % (k, MESH_X, n))
+        with open(os.path.join(outs, MESH_X + '.obj'), 'w', encoding='ascii', newline='\n') as fp:
+            fp.write('# DH.Roadview 3D mapping, %s + EGM2008 height (m), X = East, Y = North, Z = up\nmtllib %s.mtl\n' % (CRS, MESH_X))
+            np.savetxt(fp, V, fmt='v %.3f %.3f %.3f')
+            vt = tc.reshape(-1, 2).astype(np.float64); vt[:, 1] = 1.0 - vt[:, 1]
+            np.savetxt(fp, vt, fmt='vt %.5f %.5f')
+            fi = F + 1; ti = np.arange(1, 3 * nf + 1).reshape(nf, 3)      # 질감 좌표는 세모 모서리마다 하나
+            for k in np.unique(K):
+                sel = np.nonzero(K == k)[0]
+                fp.write('usemtl m%d\n' % k)
+                np.savetxt(fp, np.c_[fi[sel, 0], ti[sel, 0], fi[sel, 1], ti[sel, 1], fi[sel, 2], ti[sel, 2]], fmt='f %d/%d %d/%d %d/%d')
+        files += [MESH_X + '.obj', MESH_X + '.mtl']
+    return {'faces': int(nf), 'verts': int(len(V)), 'tex': len(names), 'files': files}
+
+
 # ---------------------------------------------------------------- 검사점 정확도 (설계서 6.4 · GCP 와 검사점은 따로)
 def check_accuracy(out, items):
     """items = [{name, E, N, Z, mE, mN, mZ}] (m* = 3D 보기에서 찍은 자리 · 없으면 None) → 결과물/정확도_검사점.csv · .txt.
@@ -1111,6 +1236,31 @@ def write_dem_js(out, log=print):
                 tiles['%d_%d' % (ix, iy)] = base64.b64encode(sub.tobytes()).decode('ascii')
     dj = {'cell': cell, 'tile': T, 'x0': round(x0 + cell / 2 - E0, 3), 'y0': round(y1 - ny * cell + cell / 2 - N0, 3), 'tiles': tiles,
           'kind': 'ground'}
+    # 땅으로 잰 곳 · 메운 곳 (맨땅 보기 · 1126): DTM_땅칸.tif (1 = 땅 · 0 = 메움 · 255 = 없음) 을 같은 1 m 칸으로 → mtiles (uint8)
+    try:
+        fm = os.path.join(out, '결과물', 'DTM_땅칸.tif')
+        if os.path.exists(os.path.join(out, '결과물', 'DTM.tif')) and os.path.exists(fm):
+            from PIL import Image
+            Image.MAX_IMAGE_PIXELS = None
+            Mg = np.asarray(Image.open(fm), np.uint8)
+            c0 = float(open(os.path.join(out, '결과물', 'DTM_땅칸.tfw')).read().split()[0])
+            k = max(1, int(round(cell / c0)))
+            h, w = (Mg.shape[0] // k) * k, (Mg.shape[1] // k) * k
+            B = Mg[:h, :w].reshape(h // k, k, w // k, k)
+            nv = (B != 255).sum(axis=(1, 3)); ng = (B == 1).sum(axis=(1, 3))
+            M1 = np.where(nv == 0, 255, np.where(ng * 2 >= nv, 1, 0)).astype(np.uint8)
+            if M1.shape == Zs.shape:
+                Ms = M1[::-1]
+                mt = {}
+                for key in tiles:
+                    ix, iy = map(int, key.split('_'))
+                    sub = np.full((T + 1, T + 1), 255, np.uint8)
+                    blk = Ms[iy * T:iy * T + T + 1, ix * T:ix * T + T + 1]
+                    sub[:blk.shape[0], :blk.shape[1]] = blk
+                    mt[key] = base64.b64encode(sub.tobytes()).decode('ascii')
+                dj['mtiles'] = mt
+    except Exception as ex:                                         # noqa: BLE001 — 표시는 없어도 됨
+        log('  땅 칸 표시(mtiles) 못 만듦 · %s' % ex)
     with open(os.path.join(out, 'data', 'dem.js'), 'w', encoding='utf-8') as fp:
         fp.write('window.RV_DEM = ' + json.dumps(dj) + ';\n')
     return int(np.isfinite(Zs).sum())
@@ -1221,7 +1371,8 @@ class Eta:
     무게 = 394장 보통 실측(1125) · 품질마다 무거운 단계는 배수 (80장 실측: 정밀 점구름 4.2배 · 면 4.3배 · 질감 3.7배 / 빠르게 0.2배 안팎).
     1126 JACK «정밀인데 남은 33분» — 예전 무게(보통 80장 비율)는 정밀 점구름을 4배 작게 봤음."""
     W0 = {'특징점': 60, '맞추기': 90, '카메라 풀기': 900, '왜곡 펴기': 36, '점구름 준비': 1, '점구름': 2800, '측량 점구름': 2800,
-          '3D 면': 1290, '질감': 1300, '결과물': 200}     # 질감 1126: 원본 크기 + OpenMVS 조각 (80장 ≈ 7분 · 394장 ≈ 20~25분)
+          '3D 면': 1290, '질감': 1300, '결과물': 200,     # 질감 1126: 원본 크기 + OpenMVS 조각 (80장 ≈ 7분 · 394장 ≈ 20~25분)
+          '가우시안': 1200}                                # 가우시안 학습 (높음 · 다른 품질은 gsplat.QUALITY_SEC 비율 · 1126 80장 RTX 5070 Ti 실측 ≈ 19분)
     QF = {'fast': {'점구름': 0.22, '측량 점구름': 0.22, '3D 면': 0.11, '질감': 0.3, '결과물': 0.3},
           'normal': {},
           'fine': {'점구름': 4.2, '측량 점구름': 4.2, '3D 면': 4.3, '질감': 2.0, '결과물': 2.6}}
@@ -1247,10 +1398,19 @@ class Eta:
         pct = max(getattr(self, 'last', 0.0), min(99.0, 100.0 * frac))     # 다시 계획해도 뒤로 안 감
         self.last = pct
         left = max(0, int(el / max(1e-6, frac) - el)) if self.done > 0 else -1
-        print('@진행 %.1f %d %s' % (pct, left, name), flush=True)
+        print('@진행 %.1f %d %s' % (pct, left, STAGE_LABEL.get(name, name)), flush=True)
 
     def finish(self, name):
         self.done += self.W.get(name, 1)
+
+    def inside(self, name, frac, label):
+        """단계 안 진행 (함께 처리처럼 한 단계가 길 때 · cluster.py) — 퍼센트 · 남은 시간이 그 단계 안에서도 앞으로."""
+        el = time.time() - self.t0
+        f = min(1.0, (self.done + max(0.0, min(1.0, frac)) * self.W.get(name, 0)) / max(1e-6, self.total))
+        pct = max(getattr(self, 'last', 0.0), min(99.0, 100.0 * f))
+        self.last = pct
+        left = max(0, int(el / max(1e-6, f) - el)) if f > 0 and self.done > 0 else -1
+        print('@진행 %.1f %d %s' % (pct, left, label), flush=True)
 
 
 _MVS_CUDA = {}
@@ -1294,12 +1454,40 @@ def main(argv=None):
     ap.add_argument('--mapper', choices=['auto', 'global', 'prior'], default='auto',
                     help='카메라 풀기: auto = %d장 이상이면 전역 · global · prior(한 장씩)' % GLOBAL_MIN)
     ap.add_argument('--outputs', default='mesh,ortho,dsm,dtm',
-                    help='만들 결과물 (쉼표): mesh = 3D 모델 · ortho = 정사영상 · dsm = DSM + 지표면 · dtm = DTM + 지표면 · las = 점구름')
+                    help='만들 결과물 (쉼표): mesh = 3D 모델 · ortho = 정사영상 · dsm = DSM + 지표면 · dtm = DTM + 지표면 · las = 점구름 · '
+                         'contour = 등고선 · gs = 가우시안 스플래팅')
     ap.add_argument('--contour', type=float, default=1.0, help='등고선 주곡선 간격 m (계곡선 = 5배)')
     ap.add_argument('--reuse-only', action='store_true', help='결과물 다듬기: 앞 단계를 다시 쓸 수 없으면(사진 · 설정이 바뀜) 처음부터 돌지 말고 멈춤')
+    ap.add_argument('--cluster', help='함께 처리 공유 폴더 (cluster.py · 옆 PC 도우미와 점구름 깊이 지도를 나눠 만듦 · 도우미가 없으면 혼자)')
+    # 매핑 화면 세부 설정 (JACK 1126 Terra 꼴) — 기본값 = 1.0.17 까지 동작 그대로
+    ap.add_argument('--feat', choices=list(FEAT_MUL), default='normal', help='특징 포인트 밀도 (특징점 사진 크기 × 1.5 / 1 / 0.5 · 바꾸면 처음부터)')
+    ap.add_argument('--ortho-res', choices=['auto'] + list(ORTHO_RES_MUL), default='auto',
+                    help='정사 해상도: auto = 품질에 맞춤 · high = 사진 GSD · mid = 2배 칸 · low = 4배 칸')
+    ap.add_argument('--ortho-fill', type=int, choices=[0, 1], default=1, help='지능형 홀 채우기 (정사 안쪽 빈칸 = 둘레 높이로 메워 사진 색)')
+    ap.add_argument('--mesh-ratio', type=float, default=100.0, help='3D 모델 축소 비율 %% (세모 한도 × 비율 · 3D 면 · 질감만 다시)')
+    ap.add_argument('--mesh-formats', default='', help='3D 내보내기 (쉼표): ply · obj → 결과물/%s.*' % MESH_X)
+    ap.add_argument('--las-density', type=int, choices=[100, 50, 25, 10], default=100, help='점구름 LAS 밀도 %% (고르게 솎음)')
+    ap.add_argument('--las-classify', choices=['auto', '1', '0'], default='auto',
+                    help='LAS 지면 포인트 분류: 1 = DTM 으로 땅 분류 (DEM 을 안 골라도) · auto = DTM 을 만들 때만')
+    ap.add_argument('--dem-cell', type=float, choices=[0.25, 0.5, 1.0, 2.0], default=DTM_CELL, help='DEM(DTM) 칸 m (1:500 = 0.25 · 1:1000 = 0.5 …)')
+    ap.add_argument('--contour-base', type=float, default=0.0, help='등고선 고도 기준면 m (등고선 = 기준면 + k × 간격)')
+    ap.add_argument('--contour-label', type=float, default=-1.0, help='등고선 고도 주석 간격 m (계곡선 · 0 = 없음 · 음수 = 계곡선 가운데 하나)')
+    ap.add_argument('--contour-clean', type=int, choices=[0, 1], default=0, help='잘못된 등고선 제거 (짧은 조각 · 작은 고리)')
+    ap.add_argument('--tin-step', type=float, default=1.0, help='DSM 지표면(LandXML) 샘플 거리 m')
+    ap.add_argument('--gs-quality', choices=['low', 'normal', 'high', 'ultra'], default=None,
+                    help='가우시안 스플래팅 품질 (학습 걸음 · 사진 크기 · gsplat.QUALITY · 안 주면 지난 학습 품질 · 처음은 high)')
+    ap.add_argument('--gs-dom', type=int, choices=[0, 1], default=None,
+                    help='가우시안으로 위에서 본 정사영상 (결과물/가우시안_정사.tif · 안 주면 지난번 그대로 · 처음은 0)')
     a = ap.parse_args(argv)
     if not (0.05 <= a.contour <= 100):
         print('등고선 간격은 0.05 ~ 100 m (%s)' % a.contour); return 2
+    if not (1 <= a.mesh_ratio <= 100):
+        print('3D 모델 축소 비율은 1 ~ 100 %% (%s)' % a.mesh_ratio); return 2
+    if not (0.25 <= a.tin_step <= 50):
+        print('샘플 거리는 0.25 ~ 50 m (%s)' % a.tin_step); return 2
+    if not (-1000 <= a.contour_base <= 9000) or a.contour_label > 1000 or 0 < a.contour_label < 5:
+        print('등고선 기준면 · 주석 간격 확인 (%s · %s)' % (a.contour_base, a.contour_label)); return 2
+    mesh_fmt = [f for f in (x.strip().lower() for x in a.mesh_formats.split(',')) if f in ('ply', 'obj')]
     set_crs(a.crs)
     outs_sel = {x.strip() for x in a.outputs.split(',') if x.strip() in OUTPUTS}
     if not outs_sel:
@@ -1310,6 +1498,9 @@ def main(argv=None):
         pass
     out = os.path.abspath(a.out); ws = os.path.join(out, 'work')
     os.makedirs(ws, exist_ok=True)
+    from . import gsplat                             # 가우시안 품질을 안 넘긴 다시 돌리기(다듬기) = 지난 학습 품질 그대로 (다시 학습 안 함)
+    a.gs_quality = a.gs_quality or gsplat.last_quality(ws) or 'high'
+    a.gs_dom = gsplat.last_dom(ws) if a.gs_dom is None else a.gs_dom
     fp = open(os.path.join(out, '매핑_기록.txt'), 'a', encoding='utf-8')
     colmap, mvs = find_engines()
     if not colmap:
@@ -1335,19 +1526,27 @@ def main(argv=None):
     names = [p['name'] for p in photos]
     with open(os.path.join(ws, 'args.json'), 'w', encoding='utf-8') as f2:    # 결과물 다듬기(잘라내기 · DEM 더하기)에서 같은 설정으로 다시
         json.dump({'photos': os.path.abspath(a.photos), 'quality': a.quality, 'names': a.names, 'title': a.title, 'crs': a.crs,
-                   'outputs': sorted(outs_sel), 'contour': a.contour, 'cell': a.cell}, f2, ensure_ascii=False, indent=1)
+                   'outputs': sorted(outs_sel), 'contour': a.contour, 'cell': a.cell,
+                   # 세부 설정 (매핑 화면 Terra 꼴 · 결과물 다듬기 _map_args · _rerun 이 그대로 다시 씀)
+                   'feat': a.feat, 'ortho_res': a.ortho_res, 'ortho_fill': a.ortho_fill, 'mesh_ratio': a.mesh_ratio, 'mesh_formats': mesh_fmt,
+                   'las_density': a.las_density, 'las_classify': a.las_classify, 'dem_cell': a.dem_cell, 'contour_base': a.contour_base,
+                   'contour_label': a.contour_label, 'contour_clean': a.contour_clean, 'tin_step': a.tin_step,
+                   'gs_quality': getattr(a, 'gs_quality', None), 'gs_dom': getattr(a, 'gs_dom', None)}, f2, ensure_ascii=False, indent=1)
     with open(os.path.join(ws, 'names.txt'), 'w', encoding='utf-8') as f2:
         f2.write('\n'.join(names) + '\n')
     cam = camera_params(photos[0])
     res_tex, res_feat = QUALITY[a.quality]
+    res_feat = int(round(res_feat * FEAT_MUL[a.feat]))         # 특징 포인트 밀도 (보통 = 1.0.17 까지 값)
+    faces = max(20000, int(TARGET_FACES[a.quality] * a.mesh_ratio / 100.0))   # 3D 모델 축소 비율 (100 % = 1.0.17 까지 값)
     cell = a.cell or {'fast': 0.1, 'normal': 0.05, 'fine': 0.03}[a.quality]
     log('시작 · 사진 %d장 · 품질 %s · RTK 고정 %d장 · 카메라 %s %s %d×%d' % (
         len(photos), QUALITY_NAME[a.quality], sum(p['rtk'] == 50 for p in photos),
         photos[0].get('model') or '?', photos[0].get('src') or '?', photos[0].get('w', 0), photos[0].get('h', 0)), fp)
     eta = Eta(len(photos), a.quality)
     want_pts0 = bool({'dsm', 'dtm', 'las', 'contour'} & outs_sel)     # 정사는 원본 사진 색 → 측량용 점구름이 없어도 됨 (1126)
-    eta.plan(skip=(set() if 'mesh' in outs_sel else {'3D 면', '질감'}) | {'측량 점구름'},
-             scale={'점구름': 1.0 if want_pts0 else (DENSE_PX_MESH[a.quality] / DENSE_PX_SURVEY[a.quality]) ** 2})
+    gs_w = gsplat.QUALITY_SEC[a.gs_quality] / gsplat.QUALITY_SEC['high']     # 가우시안 무게 = 품질별 실측 초 (높음 = W0)
+    eta.plan(skip=(set() if 'mesh' in outs_sel else {'3D 면', '질감'}) | {'측량 점구름'} | (set() if 'gs' in outs_sel else {'가우시안'}),
+             scale={'점구름': 1.0 if want_pts0 else (DENSE_PX_MESH[a.quality] / DENSE_PX_SURVEY[a.quality]) ** 2, '가우시안': gs_w})
     T0 = time.time()
 
     # 끝난 단계는 다시 쓰기 (설계서 원칙 6 · 10.5): 같은 사진 · 품질 · 카메라 값 · 차례 판일 때만
@@ -1357,6 +1556,8 @@ def main(argv=None):
     sigd = {'v': PIPELINE_VERSION, 'q': a.quality, 'names': sorted(n.lower() for n in names), 'cam': cam}
     if a.mapper != 'auto':                       # 카메라 풀기 방식을 굳이 고르면 서명에 (auto 는 옛 서명 그대로)
         sigd['mapper'] = a.mapper
+    if a.feat != 'normal':                       # 특징 포인트 밀도가 바뀌면 처음부터 (보통은 옛 서명 그대로 · 다른 세부 설정은 서명에 안 넣음)
+        sigd['feat'] = a.feat
     sig = hashlib.md5(json.dumps(sigd, ensure_ascii=False).encode('utf-8')).hexdigest()
     stf = os.path.join(ws, 'stages.json')
     try:
@@ -1387,7 +1588,7 @@ def main(argv=None):
 
     def step(name, cmd, logname, cwd=None, check=None):
         if name in stages['done'] and (check is None or check()):
-            log('%s · 지난번 것 씀' % name, fp)
+            log('%s · 지난번 것 씀' % STAGE_LABEL.get(name, name), fp)
             eta.finish(name)
             return True
         drop_from(name)
@@ -1396,7 +1597,7 @@ def main(argv=None):
         t = time.time()
         rc = run(cmd, os.path.join(ws, logname), cwd)
         good = rc == 0 and (check is None or check())
-        log('%s %d초%s' % (name, time.time() - t, '' if good else ' · 실패 (종료코드 %d · %s)' % (rc, logname)), fp)
+        log('%s %d초%s' % (STAGE_LABEL.get(name, name), time.time() - t, '' if good else ' · 실패 (종료코드 %d · %s)' % (rc, logname)), fp)
         eta.finish(name)
         if good:
             stages['done'].append(name); save_stages()
@@ -1491,15 +1692,15 @@ def main(argv=None):
     if 'params' not in stages:                   # 1.0.14 까지 만든 프로젝트 = 측량용 점구름 · 지금 세모 한도
         stages['params'] = {'dense': px_srv, 'faces': TARGET_FACES[a.quality]} if '점구름' in stages['done'] else {}
     prm = stages['params']
-    if prm.get('faces') not in (None, TARGET_FACES[a.quality]):
+    if prm.get('faces') not in (None, faces):     # 세모 한도(품질 · 축소 비율)가 바뀜 → 3D 면 · 질감만 다시
         drop_from('3D 면')
     cloud_ok = lambda: has('dense', 'scene_cpu.ply')                                       # noqa: E731
     srv_ok = lambda: has('dense', 'scene_srv.ply')                                         # noqa: E731
     reuse = lambda n, chk: n in stages['done'] and chk()                                   # noqa: E731
     dense_px = prm['dense'] if (reuse('점구름', cloud_ok) and prm.get('dense')) else (px_srv if want_pts else px_mesh)
     need_srv = want_pts and dense_px < px_srv     # 3D 만 만들었던 프로젝트에 정사 · DSM 등을 더할 때만
-    eta.plan(skip=(set() if want_mesh else {'3D 면', '질감'}) | (set() if need_srv else {'측량 점구름'}),
-             scale={'점구름': (dense_px / px_srv) ** 2})
+    eta.plan(skip=(set() if want_mesh else {'3D 면', '질감'}) | (set() if need_srv else {'측량 점구름'}) | (set() if 'gs' in outs_sel else {'가우시안'}),
+             scale={'점구름': (dense_px / px_srv) ** 2, '가우시안': gs_w})
     log('  만들 것: %s · 점구름 %d px%s' % (' · '.join(OUTPUT_NAME[k] for k in OUTPUTS if k in outs_sel), dense_px,
                                             ' + 측량용 %d px' % px_srv if need_srv else ''), fp)
 
@@ -1516,15 +1717,36 @@ def main(argv=None):
         return True
 
     def densify(name, px, outname, chk):
+        lvl = max(0, int(round(math.log2(max(1.0, res_tex / px)))))
+        res_args = ['--resolution-level', str(lvl), '--max-resolution', str(res_tex)]
+        fuse_only = []
         if not reuse(name, chk):
             if not ensure_images():
                 return False
             for f in glob.glob(os.path.join(dense, '*.dmap')):   # 다른 해상도 깊이 지도를 다시 읽지 않게
                 os.remove(f)
-        lvl = max(0, int(round(math.log2(max(1.0, res_tex / px)))))
-        return step(name, [os.path.join(mvs, 'DensifyPointCloud.exe'), 'scene.mvs', '-o', outname, '--resolution-level', str(lvl),
-                           '--max-resolution', str(res_tex)] + mvs_cuda_opt(mvs) + ['-w', '.'],
-                    '5_%s.log' % name.replace(' ', ''), cwd=dense, check=chk)
+            if a.cluster:                        # 함께 처리 (cluster.py · JACK 1126): 깊이 지도를 옆 PC 들과 나눠 만들고 여기서는 합치기만
+                from .cluster import densify_shared
+                eta.start(name + ' · 함께 처리')
+                try:
+                    shared = densify_shared(a.cluster, mvs, dense, res_args, log=lambda m: log(m, fp),
+                                            progress=lambda f, lb: eta.inside(name, f, lb))
+                except Exception as ex:          # noqa: BLE001 — 공유 폴더 · 도우미 문제로 매핑이 멈추지 않게
+                    log('  함께 처리 실패 (%s) → 혼자' % ex, fp)
+                    shared = False
+                if shared:
+                    fuse_only = ['--geometric-iters', '0']     # 깊이 지도가 다 있음 → 합치기만 (꼴 · 자리는 혼자 처리와 같음)
+                else:
+                    for f in glob.glob(os.path.join(dense, '*.dmap')):
+                        os.remove(f)
+        cmd = [os.path.join(mvs, 'DensifyPointCloud.exe'), 'scene.mvs', '-o', outname] + res_args + mvs_cuda_opt(mvs)
+        good = step(name, cmd + fuse_only + ['-w', '.'], '5_%s.log' % name.replace(' ', ''), cwd=dense, check=chk)
+        if not good and fuse_only:               # 모은 깊이 지도로 합치기가 안 됨 → 혼자 처음부터 (결과는 늘 나오게)
+            log('  함께 처리 합치기 실패 → 혼자 다시', fp)
+            for f in glob.glob(os.path.join(dense, '*.dmap')):
+                os.remove(f)
+            good = step(name, cmd + ['-w', '.'], '5_%s.log' % name.replace(' ', ''), cwd=dense, check=chk)
+        return good
 
     if ok and not reuse('점구름 준비', lambda: has('dense', 'scene.mvs')):
         ok = ensure_images()
@@ -1559,11 +1781,11 @@ def main(argv=None):
             return False
         return True
     if ok and want_mesh:
-        prm['faces'] = TARGET_FACES[a.quality]
+        prm['faces'] = faces
         if not reuse('3D 면', lambda: has('dense', 'scene_cpu_mesh.ply')):   # 정사만 만든 뒤 3D 를 더할 때 (사진 머리말을 읽음)
             ok = ensure_images()
         ok = ok and step('3D 면', [os.path.join(mvs, 'ReconstructMesh.exe'), 'scene_cpu.mvs', '-o', 'scene_cpu_mesh.mvs'] + mvs_cuda_opt(mvs) +
-                  ['--target-face-num', str(TARGET_FACES[a.quality]), '-w', '.'], '6_면.log', cwd=dense,
+                  ['--target-face-num', str(faces), '-w', '.'], '6_면.log', cwd=dense,
                   check=lambda: has('dense', 'scene_cpu_mesh.ply'))
         # 질감 = 조각마다 (한 장이면 32768 폭까지 커져 그래픽 한도 16384 로 줄어 흐려짐 · 1125 394장)
         #   1126 Terra 견줌 (COLMAP 2640 px = 흐림 · 방지턱 끝 · 길 가장자리 깨짐): 원본 크기 사진 (TEX_PX) + OpenMVS TextureMesh
@@ -1620,16 +1842,27 @@ def main(argv=None):
     # 옛 결과물이 지금 모델 · 좌표계와 다르면 지움 (검사점 보고서 · 정보는 둠) — 처음부터 다시 · 그 판이 결과물 전에 끊김
     #   (stages 의 stale_outputs) · 좌표계를 바꿈 (원점 · 관로 좌표도 옛 좌표계 → 관로는 다시 넣기) — 1125 검토
     crs_changed = P_old.get('crs') not in (None, CRS)
+    gs_prev = os.path.exists(os.path.join(data_dir, 'gs', 'gs.json'))     # 가우시안을 안 골라도 잘라내기 · 좌표계가 바뀌면 지난 학습으로 다시 바꿈
     if fresh or stages.get('stale_outputs') or crs_changed:
         for f in glob.glob(os.path.join(outs, '*')):
-            if os.path.basename(f).startswith(('정사영상', 'DSM', 'DTM', '지표면_', '점구름')):
+            if os.path.basename(f).startswith(('정사영상', 'DSM', 'DTM', '지표면_', '점구름', MESH_X + '.', '가우시안')):
                 os.remove(f)
+        shutil.rmtree(os.path.join(data_dir, 'gs'), ignore_errors=True)
+        shutil.rmtree(os.path.join(outs, MESH_X + '_tex'), ignore_errors=True)
         for f in ('mesh.json', 'mesh.bin', 'tex.jpg', '지면.tif', '지면.tfw', '지면.prj', '미리보기.png') + (('pipes.js', 'pipes_orig.js', 'obstacles.js') if crs_changed else ()) + ('dem.js',):
             if os.path.exists(os.path.join(data_dir, f)):
                 os.remove(os.path.join(data_dir, f))
         shutil.rmtree(os.path.join(data_dir, 'tiles'), ignore_errors=True)
         if crs_changed:
             log('  좌표계 %s → %s · 옛 결과물 · 관로 지움 (관로는 다시 넣기)' % (P_old.get('crs'), CRS), fp)
+            for nm in ('nonground', 'crop'):                 # 옛 좌표의 땅 아님 · 잘라내기는 옆으로 (엉뚱한 자리에 그려지지 않게 · 1126 검토)
+                q = os.path.join(data_dir, nm + '.json')     #   파일에 좌표계가 적혀 있고 지금 것과 같으면 그대로 (매핑 화면이 새 좌표계로 쓴 범위)
+                try:
+                    same = json.load(open(q, encoding='utf-8')).get('crs') == CRS
+                except (OSError, ValueError, AttributeError):
+                    same = False
+                if os.path.exists(q) and not same:
+                    os.replace(q, os.path.join(data_dir, nm + '_옛좌표계.json'))
         P_old = {k: v for k, v in P_old.items() if k == 'cover' and not crs_changed}
     use_srv = need_srv or reuse('측량 점구름', srv_ok)     # 측량용 점구름이 있으면 늘 그것으로 (지면 · 미리보기도)
     xyz, rgb = read_openmvs_ply(os.path.join(dense, 'scene_srv.ply' if use_srv else 'scene_cpu.ply'))
@@ -1660,8 +1893,10 @@ def main(argv=None):
             try:
                 from .ortho import true_ortho
                 oi = true_ortho(ws, a.photos, s, R, t, dsm, filled, x0, y1, cell, outs, a.quality, to_enh=to_5186_h, world=_world,
-                                fill=fill_pull_push, cell_out=a.cell, log=lambda m: log(m, fp))
-                ortho_meta = {'method': 'photo', 'cell': oi['cell'], 'gsd': round(oi['gsd'], 4)}
+                                fill=fill_pull_push if a.ortho_fill else None, cell_out=a.cell,
+                                res_mul=ORTHO_RES_MUL.get(a.ortho_res, 0.0), log=lambda m: log(m, fp))
+                ortho_meta = {'method': 'photo', 'cell': oi['cell'], 'gsd': round(oi['gsd'], 4), 'res': a.ortho_res,
+                              'fill': bool(a.ortho_fill), 'holes': int(oi.get('holes') or 0)}
                 log('  정사영상 원본 사진 재투영 · 칸 %.1f cm · 사진 GSD %.1f cm · %d×%d · 사진 %d / %d장 · 빈칸 %.1f%% · %d초' % (
                     100 * oi['cell'], 100 * oi['gsd'], oi['size'][0], oi['size'][1], oi['used'], oi['photos'], 100 * oi['empty'], oi['sec']), fp)
             except Exception as ex:                  # noqa: BLE001 — 사진 폴더 없음 · 메모리 등
@@ -1669,7 +1904,7 @@ def main(argv=None):
                 ortho_dsm(E, N, H, rgb, outs, cell, write_ortho=True, write_dsm=False)
                 ortho_meta = {'method': 'points', 'cell': cell, 'why': str(ex)[:200]}
         if 'dsm' in outs_sel:
-            npt, ntri = landxml_from_dsm(dsm, filled, x0, y1, cell, outs, step_m=1.0)
+            npt, ntri = landxml_from_dsm(dsm, filled, x0, y1, cell, outs, step_m=a.tin_step)   # 포인트의 그리드 및 TIN · 샘플 거리
         del dsm, filled
     # 땅 높이 (관로 넣기 · 늘 만듦 · 0.25 m 로 가벼움) + 미리보기 그림 (처음 화면 썸네일 · 3D 없을 때 보기)
     gc = max(cell, 0.25)
@@ -1681,46 +1916,82 @@ def main(argv=None):
     dtm_info = None
     ground_cls = None
     n_ct = None
-    if 'dtm' in outs_sel or 'contour' in outs_sel:
+    dcell = a.dem_cell                               # DEM «크기(스케일)» (기본 0.5 m = 1.0.17 까지)
+    # LAS 지면 포인트 분류: 1 = DEM 을 안 골라도 안에서 DTM 을 셈 · auto = DTM 을 만들 때만 (1.0.17 까지)
+    las_cls = 'las' in outs_sel and (a.las_classify == '1' or (a.las_classify == 'auto' and 'dtm' in outs_sel))
+    if 'dtm' in outs_sel or 'contour' in outs_sel or las_cls:
         # DTM (땅만 · 설계서 6.1) — 메운 곳(건물 · 비닐하우스 · 숲 밑)은 DTM_땅칸.tif 에 0 으로 따로 표시 · 등고선도 이 땅으로
-        dtm, ground, cover, dx0, dy1 = dtm_from_points(E, N, H, cell=DTM_CELL)
+        ngp = read_nonground(out)
+        dtm, ground, cover, dx0, dy1 = dtm_from_points(E, N, H, cell=dcell, exclude=ngp)
+        if ngp:
+            log('  땅 아님 다각형 %d개 → 그 안은 둘레 땅으로 메움' % len(ngp), fp)
         if crop:
-            cover &= crop_grid(crop, dx0, dy1, DTM_CELL, cover.shape)
-        if 'contour' in outs_sel:                    # 등고선 DXF (주곡선 a.contour · 계곡선 5배 · JACK 1126)
-            n_ct = write_contour_dxf(os.path.join(outs, '등고선.dxf'), dtm, cover, dx0, dy1, DTM_CELL,
-                                     minor=a.contour, major=a.contour * 5)
+            cover &= crop_grid(crop, dx0, dy1, dcell, cover.shape)
+        if 'contour' in outs_sel:                    # 등고선 DXF (주곡선 a.contour · 계곡선 5배 · 기준면 · 주석 · 정리 · JACK 1126)
+            n_ct = write_contour_dxf(os.path.join(outs, '등고선.dxf'), dtm, cover, dx0, dy1, dcell,
+                                     minor=a.contour, major=a.contour * 5, base=a.contour_base, label_m=a.contour_label,
+                                     clean=bool(a.contour_clean), log=lambda m: log(m, fp))
             if not sum(n_ct) and os.path.exists(os.path.join(outs, '등고선.dxf')):
                 os.remove(os.path.join(outs, '등고선.dxf'))    # 땅 칸이 없어 한 줄도 없음 → 잘리기 전 옛 파일이 남지 않게
-            log('  등고선 DXF 주곡선 %g m · 계곡선 %g m · 선 %d + %d' % (a.contour, a.contour * 5, n_ct[0], n_ct[1]), fp)
+            log('  등고선 DXF 주곡선 %g m · 계곡선 %g m · 기준면 %g m · 선 %d + %d' % (a.contour, a.contour * 5, a.contour_base, n_ct[0], n_ct[1]), fp)
     if 'dtm' in outs_sel:
-        write_raster(outs, 'DTM', dtm, cover, dx0, dy1, DTM_CELL)
+        write_raster(outs, 'DTM', dtm, cover, dx0, dy1, dcell)
         from PIL import Image
         Image.fromarray(np.where(cover, ground.astype(np.uint8), 255).astype(np.uint8), 'L').save(os.path.join(outs, 'DTM_땅칸.tif'))
-        _world(outs, 'DTM_땅칸', dx0, dy1, DTM_CELL)
-        nptd, ntrid = landxml_from_dsm(dtm, cover, dx0, dy1, DTM_CELL, outs, step_m=1.0, name='DTM')
+        _world(outs, 'DTM_땅칸', dx0, dy1, dcell)
+        nptd, ntrid = landxml_from_dsm(dtm, cover, dx0, dy1, dcell, outs, step_m=1.0, name='DTM')
         ground_frac = float(ground.sum() / max(1, cover.sum()))
-        rr, cc = np.nonzero(ground[::4, ::4] & cover[::4, ::4]); rr *= 4; cc *= 4
-        dem_cmp = compare_company_dem(dx0 + (cc + 0.5) * DTM_CELL, dy1 - (rr + 0.5) * DTM_CELL, dtm[rr, cc], log=lambda m: log(m, fp)) if len(rr) else None
-        log('  DTM %.1f m · 땅으로 잰 칸 %.0f%%%s' % (DTM_CELL, 100 * ground_frac, (' · 사내 DEM 과 가운데값 %.2f m (사분위 %.2f ~ %.2f)' % dem_cmp[:3]) if dem_cmp else ''), fp)
+        sk = max(1, int(round(2.0 / dcell)))         # 사내 DEM 견줌 표본 = 약 2 m 마다
+        rr, cc = np.nonzero(ground[::sk, ::sk] & cover[::sk, ::sk]); rr *= sk; cc *= sk
+        dem_cmp = compare_company_dem(dx0 + (cc + 0.5) * dcell, dy1 - (rr + 0.5) * dcell, dtm[rr, cc], log=lambda m: log(m, fp)) if len(rr) else None
+        log('  DTM %g m · 땅으로 잰 칸 %.0f%%%s' % (dcell, 100 * ground_frac, (' · 사내 DEM 과 가운데값 %.2f m (사분위 %.2f ~ %.2f)' % dem_cmp[:3]) if dem_cmp else ''), fp)
         dtm_info = (nptd, ntrid, ground_frac, dem_cmp)
-        if 'las' in outs_sel:                    # 점구름 분류: 땅으로 잰 칸에서 DTM 과 0.3 m 안 = 땅(2)
-            r = np.clip(((dy1 - N) / DTM_CELL).astype(np.int64), 0, dtm.shape[0] - 1)
-            c = np.clip(((E - dx0) / DTM_CELL).astype(np.int64), 0, dtm.shape[1] - 1)
-            ground_cls = ground[r, c] & (np.abs(H - dtm[r, c]) < 0.3)
+    if las_cls:                                      # 점구름 분류: 땅으로 잰 칸에서 DTM 과 0.3 m 안 = 땅(2)
+        r = np.clip(((dy1 - N) / dcell).astype(np.int64), 0, dtm.shape[0] - 1)
+        c = np.clip(((E - dx0) / dcell).astype(np.int64), 0, dtm.shape[1] - 1)
+        ground_cls = ground[r, c] & (np.abs(H - dtm[r, c]) < 0.3)
     if 'las' in outs_sel:
-        write_las(os.path.join(outs, '점구름.las'), E, N, H, rgb, ground_cls)
-        log('  점구름 LAS %d점%s' % (len(E), ' · 땅 분류 %.0f%%' % (100 * ground_cls.mean()) if ground_cls is not None else ''), fp)
+        st = {100: 1, 50: 2, 25: 4, 10: 10}[a.las_density]    # 밀도 = 고르게 솎음 (점 차례 = 깊이 지도 차례라 자리가 고루 섞임)
+        gl = ground_cls[::st] if ground_cls is not None else None
+        write_las(os.path.join(outs, '점구름.las'), E[::st], N[::st], H[::st], rgb[::st], gl)
+        log('  점구름 LAS %d점%s%s' % (len(E[::st]), ' · 밀도 %d%%' % a.las_density if st > 1 else '',
+                                     ' · 땅 분류 %.0f%%' % (100 * gl.mean()) if gl is not None and len(gl) else ''), fp)
     meta = None
+    mesh_x = None
     if want_mesh:
         meta = tiles_to_web(tex_dirs, s, R, t, data_dir, max_tex=MAX_TEX, origin=origin, crop=crop)
+        t4 = time.time()                             # 3D 파일 형식 (PLY · OBJ · 결과물 좌표) — 안 고르면 옛 내보내기를 지움
+        try:
+            mesh_x = export_mesh(tex_dirs, s, R, t, outs, mesh_fmt, crop=crop)
+        except Exception as ex:                      # noqa: BLE001 — 파일을 잡은 프로그램 · 디스크 → 다른 결과물은 그대로 (1126 검토)
+            mesh_x = None
+            log('  3D 내보내기(PLY · OBJ) 실패 (%s) → 다른 결과물은 그대로 · 잡고 있는 프로그램을 닫고 다듬기로 다시' % str(ex)[:200], fp)
+        if mesh_x:
+            log('  3D 내보내기 %s · 세모 %d · 질감 %d장 · %.0f초' % (' · '.join(mesh_x['files']), mesh_x['faces'], mesh_x['tex'], time.time() - t4), fp)
     elif os.path.exists(os.path.join(data_dir, 'mesh.json')):   # 지난번에 만든 3D 는 그대로 둠
         try:
             meta = json.load(open(os.path.join(data_dir, 'mesh.json'), encoding='utf-8'))
         except (OSError, ValueError):
             meta = None
+    gs_info = None
+    if 'gs' in outs_sel or gs_prev:                  # 가우시안 스플래팅 (gsplat.py · Brush · JACK 1126) — 실패해도 다른 결과물은 그대로
+        eta.start('가우시안')
+        try:
+            gs_info = gsplat.make(ws, out, s, R, t, meta['origin'] if meta else origin, quality=a.gs_quality, crop=crop, crs=CRS,
+                                  to_enh=to_5186_h, crop_fn=crop_points, ensure_images=ensure_images, res_cap=res_tex,
+                                  do_train='gs' in outs_sel, dom=bool(a.gs_dom), dom_cell=max(cell, 0.05), log=lambda m: log(m, fp),
+                                  progress=lambda f, lb: eta.inside('가우시안', f, lb))
+        except Exception as ex:                      # noqa: BLE001 — 그래픽카드 · 엔진 내려받기 · 메모리
+            log('  가우시안 스플래팅 실패 (%s) → 다른 결과물은 그대로' % str(ex)[:300], fp)
+            try:                                     # 잘라내기 전 · 옛 가우시안이 지금 것처럼 남지 않게 (1126 검토)
+                gsplat._drop_outputs(outs, os.path.join(data_dir, 'gs'))
+            except Exception:                        # noqa: BLE001
+                pass
+        eta.finish('가우시안')
     have = {'mesh': bool(meta and meta.get('tris')), 'ortho': os.path.exists(os.path.join(outs, '정사영상.tif')),
             'dsm': os.path.exists(os.path.join(outs, 'DSM.tif')), 'dtm': os.path.exists(os.path.join(outs, 'DTM.tif')),
-            'las': os.path.exists(os.path.join(outs, '점구름.las')), 'contour': os.path.exists(os.path.join(outs, '등고선.dxf'))}
+            'las': os.path.exists(os.path.join(outs, '점구름.las')), 'contour': os.path.exists(os.path.join(outs, '등고선.dxf')),
+            'gs': os.path.exists(os.path.join(outs, '가우시안.ply')) and os.path.exists(os.path.join(data_dir, 'gs', 'gs.json'))}
     proj = {'version': 1, 'kind': 'mapping', 'title': a.title or P_old.get('title') or Path(out).name, 'crs': CRS, 'height': 'EGM2008',
             'origin': meta['origin'] if meta else origin, 'quality': a.quality, 'photos': len(photos), 'registered': nreg,
             'rtk_rms': round(rms, 3), 'cell': cell, 'bbox': [float(E.min()), float(N.min()), float(E.max()), float(N.max())],
@@ -1731,9 +2002,22 @@ def main(argv=None):
     if crop:
         proj['crop'] = crop
     if have['contour']:
-        proj['contour'] = {'minor': a.contour, 'major': a.contour * 5} if 'contour' in outs_sel else P_old.get('contour')
+        proj['contour'] = ({'minor': a.contour, 'major': a.contour * 5, 'base': a.contour_base, 'label': a.contour_label,
+                            'clean': bool(a.contour_clean)} if 'contour' in outs_sel else P_old.get('contour'))
+    if have['dtm']:                              # DEM 칸 (이번에 안 만들었으면 지난번 것) · 아래도 같음 (정보.txt)
+        proj['dem_cell'] = dcell if 'dtm' in outs_sel else P_old.get('dem_cell', DTM_CELL)
+    if have['dsm']:
+        proj['tin_step'] = a.tin_step if 'dsm' in outs_sel else P_old.get('tin_step', 1.0)
+    if have['las']:
+        proj['las'] = ({'density': a.las_density, 'classify': ground_cls is not None} if 'las' in outs_sel
+                       else P_old.get('las', {'density': 100, 'classify': None}))
+    if have['mesh']:
+        proj['mesh_x'] = (mesh_x['files'] if mesh_x else []) if want_mesh else P_old.get('mesh_x', [])
+        proj['mesh_ratio'] = a.mesh_ratio if want_mesh else P_old.get('mesh_ratio', 100.0)
     if have['ortho'] and (ortho_meta or P_old.get('ortho')):     # 정사 방식 · 칸 (정보.txt) — 이번에 안 만들었으면 지난번 것
         proj['ortho'] = ortho_meta or P_old['ortho']
+    if have['gs'] and (gs_info or P_old.get('gs')):              # 가우시안 품질 · 개수 (보기 화면 · 정보.txt)
+        proj['gs'] = ({k: gs_info[k] for k in ('count', 'web', 'quality', 'steps', 'res', 'dom') if k in gs_info} if gs_info else P_old['gs'])
     with open(os.path.join(data_dir, 'mapping.js'), 'w', encoding='utf-8') as f3:
         f3.write('window.RV_MAPPING = ' + json.dumps(proj, ensure_ascii=False, indent=1) + ';\n')
     stages.pop('stale_outputs', None); save_stages()
@@ -1795,17 +2079,23 @@ def write_info(outs, proj, photos, a, cam, rms, scale, npt, ntri, colmap, mvs, d
         if om.get('method') == 'photo':
             lines.append('정사영상.tif  RGBA · 원본 사진 재투영 (칸마다 가장 수직인 사진 · 가림 검사) · %.1f cm 격자 · 사진 GSD %.1f cm · 투명 = 자료 없음'
                          % (100 * om['cell'], 100 * om['gsd']))
+            if 'res' in om:
+                lines.append('              해상도 %s · 지능형 홀 채우기 %s%s' % (
+                    ORTHO_RES_NAME.get(om['res'], om['res']), '켬' if om.get('fill') else '끔',
+                    ' (안쪽 빈칸 %d곳 메움)' % om['holes'] if om.get('fill') and om.get('holes') else ''))
         else:
             lines.append('정사영상.tif  RGBA · 점구름 색 · %.2f m 격자 · 투명 = 자료 없음%s' % (
                 om.get('cell', proj['cell']), ' (원본 사진 재투영 실패: %s)' % om['why'] if om.get('why') else ''))
     if ex('DSM.tif'):
         lines.append('DSM.tif       표고(m) float32 · %.2f m 격자 · -9999 = 자료 없음 · 건물 · 나무 포함한 표면 모델 (DTM 아님)' % proj['cell'])
     if ex('지표면_DSM.xml'):
-        lines.append('지표면_DSM.xml  LandXML 세모 지표면 (DSM 1 m 솎음%s) — Civil 3D 지표면 가져오기용 · 표면 모델'
-                     % (' · 점 %d · 세모 %d' % (npt, ntri) if npt else ''))
+        lines.append('지표면_DSM.xml  LandXML 세모 지표면 (DSM %g m 솎음 = 샘플 거리%s) — Civil 3D 지표면 가져오기용 · 표면 모델'
+                     % (proj.get('tin_step', 1.0), ' · 점 %d · 세모 %d' % (npt, ntri) if npt else ''))
     if ex('DTM.tif'):
-        lines.append('DTM.tif       표고(m) float32 · %.1f m 격자 · 땅만 (점진형 형태학 필터 · 건물 · 비닐하우스 · 나무 뺌)%s'
-                     % (DTM_CELL, ' · 땅으로 잰 칸 %.0f %%' % (100 * dtm_info[2]) if dtm_info else ''))
+        dc = proj.get('dem_cell', DTM_CELL)
+        lines.append('DTM.tif       표고(m) float32 · %g m 격자%s · 땅만 (점진형 형태학 필터 · 건물 · 비닐하우스 · 나무 뺌)%s'
+                     % (dc, {0.25: ' (1:500)', 0.5: ' (1:1000)', 1.0: ' (1:2500)', 2.0: ' (1:5000)'}.get(float(dc), ''),
+                        ' · 땅으로 잰 칸 %.0f %%' % (100 * dtm_info[2]) if dtm_info else ''))
         lines.append('DTM_땅칸.tif  1 = 땅으로 잰 칸 · 0 = 메운 칸(건물 밑 · 숲 밑 등 — 낮은 신뢰) · 255 = 자료 없음')
     if ex('지표면_DTM.xml'):
         lines.append('지표면_DTM.xml  LandXML 세모 지표면 (DTM 1 m%s) — Civil 3D 원지반용' % (' · 점 %d · 세모 %d' % dtm_info[:2] if dtm_info else ''))
@@ -1815,20 +2105,41 @@ def write_info(outs, proj, photos, a, cam, rms, scale, npt, ntri, colmap, mvs, d
         ct = proj.get('contour') or {}
         lines.append('등고선.dxf    DXF R12 · 땅(DTM) 기준 · 주곡선 %s m (등고선_주곡선) · 계곡선 %s m (등고선_계곡선 · 표고 글 등고선_표고) · 폴리선 높이값 = 표고'
                      % (ct.get('minor', '?'), ct.get('major', '?')))
+        lab = ct.get('label', -1)
+        lines.append('              고도 기준면 %g m · 표고 글 %s · 잘못된 등고선 제거 %s' % (
+            ct.get('base', 0.0), '계곡선 가운데' if lab is None or lab < 0 else ('없음' if lab == 0 else '%g m 마다' % lab),
+            '켬' if ct.get('clean') else '끔'))
     if proj.get('crop'):
         lines.append('잘라내기: 다각형 %d점 안만 (data/crop.json · 결과물 다듬기에서 바꾸거나 없앰)' % len(proj['crop']))
     if ex('점구름.las'):
-        lines.append('점구름.las    LAS 1.2 · 위치 + 색 · 1 mm 단위 · 분류 2 = 땅 (DTM 을 같이 만들 때) · 좌표 %s + EGM2008' % CRS)
+        lc = proj.get('las') or {}
+        lines.append('점구름.las    LAS 1.2 · 위치 + 색 · 1 mm 단위 · 밀도 %d %% · %s · 좌표 %s + EGM2008' % (
+            lc.get('density', 100), '분류 2 = 땅 · 1 = 그 밖 (DTM 으로 지면 포인트 분류)' if lc.get('classify') else '분류 안 함 (0)', CRS))
+    if ex('가우시안.ply'):
+        g = proj.get('gs') or {}
+        lines.append('가우시안.ply  3D 가우시안 스플래팅 · 표준 3DGS PLY (SH 3차) · %s개 · 품질 %s (%s걸음 · 사진 %s px · Brush) · 좌표 %s + EGM2008 · '
+                     'float 이라 원점을 뺌: E = x + %.1f · N = y + %.1f · H = z (머리말 comment 에도) — SuperSplat 등 보기 프로그램' % (
+                         format(g.get('count', 0), ','), {'low': '낮음', 'normal': '보통', 'high': '높음', 'ultra': '매우 높음'}.get(g.get('quality'), '?'),
+                         g.get('steps', '?'), g.get('res', '?'), CRS, proj['origin'][0], proj['origin'][1]))
+    if ex('가우시안_정사.tif'):
+        lines.append('가우시안_정사.tif  가우시안을 위에서 본 정사영상 (RGBA · .tfw · .prj) — 측량용은 정사영상.tif (원본 사진 재투영)')
     if tiles:
         lines.append('3D 보기: 조각 %d개 (조각마다 질감 · 보기 전용으로 세모를 줄임 — 측량 계산은 위 래스터 · 지표면)' % tiles)
+    for f in proj.get('mesh_x') or []:
+        if f.endswith('.ply') and ex(f):
+            lines.append('%s  질감 3D 한 덩어리 · 이진 PLY (꼭짓점 double · 세모마다 질감 좌표 · %s_tex 그림) · 좌표 %s + EGM2008 (원점 안 뺌) — MeshLab · CloudCompare' % (f, MESH_X, CRS))
+        elif f.endswith('.obj') and ex(f):
+            lines.append('%s  질감 3D 한 덩어리 · OBJ + %s.mtl (%s_tex 그림) · 좌표 %s + EGM2008 (원점 안 뺌) — Blender · 3ds Max · Civil 3D/InfraWorks' % (f, MESH_X, MESH_X, CRS))
     lines += [
         '',
         '[처리]',
         '점구름 깊이 지도 %d px%s (3D 만이면 한 단계 덜 촘촘 · 정사 · DSM · DTM · LAS 는 측량용)' % (
             px[0], ' · 측량용 %d px 따로' % px[1] if px[1] else ''),
-        '품질 %s · 질감 사진 %d px · 특징점 사진 %d px · 카메라 %s %s %d×%d · 처음 내부표정 %s' % (
-            QUALITY_NAME[a.quality], QUALITY[a.quality][0], QUALITY[a.quality][1], photos[0].get('model') or '?', photos[0].get('src') or '?',
-            photos[0].get('w', 0), photos[0].get('h', 0), cam or 'EXIF'),
+        '품질 %s · 질감 사진 %d px · 특징점 사진 %d px (특징 포인트 밀도 %s) · 카메라 %s %s %d×%d · 처음 내부표정 %s' % (
+            QUALITY_NAME[a.quality], QUALITY[a.quality][0], int(round(QUALITY[a.quality][1] * FEAT_MUL[a.feat])), FEAT_NAME[a.feat],
+            photos[0].get('model') or '?', photos[0].get('src') or '?', photos[0].get('w', 0), photos[0].get('h', 0), cam or 'EXIF'),
+        '3D 세모 한도 %d (모델 축소 비율 %g %%)' % (max(20000, int(TARGET_FACES[a.quality] * proj.get('mesh_ratio', 100.0) / 100.0)),
+                                                proj.get('mesh_ratio', 100.0)),
         '엔진: %s · %s (점구름 · 면) · 차례 판 %s' % (ver([colmap, '--version']), _openmvs_ver(os.path.join(os.path.dirname(outs), 'work', 'dense')), PIPELINE_VERSION),
         '사진 폴더: %s' % os.path.abspath(a.photos),
     ]

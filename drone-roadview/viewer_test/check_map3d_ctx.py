@@ -160,7 +160,7 @@ def main():
         rclick(ed, *A)
         cx = J(ed, '__map3d.ctx()')
         it = cx['items']
-        want = ['center', 'copy', 'shot', 'home', 'top', 'north', 'mDist', 'mArea', 'mHeight', 'mProf', 'pNew', 'photo', 'xray', 'pipes', 'files', 'ck', 'crop']
+        want = ['center', 'copy', 'shot', 'home', 'top', 'north', 'dtm', 'mDist', 'mArea', 'mHeight', 'mProf', 'pNew', 'photo', 'xray', 'pipes', 'files', 'ck', 'crop', 'ngHere']
         report('m 빈 땅 항목', it == want, str(it))
         report('m 묶음 사이 구분선 3', J(ed, "document.querySelectorAll('#ctxMenu .sep').length") == 3)
         w = pick(ed, *A)
@@ -470,7 +470,7 @@ def main():
         ed.js('__t.look(0, %f, 40, 50, 60)' % s0); ed.frames(3)
         rclick(ed, *A)
         it = J(ed, '__map3d.ctx().items')
-        report('b 프로그램 항목 없음 · 윗줄 프로그램 단추 숨김', not any(k in it for k in ('photo', 'files', 'crop', 'ck')) and J(ed, "document.getElementById('hostTools').hidden"), str(it))
+        report('b 프로그램 항목 없음 · 윗줄 프로그램 단추 숨김', not any(k in it for k in ('photo', 'files', 'crop', 'ck', 'ngHere', 'ngDel')) and J(ed, "document.getElementById('hostTools').hidden"), str(it))
         inp.key('Escape', 'Escape', 27)
         dl = os.path.join(SD, '_prof', 'downloads')
         before = set(glob.glob(os.path.join(dl, '*.png')))

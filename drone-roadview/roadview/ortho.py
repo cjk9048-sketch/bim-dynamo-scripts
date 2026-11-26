@@ -127,10 +127,11 @@ def _morton(i, j):
     return z
 
 
-def true_ortho(ws, photos, s, R, t, dsm, filled, dx0, dy1, dc, outs, quality, to_enh, world, fill=None, cell_out=0.0, log=print):
+def true_ortho(ws, photos, s, R, t, dsm, filled, dx0, dy1, dc, outs, quality, to_enh, world, fill=None, cell_out=0.0, res_mul=0.0, log=print):
     """정사영상.tif (RGBA · LZW · 투명 = 자료 없음) + tfw · prj + 정사영상_미리보기.png.
-    dsm · filled · dx0 · dy1 · dc = mapping.ortho_dsm 의 DSM (칸 dc) · fill = mapping.fill_pull_push (안쪽 빈칸 메우기)
-    cell_out = 정사 칸 m (0 = 사진 GSD 와 품질로).
+    dsm · filled · dx0 · dy1 · dc = mapping.ortho_dsm 의 DSM (칸 dc) · fill = mapping.fill_pull_push (안쪽 빈칸 메우기 ·
+    None = 지능형 홀 채우기 끔 · 매핑 화면 2D 지도 칸)
+    cell_out = 정사 칸 m (0 = 사진 GSD 와 품질로) · res_mul = 정사 칸 = 사진 GSD × 이 값 (매핑 화면 해상도 높음 1 · 중간 2 · 낮음 4 · 0 = 자동).
     → 요약 dict (칸 · GSD · 크기 · 초 · 쓴 사진 수 · 빈칸 비율 …)."""
     import cv2
     from PIL import Image
@@ -243,7 +244,7 @@ def true_ortho(ws, photos, s, R, t, dsm, filled, dx0, dy1, dc, outs, quality, to
         raise RuntimeError('카메라 아래 땅 높이를 못 잼')
     hmed = float(np.median(hgt))
     gsd = float(np.median(hgt / f_mean[sel]))
-    co = cell_out or max(gsd, CELL_MIN.get(quality, 0.03))
+    co = cell_out or (gsd * res_mul if res_mul > 0 else max(gsd, CELL_MIN.get(quality, 0.03)))
     co = math.ceil(co * 1000 - 1e-6) / 1000.0
     x0o = math.floor(dx0 / co) * co; y1o = math.ceil(dy1 / co) * co
     Wo = int(math.ceil((dx0 + Wd * dc - x0o) / co)); Ho = int(math.ceil((y1o - (dy1 - Hd * dc)) / co))

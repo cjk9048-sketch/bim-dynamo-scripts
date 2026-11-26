@@ -50,6 +50,14 @@
     crop_apply: (p) => { rec('crop_apply', p); sessionStorage.setItem('__crop_apply', JSON.stringify(p)); return wait(20).then(() => ({ ok: true, job: 'C1' })); },
     crop_clear: () => { rec('crop_clear'); sessionStorage.setItem('__crop_clear', '1'); return wait(20).then(() => ({ ok: true, job: 'C2' })); },
     add_outputs: (a) => { rec('add_outputs', a); sessionStorage.setItem('__add_outputs', JSON.stringify(a)); return wait(20).then(() => ({ ok: true, job: 'D1' })); },
+    // 땅 아님 (맨땅 · DTM): 목록 = sessionStorage '__ng' (다시 열어도 남게 · 진짜 프로그램은 data/nonground.json) · 바꾸면 다시 만듦 (job N1)
+    nonground_get: () => { rec('nonground_get'); return wait(10).then(() => ({ polygons: JSON.parse(sessionStorage.getItem('__ng') || '[]') })); },
+    nonground_set: (p) => {
+      rec('nonground_set', p);
+      sessionStorage.setItem('__nonground_set', JSON.stringify(p));
+      sessionStorage.setItem('__ng', JSON.stringify((p && p.polygons) || []));
+      return wait(20).then(() => ({ ok: true, job: 'N1' }));
+    },
     open_results: () => { rec('open_results'); return wait(10).then(() => ({ ok: true })); },
     pick_checkpoints: () => { rec('pick_checkpoints'); return wait(20).then(() => (H.ckpicks && H.ckpicks.length ? H.ckpicks.shift() : null)); },
     save_image: (p) => { rec('save_image', { name: p && p.name, head: String((p && p.data) || '').slice(0, 22), len: String((p && p.data) || '').length }); return wait(20).then(() => ({ ok: true, path: 'C:\\시험\\' + (p && p.name) })); },

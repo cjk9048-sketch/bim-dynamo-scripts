@@ -112,8 +112,9 @@ class _WS:
 
 
 class Edge:
-    def __init__(self, profile, size=(1600, 900), gl=True):
+    def __init__(self, profile, size=(1600, 900), gl=True, extra=()):
         self.profile = profile
+        self.extra = list(extra)      # 더 줄 Edge 옵션 (예: 실제 그래픽카드 --use-angle=d3d11 · file:// 시험 --allow-file-access-from-files)
         self.size = size
         self.gl = gl
         self.console = []     # (종류, 글)
@@ -132,7 +133,7 @@ class Edge:
                 '--window-size=%d,%d' % self.size]
         if self.gl:
             args += ['--disable-gpu-sandbox', '--use-angle=swiftshader', '--enable-unsafe-swiftshader']
-        self.proc = subprocess.Popen(args + ['about:blank'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.proc = subprocess.Popen(args + self.extra + ['about:blank'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         port_file = os.path.join(self.profile, 'DevToolsActivePort')
         t0 = time.time()
         port = None

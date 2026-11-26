@@ -92,15 +92,18 @@
   // ---------------------------------------------------------------- 결과물 다듬기 (JACK 1126 · 프로그램 안에서만): 잘라내기 · DEM 만들기 · 웹 공유
   // 프로그램 일 (crop_apply · crop_clear · add_outputs · export_web) → {ok, job} → job(id) 을 0.5 초마다 → 진행 막대.
   // 잘라내기 · DEM = 결과물을 다시 만듦 → 끝나면 다시 엶 · 웹 공유 = 끝나면 주소 + [주소 복사]. 3D 없는 프로젝트도 됨 (잘라내기 빼고).
-  const TB = { id: null, kind: '', crop: null, flush: () => Promise.resolve(), cut: null, onCrop: () => {} };
+  // ng = «땅 아님» 그리기 시작 (3D 화면만 · 아래에서 채움) · ngGet = 땅 아님 목록 다시 읽기
+  const TB = { id: null, kind: '', crop: null, flush: () => Promise.resolve(), cut: null, onCrop: () => {}, ng: null, ngGet: () => Promise.resolve() };
   const tbBox = $('trimBox');
+  const ngHost = () => { const h = HOST(); return !!h && typeof h.nonground_set === 'function'; };
   function tbShow(on) {
     tbBox.hidden = !on;
     if (on && tbBox.parentElement && tbBox.parentElement.id === 'side' && $('side').hidden) { $('side').hidden = false; $('tgSide').classList.add('on'); }
     $('bTrim').classList.toggle('on', on);
     $('tbCut').hidden = !TB.cut;
+    $('ngRow').hidden = !TB.ng || !ngHost();
     $('tbDem').querySelector('span').textContent = (Array.isArray(P.outputs) && P.outputs.includes('dtm')) ? 'DEM 다시 만들기' : 'DEM 만들기';
-    if (on) tbCropGet();
+    if (on) { tbCropGet(); if (TB.ng) TB.ngGet(); }
     TB.onCrop();
   }
   function tbCropGet() {
@@ -124,9 +127,9 @@
     pr.classList.toggle('done', st === 'done');
     pr.dataset.st = st;
     const busy = st === 'run';
-    ['tbCut', 'tbDem', 'tbWeb', 'tbClear'].forEach((id) => { $(id).disabled = busy; });
+    ['tbCut', 'tbDem', 'tbWeb', 'tbClear', 'ngDraw', 'ngClear'].forEach((id) => { $(id).disabled = busy; });
   }
-  // kind = 'crop' · 'clear' · 'dem' · 'web' · start = 프로그램 일 시작 (→ {ok, job})
+  // kind = 'crop' · 'clear' · 'dem' · 'web' · 'ng' (땅 아님) · start = 프로그램 일 시작 (→ {ok, job})
   function tbJob(kind, start) {
     if (TB.id != null) { toast('다른 일 하는 중'); return; }
     if (tbBox.hidden) tbShow(true);
@@ -170,9 +173,9 @@
   });
 
   // 3D 를 안 만든 프로젝트 (결과물 고르기 · 1.0.15) → 위에서 본 미리보기 그림 + 만든 것 · [결과물]
-  if (Array.isArray(P.outputs) && !P.outputs.includes('mesh')) {
+  if (Array.isArray(P.outputs) && !P.outputs.includes('mesh') && !P.outputs.includes('gs')) {     // 가우시안만 = 3D 화면 (아래 loadMesh)
     const NM = { ortho: '정사영상', dsm: 'DSM', dtm: 'DTM', las: '점구름 LAS', contour: '등고선' };
-    ['bPipes', 'hObst', 'tgEdit', 'tgQty', 'bXray', 'bCheck', 'bTop', 'tgSide', 'side', 'c', 'ov', 'load'].forEach((id) => { $(id).style.display = 'none'; });
+    ['bPipes', 'hObst', 'tgEdit', 'tgQty', 'bXray', 'bCheck', 'bDtm', 'bTop', 'tgSide', 'side', 'c', 'ov', 'load'].forEach((id) => { $(id).style.display = 'none'; });
     const f = document.createElement('div'); f.id = 'flat';
     f.innerHTML = '<img src="data/미리보기.png" alt=""><div class="fl">3D 모델 없음 · 만든 것: ' + P.outputs.map((k) => NM[k] || k).join(' · ') + '</div>';
     document.body.appendChild(f);
@@ -381,6 +384,17 @@
     return { t: texUp(src), size: [img.width, img.height], up: [src.width, src.height] };
   }
   async function loadMesh() {
+    if (Array.isArray(P.outputs) && !P.outputs.includes('mesh') && GS.ok) {      // 가우시안만 만든 프로젝트: 모델 그물 없이 (깊이 · 고르기 = 맨땅 그물)
+      await gsLoad();
+      const g = GS.meta, mn = g.min, mxp = g.max;
+      mesh = { meta: { min: mn, max: mxp, tris: 0 }, parts: [], done: true };
+      V.tgt = [(mn[0] + mxp[0]) / 2, (mn[1] + mxp[1]) / 2, mn[2] + (mxp[2] - mn[2]) * 0.3];
+      V.d = Math.hypot(mxp[0] - mn[0], mxp[1] - mn[1]) * 0.85;
+      $('bGs').hidden = true;                                           // 끌 수 없음 (맨땅 보기로만 바꿈)
+      if (!DT.on) gsSet(true);                                           // 되살린 맨땅 보기를 풀지 않게 (1126 검토)
+      window.__mesh = { tris: 0, tiles: 0, gsOnly: true };
+      return;
+    }
     const meta = await (await fetch('data/mesh.json')).json();
     // 조각(tiles) — 조각마다 질감 (1.0.15 · 그래픽 한도 16384 안) · 옛 자료는 한 덩어리(mesh.bin · tex.jpg)
     // tex_hi · texsize_hi (있으면) = 고해상도 질감: 가까이 · 화면에 큰 조각만 바꿔 읽음 (LOD)
@@ -422,7 +436,7 @@
   }
   function lodSoon() { clearTimeout(LOD.timer); LOD.timer = setTimeout(lodTick, 300); }
   function lodTick() {
-    if (!mesh || !VW || LOD.busy) return;
+    if (!mesh || !VW || LOD.busy || DT.on || GS.on) return;           // 맨땅 · 가우시안 보기 = 질감 안 그림
     // 실패한 조각은 30초 뒤 다시 (세 번까지 · 그래픽 메모리가 잠깐 모자랐던 것까지 영영 흐리지 않게 · 1126 검토)
     const ps = mesh.parts.filter((p) => p.hiUrl && !(p.hiFailN >= 3) && !(p.hiFailT && performance.now() - p.hiFailT < 30000));
     if (!ps.length) return;
@@ -494,6 +508,340 @@
     const tx = c - c0, ty = r - r0, W = T + 1, i = r0 * W + c0;
     const z = (a[i] * (1 - tx) + a[i + 1] * tx) * (1 - ty) + (a[i + W] * (1 - tx) + a[i + W + 1] * tx) * ty;
     return Number.isFinite(z) ? z : NaN;
+  }
+
+  // ---------------------------------------------------------------- 맨땅 보기 (JACK 1126 · DTM): RV_DEM 격자 → 땅 그물 (타일마다 · 빈칸 빼고)
+  // 높이 색 (낮음 → 높음 띠) · 해 그림자 · 등고선 (P.contour.minor · 없으면 1 m · 5배마다 굵게) · 메운 칸 = 옅은 색 + 빗금.
+  // mtiles (있으면 · 같은 타일 열쇠 · (tile+1)² uint8): 1 = 땅으로 잰 칸 · 0 = 메운 칸 (건물 밑 · 숲 밑 · 땅 아님) · 255 = 자료 없음.
+  const DT_KEY = 'rv_map3d:dtm:' + location.pathname;                 // 프로젝트(폴더)마다 따로 (1126 검토)
+  const CT = (function () {
+    const c = P.contour || {}, mi = num(c.minor, 0) > 0 ? Number(c.minor) : 1, ma = num(c.major, 0) > mi ? Number(c.major) : mi * 5;
+    return { minor: mi, every: Math.max(1, Math.round(ma / mi)) };
+  })();
+  const DT = { on: false, parts: null, mt: false, zr: [0, 1], el: [0, 1], tris: 0, mtOn: true, ctOn: true };
+  let DTP = null;                                                      // 못 만들면 맨땅 단추만 숨김 (다른 보기는 그대로)
+  try {
+    DTP = prog('in vec3 aP; in vec2 aT; in vec3 aN; uniform mat4 M; out vec3 w; out vec3 nv; out float mk;\n' +
+    'void main(){ w = aP; nv = aN; mk = aT.x; gl_Position = M * vec4(aP, 1.0); }',
+    'in vec3 w; in vec3 nv; in float mk; uniform sampler2D dg, dl; uniform vec4 rg, rl; uniform vec2 zr; uniform float dOn, h0, ci, cj, mtOn; out vec4 o;\n' +
+    'vec3 ramp(float t){ vec3 a = vec3(0.17, 0.42, 0.32), b = vec3(0.42, 0.62, 0.36), c = vec3(0.85, 0.80, 0.50), d = vec3(0.72, 0.50, 0.30), e = vec3(0.93, 0.91, 0.88);\n' +
+    '  float s = t * 4.0; return s < 1.0 ? mix(a, b, s) : s < 2.0 ? mix(b, c, s - 1.0) : s < 3.0 ? mix(c, d, s - 2.0) : mix(d, e, s - 3.0); }\n' +
+    'void main(){\n' +
+    '  vec3 c = ramp(clamp((w.z - zr.x) / max(zr.y - zr.x, 0.01), 0.0, 1.0));\n' +
+    '  float hp = (w.x - w.y) * 0.5, hw = fwidth(hp);\n' +                  // 메운 칸: 옅게 + 2 m 빗금 (멀면 빗금 없이 옅게만 · 미분은 갈래 밖에서)
+    '  if (mtOn > 0.5 && mk < 0.5) {\n' +
+    '    float st = smoothstep(0.3 - hw, 0.3 + hw, abs(fract(hp) - 0.5)) * (1.0 - smoothstep(0.2, 0.45, hw));\n' +
+    '    c = mix(mix(c, vec3(0.9, 0.88, 0.86), 0.6), vec3(0.42, 0.36, 0.4), st * 0.65); }\n' +
+    '  c *= 0.38 + 0.72 * max(dot(normalize(nv), vec3(-0.5, 0.5, 0.70711)), 0.0);\n' +   // 해 = 북서 45°
+    '  float f = (w.z + h0) / max(ci, 1e-3), fw = max(fwidth(f), 1e-5), g = f / cj, gw = fw / cj;\n' +
+    '  if (ci > 0.0) {\n' +
+    '    float lm = (1.0 - smoothstep(0.6, 1.4, abs(fract(f + 0.5) - 0.5) / fw)) * (1.0 - smoothstep(0.3, 0.6, fw));\n' +
+    '    float lM = (1.0 - smoothstep(1.0, 2.0, abs(fract(g + 0.5) - 0.5) / gw)) * (1.0 - smoothstep(0.3, 0.6, gw));\n' +
+    '    c = mix(c, vec3(0.2, 0.13, 0.08), max(lm * 0.45, lM * 0.8)); }\n' +
+    '  if (dOn > 0.5) {\n' +
+    '    vec2 ug = (w.xy - rg.xy) / rg.zw, ul = (w.xy - rl.xy) / rl.zw; vec4 a = texture(dg, ug), b = texture(dl, ul);\n' +
+    '    bool il = all(greaterThanEqual(ul, vec2(0.0))) && all(lessThanEqual(ul, vec2(1.0)));\n' +
+    '    bool ig = all(greaterThanEqual(ug, vec2(0.0))) && all(lessThanEqual(ug, vec2(1.0)));\n' +
+    '    vec4 d = il ? b : ig ? a : vec4(0.0); c = c * (1.0 - d.a) + d.rgb; }\n' +
+    '  o = vec4(c, 1.0); }');
+  } catch (e) { DTP = null; window.__dtErr = String(e); }
+  function dtMask(k) {
+    const m = window.RV_DEM && window.RV_DEM.mtiles, s = m && m[k], n = (DEM.tile + 1) * (DEM.tile + 1);
+    if (typeof s !== 'string') return null;
+    try {
+      const b = atob(s);
+      if (b.length < n) return null;
+      const a = new Uint8Array(n);
+      for (let i = 0; i < n; i++) a[i] = b.charCodeAt(i);
+      return a;
+    } catch (e) { return null; }
+  }
+  // 격자 마디 (gx, gy) 표고 (타일 경계 = 한 줄 겹침 → 옆 타일도 봄)
+  function dtNode(gx, gy) {
+    const T = DEM.tile, W = T + 1, ix = Math.floor(gx / T), iy = Math.floor(gy / T), c = gx - ix * T, r = gy - iy * T;
+    const at = (a, b, cc, rr) => { if (a < 0 || b < 0) return NaN; const A = demTile(a, b); return A ? A[rr * W + cc] : NaN; };
+    let z = at(ix, iy, c, r);
+    if (!Number.isFinite(z) && c === 0) z = at(ix - 1, iy, T, r);
+    if (!Number.isFinite(z) && r === 0) z = at(ix, iy - 1, c, T);
+    if (!Number.isFinite(z) && c === 0 && r === 0) z = at(ix - 1, iy - 1, T, T);
+    return Number.isFinite(z) ? z : NaN;
+  }
+  // 그물: 마디마다 꼭짓점 (자리 · 메운 칸 표시 · 법선 = 이웃 마디 차분 · 그림자만 높이 2배) · 네 마디 다 있으면 세모 둘 · 셋이면 하나
+  function dtBuild() {
+    if (DT.parts || !DEM) return DT.parts || [];
+    const T = DEM.tile, W = T + 1, cell = DEM.cell, ZF = 2, parts = [], zs = [];
+    let tris = 0, mt = 0;
+    for (const k of Object.keys(DEM.tiles)) {
+      const ij = k.split('_').map(Number);
+      if (ij.length !== 2 || !ij.every(Number.isInteger)) continue;
+      const ix = ij[0], iy = ij[1], a = demTile(ix, iy);
+      if (!a) continue;
+      const m = dtMask(k), gx0 = ix * T, gy0 = iy * T;
+      if (m) mt++;
+      const zl = (c, r) => (c >= 0 && c <= T && r >= 0 && r <= T ? a[r * W + c] : dtNode(gx0 + c, gy0 + r));
+      const dif = (z0, z, z1) => (Number.isFinite(z0) && Number.isFinite(z1) ? (z1 - z0) / 2 : Number.isFinite(z1) ? z1 - z : Number.isFinite(z0) ? z - z0 : 0);
+      const vb = new Float32Array(W * W * 8), ok = new Uint8Array(W * W);
+      for (let r = 0; r <= T; r++) {
+        for (let c = 0; c <= T; c++) {
+          const i = r * W + c, z = a[i];
+          if (!Number.isFinite(z)) continue;
+          ok[i] = 1;
+          if ((i & 7) === 0) zs.push(z);
+          const nx = -dif(zl(c - 1, r), z, zl(c + 1, r)) / cell * ZF, ny = -dif(zl(c, r - 1), z, zl(c, r + 1)) / cell * ZF, nl = Math.hypot(nx, ny, 1), o = i * 8;
+          vb[o] = DEM.x0 + (gx0 + c) * cell; vb[o + 1] = DEM.y0 + (gy0 + r) * cell; vb[o + 2] = z - H0;
+          vb[o + 3] = m && m[i] === 0 ? 0 : 1;
+          vb[o + 5] = nx / nl; vb[o + 6] = ny / nl; vb[o + 7] = 1 / nl;
+        }
+      }
+      const ib = [];
+      for (let r = 0; r < T; r++) {
+        for (let c = 0; c < T; c++) {
+          const i00 = r * W + c, i10 = i00 + 1, i01 = i00 + W, i11 = i01 + 1, q = ok[i00] + ok[i10] + ok[i01] + ok[i11];
+          if (q === 4) ib.push(i00, i10, i11, i00, i11, i01);
+          else if (q === 3) for (const v of [i00, i10, i11, i01]) if (ok[v]) ib.push(v);
+        }
+      }
+      if (!ib.length) continue;
+      const I = W * W <= 65535 ? new Uint16Array(ib) : new Uint32Array(ib);
+      const vao = gl.createVertexArray(); gl.bindVertexArray(vao);
+      const vbo = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, vbo); gl.bufferData(gl.ARRAY_BUFFER, vb, gl.STATIC_DRAW);
+      gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 32, 0);
+      gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 2, gl.FLOAT, false, 32, 12);
+      gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 3, gl.FLOAT, false, 32, 20);
+      const ibo = gl.createBuffer(); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ibo); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, I, gl.STATIC_DRAW);
+      gl.bindVertexArray(null);
+      parts.push({ key: k, vao: vao, n: I.length, it: I.BYTES_PER_ELEMENT === 2 ? gl.UNSIGNED_SHORT : gl.UNSIGNED_INT });
+      tris += I.length / 3;
+    }
+    zs.sort((p, q) => p - q);
+    const lo = zs.length ? zs[Math.floor(zs.length * 0.02)] : H0, hi = zs.length ? zs[Math.min(zs.length - 1, Math.floor(zs.length * 0.98))] : H0 + 1;
+    DT.el = [lo, Math.max(hi, lo + 0.5)]; DT.zr = [DT.el[0] - H0, DT.el[1] - H0];
+    DT.parts = parts; DT.tris = tris; DT.mt = mt > 0;
+    return parts;
+  }
+  function dtDraw(M) {
+    gl.uniform2f(DTP.u.zr, DT.zr[0], DT.zr[1]); gl.uniform1f(DTP.u.h0, H0);
+    gl.uniform1f(DTP.u.ci, DT.ctOn ? CT.minor : 0); gl.uniform1f(DTP.u.cj, CT.every); gl.uniform1f(DTP.u.mtOn, DT.mtOn ? 1 : 0);
+    for (const p of DT.parts) { gl.bindVertexArray(p.vao); gl.drawElements(gl.TRIANGLES, p.n, p.it, 0); }
+  }
+  // 켜고 끄기 (윗줄 [맨땅] · 오른쪽 메뉴) · 이 창에서는 다시 열어도 그대로 (땅 아님 적용 뒤 맨땅으로 돌아옴)
+  function dtSet(on) {
+    on = !!on && !!DEM && !!DTP;
+    if (on && !dtBuild().length) { toast('땅 높이 자료 없음'); on = false; }
+    if (on && GS.on) gsSet(false);                                      // 가우시안 보기와 하나만
+    DT.on = on;
+    try { sessionStorage.setItem(DT_KEY, on ? '1' : '0'); } catch (e) { /* 저장 못 해도 계속 */ }
+    setOn($('bDtm'), on);
+    $('bDtm').title = on ? '모델 보기 (질감 3D)' : '맨땅 보기 (나무 · 건물 뺀 땅 · DTM)';
+    $('dtLeg').hidden = !on;
+    if (on) {
+      const f1 = (v) => v.toFixed(1), ci = String(+CT.minor.toFixed(2));
+      $('dtMt').hidden = !DT.mt;
+      $('dtTx').textContent = (DT.mt ? '· ' : '') + 'EL ' + f1(DT.el[0]) + ' ~ ' + f1(DT.el[1]) + ' · 등고선 ' + ci + ' m';
+      TB.ngGet();
+    }
+    if (!on && mesh && !mesh.parts.length && GS.ok && !GS.on) gsSet(true);   // 가우시안만 만든 프로젝트 = 맨땅을 끄면 가우시안
+    redraw();
+  }
+
+  // ---------------------------------------------------------------- 가우시안 보기 (JACK 1126 · 가우시안 스플래팅 · data/gs/gs.json + splats.bin)
+  // 그리기는 antimatter15/splat 의 WebGL2 방식을 옮겨 고침 (MIT License · Copyright (c) 2023 Kevin Kwok · https://github.com/antimatter15/splat):
+  //   자료 텍스처 RGBA32UI (가우시안마다 2 텍셀: 위치 float×3 · 3D 공분산 반정밀 6개 · 색 RGBA8) · 화면 타원 → 사각형 4점 (인스턴스) ·
+  //   조각 exp(−r²) · 정렬 = 눈과 깊이 16 bit 계수 정렬 (Worker · 시점이 바뀌면 다시 · 뒤 → 앞) · 미리 곱한 알파로 섞기.
+  // 고친 것: 이 화면의 시점 (오른쪽 r · 위 u · 앞 f · 원점 기준 세계) · 화소 0.3 저역 통과 · 깊이 = 모델 (없으면 맨땅) 그물을 먼저 깊이만 그림
+  //   → 관 · 터파기 · 재기 · 고르기 · 땅 위 그림은 모델 그물 위에서 그대로 (가우시안 = 보이는 색만).
+  // splats.bin = 가우시안마다 32 B (위치 float32×3 · 크기 float32×3 m · 색 RGBA8 · 회전 uint8×4 (w x y z · ×128 + 128)) · gsplat.py write_web
+  const GS_KEY = 'rv_map3d:gs:' + location.pathname;
+  const GS = { on: false, ok: Array.isArray(P.outputs) && P.outputs.includes('gs'), meta: null, n: 0, tex: null, vao: null, ibuf: null,
+    ready: false, loading: null, wk: null, key: '', want: '', busy: false, sorted: 0, sorts: 0, err: '', prog: null };
+  try {                                                                 // progRaw 자리: a_pos (0) = 사각형 귀퉁이 · a_nrm (1) = 가우시안 번호 (정렬 차례 · 인스턴스)
+    GS.prog = progRaw('#version 300 es\nprecision highp float; precision highp int;\n' +
+      'uniform highp usampler2D u_tex; uniform vec3 u_eye, u_r, u_u, u_f; uniform vec2 u_tan, u_vp; uniform float u_near;\n' +
+      'in vec2 a_pos; in int a_nrm; out vec4 vC; out vec2 vP;\n' +
+      'void main(){\n' +
+      '  ivec2 tc = ivec2((uint(a_nrm) & 0x3ffu) << 1, uint(a_nrm) >> 10);\n' +
+      '  uvec4 cen = texelFetch(u_tex, tc, 0);\n' +
+      '  vec3 d = uintBitsToFloat(cen.xyz) - u_eye, c = vec3(dot(d, u_r), dot(d, u_u), dot(d, u_f));\n' +
+      '  gl_Position = vec4(0.0, 0.0, 2.0, 1.0);\n' +
+      '  if (c.z < u_near) return;\n' +
+      '  vec2 nd = vec2(c.x / (c.z * u_tan.x), c.y / (c.z * u_tan.y));\n' +
+      '  if (abs(nd.x) > 1.3 || abs(nd.y) > 1.3) return;\n' +
+      '  uvec4 cv = texelFetch(u_tex, tc + ivec2(1, 0), 0);\n' +
+      '  vec2 a1 = unpackHalf2x16(cv.x), a2 = unpackHalf2x16(cv.y), a3 = unpackHalf2x16(cv.z);\n' +
+      '  mat3 S = mat3(a1.x, a1.y, a2.x, a1.y, a2.y, a3.x, a2.x, a3.x, a3.y);\n' +
+      '  vec2 fp = 0.5 * u_vp / u_tan;\n' +
+      '  mat3 J = mat3(fp.x / c.z, 0.0, 0.0, 0.0, fp.y / c.z, 0.0, -fp.x * c.x / (c.z * c.z), -fp.y * c.y / (c.z * c.z), 0.0);\n' +
+      '  mat3 T = J * transpose(mat3(u_r, u_u, u_f));\n' +
+      '  mat3 C = T * S * transpose(T);\n' +
+      '  float a = C[0][0] + 0.3, b = C[0][1], e = C[1][1] + 0.3;\n' +
+      '  float mid = 0.5 * (a + e), rd = length(vec2(0.5 * (a - e), b)), l1 = mid + rd, l2 = mid - rd;\n' +
+      '  if (l2 <= 0.0) return;\n' +
+      '  vec2 dv = vec2(b, l1 - a); dv = dot(dv, dv) > 1e-12 ? normalize(dv) : (a >= e ? vec2(1.0, 0.0) : vec2(0.0, 1.0));\n' +
+      '  vec2 mj = min(sqrt(2.0 * l1), 1024.0) * dv, mn = min(sqrt(2.0 * l2), 1024.0) * vec2(dv.y, -dv.x);\n' +
+      '  vC = vec4(float(cv.w & 0xffu), float((cv.w >> 8) & 0xffu), float((cv.w >> 16) & 0xffu), float(cv.w >> 24)) / 255.0;\n' +
+      '  vP = a_pos;\n' +
+      '  gl_Position = vec4(nd + (a_pos.x * mj + a_pos.y * mn) * 2.0 / u_vp, 0.0, 1.0);\n' +
+      '}\n',
+      '#version 300 es\nprecision highp float;\nin vec4 vC; in vec2 vP; out vec4 o;\n' +
+      'void main(){ float A = -dot(vP, vP); if (A < -4.0) discard; float B = exp(A) * vC.a; if (B < 0.004) discard; o = vec4(B * vC.rgb, B); }\n');
+  } catch (e) { GS.prog = null; GS.err = String(e); }
+  // 가우시안 위 땅 그림 (터파기 영역 · 관 띠 · 자른 선): 모델 그물에 그 그림만 (미리 곱한 알파) · 깊이 = 같은 그물
+  let DCO = null;
+  try {
+    DCO = prog('in vec3 aP; uniform mat4 M; out vec2 w; void main(){ w = aP.xy; gl_Position = M * vec4(aP, 1.0); }',
+      'in vec2 w; uniform sampler2D dg, dl; uniform vec4 rg, rl; out vec4 o;\n' +
+      'void main(){ vec2 ug = (w - rg.xy) / rg.zw, ul = (w - rl.xy) / rl.zw; vec4 a = texture(dg, ug), b = texture(dl, ul);\n' +
+      '  bool il = all(greaterThanEqual(ul, vec2(0.0))) && all(lessThanEqual(ul, vec2(1.0)));\n' +
+      '  bool ig = all(greaterThanEqual(ug, vec2(0.0))) && all(lessThanEqual(ug, vec2(1.0)));\n' +
+      '  vec4 d = il ? b : ig ? a : vec4(0.0); if (d.a < 0.004) discard; o = d; }');
+  } catch (e) { DCO = null; }
+  // 정렬 · 자료 텍스처 (Worker 안 · 안 되면 이 창에서): gsCore(post) → 받은 글 처리 함수
+  function gsCore(post) {
+    let pos = null, n = 0;
+    const f1 = new Float32Array(1), i1 = new Int32Array(f1.buffer);
+    function half(v) {                                                  // float → 반정밀 (antimatter15 floatToHalf)
+      f1[0] = v; const f = i1[0], sign = (f >> 31) & 0x0001, exp = (f >> 23) & 0x00ff;
+      let frac = f & 0x007fffff, ne;
+      if (exp === 0) ne = 0;
+      else if (exp < 113) { ne = 0; frac |= 0x00800000; frac = frac >> (113 - exp); if (frac & 0x01000000) { ne = 1; frac = 0; } }
+      else if (exp < 142) ne = exp - 112;
+      else { ne = 31; frac = 0; }
+      return (sign << 15) | (ne << 10) | (frac >> 13);
+    }
+    const pack = (a, b) => (half(a) | (half(b) << 16)) >>> 0;
+    function build(buf, cnt) {
+      const fb = new Float32Array(buf), ub = new Uint8Array(buf), tw = 2048, th = Math.max(1, Math.ceil(2 * cnt / tw));
+      const td = new Uint32Array(tw * th * 4), tf = new Float32Array(td.buffer), tc = new Uint8Array(td.buffer);
+      pos = new Float32Array(cnt * 3); n = cnt;
+      for (let i = 0; i < cnt; i++) {
+        const x = fb[8 * i], y = fb[8 * i + 1], z = fb[8 * i + 2];
+        tf[8 * i] = x; tf[8 * i + 1] = y; tf[8 * i + 2] = z; pos[3 * i] = x; pos[3 * i + 1] = y; pos[3 * i + 2] = z;
+        for (let k = 0; k < 4; k++) tc[4 * (8 * i + 7) + k] = ub[32 * i + 24 + k];
+        const sx = fb[8 * i + 3], sy = fb[8 * i + 4], sz = fb[8 * i + 5];
+        const w = (ub[32 * i + 28] - 128) / 128, qx = (ub[32 * i + 29] - 128) / 128, qy = (ub[32 * i + 30] - 128) / 128, qz = (ub[32 * i + 31] - 128) / 128;
+        const M = [1 - 2 * (qy * qy + qz * qz), 2 * (qx * qy + w * qz), 2 * (qx * qz - w * qy),
+          2 * (qx * qy - w * qz), 1 - 2 * (qx * qx + qz * qz), 2 * (qy * qz + w * qx),
+          2 * (qx * qz + w * qy), 2 * (qy * qz - w * qx), 1 - 2 * (qx * qx + qy * qy)];
+        for (let k = 0; k < 3; k++) { M[k] *= sx; M[3 + k] *= sy; M[6 + k] *= sz; }     // 줄 k = 회전 축 k × 크기 k
+        const s00 = M[0] * M[0] + M[3] * M[3] + M[6] * M[6], s01 = M[0] * M[1] + M[3] * M[4] + M[6] * M[7], s02 = M[0] * M[2] + M[3] * M[5] + M[6] * M[8];
+        const s11 = M[1] * M[1] + M[4] * M[4] + M[7] * M[7], s12 = M[1] * M[2] + M[4] * M[5] + M[7] * M[8], s22 = M[2] * M[2] + M[5] * M[5] + M[8] * M[8];
+        td[8 * i + 4] = pack(s00, s01); td[8 * i + 5] = pack(s02, s11); td[8 * i + 6] = pack(s12, s22);
+      }
+      return { td: td, tw: tw, th: th };
+    }
+    let dep = null, cnt16 = null;
+    function sort(e, f) {                                               // 뒤 → 앞 (먼 것부터) · 16 bit 계수 정렬
+      if (!dep || dep.length !== n) { dep = new Int32Array(n); cnt16 = new Uint32Array(65536); }
+      let lo = Infinity, hi = -Infinity;
+      for (let i = 0; i < n; i++) {
+        const d = (pos[3 * i] - e[0]) * f[0] + (pos[3 * i + 1] - e[1]) * f[1] + (pos[3 * i + 2] - e[2]) * f[2];
+        const q = (d * 1024) | 0; dep[i] = q; if (q < lo) lo = q; if (q > hi) hi = q;
+      }
+      const k = 65535 / Math.max(1, hi - lo);
+      cnt16.fill(0);
+      for (let i = 0; i < n; i++) { const b = 65535 - (((dep[i] - lo) * k) | 0); dep[i] = b; cnt16[b]++; }
+      for (let i = 1; i < 65536; i++) cnt16[i] += cnt16[i - 1];
+      const idx = new Uint32Array(n);
+      for (let i = n - 1; i >= 0; i--) idx[--cnt16[dep[i]]] = i;
+      return idx;
+    }
+    return function (m) {
+      if (m.buf) { const r = build(m.buf, m.n); post({ tex: r.td, tw: r.tw, th: r.th }, [r.td.buffer]); }
+      else if (m.e) { const idx = sort(m.e, m.f); post({ idx: idx, key: m.key }, [idx.buffer]); }
+    };
+  }
+  function gsMsg(d) {
+    if (d.tex) {
+      const t = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, t);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32UI, d.tw, d.th, 0, gl.RGBA_INTEGER, gl.UNSIGNED_INT, d.tex);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+      if (gl.getError() === gl.OUT_OF_MEMORY) { gl.deleteTexture(t); gsFail('그래픽 메모리 모자람'); return; }
+      GS.tex = t;
+      GS.vao = gl.createVertexArray(); gl.bindVertexArray(GS.vao);
+      const qb = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, qb); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-2, -2, 2, -2, 2, 2, -2, 2]), gl.STATIC_DRAW);
+      gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+      GS.ibuf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, GS.ibuf); gl.bufferData(gl.ARRAY_BUFFER, 4, gl.DYNAMIC_DRAW);
+      gl.enableVertexAttribArray(1); gl.vertexAttribIPointer(1, 1, gl.INT, 0, 0); gl.vertexAttribDivisor(1, 1);
+      gl.bindVertexArray(null);
+      GS.ready = true; GS.busy = false; GS.key = '';
+      if (typeof Worker !== 'undefined' && GS.wk instanceof Worker) GS.wk.onerror = (e) => { e.preventDefault(); gsFail('Worker · ' + (e.message || '')); };   // 받은 자료 (수백 MB) 를 놓아줌
+      if (GS.res) { GS.res(); GS.res = null; }
+      redraw();
+    } else if (d.idx) {
+      gl.bindBuffer(gl.ARRAY_BUFFER, GS.ibuf); gl.bufferData(gl.ARRAY_BUFFER, new Int32Array(d.idx.buffer), gl.DYNAMIC_DRAW);
+      GS.sorted = d.idx.length; GS.sorts++; GS.key = d.key; GS.busy = false;
+      redraw();
+    }
+  }
+  function gsFail(msg) {
+    GS.err = msg; GS.loading = null; GS.busy = false;
+    if (GS.rej) { GS.rej(new Error(msg)); GS.rej = null; }
+    if (GS.on) gsSet(false);
+    toast('가우시안 못 불러옴 · ' + msg);
+  }
+  function gsLoad() {
+    if (GS.loading) return GS.loading;
+    GS.loading = new Promise((res, rej) => { GS.res = res; GS.rej = rej; });
+    $('load').style.display = ''; $('load').textContent = '가우시안 불러오는 중…';
+    (async () => {
+      const meta = await (await fetch('data/gs/gs.json')).json();
+      const r = await fetch('data/gs/' + (meta.file || 'splats.bin'));
+      if (!r.ok) throw new Error('splats.bin ' + r.status);
+      const all = await r.arrayBuffer(), cap = 1024 * Math.min(maxTex, 16384), n = Math.min(Math.floor(all.byteLength / 32), cap);   // 텍스처 줄 한도 (1024개 / 줄)
+      if (!n) throw new Error('자료 없음');
+      const buf = n * 32 < all.byteLength ? all.slice(0, n * 32) : all;          // 파일 = 중요한 것부터 → 한도면 앞에서부터
+      if (n < all.byteLength / 32) toast('가우시안 ' + n.toLocaleString() + '개만 (그래픽 한도)');
+      GS.meta = meta; GS.n = n;
+      const local = () => {                                             // Worker 를 못 쓰는 곳 (보안 설정) → 이 창에서 (정렬 동안 잠깐 멈춤)
+        const h = gsCore((m) => setTimeout(() => gsMsg(m), 0));
+        GS.wk = { postMessage: (m) => h(m) };
+        GS.wk.postMessage({ buf: buf, n: n });
+      };
+      GS.busy = true;
+      try {
+        const url = URL.createObjectURL(new Blob(['const h = (' + gsCore.toString() + ')((m, t) => postMessage(m, t)); onmessage = (e) => h(e.data);'], { type: 'text/javascript' }));
+        GS.wk = new Worker(url);
+        GS.wk.onmessage = (e) => gsMsg(e.data);
+        GS.wk.onerror = (e) => { e.preventDefault(); if (GS.ready) gsFail('Worker · ' + (e.message || '')); else { GS.wk.terminate(); local(); } };
+        GS.wk.postMessage({ buf: buf, n: n });                          // 복사로 넘김 (Worker 가 안 뜨면 이 창에서 같은 자료로)
+      } catch (e) { local(); }
+    })().catch((e) => gsFail(errText(e))).finally(() => { if (mesh || !GS.on) $('load').style.display = 'none'; });
+    return GS.loading;
+  }
+  // 정렬을 다시 할지 (눈 · 앞 방향이 조금이라도 바뀌면 · 정렬 하나가 도는 동안은 다음 하나만 기다림)
+  function gsSortSoon(vw) {
+    const k = vw.E.map((v) => v.toFixed(2)).join(',') + '|' + vw.f.map((v) => v.toFixed(3)).join(',');
+    GS.want = k;
+    if (GS.busy || k === GS.key) return;
+    GS.busy = true;
+    GS.wk.postMessage({ e: vw.E, f: vw.f, key: k });
+  }
+  function gsDraw(vw) {
+    if (!GS.ready || !GS.sorted) { gsSortSoon(vw); return false; }
+    gl.useProgram(GS.prog.p);
+    gl.activeTexture(gl.TEXTURE3); gl.bindTexture(gl.TEXTURE_2D, GS.tex); gl.uniform1i(GS.prog.u.u_tex, 3); gl.activeTexture(gl.TEXTURE0);
+    gl.uniform3fv(GS.prog.u.u_eye, vw.E); gl.uniform3fv(GS.prog.u.u_r, vw.r); gl.uniform3fv(GS.prog.u.u_u, vw.u); gl.uniform3fv(GS.prog.u.u_f, vw.f);
+    gl.uniform2f(GS.prog.u.u_tan, vw.tanH, vw.tanV); gl.uniform2f(GS.prog.u.u_vp, vw.W, vw.H); gl.uniform1f(GS.prog.u.u_near, Math.max(0.05, V.d * 0.005));
+    gl.disable(gl.DEPTH_TEST); gl.depthMask(false);
+    gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+    gl.bindVertexArray(GS.vao);
+    gl.drawArraysInstanced(gl.TRIANGLE_FAN, 0, 4, GS.sorted);
+    gl.bindVertexArray(null);
+    gl.disable(gl.BLEND); gl.depthMask(true); gl.enable(gl.DEPTH_TEST);
+    gsSortSoon(vw);                                                     // 지금 시점이 정렬한 시점과 다르면 다시 (정렬이 오면 다시 그림)
+    return true;
+  }
+  // 깊이 · 고르기 그물: 모델 (없으면 맨땅)
+  const gsSurfDT = () => !!DT.parts && !!mesh && !mesh.parts.length;
+  function gsSet(on) {
+    on = !!on && GS.ok && !!GS.prog;
+    GS.on = on;
+    if (on && DT.on) dtSet(false);                                      // 맨땅 보기와 하나만
+    try { sessionStorage.setItem(GS_KEY, on ? '1' : '0'); } catch (e) { /* 저장 못 해도 계속 */ }
+    setOn($('bGs'), on);
+    $('bGs').title = on ? '모델 보기 (질감 3D)' : '가우시안 보기 (가우시안 스플래팅)';
+    if (on) { if (DEM && DTP && mesh && !mesh.parts.length) dtBuild(); gsLoad().then(() => redraw(), () => {}); }
+    redraw();
   }
 
   // ---------------------------------------------------------------- 관로 자료 (360 보기와 같음)
@@ -1200,6 +1548,7 @@
   }
   // 벽 꼭대기를 땅 g 위로 올릴 만큼 (관로 좌표 · 그 자리 모델 면 − g + 0.1 · 0 ~ 3 m · 높이 지도 없으면 WALL_UP)
   function wallUp(e, n, g) {
+    if (DT.on) { const z = demP(e, n); return Number.isFinite(z) ? clamp(z - g + 0.1, 0, 3) : WALL_UP; }   // 맨땅 보기: 보이는 면 = 땅 그물
     const m = hmMax(e + TX, n + TY, 0.35);
     return Number.isFinite(m) ? clamp(m - TZ - g + 0.1, 0, 3) : WALL_UP;
   }
@@ -1701,7 +2050,7 @@
   }
   function ug3d() {
     if (!TP) return;
-    const sel = edSel(), base = S.cover + '|' + HM.ver;
+    const sel = edSel(), base = S.cover + '|' + HM.ver + '|' + (DT.on ? 'd' : 'm');
     if (S.pipes) tubesPut(sel, base);
     if (obShow()) obPut();
     const tubes = S.pipes ? tubeM.filter((m) => m.n) : [], obs = obShow() && obM.n ? [obM] : [];
@@ -1729,17 +2078,34 @@
     const M = VW.M;
     decalSync();
     gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LESS); gl.disable(gl.BLEND);
-    gl.useProgram(MESH.p); gl.uniformMatrix4fv(MESH.u.M, false, M);
-    gl.uniform1i(MESH.u.tex, 0); gl.uniform1i(MESH.u.dg, 1); gl.uniform1i(MESH.u.dl, 2);
+    const gsOn = GS.on && GS.ready && !!GS.prog;                       // 가우시안 보기: 그물은 깊이만 → 가우시안 → 땅 위 그림 → 관 · 터파기
+    const dtm = (DT.on || (gsOn && gsSurfDT())) && !!DT.parts, SP = dtm ? DTP : MESH;   // 맨땅 보기 = 질감 모델 대신 땅 그물 (땅 위 그림은 같이)
+    gl.useProgram(SP.p); gl.uniformMatrix4fv(SP.u.M, false, M);
+    if (!dtm) gl.uniform1i(MESH.u.tex, 0);
+    gl.uniform1i(SP.u.dg, 1); gl.uniform1i(SP.u.dl, 2);
     const dOn = DC.g && (DC.g.on || DC.l.on);
-    gl.uniform1f(MESH.u.dOn, dOn ? 1 : 0);
+    gl.uniform1f(SP.u.dOn, dOn ? 1 : 0);
     if (DC.g) {
       const OFF = [1e9, 1e9, 1, 1];                       // 그림 없음 = 늘 범위 밖
-      gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, DC.g.t); gl.uniform4fv(MESH.u.rg, DC.g.on ? DC.g.r : OFF);
-      gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, DC.l.t); gl.uniform4fv(MESH.u.rl, DC.l.on ? DC.l.r : OFF);
+      gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, DC.g.t); gl.uniform4fv(SP.u.rg, DC.g.on ? DC.g.r : OFF);
+      gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, DC.l.t); gl.uniform4fv(SP.u.rl, DC.l.on ? DC.l.r : OFF);
     }
     gl.activeTexture(gl.TEXTURE0);
-    for (const p of mesh.parts) { gl.bindTexture(gl.TEXTURE_2D, p.tex); gl.bindVertexArray(p.vao); gl.drawArrays(gl.TRIANGLES, 0, p.n); }
+    if (gsOn) gl.colorMask(false, false, false, false);
+    if (dtm) dtDraw(M);
+    else for (const p of mesh.parts) { gl.bindTexture(gl.TEXTURE_2D, p.tex); gl.bindVertexArray(p.vao); gl.drawArrays(gl.TRIANGLES, 0, p.n); }
+    if (gsOn) {
+      gl.colorMask(true, true, true, true);
+      gsDraw(VW);
+      if (dOn && DCO && DC.g) {                                       // 땅 위 그림 (터파기 영역 · 관 띠) = 같은 그물 깊이에 덧칠
+        gl.useProgram(DCO.p); gl.uniformMatrix4fv(DCO.u.M, false, M); gl.uniform1i(DCO.u.dg, 1); gl.uniform1i(DCO.u.dl, 2);
+        gl.uniform4fv(DCO.u.rg, DC.g.on ? DC.g.r : [1e9, 1e9, 1, 1]); gl.uniform4fv(DCO.u.rl, DC.l.on ? DC.l.r : [1e9, 1e9, 1, 1]);
+        gl.depthFunc(gl.LEQUAL); gl.depthMask(false); gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+        if (dtm) for (const p of DT.parts) { gl.bindVertexArray(p.vao); gl.drawElements(gl.TRIANGLES, p.n, p.it, 0); }
+        else for (const p of mesh.parts) { gl.bindVertexArray(p.vao); gl.drawArrays(gl.TRIANGLES, 0, p.n); }
+        gl.disable(gl.BLEND); gl.depthMask(true); gl.depthFunc(gl.LESS);
+      }
+    }
     ug3d();
     gl.bindVertexArray(null);
     drawChecks(M);
@@ -1838,14 +2204,15 @@
       gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, PB.dep);
     }
     gl.bindFramebuffer(gl.FRAMEBUFFER, PB.fb);
-    const M = view(W, H).M, key = M.join(',') + '|' + mesh.parts.length;
+    const dtm = (DT.on || gsSurfDT()) && !!DT.parts, M = view(W, H).M, key = M.join(',') + '|' + mesh.parts.length + '|' + (dtm ? 'd' : 'm');   // 가우시안만 = 맨땅 그물에서
     if (key !== PB.key) {
       PB.key = key; PB.renders++;
       gl.viewport(0, 0, W, H);
       gl.colorMask(true, true, true, true); gl.depthMask(true);
       gl.clearBufferfv(gl.COLOR, 0, [0, 0, 0, -1]); gl.clear(gl.DEPTH_BUFFER_BIT); gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LESS); gl.disable(gl.BLEND); gl.disable(gl.STENCIL_TEST);
       gl.useProgram(PICK.p); gl.uniformMatrix4fv(PICK.u.M, false, M); gl.uniform1f(PICK.u.id, 0);
-      for (const p of mesh.parts) { gl.bindVertexArray(p.vao); gl.drawArrays(gl.TRIANGLES, 0, p.n); }
+      if (dtm) for (const p of DT.parts) { gl.bindVertexArray(p.vao); gl.drawElements(gl.TRIANGLES, p.n, p.it, 0); }    // 맨땅 보기 = 땅 그물에서 고름
+      else for (const p of mesh.parts) { gl.bindVertexArray(p.vao); gl.drawArrays(gl.TRIANGLES, 0, p.n); }
     }
     const px = new Float32Array(4);
     gl.readPixels(clamp(Math.round(x * dpr), 0, W - 1), clamp(Math.round(H - y * dpr), 0, H - 1), 1, 1, gl.RGBA, gl.FLOAT, px);
@@ -2032,6 +2399,31 @@
     redraw();
   }
   $('tgSide').addEventListener('click', () => { const s = $('side'); s.hidden = !s.hidden; setOn($('tgSide'), !s.hidden); });
+  // 오른쪽 칸 폭 끌어 바꾸기 (JACK 1126 «오른쪽 옵션 창을 좌우로 크기 조정») — 칸 왼쪽 가장자리 손잡이 · 이 PC 에 기억 · 두 번 누르면 처음 폭
+  (function sideGripInit() {
+    const side = $('side'), KEY = 'rv_map3d:sideW', MIN = 240, root = document.documentElement;
+    if (!side || !window.ResizeObserver) return;
+    const maxW = () => Math.max(MIN, Math.round(window.innerWidth * 0.6));
+    const apply = (w) => root.style.setProperty('--sideW', Math.round(Math.max(MIN, Math.min(w, maxW()))) + 'px');
+    const sv = Number(lsGet(KEY)); if (sv > 0) apply(sv);               // 저장소가 막힌 브라우저에서도 화면이 멈추지 않게 (1126 검토)
+    const g = document.createElement('div'); g.id = 'sideGrip'; g.title = '끌어서 폭 바꾸기 · 두 번 누르면 처음 폭';
+    document.body.appendChild(g);
+    const place = () => {                                           // 손잡이 = 칸 왼쪽 가장자리 (칸이 숨거나 좁은 화면 배치면 숨김)
+      const r = side.getBoundingClientRect();
+      g.hidden = side.hidden || r.width < 1 || window.innerWidth <= 860;
+      if (!g.hidden) { g.style.left = (r.left - 5) + 'px'; g.style.top = r.top + 'px'; g.style.height = r.height + 'px'; }
+    };
+    new ResizeObserver(place).observe(side);
+    new MutationObserver(place).observe(side, { attributes: true, attributeFilter: ['hidden'] });
+    window.addEventListener('resize', () => { const c = parseFloat(root.style.getPropertyValue('--sideW')); if (c > maxW()) apply(maxW()); place(); });
+    let dn = null;
+    g.addEventListener('pointerdown', (e) => { if (e.button !== 0) return; dn = { x: e.clientX, w: side.getBoundingClientRect().width }; g.setPointerCapture(e.pointerId); g.classList.add('on'); e.preventDefault(); });
+    g.addEventListener('pointermove', (e) => { if (!dn) return; apply(dn.w + (dn.x - e.clientX)); place(); });
+    const up = () => { if (!dn) return; dn = null; g.classList.remove('on'); lsSet(KEY, Math.round(side.getBoundingClientRect().width)); };
+    g.addEventListener('pointerup', up); g.addEventListener('pointercancel', up);
+    g.addEventListener('dblclick', () => { root.style.removeProperty('--sideW'); try { localStorage.removeItem(KEY); } catch (e) { /* 없어도 됨 */ } place(); });
+    place();
+  })();
 
   // ---------------------------------------------------------------- 터파기 설정 창 (360 과 같음)
   const secDlg = $('secDlg'), secDia = $('secDia'), secOn = $('secOn'), secSvg = $('secSvg');
@@ -2346,7 +2738,7 @@
   }
   // data/pipes.js 다시 읽기 (프로그램이 [관로 넣기] 로 새로 쓴 뒤 · 땅 높이 dem.js 도 처음 만들어졌을 수 있음)
   function reloadPipes() {
-    return (DEM ? Promise.resolve() : loadScript('data/dem.js', 'RV_DEM').then((d) => { DEM = demInit(d); }, () => {}))
+    return (DEM ? Promise.resolve() : loadScript('data/dem.js', 'RV_DEM').then((d) => { DEM = demInit(d); const b = $('bDtm'); if (b) b.hidden = !DEM || !DTP; }, () => {}))
       .then(() => loadScript('data/pipes.js', 'RV_PIPES'))
       .then(() => {
         poSet(window.RV_PIPES);
@@ -3125,10 +3517,13 @@
   // MS.pts = 세계 점 (매핑 원점 기준 · z = 표고 − 원점 표고). dist = 거리 (평면 · 경사) · area = 면적 (평면) · height = 높이 차 ·
   // prof = 지형 단면 (땅 = dem.js · 3D 모델 면 = 위에서 본 띠 그리기) · pipe = 새 관 (끝나면 관경 · 관종 · 이름 창) · crop = 잘라내기 경계.
   // 점 찍기 = 누르기 · 끝 = 두 번 누르기 · Enter · Esc = 취소 · Backspace = 마지막 점 빼기. 결과 칸은 [지우기] 까지 남음.
-  const MS = { kind: '', pts: [], hov: null, done: false, drag: -1, rect: false, rNew: false, res: null, prof: null };
+  // ng = 땅 아님 다각형 (여러 개 · 닫으면 NG.draft 로 · [적용] = 지금 것 + 새 것 → nonground_set)
+  const MS = { kind: '', pts: [], hov: null, done: false, drag: -1, dg: null, rect: false, rNew: false, res: null, prof: null };
+  // 땅 아님 (JACK 1126 · 프로그램 안에서만): polys = 지정된 것 (도면 좌표 [[E, N], …]) · draft = 새로 그린 것 (세계 점) · sel = 지우려고 고른 것
+  const NG = { polys: [], got: false, draft: [], sel: -1, selT: 0 };
   const MS_TIP = { dist: '거리 · 점 찍기 · 두 번 누르기 · Enter = 끝', area: '면적 · 점 찍기 · 두 번 누르기 · Enter = 닫기',
     height: '높이 차 · 두 점', prof: '지형 단면 · 두 점', pipe: '새 관 · 점 찍기 · 두 번 누르기 · Enter = 끝' };
-  const MS_COL = { dist: '#facc15', area: '#facc15', height: '#facc15', prof: '#facc15', pipe: '#a3e635', crop: '#f87171' };
+  const MS_COL = { dist: '#facc15', area: '#facc15', height: '#facc15', prof: '#facc15', pipe: '#a3e635', crop: '#f87171', ng: '#f87171' };
   const fM = (v) => v.toFixed(2) + ' m';
   const fA = (v) => v.toLocaleString('ko-KR', { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + ' m²';
   const msBox = $('msBox'), msChip = $('msChip');
@@ -3142,7 +3537,8 @@
   }
   function msClear() {
     if (!MS.kind) return;
-    MS.kind = ''; MS.pts = []; MS.hov = null; MS.done = false; MS.drag = -1; MS.res = null; MS.prof = null;
+    MS.kind = ''; MS.pts = []; MS.hov = null; MS.done = false; MS.drag = -1; MS.dg = null; MS.res = null; MS.prof = null;
+    NG.draft = [];
     cv.classList.remove('pick');
     msUI(); redraw();
   }
@@ -3157,7 +3553,7 @@
   function msPoint(x, y) {
     const h = pickAt(x, y);
     if (h) return h.p.slice();
-    return MS.kind === 'crop' ? rayZ(x, y, MS.pts.length ? MS.pts[MS.pts.length - 1][2] : V.tgt[2]) : null;
+    return MS.kind === 'crop' || MS.kind === 'ng' ? rayZ(x, y, MS.pts.length ? MS.pts[MS.pts.length - 1][2] : V.tgt[2]) : null;
   }
   const wScr = (p) => toScr(p[0] - TX, p[1] - TY, p[2] - TZ);
   function msTap(x, y) {
@@ -3176,6 +3572,7 @@
   function msFinish() {
     const k = MS.kind, need = k === 'area' || k === 'crop' ? 3 : 2;
     if (!k || MS.done) return;
+    if (k === 'ng') { ngClose(); return; }                                // 땅 아님: 닫고 다음 다각형
     if (MS.pts.length < need) { toast('점 ' + need + '개 이상'); return; }
     if (k === 'pipe') { npShow(); return; }
     MS.done = true; MS.hov = null;
@@ -3184,7 +3581,9 @@
     msUI(); redraw();
   }
   function msBack() {
-    if (!MS.kind || MS.done || !MS.pts.length) return;
+    if (!MS.kind || MS.done) return;
+    if (MS.kind === 'ng' && !MS.pts.length && NG.draft.length) { MS.pts = NG.draft.pop(); msUI(); redraw(); return; }   // 닫은 것 다시 열기
+    if (!MS.pts.length) return;
     MS.pts.pop(); msUI(); redraw();
   }
   function msCalc() {
@@ -3202,24 +3601,25 @@
     return r;
   }
   function msUI() {
-    const k = MS.kind, crop = k === 'crop';
+    const k = MS.kind, crop = k === 'crop', ng = k === 'ng', red = crop || ng;
     document.body.classList.toggle('msOn', !!k && !MS.done || crop);
     msChip.classList.toggle('show', !!k && (!MS.done || crop));
-    msChip.classList.toggle('crop', crop);
+    msChip.classList.toggle('crop', red);
     $('msSeg').hidden = !crop;
     setOn($('msRect'), crop && MS.rect); setOn($('msPoly'), crop && !MS.rect);
-    const n = MS.pts.length;
+    const n = MS.pts.length, nd = NG.draft.length;
     let tip = MS_TIP[k] || '';
     if (k === 'height' || k === 'prof') tip += n ? ' · 둘째 점' : ' · 첫 점';
     if (crop) tip = MS.done ? '점 끌어 고치기 · 적용 = 결과물 다시 만듦 (394장 3~5분 · 1.0.15 이전 프로젝트는 질감도 다시라 더 걸림)' : MS.rect ? (n ? '맞은 구석 누르기 · 끌기' : '두 구석 끌기') : '점 찍기 · 두 번 누르기 · Enter = 닫기 · 점 끌어 고치기';
+    if (ng) tip = n ? '땅 아님 · 점 찍기 · 두 번 누르기 · Enter = 닫기' : nd ? '새 땅 아님 ' + nd + '곳 · 또 그리기 · 점 끌어 고치기 · 적용 = DTM 다시 만듦 (약 3분)' : '땅 아님 · 건물 둘레 점 찍기 · 두 번 누르기 · Enter = 닫기';
     $('msTip').textContent = tip;
     const end = $('msEnd');
     end.hidden = k === 'height' || k === 'prof';
-    end.textContent = crop ? '적용' : '끝';
-    end.disabled = crop ? !MS.done : n < (k === 'area' ? 3 : 2);
-    msChip.dataset.kind = k; msChip.dataset.n = String(n);
+    end.textContent = red ? '적용' : '끝';
+    end.disabled = crop ? !MS.done : ng ? !(nd || n >= 3) : n < (k === 'area' ? 3 : 2);
+    msChip.dataset.kind = k; msChip.dataset.n = String(n); msChip.dataset.nd = String(nd);
     // 결과 칸
-    const show = !!k && k !== 'pipe' && !crop && n >= (k === 'area' ? 3 : 2);
+    const show = !!k && k !== 'pipe' && !red && n >= (k === 'area' ? 3 : 2);
     msBox.hidden = !show;
     msBox.dataset.kind = show ? k : '';
     if (!show) { MS.res = null; return; }
@@ -3246,7 +3646,7 @@
     }
     kvRows($('msRows'), rows, 'ms_');
   }
-  $('msEnd').addEventListener('click', () => { if (MS.kind === 'crop') crApply(); else msFinish(); });
+  $('msEnd').addEventListener('click', () => { if (MS.kind === 'crop') crApply(); else if (MS.kind === 'ng') ngApply(); else msFinish(); });
   $('msX').addEventListener('click', msClear);
   $('msClr').addEventListener('click', msClear);
   // 지형 단면: 땅 (dem.js · 매끈한 땅 DTM) + 3D 모델 면 (위에서 본 가장 높은 면 · 두 점 사이 띠 1 화소 줄 그리기)
@@ -3355,6 +3755,31 @@
       c.forEach((p, i) => { const s = wClip(p, c[(i + 1) % c.length]); if (s) { ov.beginPath(); ov.moveTo(s[0][0], s[0][1]); ov.lineTo(s[1][0], s[1][1]); ov.stroke(); } });
       ov.setLineDash([]);
     }
+    if (ngShown()) NG.polys.forEach((pg, i) => {                          // 지정된 땅 아님 (붉은 점선 · 고른 것은 진하게)
+      const c = cropWorld(pg), sc = c.map(wScr), on = i === NG.sel;
+      if (sc.every(Boolean)) {
+        ov.beginPath(); sc.forEach((q, j) => (j ? ov.lineTo(q[0], q[1]) : ov.moveTo(q[0], q[1]))); ov.closePath();
+        ov.fillStyle = on ? 'rgba(248, 113, 113, 0.34)' : 'rgba(248, 113, 113, 0.1)'; ov.fill();
+      }
+      ov.setLineDash([6, 4]);
+      c.forEach((p, j) => {
+        const s = wClip(p, c[(j + 1) % c.length]);
+        if (!s) return;
+        ov.beginPath(); ov.moveTo(s[0][0], s[0][1]); ov.lineTo(s[1][0], s[1][1]);
+        ov.strokeStyle = PIN_DARK; ov.lineWidth = on ? 4.5 : 3.6; ov.stroke();
+        ov.strokeStyle = '#f87171'; ov.lineWidth = on ? 2.6 : 1.8; ov.stroke();
+      });
+      ov.setLineDash([]);
+    });
+    if (MS.kind === 'ng') NG.draft.forEach((pg) => {                      // 새로 그린 땅 아님 (닫힘 · 아직 적용 전)
+      const sc = pg.map(wScr);
+      if (sc.every(Boolean)) {
+        ov.beginPath(); sc.forEach((q, j) => (j ? ov.lineTo(q[0], q[1]) : ov.moveTo(q[0], q[1]))); ov.closePath();
+        ov.fillStyle = 'rgba(248, 113, 113, 0.24)'; ov.fill();
+      }
+      pg.forEach((p, j) => msLine(p, pg[(j + 1) % pg.length], MS_COL.ng, false));
+      pg.forEach((p) => msDot(p, '#ffffff', 5.5));
+    });
     if (PH.at && !phBox.hidden) {                                         // 원본 사진 자리
       const s = wScr(PH.at);
       if (s) { ov.beginPath(); ov.arc(s[0], s[1], 9, 0, 2 * Math.PI); ov.strokeStyle = PIN_DARK; ov.lineWidth = 5; ov.stroke(); ov.strokeStyle = CF_RED; ov.lineWidth = 2.5; ov.stroke(); }
@@ -3365,7 +3790,7 @@
     let Pp = MS.pts.slice();
     if (k === 'crop' && MS.rect && !MS.done && Pp.length === 1 && MS.hov) Pp = crRect(Pp[0], MS.hov);
     else if (!MS.done && MS.hov && Pp.length) Pp.push(MS.hov);
-    const closed = (k === 'area' || k === 'crop') && Pp.length >= 3;
+    const closed = (k === 'area' || k === 'crop' || k === 'ng') && Pp.length >= 3;
     if (closed) {
       const sc = Pp.map(wScr);
       if (sc.every(Boolean)) {
@@ -3373,7 +3798,7 @@
         if (k === 'crop') ov.rect(0, 0, w, h);
         sc.forEach((q, i) => (i ? ov.lineTo(q[0], q[1]) : ov.moveTo(q[0], q[1])));
         ov.closePath();
-        ov.fillStyle = k === 'crop' ? 'rgba(0, 0, 0, 0.5)' : 'rgba(250, 204, 21, 0.16)';
+        ov.fillStyle = k === 'crop' ? 'rgba(0, 0, 0, 0.5)' : k === 'ng' ? 'rgba(248, 113, 113, 0.16)' : 'rgba(250, 204, 21, 0.16)';
         ov.fill('evenodd');
       }
     }
@@ -3404,7 +3829,7 @@
       const r = msCalc(), s = wScr(MS.pts[MS.pts.length - 1]);
       if (s) msTag('합계 ' + fM(r.plan), s[0], s[1] + 22, col);
     }
-    MS.pts.forEach((p, i) => msDot(p, i === 0 && closed && !MS.done ? col : '#ffffff', k === 'crop' ? 5.5 : 4.5));
+    MS.pts.forEach((p, i) => msDot(p, i === 0 && closed && !MS.done ? col : '#ffffff', k === 'crop' || k === 'ng' ? 5.5 : 4.5));
   }
 
   // ---------------------------------------------------------------- 잘라내기 (결과물 다듬기 · 오른쪽 메뉴 «여기서부터 잘라내기»): 위에서 보기 · 네모 = 두 구석 끌기 · 다각형 = 점 찍기
@@ -3451,6 +3876,15 @@
   }
   // 누르기 (왼쪽): 네모 그리기 · 꼭짓점 끌기 (잘라내기) → true 면 이 누르기는 재기 몫 (돌리기 · 옮기기 안 함)
   function msDown(x, y) {
+    if (MS.kind === 'ng') {                                              // 땅 아님: 그리는 것 · 닫은 것 꼭짓점 끌기
+      let best = null, bd = 10;
+      const chk = (p, o) => { const s = wScr(p); if (s) { const d = Math.hypot(s[0] - x, s[1] - y); if (d < bd) { bd = d; best = o; } } };
+      MS.pts.forEach((p, i) => chk(p, { i: i }));
+      NG.draft.forEach((pg, d) => pg.forEach((p, i) => chk(p, { d: d, i: i })));
+      if (!best) return false;
+      if (best.d == null) MS.drag = best.i; else MS.dg = [best.d, best.i];
+      return true;
+    }
     if (MS.kind !== 'crop') return false;
     if (MS.rect && !MS.done) {
       MS.rNew = !MS.pts.length;
@@ -3464,10 +3898,17 @@
     return true;
   }
   function msMove(x, y) {
+    if (MS.dg) { const p = msPoint(x, y); if (p) { NG.draft[MS.dg[0]][MS.dg[1]] = p; redraw(); } return; }
     if (MS.drag >= 0) { const p = msPoint(x, y); if (p) { MS.pts[MS.drag] = p; redraw(); } return; }
     if (MS.kind === 'crop' && MS.rect && !MS.done) { MS.hov = msPoint(x, y); redraw(); }
   }
   function msUp(x, y, moved) {
+    if (MS.dg) {                                                         // 닫은 땅 아님 꼭짓점: 안 끌고 누름 = 그 자리에 새 점
+      MS.dg = null;
+      if (!moved) msTap(x, y);
+      msUI(); redraw();
+      return;
+    }
     if (MS.drag >= 0) {
       const i = MS.drag;
       MS.drag = -1;
@@ -3488,6 +3929,105 @@
   TB.cut = (w) => crStart(w);
   TB.flush = () => pipesFlush();
   TB.onCrop = redraw;
+
+  // ---------------------------------------------------------------- 땅 아님 (JACK 1126 · 결과물 다듬기 «땅 아님» · 오른쪽 메뉴 «여기 땅 아님 지정»)
+  // DTM 필터가 놓친 큰 건물 등을 다각형으로 → nonground_set({polygons: 지금 것 + 새 것}) → DTM · 등고선 · dem.js 다시 → 다시 엶.
+  // 지정된 것 = 맨땅 보기 · 다듬기 칸 · 그리는 동안 붉은 점선 · 누르기 (오른쪽 메뉴) = 그것만 지우기. 프로그램 안에서만.
+  const ngShown = () => NG.got && ngHost() && (DT.on || !tbBox.hidden || MS.kind === 'ng');
+  function ngUI() {
+    const n = NG.polys.length, st = $('ngState');
+    st.textContent = n ? '땅 아님 ' + n + '곳' : '땅 아님 없음';
+    st.classList.toggle('on', n > 0);
+    $('ngClear').hidden = !n;
+  }
+  function ngGet() {
+    const h = HOST();
+    if (!h || typeof h.nonground_get !== 'function') return Promise.resolve(NG.polys);
+    return Promise.resolve().then(() => h.nonground_get()).then((r) => {
+      const ok = (q) => Array.isArray(q) && isNum(q[0]) && isNum(q[1]);
+      NG.polys = (r && Array.isArray(r.polygons) ? r.polygons : []).filter((pg) => Array.isArray(pg) && pg.length >= 3 && pg.every(ok)).map((pg) => pg.map((q) => [Number(q[0]), Number(q[1])]));
+      NG.got = true;
+      if (NG.sel >= NG.polys.length) NG.sel = -1;
+      ngUI(); redraw();
+      return NG.polys;
+    }, () => NG.polys);
+  }
+  TB.ngGet = ngGet;
+  // 세계 점 w 가 든 지정된 다각형 차례 (없으면 -1)
+  function ngAt(w) {
+    const x = w[0] + ORG[0], y = w[1] + ORG[1];
+    for (let k = NG.polys.length - 1; k >= 0; k--) {
+      const p = NG.polys[k];
+      let inside = false;
+      for (let i = 0, j = p.length - 1; i < p.length; j = i++) {
+        if ((p[i][1] > y) !== (p[j][1] > y) && x < (p[j][0] - p[i][0]) * (y - p[i][1]) / (p[j][1] - p[i][1]) + p[i][0]) inside = !inside;
+      }
+      if (inside) return k;
+    }
+    return -1;
+  }
+  function ngStart(w) {
+    if (!ngHost()) { toast('프로그램 안에서만'); return; }
+    if (MS.kind === 'ng') {                                              // 이미 그리는 중: 그리던 것은 닫아 두고 새로 (지우지 않음)
+      if (MS.pts.length >= 3) ngClose(); else { MS.pts = []; MS.hov = null; MS.drag = -1; }
+    } else msStart('ng', null);
+    if (V.el <= 80) { V.el = 89.5; setOn($('bTop'), true); }
+    if (w) { V.tgt = w.slice(); MS.pts = [w.slice()]; }
+    if (tbBox.hidden) tbShow(true); else ngGet();
+    msUI(); redraw();
+  }
+  TB.ng = ngStart;
+  // 그리던 다각형 닫기 → NG.draft (점 셋 이상 · 변 안 엇갈림 · 1 m² 이상 = 프로그램이 받는 것)
+  function ngClose() {
+    const pg = MS.pts;
+    if (pg.length < 3) { if (pg.length) toast('점 3개 이상'); return false; }
+    if (crCross(pg)) { toast('경계선이 서로 엇갈림 · 점을 끌어 고치기'); return false; }
+    let a = 0;
+    for (let i = 0, j = pg.length - 1; i < pg.length; j = i++) a += (pg[j][0] + pg[i][0]) * (pg[j][1] - pg[i][1]);
+    if (Math.abs(a / 2) < 1) { toast('너무 작음 · 1 m² 이상'); return false; }
+    NG.draft.push(pg.slice());
+    MS.pts = []; MS.hov = null; MS.drag = -1;
+    msUI(); redraw();
+    return true;
+  }
+  function ngSet(polys) { tbJob('ng', () => call('nonground_set', { polygons: polys })); }
+  // [적용]: 그리던 것도 닫고 → 목록을 새로 읽어 (다른 데서 바뀌었어도) 지금 것 + 새 것
+  function ngApply() {
+    if (MS.kind !== 'ng') return;
+    if (MS.pts.length && !ngClose()) return;
+    if (!NG.draft.length) { toast('다각형 먼저'); return; }
+    for (const pg of NG.draft) {                                         // 닫은 뒤 꼭짓점을 끌어 엇갈리거나 작아졌으면 막음 (1126 검토)
+      let ar = 0;
+      for (let i = 0, j = pg.length - 1; i < pg.length; j = i++) ar += (pg[j][0] + pg[i][0]) * (pg[j][1] - pg[i][1]);
+      if (crCross(pg)) { toast('경계선이 서로 엇갈린 다각형이 있음 · 점을 끌어 고치기'); return; }
+      if (Math.abs(ar / 2) < 1) { toast('너무 작은 다각형이 있음 · 1 m² 이상'); return; }
+    }
+    if (TB.id != null) { toast('다른 일 하는 중 · 끝난 뒤 적용'); return; }    // 그린 것을 지우기 전에 (1126 검토)
+    const add = NG.draft.map((pg) => pg.map((p) => [round(p[0] + ORG[0], 3), round(p[1] + ORG[1], 3)]));
+    const keep = NG.draft.map((pg) => pg.map((p) => p.slice()));
+    msClear();
+    const back = (r) => {                                                // 거절 · 실패 → 그리던 상태로 되돌림
+      if (!r || r.ok === false || r.job == null) { msStart('ng', null); NG.draft = keep; msUI(); redraw(); }
+      return r;
+    };
+    tbJob('ng', () => ngGet().then(() => (NG.got ? call('nonground_set', { polygons: NG.polys.concat(add) }) : { ok: false, msg: '땅 아님 목록 못 읽음' })).then(back, (e) => { back(null); throw e; }));
+  }
+  function ngAsk(i) {
+    NG.sel = i; redraw();
+    clearTimeout(NG.selT); NG.selT = setTimeout(() => { NG.sel = -1; redraw(); }, 10000);
+    toast('땅 아님 ' + (i + 1) + ' 지우기 · DTM 다시 만듦', () => { const rest = NG.polys.filter((q, j) => j !== i); NG.sel = -1; ngSet(rest); }, '지우기');
+  }
+  // 누르기 (재기 · 고치기 · 관이 아닐 때): 지정된 다각형 안이면 지우기 묻기
+  function ngTap(x, y) {
+    if (!ngShown() || !NG.polys.length) return false;
+    const h = pickAt(x, y), w = h ? h.p : rayZ(x, y, V.tgt[2]), i = w ? ngAt(w) : -1;
+    if (i < 0) { if (NG.sel >= 0) { NG.sel = -1; redraw(); } return false; }
+    ngAsk(i);
+    return true;
+  }
+  $('ngDraw').addEventListener('click', () => ngStart(null));
+  $('ngClear').addEventListener('click', () => toast('땅 아님 모두 없애고 DTM 다시 만들기', () => ngSet([]), '없애기'));
+  window.addEventListener('pywebviewready', () => { if (DT.on || !tbBox.hidden) ngGet(); });
 
   // ---------------------------------------------------------------- 새 관 (오른쪽 메뉴 «여기서 새 관 그리기»): 점 찍기 → 관경 · 관종 · 이름 창 → RV_PIPES 새 줄
   // 저장 = 관로 고치기와 같은 길 (edCommit → save_pipes · 이 브라우저 · 되돌리기). 깊이 = 평균매설깊이 (관 표고 없음).
@@ -3631,6 +4171,10 @@
     folder: '<path d="M4 6h5l2 2h9v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/>',
     ck: '<path d="M12 3 4 21h16z"/><path d="M12 10v5"/>',
     crop: '<path d="M6 2v14a2 2 0 0 0 2 2h14"/><path d="M18 22V8a2 2 0 0 0-2-2H2"/>',
+    dtm: '<path d="M2 19l6-9 4 5 3-4 7 8z"/><path d="M6.5 15h3.2M13.5 15.5h3.5" opacity=".55"/>',
+    model: '<path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M4 7.5l8 4.5 8-4.5M12 12v9"/>',
+    gs: '<ellipse cx="9.5" cy="10" rx="6" ry="3.4" transform="rotate(-28 9.5 10)"/><ellipse cx="16" cy="15" rx="4.2" ry="2.4" transform="rotate(18 16 15)" opacity=".7"/><circle cx="7" cy="17.5" r="2" opacity=".5"/>',
+    ng: '<path d="M4 7l9-3 7 6-3 10-12-2z" stroke-dasharray="3 2.2"/><path d="M9.5 10.5l5 5M14.5 10.5l-5 5"/>',
   };
   const ctxEl = $('ctxMenu');
   const CTX = { open: false, items: [], at: null };
@@ -3719,6 +4263,9 @@
     it(0, 'home', 'home', '처음 시점', viewHome);
     it(0, 'top', 'top', V.el > 80 ? '비스듬히 보기' : '위에서 보기', () => $('bTop').click());
     it(0, 'north', 'north', '북쪽 보기', () => { V.az = 0; redraw(); });
+    if (DEM && DTP) it(0, 'dtm', DT.on ? 'model' : 'dtm', DT.on ? '모델 보기' : '맨땅 보기', () => dtSet(!DT.on));
+    if (GS.ok && GS.prog && mesh.parts.length) it(0, 'gs', GS.on ? 'model' : 'gs', GS.on ? '모델 보기' : '가우시안 보기', () => gsSet(!GS.on));
+    else if (GS.ok && GS.prog && DT.on) it(0, 'gs', 'gs', '가우시안 보기', () => gsSet(true));
     it(1, 'mDist', 'dist', '거리 재기', () => msStart('dist', w));
     it(1, 'mArea', 'area', '면적 재기', () => msStart('area', w));
     it(1, 'mHeight', 'height', '높이 차 (두 점)', () => msStart('height', w));
@@ -3735,6 +4282,9 @@
     if (host) it(3, 'files', 'folder', '결과물 폴더', () => call('open_results'));
     if (w && (host || CK.pts.length)) it(3, 'ck', 'ck', CK.pts.length && CK.active >= 0 ? '검사점 «' + CK.pts[CK.active].name + '» 여기로' : '검사점 찍기', () => ckHere(w));
     if (host) it(3, 'crop', 'crop', '여기서부터 잘라내기', () => crStart(w));
+    if (w && ngHost()) it(3, 'ngHere', 'ng', '여기 땅 아님 지정', () => ngStart(w));
+    const ngi = w && ngShown() ? ngAt(w) : -1;
+    if (ngi >= 0) it(3, 'ngDel', 'del', '이 땅 아님 지우기', () => ngAsk(ngi), { warn: true });
     if (w) {
       const hd = document.createElement('div');
       hd.className = 'cHd'; hd.title = (P.crs || 'EPSG:5186') + ' · X = 동 · Y = 북 · Z = 표고 (' + (P.height || 'EGM2008') + ')';
@@ -3786,10 +4336,15 @@
   function tap(x, y) {
     vwNow();
     if (MS.kind && msTap(x, y)) return;                                  // 재기 · 새 관 · 잘라내기 점 찍기
-    if (CK.active >= 0 && $('ck').style.display !== 'none') { const h = pickAt(x, y); if (h) { ckMeasure(h); return; } }
+    if (CK.active >= 0 && $('ck').style.display !== 'none') {
+      if (DT.on) { dtSet(false); toast('검사점은 3D 모델 위에서 · 모델 보기로 바꿈 · 다시 누르기'); return; }   // 맨땅 = 다듬고 메운 땅 (1126 검토)
+      const h = pickAt(x, y); if (h) { ckMeasure(h); return; }
+    }
     if (SH.arm) { shTap('v', x, y); return; }
     if (ED.on) { edTap('v', x, y); return; }
-    if (!pipeTap('v', x, y)) cardHide();
+    if (pipeTap('v', x, y)) return;
+    cardHide();
+    ngTap(x, y);                                                         // 지정된 땅 아님 안 → 지우기 묻기
   }
   function hover(x, y) {
     if (!mesh) return;
@@ -3835,7 +4390,7 @@
     if (!d.moved && d.b === 0) tap(x, y);
     if (!d.moved && d.b === 2) ctxOpen(e.clientX, e.clientY, x, y);   // 오른쪽 눌렀다 떼기 = 메뉴
   });
-  cv.addEventListener('pointercancel', () => { cv.classList.remove('drag'); if (dn && dn.edit) edEnd(dn.moved); if (dn && dn.ms) { MS.drag = -1; MS.rNew = false; } dn = null; });
+  cv.addEventListener('pointercancel', () => { cv.classList.remove('drag'); if (dn && dn.edit) edEnd(dn.moved); if (dn && dn.ms) { MS.drag = -1; MS.dg = null; MS.rNew = false; } dn = null; });
   cv.addEventListener('contextmenu', (e) => e.preventDefault());
   cv.addEventListener('wheel', (e) => {
     e.preventDefault();
@@ -3867,7 +4422,7 @@
     }
     if (MS.kind && (!MS.done || MS.kind === 'crop')) {                   // 재기 · 새 관 · 잘라내기: Esc = 취소 · Enter = 끝 · Backspace = 마지막 점 빼기
       if (e.key === 'Escape') { msClear(); return; }
-      if (e.key === 'Enter') { e.preventDefault(); if (MS.kind === 'crop' && MS.done) crApply(); else msFinish(); return; }
+      if (e.key === 'Enter') { e.preventDefault(); if (MS.kind === 'crop' && MS.done) crApply(); else if (MS.kind === 'ng' && !MS.pts.length) ngApply(); else msFinish(); return; }
       if (e.key === 'Backspace' && !MS.done) { e.preventDefault(); msBack(); return; }
     }
     if (e.key === 'Escape' && (SH.arm || SH.a)) { shCancel(); return; }
@@ -3877,15 +4432,22 @@
   window.addEventListener('resize', redraw);
   $('bXray').addEventListener('click', () => { xray = !xray; setOn($('bXray'), xray); redraw(); });
   $('bTop').addEventListener('click', () => { V.el = V.el > 80 ? 38 : 89.5; setOn($('bTop'), V.el > 80); redraw(); });
+  $('bDtm').hidden = !DEM || !DTP;                                       // dem.js 없으면 맨땅 단추 숨김
+  $('bDtm').addEventListener('click', () => dtSet(!DT.on));
+  $('bGs').hidden = !GS.ok || !GS.prog;                                  // 결과물에 가우시안이 있을 때만
+  $('bGs').addEventListener('click', () => gsSet(!GS.on));
 
   // ---------------------------------------------------------------- 시작
   function infoUpd() {
     if (!mesh) return;
-    $('info').textContent = '세모 ' + mesh.meta.tris.toLocaleString() + ' · 사진 ' + (P.registered || '?') + '/' + (P.photos || '?') + '장 · RTK 어긋남 ' +
+    const gn = P.gs && P.gs.web ? ' · 가우시안 ' + Number(P.gs.web).toLocaleString() : '';
+    $('info').textContent = (mesh.parts.length ? '세모 ' + mesh.meta.tris.toLocaleString() : '3D 모델 없음') + gn + ' · 사진 ' + (P.registered || '?') + '/' + (P.photos || '?') + '장 · RTK 어긋남 ' +
       (P.rtk_rms != null ? P.rtk_rms.toFixed(2) + ' m' : '-') + ' · ' + (P.crs || 'EPSG:5186') + ' + ' + (P.height || 'EGM2008') + (lines.length ? ' · 관로 ' + lines.length + '줄' : '');
   }
   obSet(window.RV_OBST);
   if (!TP) toast('지하 시설물 그리기 안 됨 (그래픽)');
+  try { if (DEM && sessionStorage.getItem(DT_KEY) === '1') dtSet(true); } catch (e) { /* 저장소 못 씀 = 모델 보기 */ }
+  try { if (GS.ok && !DT.on && sessionStorage.getItem(GS_KEY) === '1') gsSet(true); } catch (e) { /* 저장소 못 씀 = 모델 보기 */ }
   requestAnimationFrame(loop);
   loadMesh().then(() => {
     $('load').style.display = 'none';
@@ -3900,5 +4462,8 @@
     xray: (on) => { xray = !!on; setOn($('bXray'), xray); redraw(); },
     rebuild: () => { lines = buildLines(window.RV_PIPES); pipeGen++; redraw(); },
     ctx: () => ({ open: CTX.open, items: CTX.items.slice(), at: CTX.at }), MS, PH, TB, NP, profGet,
+    dtSet, DT, CT, NG, ngGet, ngShown, gsSet,
+    gs: () => ({ ok: GS.ok, on: GS.on, ready: GS.ready, n: GS.n, sorted: GS.sorted, sorts: GS.sorts, err: GS.err, worker: !!(GS.wk && GS.wk instanceof Worker) }),
+    dt: () => ({ on: DT.on, parts: DT.parts ? DT.parts.length : 0, tris: DT.tris, mt: DT.mt, el: DT.el, ci: CT.minor, every: CT.every, keys: DT.parts ? DT.parts.map((p) => p.key) : [] }),
   };
 })();

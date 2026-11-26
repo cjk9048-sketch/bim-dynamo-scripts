@@ -51,6 +51,21 @@ main { position:absolute; left:210px; right:0; top:0; bottom:0; overflow:auto; p
 .share .t { font-weight:600; min-width:170px; }
 .share .u { flex:1; color:#9fb6d8; font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 
+/* 함께 처리 (cluster.js) — 켜고 끄는 단추 = 점 (꺼짐 회색 · 켜짐 초록) */
+.tools { display:flex; gap:8px; }
+.tog { background:var(--panel); border:0; border-radius:6px; padding:6px 12px 6px 10px; font-size:12px; color:#bdbdbd; display:inline-flex; align-items:center; gap:7px; white-space:nowrap; }
+.tog::before { content:''; width:8px; height:8px; border-radius:50%; background:#555; flex:none; }
+.tog:hover { background:#3a3a3a; }
+.tog.on { background:#16405f; color:#fff; }
+.tog.on::before { background:#3fb950; box-shadow:0 0 0 3px #3fb95033; }
+.cbox { background:var(--panel); border-radius:10px; padding:16px 18px; max-width:760px; margin:0; }
+.cbox input[readonly] { cursor:default; color:#cfd6e4; }
+.cbox .mini, .cbox .tog:not(.on) { background:#3a3a3a; }
+.cbox .mini:hover, .cbox .tog:not(.on):hover { background:#454545; }
+.crow { align-items:center; }
+.crow > .sub { margin:0; }
+.share.gone { opacity:.45; }
+
 /* 작업 알약 */
 .pill { position:fixed; top:14px; right:18px; background:#2b2b2b; border:1px solid #3a3a3a; border-radius:16px; padding:6px 14px 6px 10px; display:flex; align-items:center; gap:8px; font-size:12px; z-index:5; }
 .spin { width:12px; height:12px; border-radius:50%; border:2px solid #555; border-top-color:var(--pri); animation:sp 0.9s linear infinite; }
