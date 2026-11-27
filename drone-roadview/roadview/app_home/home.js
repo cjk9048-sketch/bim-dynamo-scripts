@@ -101,7 +101,8 @@
   // 왼쪽 = 하늘에 뜬 360 드론 (둥실) · 오른쪽 = 어두운 공간의 레이저 격자 속을 나는 매핑 드론.
   // 가볍게: 30fps 이하 · 창이 숨거나 다른 화면이 덮으면 멈춤 · 움직임 줄이기 설정이면 멈춘 그림 한 장.
   const TAU = Math.PI * 2;
-  const reduce = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+  // 윈도우 «애니메이션 효과» 가 꺼진 PC 도 많아(이 PC 도 그렇게 잡힘) 설정을 따르면 그림이 늘 멈춰 보임 → 따르지 않고 가볍게(30fps 이하) 움직임
+  const reduce = false;
 
   function rr(c, x, y, w, h, r) {
     c.beginPath(); c.moveTo(x + r, y); c.arcTo(x + w, y, x + w, y + h, r); c.arcTo(x + w, y + h, x, y + h, r);
@@ -273,15 +274,30 @@
   }
 
   const HERO = [];
-  function heroSetup(cid, draw) {
+  // 큰 카드 = 실제 드론 영상(있으면) 바탕 + 3D 드론 (three.js) · WebGL 이 안 되면 위에서 그린 canvas 그림
+  const MEDIA = '../../tutorial/_media/';
+  function heroSetup(cid, draw, g3id, kind, vid, media) {
     const cv = $(cid); if (!cv) return;
-    const o = { cv, c: cv.getContext('2d'), draw, w: 0, h: 0, dpr: 1 };
+    const o = { cv, c: cv.getContext('2d'), draw, w: 0, h: 0, dpr: 1, g3: null, v: null };
+    const g3 = window.Drone3D && $(g3id) ? window.Drone3D.create($(g3id), kind) : null;
+    if (g3) {
+      o.g3 = g3; cv.parentNode.classList.add('g3on');
+      const v = $(vid);
+      if (v) {
+        o.v = v;
+        v.poster = MEDIA + media + '.jpg';
+        v.addEventListener('loadeddata', () => v.classList.add('on'));
+        v.addEventListener('error', () => { v.classList.remove('on'); v.removeAttribute('src'); o.v = null; });
+        v.src = MEDIA + media + '.mp4';
+      }
+    }
     const fit = () => {
       const r = cv.parentNode.getBoundingClientRect();
       if (r.width < 2 || r.height < 2) return;
       o.dpr = Math.min(window.devicePixelRatio || 1, 1.25);
       o.w = r.width; o.h = r.height;
-      cv.width = Math.round(r.width * o.dpr); cv.height = Math.round(r.height * o.dpr);
+      if (o.g3) o.g3.resize(r.width, r.height, o.dpr);
+      else { cv.width = Math.round(r.width * o.dpr); cv.height = Math.round(r.height * o.dpr); }
       if (reduce) paint(o, 3.2);
     };
     if (window.ResizeObserver) new ResizeObserver(fit).observe(cv.parentNode); else window.addEventListener('resize', fit);
@@ -290,8 +306,16 @@
   }
   function paint(o, t) {
     if (!o.w) return;
+    if (o.g3) { o.g3.render(t); return; }
     o.c.setTransform(o.dpr, 0, 0, o.dpr, 0, 0);
     o.draw(o.c, o.w, o.h, t);
+  }
+  function heroVideos(on) {
+    for (const o of HERO) {
+      if (!o.v) continue;
+      if (on && !reduce) { if (o.v.paused) { const p = o.v.play(); if (p && p.catch) p.catch(() => {}); } }
+      else if (!o.v.paused) o.v.pause();
+    }
   }
   let hRaf = 0, hTimer = 0, hLast = 0;
   function heroActive() {
@@ -299,14 +323,15 @@
   }
   function heroTick(now) {
     hRaf = 0;
-    if (!heroActive()) { hTimer = setTimeout(() => { hTimer = 0; heroKick(); }, 400); return; }
+    if (!heroActive()) { heroVideos(false); hTimer = setTimeout(() => { hTimer = 0; heroKick(); }, 400); return; }
+    heroVideos(true);
     if (now - hLast >= 33) { hLast = now; for (const o of HERO) paint(o, now / 1000); }
     hRaf = requestAnimationFrame(heroTick);
   }
   function heroKick() { if (!hRaf && !hTimer) hRaf = requestAnimationFrame(heroTick); }
   function heroStart() {
-    heroSetup('hCv360', frame360);
-    heroSetup('hCvMap', frameMap);
+    heroSetup('hCvMap', frameMap, 'hG3Map', 'mapping', 'hVidMap', 'home_3d');
+    heroSetup('hCv360', frame360, 'hG3360', '360', 'hVid360', 'home_360');
     if (reduce) return;
     document.addEventListener('visibilitychange', heroKick);
     heroKick();

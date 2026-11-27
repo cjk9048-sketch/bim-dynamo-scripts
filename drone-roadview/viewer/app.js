@@ -42,6 +42,7 @@
   // 하천 추진 · 횡단 (JACK 1126): RV_PIPES.lines[i].river = [{ k: 'jack' | 'open', a, b, … }] · 셈 · 기하 = viewer/river.js (3D 매핑 화면과 같은 셈) ·
   // 360 은 붙이는 코드만 (불러온 관 위 두 점 · 땅 = groundAt · 그물 = 터파기와 같은 셰이더 · 구멍) · river.js 가 없으면 그 카테고리 · 수량 갈래만 숨김
   const RV = window.RVRiver || null;
+  const RVC = window.RVCost || null;                // 개략공사비 셈 (viewer/cost.js · 3D 화면과 같은 셈 · 없으면 수량만)
   function guessMat(text) {
     const u = String(text || '').toUpperCase();
     if (/비금속|폴리|PVC|HDPE|GRP|(?<![A-Z])PE(?![A-Z])/.test(u)) return 'plastic';
@@ -122,7 +123,177 @@
   // ---------------------------------------------------------------- 프로그램 연결 (pywebview · WebView2)
   // 프로그램 안에서 열면 window.pywebview.api 가 있다 → 윗줄 [처음] · 관로 [SHP 불러오기 · 내보내기 · 지장물] · 결과물 · 웹 공유 · 사진점 지우기.
   // 웹 공유 · 브라우저에서는 숨김 ([data-host] · 3D 매핑 화면 map3d.js hostShow 와 같음).
-  const HOST = () => (window.pywebview && window.pywebview.api) || null;
+  // ---------------------------------------------------------------- 저장 (JACK 1127 «작업 끝나고 [저장] 해야 저장 · 튜토리얼은 [저장] = 일반 프로젝트로» · 3D map3d.js 와 같은 틀)
+  // 프로그램 안: 저장 API (SV_HOLD) 를 감싸 바로 쓰지 않고 «저장 대기» 에 마지막 값만 모음 → 윗줄 [저장] · Ctrl+S · [위치 보정 저장] 때 진짜로 씀 (→ mark_saved = 최근 목록 맨 위).
+  // 프로그램이 프로젝트 파일을 읽거나 새로 쓰는 일 (SV_FIRST) 전에는 모은 것을 먼저 씀 · [처음] · 창 × (app.py → __rvClose) = 저장 안 한 것이 있으면 묻기.
+  // 튜토리얼 (project_info().tutorial) = [저장] 이 save_as (이름 · 위치 → 일반 프로젝트 · 짝도 같이) · 브라우저 (웹 공유) = 저장 단추 없음 (지금처럼).
+  const SV_HOLD = ['save_pipes', 'save_grade', 'save_calib', 'ai_save'];
+  const SV_FIRST = ['import_pipes', 'export_pipes_shp', 'import_obstacles', 'trim_shots', 'ai_run', 'add_outputs', 'crop_apply', 'crop_clear', 'nonground_set', 'export_web', 'export_folder'];
+  const SV_READ = ['export_pipes_shp', 'export_web', 'export_folder'];   // 읽기만 (튜토리얼 «고친 것» 표시 안 함)
+  const SV_NAME = { save_pipes: '관로', save_grade: '부지정지', save_calib: '위치 보정', ai_save: 'AI 확인' };
+  const SV = { raw: null, px: null, q: new Map(), busy: null, saving: null, info: null, touched: false, ready: [], clean: [], ask: null };
+  const RAW = () => (window.pywebview && window.pywebview.api) || null;
+  const HOST = () => {
+    const h = RAW();
+    if (!h) return null;
+    if (SV.raw !== h) {
+      SV.raw = h;
+      SV.px = new Proxy(h, { get(t, k) {
+        const f = t[k];
+        if (typeof f !== 'function') return f;
+        if (SV_HOLD.includes(k)) return (...a) => { SV.q.set(k === 'ai_save' ? k + '|' + a[0] : k, { k: k, a: a }); svTouch(); return Promise.resolve({ ok: true, held: true }); };
+        if (SV_FIRST.includes(k)) return (...a) => svWrite().then(() => { if (!SV_READ.includes(k)) svTouch(); return f(...a); });
+        return f;
+      } });
+    }
+    return SV.px;
+  };
+  const svTut = () => !!(SV.info && SV.info.tutorial);
+  const svDirty = () => SV.q.size > 0 || (svTut() && SV.touched);
+  const svSsKey = () => 'rv_sv:' + location.pathname;
+  function svTouch() {
+    SV.touched = true;
+    if (SV.info) { try { sessionStorage.setItem(svSsKey(), JSON.stringify({ opened: SV.info.opened, touched: true })); } catch (e) { /* 없어도 됨 */ } }
+    svUI();
+  }
+  function svUI() {
+    const b = document.getElementById('hSave');
+    if (!b) return;
+    const d = svDirty(), busy = !!SV.saving;
+    b.classList.toggle('dirty', d);
+    b.disabled = busy;
+    b.querySelector('span').textContent = busy ? '저장 중' : '저장';
+    b.title = (svTut() ? '일반 프로젝트로 저장' : d ? '저장 (Ctrl+S)' : '저장할 것 없음') + (svTut() ? ' (Ctrl+S)' : '');
+  }
+  // 모은 것을 진짜 API 로 차례대로 씀 → true = 다 씀 (못 쓴 것은 다시 대기) · 다 쓰면 이 브라우저 기억 (SV.clean) 지움 · 최근 목록 (mark_saved)
+  function svWrite() {
+    if (SV.busy) return SV.busy.then(() => svWrite());
+    if (!SV.q.size || !SV.raw) return Promise.resolve(true);
+    const jobs = [...SV.q.entries()];
+    SV.q.clear();
+    let ok = true;
+    SV.busy = jobs.reduce((p, [key, j]) => p.then(() => Promise.resolve().then(() => SV.raw[j.k](...j.a)).then((r) => !!r && r.ok !== false, () => false).then((good) => {
+      if (good) return;
+      ok = false;
+      if (!SV.q.has(key)) SV.q.set(key, j);
+      toast((SV_NAME[j.k] || '') + ' 저장 안 됨');
+    })), Promise.resolve()).then(() => {
+      SV.busy = null;
+      if (ok) {
+        SV.clean.forEach((f) => { try { f(); } catch (e) { /* 계속 */ } });
+        if (!svTut() && typeof SV.raw.mark_saved === 'function') Promise.resolve().then(() => SV.raw.mark_saved()).catch(() => {});
+        window.dispatchEvent(new Event('rv:saved'));
+      }
+      svUI();
+      return ok;
+    });
+    return SV.busy;
+  }
+  // [저장] · Ctrl+S · [위치 보정 저장]: 고치던 것 (0.8 초 모음) 을 대기로 → 씀 → 튜토리얼이면 «일반 프로젝트로 저장» · o.open = false → 저장 뒤 그 프로젝트를 안 엶 (나갈 때)
+  function svSave(o) {
+    if (!RAW()) return Promise.resolve(false);
+    if (SV.saving) return SV.saving;
+    SV.saving = Promise.resolve().then(() => beforeHome()).catch(() => {}).then(() => svWrite()).then((ok) => {
+      if (!ok) return false;
+      if (svTut()) { SV.saving = null; svUI(); return svSaveAs(o || {}); }
+      toast('저장됨');
+      return true;
+    }).then((v) => { SV.saving = null; svUI(); return v; }, () => { SV.saving = null; svUI(); return false; });
+    svUI();
+    return SV.saving;
+  }
+  function svSaveAs(o) {
+    const I = SV.info || {};
+    let parent = String(I.parent || '');
+    return svDlg({ head: '일반 프로젝트로 저장', msg: '튜토리얼은 저장해야 남음', as: { name: String(I.name || ''), dir: parent }, ok: '저장', pick: (set) => {
+      Promise.resolve().then(() => RAW().pick_folder()).then((p) => { if (p) { parent = String(p); set(parent); } }, () => {});
+    } }).then((a) => {
+      if (a.v !== 'ok') return false;
+      toast('저장 중…');
+      return Promise.resolve().then(() => RAW().save_as({ name: a.name, parent: parent, open: o.open !== false })).then((r) => {
+        if (!r || r.ok === false) { toast('저장 못 함' + (r && r.msg ? ' · ' + r.msg : '')); return false; }
+        SV.touched = false;
+        try { sessionStorage.removeItem(svSsKey()); } catch (e) { /* 없어도 됨 */ }
+        toast('저장됨 · ' + r.path);
+        svUI();
+        return true;
+      }, (e) => { toast('저장 못 함 · ' + String((e && e.message) || e).slice(0, 80)); return false; });
+    });
+  }
+  function svDrop() {                       // 저장 안 함 = 모은 것 버림 · 이 브라우저 기억도 (다음에 열면 파일 그대로)
+    SV.q.clear(); SV.touched = false;
+    try { sessionStorage.removeItem(svSsKey()); } catch (e) { /* 없어도 됨 */ }
+    SV.clean.forEach((f) => { try { f(); } catch (e) { /* 계속 */ } });
+    svUI();
+  }
+  // 나가기 전 ([처음] · 창 ×): 저장 안 한 것 → 묻기 → true = 나가도 됨
+  function svLeave() {
+    if (!RAW()) return Promise.resolve(true);
+    return Promise.resolve().then(() => beforeHome()).catch(() => {}).then(() => SV.busy).then(() => {
+      if (!svDirty()) return true;
+      return svDlg({ head: '저장 안 한 변경', msg: svTut() ? '튜토리얼 · 저장하면 일반 프로젝트로' : '저장 안 하면 고친 것 버림', no: '저장 안 함', ok: '저장' })
+        .then((a) => (a.v === 'ok' ? svSave({ open: false }) : a.v === 'no' ? (svDrop(), true) : false));
+    });
+  }
+  // 작은 창 (#svBack): o = {head, msg, as: {name, dir}, pick (위치 바꾸기), no (가운데 단추 글), ok} → {v: 'ok' | 'no' | 'cancel' | 'busy', name}
+  function svDlg(o) {
+    if (SV.ask) return Promise.resolve({ v: 'busy' });   // 이미 묻는 중 (Ctrl+S · × 를 또 누름) = 그 창 그대로
+    const back = document.getElementById('svBack');
+    if (!back) return Promise.resolve({ v: 'cancel' });
+    const el = (id) => document.getElementById(id);
+    el('svHead').textContent = o.head || '';
+    el('svMsg').textContent = o.msg || '';
+    el('svAs').hidden = !o.as;
+    el('svNo').hidden = !o.no; el('svNo').textContent = o.no || '';
+    el('svOk').textContent = o.ok || '저장';
+    if (o.as) { el('svName').value = o.as.name; el('svDir').textContent = o.as.dir; el('svDir').title = o.as.dir; }
+    back.hidden = false;
+    SV.ask = new Promise((res) => {
+      const done = (v) => {
+        back.hidden = true; SV.ask = null;
+        window.removeEventListener('keydown', key, true);
+        res({ v: v, name: el('svName').value.trim() });
+      };
+      const key = (e) => {
+        if (e.key === 'Escape') { e.preventDefault(); e.stopImmediatePropagation(); done('cancel'); }
+        else if (e.key === 'Enter' && !e.isComposing && e.target.tagName !== 'BUTTON') { e.preventDefault(); e.stopImmediatePropagation(); done('ok'); }
+      };
+      window.addEventListener('keydown', key, true);
+      el('svOk').onclick = () => done('ok');
+      el('svNo').onclick = () => done('no');
+      el('svX').onclick = () => done('cancel');
+      back.onclick = (e) => { if (e.target === back) done('cancel'); };
+      el('svPick').hidden = !o.pick;
+      el('svPick').onclick = () => { if (o.pick) o.pick((d) => { el('svDir').textContent = d; el('svDir').title = d; }); };
+    });
+    setTimeout(() => { const f = o.as ? el('svName') : el('svOk'); if (f) { f.focus(); if (o.as) f.select(); } }, 0);
+    return SV.ask;
+  }
+  // 프로그램 연결 뒤: 튜토리얼인지 · 이번에 연 튜토리얼에서 고친 적 있는지 (sessionStorage) · 이 브라우저 기억 정리 (SV.ready)
+  function svInit() {
+    const h = RAW();
+    if (!h || SV.info) return;
+    SV.info = {};
+    Promise.resolve().then(() => (typeof h.project_info === 'function' ? h.project_info() : null)).then((I) => {
+      SV.info = I && typeof I === 'object' ? I : {};
+      try { const s = JSON.parse(sessionStorage.getItem(svSsKey()) || 'null'); if (s && s.touched && s.opened === SV.info.opened) SV.touched = true; } catch (e) { /* 없어도 됨 */ }
+      svUI();
+    }, () => { svUI(); });
+    SV.ready.forEach((f) => { try { f(); } catch (e) { /* 계속 */ } });
+  }
+  window.__rvClose = () => {               // app.py 창 × → 'wait' (물은 뒤 close_app) · 저장 안 한 것 없으면 바로 close_app
+    svLeave().then((go) => { if (go) { const h = RAW(); if (h && typeof h.close_app === 'function') h.close_app(); } });
+    return 'wait';
+  };
+  window.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.code === 'KeyS' || e.key === 's' || e.key === 'S')) {
+      if (!RAW()) return;
+      e.preventDefault(); e.stopPropagation();
+      svSave();
+    }
+  }, true);
+  window.addEventListener('pywebviewready', svInit);
+  setTimeout(svInit, 0);
   function hostCall(name, arg) {
     const h = HOST();
     if (!h || typeof h[name] !== 'function') return Promise.reject(new Error('프로그램 연결 없음'));
@@ -135,9 +306,10 @@
     document.body.classList.toggle('host', h);
   }
   let beforeHome = () => Promise.resolve(); // [처음] 전에 할 일 (맞춤 저장)
-  $('hHome').addEventListener('click', () => {
-    beforeHome().catch(() => {}).then(() => hostCall('go_home')).catch((e) => toast(errText(e)));
+  $('hHome').addEventListener('click', () => {                  // 저장 안 한 것 → 묻기 (JACK 1127)
+    svLeave().then((go) => (go ? hostCall('go_home') : null)).catch((e) => toast(errText(e)));
   });
+  $('hSave').addEventListener('click', () => svSave());
   window.addEventListener('pywebviewready', hostShow);
 
   // ---------------------------------------------------------------- 자료
@@ -272,6 +444,13 @@
   function rvAny() { return !!RV && lines.some((L) => L.river && L.river.length); }
   function rvPipeZ(L) { return rvPlans(L).filter((p) => Number.isFinite(p.zc)).map((p) => ({ a: p.a, b: p.b, zc: p.zc })); }
   // 측점 s 의 하천 계획 (터파기 · 수량): 추진 = 두 수직구 바깥 벽 사이 (river.js ta · tb · 수직구 안에 터파기 없음 · JACK 1127) · 횡단 = 구간 a ~ b
+  // 추진 수직구 바닥 자리 (river.js foot · 격자 좌표 · 터파기 영역 = 임시점용 그림 · AI 영역 · JACK 1127) → [{src, P: [[e, n], …]}]
+  function rvFeet() {
+    const out = [];
+    if (!RV) return out;
+    for (const L of lines) if (L.river && L.river.length) for (const pl of rvPlans(L)) if (pl.k === 'jack' && pl.foot) for (const f of pl.foot) out.push({ src: L.src, P: f.poly });
+    return out;
+  }
   function rvTa(p) { return Number.isFinite(p.ta) ? p.ta : p.a; }
   function rvTb(p) { return Number.isFinite(p.tb) ? p.tb : p.b; }
   function rvAt(rp, s) { return rp.find((p) => p.k === 'jack' && s > rvTa(p) && s < rvTb(p)) || rp.find((p) => s > p.a && s < p.b) || null; }
@@ -319,7 +498,7 @@
     c[k] = DZ_LOCK && k === 'dz' ? 0 : round(v, 4);
     localCal[vid] = c;
     calMemo.delete(vid);
-    lsSet(CAL_KEY, { videos: localCal });
+    if (!HOST()) lsSet(CAL_KEY, { videos: localCal });              // 프로그램 안 = 파일만 ([저장] · 저장 안 함이 맞게 · JACK 1127)
     hostCalSoon();
   }
   // 프로그램 안: 맞춤 값 · 점 짝이 바뀌면 0.8 초 뒤 한 번 프로젝트 폴더에 저장 (save_calib, «파일로 저장» 과 같은 글)
@@ -333,12 +512,21 @@
     clearTimeout(hostCalT);
     hostCalT = 0;
     return hostCall('save_calib', calibText()).then((r) => {
-      if (!r || r.ok === false) toast('맞춤 저장 안 됨');
+      if (!r || r.ok === false) toast('위치 보정 저장 안 됨');
       return r;
-    }, () => { toast('맞춤 저장 안 됨'); return null; });
+    }, () => { toast('위치 보정 저장 안 됨'); return null; });
   }
   beforeHome = () => (hostCalT ? hostCalFlush() : Promise.resolve());
   window.addEventListener('pagehide', () => { if (hostCalT) hostCalFlush(); });
+  // 프로그램 안 = 파일 (calib.js) 이 기준: 옛 판이 이 브라우저에 남긴 맞춤 · 점 짝 · 터파기 설정이 있으면 지우고 다시 엶 (한 번 · 튜토리얼을 다시 열면 처음 값 · JACK 1127)
+  const calLsKeys = () => [CAL_KEY, PAIR_KEY, TR_KEY];
+  SV.ready.push(() => {
+    const ks = calLsKeys().filter((k) => lsGet(k) != null);
+    if (!ks.length) return;
+    ks.forEach((k) => { try { localStorage.removeItem(k); } catch (e) { /* 없어도 됨 */ } });
+    if (calLsKeys().every((k) => lsGet(k) == null)) location.reload();   // 못 지우는 브라우저면 다시 열지 않음 (되풀이 막기)
+  });
+  SV.clean.push(() => calLsKeys().forEach((k) => { try { localStorage.removeItem(k); } catch (e) { /* 없어도 됨 */ } }));
   function mul3(A, B) {
     const C = new Array(9);
     for (let i = 0; i < 3; i++) {
@@ -418,7 +606,7 @@
   }
   function setPairs(vid, list) {
     localPairs[vid] = list;
-    lsSet(PAIR_KEY, { videos: localPairs });
+    if (!HOST()) lsSet(PAIR_KEY, { videos: localPairs });
     hostCalSoon();
   }
   // 지도 점의 땅 표고: 높이 타일, 없으면 찍은 사진의 groundZ
@@ -2080,6 +2268,15 @@
           if (j === T.m - 2 && T.wall[1]) addEdge({ edge: edge }, L2, R2);
         }
       }
+      for (const ft of rvFeet()) {                                       // 추진 수직구 바닥 자리 = 터파기 영역 (JACK 1127)
+        const P3 = ft.P.map((p) => { const g = groundAt(p[0], p[1]); return [p[0], p[1], Number.isFinite(g) ? g : S.gz]; });
+        if (Math.min(...P3.map((p) => Math.hypot(p[0] - Cx, p[1] - Cy))) > FADE0) continue;
+        const Qf = [];
+        for (const p of P3) { vc(p[0], p[1], p[2], A3); Qf.push(A3[0], A3[1], A3[2]); }
+        const pg = projPoly(Qf);
+        if (pg) fill.push(pg);
+        for (let i = 0; i < P3.length; i++) addEdge({ edge: edge }, P3[i], P3[(i + 1) % P3.length]);
+      }
       if (fill.length) {
         ov.beginPath();
         fill.forEach(tracePg);
@@ -3088,7 +3285,7 @@
   function trSet(patch) {
     TR = trClean(Object.assign({}, TR, patch), TR);
     trOff = false;
-    lsSet(TR_KEY, TR);
+    if (!HOST()) lsSet(TR_KEY, TR);
     hostCalSoon();
     secUI();
     ugUI();
@@ -3425,8 +3622,8 @@
     return 'window.RV_CALIB = ' + JSON.stringify(out, null, 2) + ';\n';
   }
   function saveCalFile() {
-    if (HOST()) { // 프로그램 안: 내려받기 대신 프로젝트 폴더에 바로
-      hostCalFlush().then((r) => { if (r && r.ok !== false) toast('맞춤 저장됨'); });
+    if (HOST()) { // 프로그램 안: 윗줄 [저장] 과 같음 (모은 것 전부 씀 · 튜토리얼 = 일반 프로젝트로 · JACK 1127)
+      svSave();
       return;
     }
     const text = calibText();
@@ -3761,6 +3958,15 @@
           if (j === T.m - 2 && T.wall[1]) { edgeP.moveTo(L2[0], L2[1]); edgeP.lineTo(R2[0], R2[1]); }
           any = true;
         }
+      }
+      for (const ft of rvFeet()) {                                       // 추진 수직구 바닥 자리 = 터파기 영역 (1127)
+        const q = ft.P.map((p) => at(p[0], p[1]));
+        let a2 = 0;
+        for (let i = 0; i < q.length; i++) { const p = q[i], r = q[(i + 1) % q.length]; a2 += p[0] * r[1] - r[0] * p[1]; }
+        if (a2 < 0) q.reverse();
+        fillP.moveTo(q[0][0], q[0][1]); q.slice(1).forEach((p) => fillP.lineTo(p[0], p[1])); fillP.closePath();
+        edgeP.moveTo(q[0][0], q[0][1]); q.slice(1).forEach((p) => edgeP.lineTo(p[0], p[1])); edgeP.closePath();
+        any = true;
       }
       if (any) {
         mx.globalAlpha = 0.22;
@@ -4287,7 +4493,7 @@
     if (!all.length) return '';
     if (!ok.length) return '점 확인 · 점 ' + all.length + '개';
     const rms = Math.sqrt(ok.reduce((a, o) => a + o.r * o.r, 0) / ok.length);
-    return '맞춤 오차 ' + rms.toFixed(2) + ' m · 점 ' + all.length + '개';
+    return '위치 보정 오차 ' + rms.toFixed(2) + ' m · 점 ' + all.length + '개';
   }
   function alUI() {
     const vid = curVid(), res = pairRes(vid), sum = alSummary(vid);
@@ -5727,6 +5933,12 @@
         fn(bb, () => (tris = tris || aiQuadTris(Q)), T.SR ? T.SR[j + 1] : -1);
       }
     }
+    for (const ft of rvFeet()) {                                         // 추진 수직구 바닥 자리도 터파기 영역 (1127)
+      const Q = ft.P, tris = [];
+      for (let i = 1; i + 1 < Q.length; i++) tris.push(aiTri(Q[0], Q[i], Q[i + 1]));
+      const xs = Q.map((p) => p[0]), ys = Q.map((p) => p[1]);
+      fn([Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)], () => tris, ft.src);
+    }
   }
   const aiHit = (F, bb) => !(F.bb[2] < bb[0] || F.bb[0] > bb[2] || F.bb[3] < bb[1] || F.bb[1] > bb[3]);
   const AIZ = { of: null, lgen: -1, set: new Set(), ver: 0 };
@@ -5796,12 +6008,15 @@
     aiSaveTxt('저장 중');
     return Promise.resolve().then(() => h.ai_save(projDir(), data)).then((r) => {
       const ok = !!r && r.ok !== false;
-      aiSaveTxt(ok ? '저장됨' : '저장 안 됨', !ok);
+      aiSaveTxt(ok ? (r.held ? '저장 대기' : '저장됨') : '저장 안 됨', !ok);   // held = 윗줄 [저장] 을 기다림 (JACK 1127)
       if (!ok) toast('AI 확인 저장 안 됨' + (r && r.msg ? ' · ' + r.msg : ''));
       return r;
     }, (e) => { aiSaveTxt('저장 안 됨', true); toast('AI 확인 저장 안 됨 · ' + String(e && e.message || e).slice(0, 80)); return null; });
   }
   function aiSaveSoon() { const h = HOST(); if (!h || typeof h.ai_save !== 'function') return; clearTimeout(AI.saveT); AI.saveT = setTimeout(aiFlush, 800); aiSaveTxt('저장 대기'); }
+  window.addEventListener('rv:saved', () => { if ($('aiSave').textContent === '저장 대기') aiSaveTxt('저장됨'); });
+  const homeAi = beforeHome;
+  beforeHome = () => Promise.all([homeAi(), aiFlush()]);              // [처음] · [저장] 전에 모으던 AI 확인도 (JACK 1127)
   function aiMark(F, patch) {
     if (!HOST()) return;                                                 // 브라우저 (웹 공유) = 보기만
     Object.assign(F.f, patch);
@@ -5942,6 +6157,7 @@
     if (m && m.key === key) return aiQtyPut(L, m.q);
     const P = L.pts, D = L.dia, cnt = P.length / 3, C = L.cum;
     let len = 0, tlen = 0, cut = 0, pav = 0, sandA = 0, g0 = gQ(L, 0), z0 = zcQ(L, 0);   // sandA = ∫ 바닥 폭 (가시설 폭 고친 구간은 그 폭)
+    let hpA = 0; // 토류벽 구간 ∫ 굴착 깊이 (땅 → 터파기 바닥 · 한쪽) = 흙막이판 m² ÷ 2 (개략공사비 · 3D 화면과 같음)
     const rp = rvPlans(L); // 하천: 추진 = 터파기 없음 · 횡단 = 관 깊이 = 하천 깊이 (3D 화면과 같음)
     for (let k = 1; k < cnt; k++) {
       const g1 = gQ(L, k), z1 = zcQ(L, k), l = Math.hypot(P[k * 3] - P[k * 3 - 3], P[k * 3 + 1] - P[k * 3 - 2]);
@@ -5955,6 +6171,10 @@
           if (rq && rq.k === 'jack') continue;
           const sh0 = shoreAt(L, sm), n = sh0 ? 0 : TR.n, wo = sh0 && sh0.w ? sh0.w / 2 : 0, sq = (t) => secQ(D, g0 + (g1 - g0) * t, rz == null ? z0 + (z1 - z0) * t : rz, n, wo);
           const A = sq(ta), M = sq(tm), B = sq(tb);
+          if (sh0 && sh0.t === 'hpile') { // 굴착 깊이 = 땅 − (관 바닥 − 모래) (secQ 와 같은 바닥)
+            const dp = (t) => { const g = g0 + (g1 - g0) * t, zc = rz == null ? z0 + (z1 - z0) * t : rz; return g - Math.min(zc - D / 2, g - 0.01) + TR.bed; };
+            hpA += h / 6 * (dp(ta) + 4 * dp(tm) + dp(tb));
+          }
           cut += h / 6 * (A[0] + 4 * M[0] + B[0]);
           pav += h / 3 * (A[1] + 4 * M[1] + B[1]);
           tlen += h; sandA += h * 2 * (wo > 0 ? wo : D / 2 + TR.margin);
@@ -5964,11 +6184,19 @@
       g0 = g1; z0 = z1;
     }
     const sand = sandA * TR.bed, pipe = Math.PI * D * D / 4 * tlen; // 터파기 길이만 (추진 구간 빼고)
+    for (const pl of rp) if (pl.k === 'jack' && pl.foot) for (const f of pl.foot) pav += f.area;   // 추진 수직구 바닥 자리 = 포장 깨기 · 임시점용 (JACK 1127 «추진도 터파기 영역»)
     const q = { len: len, cut: cut, pav: pav, sand: sand, fill: cut - pipe - sand, tmp: pav, perm: D * len }; // 임시점용 = 터파기 위 폭 × 길이 · 영구점용 = 관 바깥지름 × 길이
     SHORE_T.forEach((t) => { q['sh_' + t] = 0; });
     for (const s of L.shore) if (q['sh_' + s.t] != null) q['sh_' + s.t] += s.b - s.a;     // 가시설 연장 (관 측점 구간 b − a)
     RV_Q.forEach(([k]) => { q[k] = 0; });
     for (const pl of rp) { const z = RV.qty(pl); RV.QROWS.forEach(([k]) => { q['rv_' + k] += z[k]; }); }   // 하천 (구간마다 river.js)
+    // 개략공사비에만 쓰는 수량 (표 줄 아님 · cost.js EXTRA · 3D 화면과 같음): 개착 길이 · 토류벽 H-파일 본 수 · 흙막이판 m² · 시트파일 본 수 (Type3 폭 0.4)
+    q.tlen = tlen; q.sh_hpN = 0; q.sh_hpA = 2 * hpA; q.sh_spN = 0; q.rv_spN = 0;
+    for (const s of L.shore) {
+      if (s.t === 'hpile') q.sh_hpN += 2 * (Math.max(1, Math.round((s.b - s.a) / (s.pitch || SHORE_PITCH))) + 1);
+      else if (s.t === 'sheet' && RVC) q.sh_spN += 2 * Math.ceil((s.b - s.a) / RVC.SP_W - 1e-9);
+    }
+    if (RVC) for (const pl of rp) q.rv_spN += RVC.sheetN(pl);
     QT.memo.set(L, { key: key, q: q });
     return aiQtyPut(L, q);
   }
@@ -5994,7 +6222,13 @@
   function qtyUI() {
     const L = qtyLine(), one = L ? lineQty(L) : null, tot = {};
     Q_ROWS.forEach(([k]) => { tot[k] = 0; });
-    lines.forEach((M) => { const q = lineQty(M); Q_ROWS.forEach(([k]) => { tot[k] += q[k]; }); });
+    const pp = []; // 개략공사비: 관마다 관종 · 관경 · 개착 길이 (+ 금액에만 쓰는 수량 RVC.EXTRA)
+    if (RVC) RVC.EXTRA.forEach((k) => { tot[k] = 0; });
+    lines.forEach((M) => {
+      const q = lineQty(M);
+      Q_ROWS.forEach(([k]) => { tot[k] += q[k]; });
+      if (RVC) { RVC.EXTRA.forEach((k) => { tot[k] += q[k] || 0; }); pp.push({ mat: M.mat, dia: M.dia, tlen: q.tlen, label: M.label }); }
+    });
     qTxt($('qLine'), L ? L.label || 'D' + Math.round(L.dia * 1000) : '관로 없음');
     Q_ROWS.forEach(([k]) => {
       const [a, b] = QT.row[k], va = String(one ? one[k] : NaN), vb = String(lines.length ? tot[k] : NaN), fm = RV_QINT.has(k) ? qFmt0 : qFmt;
@@ -6005,6 +6239,56 @@
     if (QT.view === 'all') { const hb = !AI.data; BD_Q.forEach(([k]) => QT.rowEl[k].forEach((e) => { if (e.hidden !== hb) e.hidden = hb; })); } // 전체 = AI 결과 있을 때만 부대공 줄
     qTxt($('qNote'), QT.view === 'budae' ? aiQtyNote() : QT.view === 'river' ? (rvAny() ? '수직구 = 내공 × 깊이 · H-파일 근입 ' + RV.HP_EMB + ' m' : '하천 구간 없음') :
       QT.view !== 'pipe' && QT.view !== 'shore' && ['tp', 'n', 'margin', 'bed'].every((k) => TR[k] === TR_DEF[k]) ? '가시화 기본값 기준' : '');
+    costUI(tot, pp);
+  }
+  // 개략공사비 (JACK 1127 · 셈 = viewer/cost.js · 3D 화면과 같음): 수량 줄 밑 = 단가 · 금액 (전체 수량 기준 · 0 인 줄은 숨김)
+  //   표 아래 = 갈래 소계 · «전체» = 관로 본공사 + 부대 공종 = 개략공사비 합계 · 단가 · 포장 · 보정 계수 = 이 PC 에 기억 (cost.js load/save)
+  const CO = { o: RVC ? RVC.load() : null };
+  function costUI(ct, pp) {
+    if (!RVC) return;
+    const C = RVC.calc(ct, pp, CO.o);
+    QT.cost = C;
+    Q_ROWS.forEach(([k, , u]) => {
+      const e = QT.cEl[k];
+      if (!e) return;
+      const t = RVC.rowText(k, C, u), show = !!t && (k === 'len' ? pp.length > 0 : Number(ct[k]) > 1e-9), cls = 'qc' + (show ? (t.cls ? ' ' + t.cls : '') : ' empty');
+      if (e.className !== cls) e.className = cls;
+      if (!show) return;
+      qTxt(e.firstChild, t.l); qTxt(e.lastChild, t.r);
+      if (e.dataset.v !== String(t.v)) e.dataset.v = String(t.v);
+      if (e.title !== t.tip) e.title = t.tip;
+    });
+    const sr = RVC.sumRows(C, Q_KIND[QT.view][1]), sig = JSON.stringify(sr), box = $('qSum');
+    if (QT.sumSig !== sig) {
+      QT.sumSig = sig; box.textContent = '';
+      sr.forEach(([n, v, k, note]) => {
+        const a = document.createElement('span'), b = document.createElement('span'), big = k === 'total' || k === 'sub';
+        a.className = 'sl' + (big ? ' tot' : ''); a.textContent = n;
+        b.className = 'sv' + (big ? ' tot' : ''); b.dataset.k = k; b.dataset.v = String(v); b.textContent = note || RVC.won(v) + '원';
+        box.append(a, b);
+        const ko = !note && big ? RVC.wonKo(v) : '';
+        if (ko) { const c = document.createElement('span'); c.className = 'ko'; c.textContent = ko; box.appendChild(c); }
+      });
+    }
+    if (box.hidden !== !sr.length) box.hidden = !sr.length;
+  }
+  function costWire() { // 포장 고르기 · (i) 설명 · [단가표] 창 (몸 = cost.js dlgFill)
+    const pave = $('qPave'), info = $('qInfo'), ibox = $('qInfoBox'), dlg = $('cpDlg'), body = $('cpBody'), pb = $('qPrice');
+    RVC.infoFill(ibox);
+    pave.value = CO.o.pave;
+    const env = {
+      opt: () => CO.o, toast: toast,
+      set: (o) => { CO.o = RVC.optClean(o); RVC.save(CO.o); pave.value = CO.o.pave; QT.sumSig = ''; if (QT.on) qtyUI(); },
+      pipes: () => lines.map((L) => ({ mat: L.mat, dia: L.dia, label: L.label })),
+      copy: HOST() ? (t) => hostCall('copy_text', t).then((r) => { if (!(r && r.ok !== false)) copyText(t); toast('단가표 복사됨 · 엑셀에 붙여넣기'); }, () => { copyText(t); toast('단가표 복사됨 · 엑셀에 붙여넣기'); }) : null,
+    };
+    const close = () => { dlg.hidden = true; setOn(pb, false); };
+    pave.addEventListener('change', () => { env.set(Object.assign({}, CO.o, { pave: pave.value })); if (!dlg.hidden) RVC.dlgFill(body, env); });
+    info.addEventListener('click', () => { ibox.hidden = !ibox.hidden; setOn(info, !ibox.hidden); });
+    pb.addEventListener('click', () => { if (!dlg.hidden) { close(); return; } RVC.dlgFill(body, env); dlg.hidden = false; setOn(pb, true); });
+    $('cpX').addEventListener('click', close);
+    $('cpDef').addEventListener('click', () => { RVC.dlgDefault(env); RVC.dlgFill(body, env); toast('단가 기본값으로'); });
+    $('cpCsv').addEventListener('click', () => RVC.dlgCsv(env));
   }
   // 수량 표 열기 · 닫기 (view = 갈래 · 그 갈래 단추 켜짐 · 표 = 그 갈래 줄만)
   function qShow(on, view) {
@@ -6023,15 +6307,19 @@
   (function buildQty() {
     const tab = $('qTab');
     ['', '이 관', '전체'].forEach((t) => { const s = document.createElement('span'); s.className = 'qh'; s.textContent = t; tab.appendChild(s); });
+    QT.cEl = {};
     Q_ROWS.forEach(([k, name, unit]) => {
       const lab = document.createElement('span');
       lab.className = 'ql'; lab.textContent = name + ' ' + unit;
       const a = document.createElement('span'), b = document.createElement('span');
       a.className = 'qv'; b.className = 'qv'; a.id = 'q_' + k; b.id = 'qt_' + k;
       tab.append(lab, a, b);
+      let c = null; // 개략공사비 밑줄 (단가 · 금액 · 금액 있는 줄만)
+      if (RVC && (k === 'len' || RVC.ROWS[k])) { c = document.createElement('div'); c.className = 'qc empty'; c.id = 'qc_' + k; c.append(document.createElement('span'), document.createElement('b')); tab.appendChild(c); QT.cEl[k] = c; }
       QT.row[k] = [a, b];
-      QT.rowEl[k] = [lab, a, b];
+      QT.rowEl[k] = c ? [lab, a, b, c] : [lab, a, b];
     });
+    if (RVC) costWire(); else $('qCost').hidden = true;
     document.querySelectorAll('[data-q]').forEach((b) => b.addEventListener('click', () => (QT.on && QT.view === b.dataset.q ? qShow(false) : qShow(true, b.dataset.q))));
     $('qX').addEventListener('click', () => qShow(false));
     const gap = $('qGap');
@@ -6257,7 +6545,7 @@
       feat: (id) => { const F = AI.byId.get(String(id)); return F ? { id: F.id, cls: F.f.cls, st: aiSt(F), line: F.line, meas: F.meas, c: F.c, P: F.P } : null; },
       zone: () => [...aiZone()], qty: () => { const m = aiQtyAll(), o = { un: m.un }; m.forEach((v, k) => { o[k] = Object.assign({}, v); }); return o; },
       set: aiSet, flush: aiFlush, go: (id) => { const F = AI.byId.get(String(id)); if (F) aiGo(F); return !!F; }, order: () => AI.order.slice() }, shOpen: (id) => { SH.open = String(id || ''); SH.sig = ''; shUI(); },   // 시험 (3D 화면 window.__map3d 와 같은 꼴)
-    SH: SH, lineQty: (src) => { const L = lines.find((q) => q.src === src); return L ? lineQty(L) : null; },
+    SH: SH, QT: QT, lineQty: (src) => { const L = lines.find((q) => q.src === src); return L ? lineQty(L) : null; },
     rv: { ok: !!RV, arm: rvArm, set: rvSet, show: rvShow, ground: rvGround, plans: (src) => { const L = lines.find((q) => q.src === src); return L ? rvPlans(L) : []; },
       cur: () => { const c = rvCur(); return c ? { src: c.L.src, q: c.q } : null; }, pick: (src, a, b) => { RVS.cur = { src: src, a: a, b: b }; rvUI(); },
       tris: () => (rvM.n - rvM.no) / 3, holes: () => rvM.no / 3,

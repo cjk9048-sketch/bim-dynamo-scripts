@@ -136,7 +136,7 @@ def setup(src, work, extra_river=None):
     shutil.copytree(src, work)
     for dst in ('로드뷰.html', 'index.html'):
         shutil.copyfile(os.path.join(REPO, 'viewer', 'index.html'), os.path.join(work, dst))
-    for f in ('app.js', 'style.css', 'river.js'):
+    for f in ('app.js', 'style.css', 'river.js', 'cost.js'):     # cost.js = 개략공사비 셈 (1127)
         shutil.copyfile(os.path.join(REPO, 'viewer', f), os.path.join(work, 'viewer', f))
     cj = os.path.join(work, 'data', 'calib.js')
     if os.path.exists(cj):
@@ -407,6 +407,7 @@ def main():
         inp.click(*xy)
         rv = J(ed, 'window.RV_PIPES.lines[%d].river' % src0)
         report('d 목록 × → 추진 지움 (횡단 남음)', len(rv) == 1 and rv[0]['k'] == 'open', str([x['k'] for x in rv]))
+        ed.js("document.getElementById('hSave').click()")              # JACK 1127: 윗줄 [저장] 을 눌러야 씀
         ed.wait_js("__host.calls.filter((c) => c.name === 'save_pipes').length > %d" % n0, 5)
         sv = ci_calls(ed)
         txt = sv[-1] if sv else ''

@@ -433,12 +433,15 @@ def test_host(ed, out_dir, shots_dir):
                and st['logo'][4] == 'none' and st['top'] == 48, json.dumps(st['logo']) + ' · 윗줄 %s' % st['top'])
         ct.set_cfg(ed, {'prot': 0.45})
         time.sleep(1.4)
+        n_held = len(js_json(ed, "window.__host.calls.filter((c) => c.name === 'save_calib')"))   # JACK 1127: 저절로 안 씀 · [저장] 을 눌러야
+        ed.js("document.getElementById('hSave').click()")
+        ed.wait_js("window.__host.calls.some((c) => c.name === 'save_calib')", 5)
         calls = js_json(ed, "window.__host.calls.filter((c) => c.name === 'save_calib').map((c) => c.arg)")
         tr = None
         if calls:
             t = calls[-1]
             tr = json.loads(t[t.index('{'):t.rindex('}') + 1]).get('trench')
-        report('보호층 0.45 → save_calib (0.8 초 모아) 에 prot', len(calls) == 1 and tr == dict(TR_DEF, prot=0.45, on=True), '%d 번 · %s' % (len(calls), json.dumps(tr)))
+        report('보호층 0.45 → 1.4 초 뒤에도 안 씀 · [저장] → save_calib 에 prot', n_held == 0 and len(calls) == 1 and tr == dict(TR_DEF, prot=0.45, on=True), '%d → %d 번 · %s' % (n_held, len(calls), json.dumps(tr)))
         ed.screenshot(os.path.join(shots_dir, 'h_host.png'))
         errs(ed, 'h')
     finally:

@@ -16,8 +16,10 @@ shutil.copy2(imageio_ffmpeg.get_ffmpeg_exe(), FF)          # 이름을 ffmpeg.ex
 import subprocess
 SNAP = os.path.join(WORK, 'viewer')
 os.makedirs(SNAP, exist_ok=True)
-for fn in ('index.html', 'app.js', 'style.css', 'map3d.html', 'map3d.js', 'river.js'):     # river.js = 하천 추진 · 횡단 셈 (1126 · 커밋돼 있어야 함)
+for fn in ('index.html', 'app.js', 'style.css', 'map3d.html', 'map3d.js', 'river.js', 'cost.js',     # river.js = 하천 추진 · 횡단 셈 (1126) · cost.js = 개략공사비 셈 (1127) · 커밋돼 있어야 함
+           'textures/gd_color.jpg', 'textures/gd_normal.jpg', 'textures/LICENSE.txt'):   # 부지정지 실사 질감 (ambientCG CC0 · 1127)
     data = subprocess.run(['git', 'show', 'HEAD:drone-roadview/viewer/' + fn], cwd=ROOT, capture_output=True, check=True).stdout
+    os.makedirs(os.path.dirname(os.path.join(SNAP, fn)), exist_ok=True)
     open(os.path.join(SNAP, fn), 'wb').write(data)
 datas = [
     (os.path.join(SNAP, 'index.html'), 'viewer'),
@@ -26,6 +28,8 @@ datas = [
     (os.path.join(SNAP, 'map3d.html'), 'viewer'),
     (os.path.join(SNAP, 'map3d.js'), 'viewer'),
     (os.path.join(SNAP, 'river.js'), 'viewer'),
+    (os.path.join(SNAP, 'cost.js'), 'viewer'),
+    (os.path.join(SNAP, 'textures'), os.path.join('viewer', 'textures')),
     (os.path.join(ROOT, 'roadview', 'app_home'), 'app_home'),
     (os.path.join(ROOT, 'roadview', 'rig_avata360.json'), 'roadview'),
     (os.path.join(ROOT, 'roadview', 'ai_worker.py'), 'roadview'),      # AI 부대공 인식 작업 (AI 엔진 python 이 파일로 돌림 · 앱에 import 안 함)

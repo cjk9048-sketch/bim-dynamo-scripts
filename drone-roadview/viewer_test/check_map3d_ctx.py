@@ -114,6 +114,7 @@ def copy_site(out):
     shutil.copy2(os.path.join(REPO, 'viewer', 'map3d.html'), os.path.join(out, 'index.html'))
     shutil.copy2(os.path.join(REPO, 'viewer', 'map3d.js'), os.path.join(out, 'viewer', 'map3d.js'))
     shutil.copy2(os.path.join(REPO, 'viewer', 'river.js'), os.path.join(out, 'viewer', 'river.js'))   # 하천 추진 · 횡단 셈
+    shutil.copy2(os.path.join(REPO, 'viewer', 'cost.js'), os.path.join(out, 'viewer', 'cost.js'))     # 개략공사비 셈 (1127)
     shutil.copy2(os.path.join(HERE, 'hostmock.js'), os.path.join(out, 'viewer', 'hostmock.js'))
     html = open(os.path.join(out, 'index.html'), encoding='utf-8').read()
     open(os.path.join(out, 'index_host.html'), 'w', encoding='utf-8').write(
@@ -315,12 +316,51 @@ def main():
         okn = J(ed, 'window.RV_PIPES.lines.length') == n0 + 1 and abs(raw['dia'] - 0.25) < 1e-9 and raw['mat'] == 'steel' and raw['label'] == '시험 관' and len(cps) == 3
         okn = okn and max(math.hypot(cps[i][0] - (pts[i][0] - T[0]), cps[i][1] - (pts[i][1] - T[1])) for i in range(3)) < 0.002
         report('n 새 줄 (D250 · 강관 · 이름 · 꼭짓점 = 찍은 자리)', okn, str({k: raw.get(k) for k in ('dia', 'mat', 'label', 'layer')}))
+        ed.js("document.getElementById('bSave').click()")              # JACK 1127: 윗줄 [저장] 을 눌러야 씀
+        ed.wait_js("__host.calls.some((c) => c.name === 'save_pipes')", 5)
         sv = calls(ed, 'save_pipes')
         oks = bool(sv) and len(json.loads(sv[-1].split('=', 1)[1].strip().rstrip(';'))['lines']) == n0 + 1
         report('n save_pipes (새 줄 포함)', oks, '%d 번' % len(sv))
         report('n 보기에 새 관', any(L == n0 for L in J(ed, '__map3d.lines().map((L) => L.src)')) and J(ed, '__map3d.MS.kind') == '')
         shot(ed, SD, '25b_새관.png')
         errs(ed, '새 관')
+
+        print('== nb 새 관 분기 (기존 관 위 누름 = 그 관 중심선에 붙음) · 고치기 Delete = 관 지우기 (JACK 1127)')
+        ed.js('__t.look(0, %f, 40, 50, 60)' % (s0 + 4)); ed.frames(3)
+        q0 = J(ed, '__t.at(0, %f, true)' % (s0 + 4))
+        off = [q0[0] + 140, q0[1] + 60]
+        nb0 = J(ed, 'window.RV_PIPES.lines.length')
+        menu(ed, inp, off[0], off[1], 'pNew')
+        inp.click(q0[0], q0[1])
+        ed.frames(2)
+        tt = J(ed, "document.getElementById('toast').textContent")
+        inp.key('Enter', 'Enter', 13)
+        ed.frames(2)
+        inp.el_click('npGo')
+        time.sleep(1.0)
+        rawb = J(ed, 'window.RV_PIPES.lines[window.RV_PIPES.lines.length - 1]')
+        endp = rawb['pts'][rawb['ctrl'][-1]][:2] if rawb and rawb.get('ctrl') else None
+        LS = J(ed, '__map3d.lines().filter((L) => L.src !== window.RV_PIPES.lines.length - 1).map((L) => Array.from(L.pts))')   # 기존 관 전부 (새로 그린 것 빼고)
+        def dseg(p, a, b):
+            ax, ay, bx, by = a[0], a[1], b[0], b[1]
+            l2 = (bx - ax) ** 2 + (by - ay) ** 2
+            u = 0 if l2 == 0 else max(0, min(1, ((p[0] - ax) * (bx - ax) + (p[1] - ay) * (by - ay)) / l2))
+            return math.hypot(p[0] - ax - u * (bx - ax), p[1] - ay - u * (by - ay))
+        dmin = min(dseg(endp, (L0[k], L0[k + 1]), (L0[k + 3], L0[k + 4])) for L0 in LS for k in range(0, len(L0) - 3, 3)) if endp else 99
+        report('nb 끝점 = 누른 기존 관 중심선 위 (1 cm) · 알림 «분기»', J(ed, 'window.RV_PIPES.lines.length') == nb0 + 1 and dmin < 0.01 and '분기' in tt, '%.4f m · %s' % (dmin, tt))
+        shot(ed, SD, '25c_분기.png')
+        sb = J(ed, 'window.RV_PIPES.lines.length') - 1
+        qm = J(ed, '__t.at(%d, 2, true)' % sb)
+        okm = menu(ed, inp, qm[0], qm[1], 'pEdit') if qm else False
+        ed.frames(2)
+        inp.key('Delete', 'Delete', 46)
+        ed.frames(2)
+        okc = toast_btn(ed, inp)
+        ed.frames(2)
+        report('nb 고치기 · 점 안 고르고 Delete → 확인 → 관 지움', okm and okc and J(ed, 'window.RV_PIPES.lines[%d].pts.length' % sb) == 0 and sb not in J(ed, '__map3d.lines().map((L) => L.src)'),
+               str([okm, okc]))
+        inp.key('Escape', 'Escape', 27)
+        errs(ed, '분기')
 
         print('== p 관')
         ed.js('__t.look(0, %f, 40, 50, 60)' % s0); ed.frames(3)

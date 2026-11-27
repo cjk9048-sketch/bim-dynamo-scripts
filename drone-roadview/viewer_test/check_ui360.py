@@ -81,7 +81,7 @@ def setup(src, work):
     shutil.copytree(src, work)
     for dst in ('로드뷰.html', 'index.html'):
         shutil.copyfile(os.path.join(REPO, 'viewer', 'index.html'), os.path.join(work, dst))
-    for f in ('app.js', 'style.css', 'river.js'):
+    for f in ('app.js', 'style.css', 'river.js', 'cost.js'):     # cost.js = 개략공사비 셈 (1127)
         shutil.copyfile(os.path.join(REPO, 'viewer', f), os.path.join(work, 'viewer', f))
     co.write_data(work)                                     # T4 + 지장물
     pj = os.path.join(work, 'data', 'pipes.js')
@@ -157,7 +157,7 @@ def main():
         print('== t  윗줄 · 조작법 · 오른쪽 칸')
         report('불러옴 (프로그램)', pg.load(True))
         top = J(ed, "[...document.querySelectorAll('#top button')].filter((b) => b.getClientRects().length).map((b) => b.id)")
-        report('t 윗줄 단추 = 처음 · 조작법 · 오른쪽 칸 만', top == ['hHome', 'bHelp', 'tgMap'], json.dumps(top))
+        report('t 윗줄 단추 = 처음 · 저장 · 조작법 · 오른쪽 칸 만', top == ['hHome', 'hSave', 'bHelp', 'tgMap'], json.dumps(top))
         st = J(ed, "{logo: !!document.getElementById('dohwa').naturalWidth, title: document.getElementById('title').textContent, no: document.getElementById('shotNo').textContent,"
                    " top: document.getElementById('top').getBoundingClientRect().height, bg: getComputedStyle(document.getElementById('top')).backgroundColor,"
                    " ov: [Math.round(document.getElementById('ov').getBoundingClientRect().width), Math.round(document.getElementById('ov').getBoundingClientRect().height)]}")
@@ -186,7 +186,7 @@ def main():
         order = J(ed, "[...document.querySelectorAll('#opts .cat')].map((c) => c.dataset.cat)")
         report('c 차례 = 3D 와 같음 (재기 · 검사 자리 = 맞춤)', order == CATS, json.dumps(order))
         names = J(ed, "[...document.querySelectorAll('#opts .cat .catH b')].map((b) => b.textContent)")
-        report('c 이름', names == ['보기', '관로', '터파기 · 점용', '가시설', '하천 추진 · 횡단', 'AI 부대공', '수량', '간섭', '맞춤', '결과물', '웹 공유'], json.dumps(names, ensure_ascii=False))
+        report('c 이름', names == ['보기', '관로', '터파기 · 점용', '가시설', '하천 추진 · 횡단', 'AI 구조물 인식', '개략공사비', '간섭', '사진 위치 보정', '결과물', '웹 공유'], json.dumps(names, ensure_ascii=False))
         html = open(os.path.join(REPO, 'viewer', 'index.html'), encoding='utf-8').read()
         i_sh, i_rv, i_q = html.index('data-cat="shore"'), html.find('<section class="cat" data-cat="river">'), html.index('data-cat="qty"')
         report('c «가시설» 다음 «하천 추진 · 횡단» 카테고리 (3D 와 같은 꼴 · 시험 = check_river360)', i_sh < i_rv < i_q and J(ed, "!document.querySelector('[data-cat=river]').hidden"), str(i_rv))
@@ -340,6 +340,39 @@ def main():
         report('q 갈래 단추마다 그 갈래 줄만 · 단추 하나 켜짐', ok, ' · '.join(info))
         sh = J(ed, "Object.fromEntries(['panel', 'hpile', 'sheet'].map((t) => [t, Number(document.getElementById('qt_sh_' + t).dataset.v)]))")
         report('q 가시설 연장 = 구간 합 (따로 셈)', abs(sh['hpile'] - 5.0) < 1e-6 and abs(sh['sheet'] - 3.5) < 1e-6 and sh['panel'] == 0, json.dumps(sh))
+        # 개략공사비 (JACK 1127 · cost.js · 3D 와 같은 셈): 가시설 소계 · 전체 합계 = 손셈 · (i) 설명 · 단가 고치면 금액 바뀜
+        if J(ed, '!!window.RVCost'):
+            C = lambda e: J(ed, '__rv360.QT.cost.' + e)    # noqa: E731
+            ck = lambda k: J(ed, "(() => { const e = document.querySelector('#qSum [data-k=%s]'); return e ? Number(e.dataset.v) : NaN; })()" % k)   # noqa: E731
+            HP, LAG, SP = 115883 + 58284, 40212 + 32031, 100112 + 59996
+            n_hp, a_hp, n_sp = C('rows.sh_hpile.parts[0].q'), C('rows.sh_hpile.parts[2].q'), C('rows.sh_sheet.parts[0].q')
+            w_sh = (n_hp * HP + a_hp * LAG + n_sp * SP) * 1.5
+            report('$ 가시설 소계 = 손셈 (H파일 2 × (5 ÷ 1.8 → 3 + 1) = 8 본 · 시트파일 2 × ⌈3.5 ÷ 0.4⌉ = 18 본)', n_hp == 8 and n_sp == 18 and 2 * 5 * 0.5 < a_hp < 2 * 5 * 6 and abs(ck('sub') - w_sh) < 0.5,
+                   '%.0f · 손셈 %.0f · 흙막이판 %.2f m²' % (ck('sub'), w_sh, a_hp))
+            click(ed, inp, 'tgQty')
+            hand = {('주철관', 200): 75270 * 1.10 + 325316 * 1.50, ('주철관', 300): 124441 * 1.10 + 361041 * 1.50,    # 2016.01 환경부 표 (아스팔트 · 자재비 × 1.10 + 공사비 × 1.50)
+                    ('주철관', 400): 181534 * 1.10 + 434672 * 1.50, ('주철관', 600): 313947 * 1.10 + 524869 * 1.50, ('주철관', 800): 629946 * 1.10 + 675253 * 1.50,
+                    ('강관', 300): 224952 * 1.10 + 406424 * 1.50, ('강관', 800): 604266 * 1.10 + 806578 * 1.50}
+            pl = C('pipe.list')
+            known = [p for p in pl if (p['name'], p['Dt']) in hand]
+            w_pipe = sum(hand[(p['name'], p['Dt'])] * p['len'] for p in known)
+            report('$ 관로 본공사 = Σ m당 (손셈) × 개착 길이 · 합계 = 관로 + 부대', len(known) == len(pl) > 0 and abs(ck('pipe') - w_pipe) < 0.5 and abs(ck('pipe') + ck('extra') - ck('total')) < 0.5,
+                   '관로 %.0f · 손셈 %.0f · 합계 %.0f · 관 %s' % (ck('pipe'), w_pipe, ck('total'), [(p['name'], p['Dt']) for p in pl]))
+            shot(ed, '30_개략공사비_전체.png', SD)
+            click(ed, inp, 'qInfo')
+            info = J(ed, "document.getElementById('qInfoBox').hidden ? '' : document.getElementById('qInfoBox').textContent")
+            report('$ (i) → 단가 출처 설명', '개략산정기준' in info and '제2026-652호' in info, info[:50])
+            click(ed, inp, 'qInfo')
+            t0 = ck('total')
+            click(ed, inp, 'qPrice')
+            ed.js("(() => { const e = document.getElementById('cp_sp_in'); e.value = '150000'; e.dispatchEvent(new Event('change', { bubbles: true })); })()"); ed.frames(2)
+            shot(ed, '31_단가표_창.png', SD)
+            report('$ 시트파일 항타 단가 150,000 → 합계 = 손셈', abs(ck('total') - (t0 + (150000 - 100112) * 1.5 * n_sp)) < 0.5, '%.0f → %.0f' % (t0, ck('total')))
+            click(ed, inp, 'cpDef'); ed.frames(2)
+            click(ed, inp, 'cpX')
+            report('$ [기본값] → 처음 합계 · × 닫힘', abs(ck('total') - t0) < 0.5 and J(ed, "document.getElementById('cpDlg').hidden"))
+            errs(ed, '$')
+            click(ed, inp, 'qkShore')
         click(ed, inp, 'qkShore')
         report('q 같은 단추 = 닫기', not vis(ed, 'qtyBox') and not on(ed, 'qkShore'))
         errs(ed, 'q')

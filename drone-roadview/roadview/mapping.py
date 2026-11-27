@@ -2437,6 +2437,12 @@ def copy_viewer(out):
     shutil.copy2(base / 'map3d.js', os.path.join(out, 'viewer', 'map3d.js'))
     if (base / 'river.js').exists():                 # 하천 추진 · 횡단 (JACK 1126 · 없으면 그 카테고리만 숨음)
         shutil.copy2(base / 'river.js', os.path.join(out, 'viewer', 'river.js'))
+    if (base / 'cost.js').exists():                  # 개략공사비 셈 (JACK 1127 · 없으면 수량만)
+        shutil.copy2(base / 'cost.js', os.path.join(out, 'viewer', 'cost.js'))
+    for fn in ('gd_color.jpg', 'gd_normal.jpg', 'LICENSE.txt'):   # 부지정지 실사 질감 (JACK 1127 · 없으면 셰이더 결로)
+        if (base / 'textures' / fn).exists():
+            os.makedirs(os.path.join(out, 'viewer', 'textures'), exist_ok=True)
+            shutil.copy2(base / 'textures' / fn, os.path.join(out, 'viewer', 'textures', fn))
 
 
 if __name__ == '__main__':

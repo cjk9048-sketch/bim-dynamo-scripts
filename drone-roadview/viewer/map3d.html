@@ -50,6 +50,7 @@ input[type=number]::-webkit-outer-spin-button, input[type=number]::-webkit-inner
 .tag.bad { background: rgba(239, 68, 68, .16); color: #f87171; }
 .tag.ok { background: rgba(34, 197, 94, .16); color: #4ade80; }
 .tag:empty { display: none; }
+.beta { flex: none; margin-left: 2px; padding: 0 6px; border-radius: 999px; background: rgba(168, 85, 247, .18); color: #c4a3fa; font-size: 10px; font-weight: 700; letter-spacing: .3px; line-height: 16px; text-transform: uppercase; }   /* 시험판 표시 (AI 구조물 인식 · 1127) */
 .pb2 { flex: none; height: 26px; padding: 0 10px; border: 0; border-radius: var(--r-s); background: var(--wall); box-shadow: inset 0 0 0 1px var(--line); color: var(--ink); font-size: 12px; font-weight: 600; white-space: nowrap; }
 .pb2:hover { background: var(--dhDim); }
 .pb2:disabled { opacity: .45; pointer-events: none; }
@@ -60,6 +61,22 @@ input[type=number]::-webkit-outer-spin-button, input[type=number]::-webkit-inner
 #top .ib { color: #bdbdbd; }
 #top .ib:hover { background: var(--panel-2); color: #fff; }
 #top .ib.on { background: var(--acc-soft); color: #fff; }
+/* 저장 (JACK 1127): 윗줄 [저장] · 저장 안 한 것 있으면 파랑 + 노란 점 · 묻는 창 #svBack */
+.svb { position: relative; flex: none; height: 30px; padding: 0 12px 0 9px; display: inline-flex; align-items: center; gap: 6px; border: 0; border-radius: var(--r-s);
+  background: var(--panel-2); color: #bdbdbd; font-weight: 600; font-size: 13px; transition: background .12s, color .12s; }
+.svb svg { width: 17px; height: 17px; stroke-width: 1.8; }
+.svb:hover { background: var(--panel-3); color: #fff; }
+.svb.dirty { background: var(--dh); color: #fff; }
+.svb.dirty:hover { background: var(--dhHi); }
+.svb.dirty::after { content: ''; position: absolute; right: -2px; top: -2px; width: 9px; height: 9px; border-radius: 50%; background: var(--yel); box-shadow: 0 0 0 2px var(--panel); }
+.svb:disabled { opacity: .6; pointer-events: none; }
+#svBack { position: fixed; inset: 0; z-index: 40; display: flex; align-items: center; justify-content: center; padding: 16px; background: rgba(0, 0, 0, .55); }
+#svDlg .fields label { grid-template-columns: 52px 1fr; }
+.svDirRow { display: flex; align-items: center; gap: 8px; min-width: 0; color: var(--sub); font-size: 12px; }
+.svDirRow span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#svNo { margin-right: auto; }
+#svDlg #svOk { background: var(--dh); color: #fff; box-shadow: none; }
+#svDlg #svOk:hover { background: var(--dhHi); }
 .brand { display: flex; align-items: center; gap: 9px; min-width: 0; flex: 0 1 auto; padding-left: 4px; }
 .logo { flex: none; width: 16px; height: 16px; border-radius: 50%; background: radial-gradient(circle at 35% 35%, #9cc9ff, var(--acc) 60%, #173a73); }
 #title { font-weight: 700; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 50vw; }
@@ -211,6 +228,52 @@ body.sideOn #rvDlg { right: calc(var(--sideW, 300px) + 12px); }
 #qTab .qv { text-align: right; white-space: nowrap; }
 #qNote { color: var(--sub); font-size: 11px; }
 #qNote:empty { display: none; }
+/* 개략공사비 (수량 줄 밑 단가 · 금액 · 소계 · 합계 · 단가표 창 · 360 style.css 와 같음) */
+#qCost { gap: 6px; }
+#qCost select { height: 24px; margin-left: 5px; }
+.qBtn { margin-left: auto; height: 24px; padding: 0 11px; border: 0; border-radius: 999px; background: var(--wall); box-shadow: inset 0 0 0 1px var(--line); color: var(--ink); font-size: 11.5px; font-weight: 600; }
+.qBtn:hover, .qBtn.on { background: var(--dhDim); color: var(--dh); }
+.qI { flex: none; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 50%; background: transparent; box-shadow: inset 0 0 0 1.5px var(--sub); color: var(--sub); font: italic 700 12px Georgia, serif; line-height: 1; }
+.qI:hover { color: var(--dh); box-shadow: inset 0 0 0 1.5px var(--dh); }
+.qI.on { background: var(--dh); color: #fff; box-shadow: none; }
+#qInfoBox { padding: 6px 8px; background: var(--wall); border-radius: var(--r-s); box-shadow: inset 0 0 0 1px var(--line); color: var(--sub); font-size: 11px; line-height: 1.5; }
+#qInfoBox ul { margin: 0; padding-left: 14px; }
+#qTab .qc { grid-column: 1 / -1; display: flex; justify-content: space-between; gap: 8px; margin: -2px 0 1px 10px; color: var(--sub); font-size: 11px; white-space: nowrap; }
+#qTab .qc span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+#qTab .qc b { font-weight: 600; color: var(--ink); }
+#qTab .qc.incl { opacity: .75; }
+#qTab .qc.none span, #qTab .qc.warn span { color: #f59e0b; }
+#qTab .qc.empty { display: none; }
+#qSum { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; padding-top: 5px; border-top: 1px solid var(--line); }
+#qSum .sl { color: var(--sub); white-space: nowrap; }
+#qSum .sv { text-align: right; white-space: nowrap; }
+#qSum .tot { font-weight: 700; color: var(--dh); }
+#qSum .ko { grid-column: 1 / -1; margin-top: -2px; text-align: right; color: var(--sub); font-size: 11px; }
+#cpDlg { position: fixed; right: 12px; top: calc(var(--topH) + 10px); z-index: 8; width: min(470px, calc(100% - 24px)); max-height: calc(100% - var(--topH) - 20px); }
+body.sideOn #cpDlg { right: calc(var(--sideW, 300px) + 12px); }
+#cpDlg .dlgHead b { flex: none; }
+#cpDlg .dlgHead .dlgX { margin-left: auto; }
+#cpDlg .dlgFoot { position: sticky; bottom: 0; justify-content: space-between; padding-top: 10px; background: var(--panel); border-top: 1px solid var(--line); }
+.cpTop { display: flex; align-items: center; gap: 14px; }
+.cpTop select, .cpTop input { height: 26px; margin-left: 6px; }
+.cpTop input { width: 70px; }
+.cpHint, .cpSrc { color: var(--sub); font-size: 11px; }
+.cpSec { margin-top: 2px; color: var(--dh); font-size: 12px; font-weight: 700; }
+.cpTab { display: grid; gap: 5px 10px; align-items: center; font-size: 12px; font-variant-numeric: tabular-nums; }
+.cpPipe { grid-template-columns: 1fr auto auto auto; }
+.cpItems { grid-template-columns: 1fr auto auto; }
+.cpTab .h { color: var(--sub); font-size: 11px; }
+.cpTab .r { text-align: right; white-space: nowrap; }
+.cpTab .b { font-weight: 700; }
+.cpTab .u { color: var(--sub); white-space: nowrap; }
+.cpTab .nm { min-width: 0; }
+.cpTab .nm b { display: block; font-weight: 600; }
+.cpTab .nm small { display: block; color: var(--sub); font-size: 10.5px; line-height: 1.35; }
+.cpTab .nm small.src { opacity: .75; }
+.cpTab .nm small.w { color: #f59e0b; }
+.cpTab input { width: 96px; height: 26px; text-align: right; }
+.cpTab input.mod { font-weight: 700; color: var(--dh); }
+.cpNone { grid-column: 1 / -1; color: var(--sub); }
 /* 간섭 (간섭 카테고리 안) */
 #qClr { display: flex; align-items: center; gap: 10px; }
 #qClr label { display: flex; align-items: center; gap: 5px; color: var(--sub); font-weight: 600; font-size: 12px; }
@@ -415,6 +478,7 @@ body.flat:not(.host) #side, body.flat:not(.host) #tgSide, body.flat #bHelp { dis
   <button class="ib" id="bHome" type="button" title="처음 화면" aria-label="처음" data-host hidden><svg viewBox="0 0 24 24"><path d="M3 11l9-7 9 7"/><path d="M5.5 9.5V20h4.5v-6h4v6h4.5V9.5"/></svg></button>
   <div class="brand"><span class="logo"></span><span id="title">3D 매핑</span></div>
   <div class="spacer"></div>
+  <button class="svb" id="bSave" type="button" title="저장할 것 없음" aria-label="저장" data-host hidden><svg viewBox="0 0 24 24"><path d="M5 4h11.5L19 6.5V20H5z"/><path d="M8.5 4v4.5h6V4"/><path d="M8 20v-6h8v6"/></svg><span>저장</span></button>
   <button class="ib" id="bHelp" type="button" title="조작법" aria-label="조작법"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.6 9.4a2.5 2.5 0 1 1 3.6 2.3c-.8.4-1.2 1-1.2 1.8v.4"/><path d="M12 17.3v.2"/></svg></button>
   <button class="ib on" id="tgSide" type="button" title="오른쪽 칸 (기능)" aria-label="오른쪽 칸"><svg viewBox="0 0 24 24"><rect x="3" y="4.5" width="18" height="15" rx="2"/><path d="M14.5 4.5v15"/></svg></button>
 </header>
@@ -456,7 +520,7 @@ body.flat:not(.host) #side, body.flat:not(.host) #tgSide, body.flat #bHelp { dis
       <div class="fgrid c3">
         <button class="fb" id="bPipes" type="button" title="관로 불러오기 (SHP · DXF)" data-host hidden><svg viewBox="0 0 24 24"><path d="M3 8h9M3 16h9"/><path d="M12 8a2.2 4 0 0 1 0 8"/><path d="M18 8v8M14 12h8"/></svg><span>SHP 불러오기</span></button>
         <button class="fb" id="pNew" type="button" data-ms="pipe" title="새 관 직접 그리기 · 점 찍기 · 두 번 누르기 = 끝"><svg viewBox="0 0 24 24"><path d="M3 19l6-7 4 3 4-5"/><circle cx="3" cy="19" r="1.4"/><circle cx="9" cy="12" r="1.4"/><circle cx="13" cy="15" r="1.4"/><path d="M19 3v6M16 6h6"/></svg><span>직접 그리기</span></button>
-        <button class="fb" id="tgEdit" type="button" title="관로 고치기 (Esc 끝)"><svg viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13 7l4 4"/></svg><span>고치기</span></button>
+        <button class="fb" id="tgEdit" type="button" title="관로 고치기 · 점 끌기 · Delete = 고른 점 빼기 (점을 안 고르면 그 관 지우기) · Esc 끝"><svg viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13 7l4 4"/></svg><span>고치기</span></button>
         <button class="fb" id="bShpOut" type="button" title="지금 관로 (고친 것 포함) 를 SHP 로" data-host hidden><svg viewBox="0 0 24 24"><path d="M12 15V3M7 8l5-5 5 5"/><path d="M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/></svg><span>SHP 내보내기</span></button>
         <button class="fb" id="hObst" type="button" title="지장물 가져오기 (SHP)" data-host hidden><svg viewBox="0 0 24 24"><path d="M2 12h2.5M7 12h2.5M12 12h.5"/><path d="M2 7.5h10M2 16.5h10" opacity=".45"/><path d="M18 8v8M14 12h8"/></svg><span>지장물 가져오기</span></button>
       </div>
@@ -523,7 +587,7 @@ body.flat:not(.host) #side, body.flat:not(.host) #tgSide, body.flat #bHelp { dis
   </section>
   <!-- AI 부대공 (JACK 1126 · 결과 = data/ai_budae.js · 엔진 = 프로그램 ai_status · ai_setup · ai_run · ai_save · 셈 = map3d.js «AI 부대공») -->
   <section class="cat" data-cat="ai">
-    <button class="catH" id="hd_ai" type="button" title="AI 부대공 (연석 · 석축 · 보도 · 포장 인식 → 확인 → 수량)"><svg viewBox="0 0 24 24"><path d="M3 21l4.5-13M14.5 21L10 8"/><path d="M2.5 21h13" opacity=".55"/><path d="M18.5 2.5l.9 2.4 2.4.9-2.4.9-.9 2.4-.9-2.4-2.4-.9 2.4-.9z"/></svg><b>AI 부대공</b><span id="aiTag" class="tag"></span><i class="chev"></i></button>
+    <button class="catH" id="hd_ai" type="button" title="AI 구조물 인식 (beta · 연석 · 석축 · 보도 · 포장 인식 → 확인 → 부대공 수량)"><svg viewBox="0 0 24 24"><path d="M3 21l4.5-13M14.5 21L10 8"/><path d="M2.5 21h13" opacity=".55"/><path d="M18.5 2.5l.9 2.4 2.4.9-2.4.9-.9 2.4-.9-2.4-2.4-.9 2.4-.9z"/></svg><b>AI 구조물 인식</b><span class="beta" title="시험판 (beta) · 결과는 사람이 확인">beta</span><span id="aiTag" class="tag"></span><i class="chev"></i></button>
     <div class="catB" id="aiBox">
       <div class="fgrid c3" role="group" aria-label="AI 부대공">
         <button class="fb" id="aiRun" type="button" title="AI 인식 (3D 매핑 + 같은 구간 360) · 처음이면 AI 엔진 받기" data-host hidden><svg viewBox="0 0 24 24"><path d="M12 2.5l1.6 4.3 4.3 1.6-4.3 1.6L12 14.3l-1.6-4.3-4.3-1.6 4.3-1.6z"/><path d="M18.5 14l.8 2.1 2.1.8-2.1.8-.8 2.1-.8-2.1-2.1-.8 2.1-.8zM6 15.5l.6 1.6 1.6.6-1.6.6L6 19.9l-.6-1.6-1.6-.6 1.6-.6z" opacity=".7"/></svg><span>AI 인식</span></button>
@@ -541,8 +605,11 @@ body.flat:not(.host) #side, body.flat:not(.host) #tgSide, body.flat #bHelp { dis
   </section>
   <!-- 수량 (갈래마다 단추 → 아래 표) -->
   <section class="cat" data-cat="qty">
-    <button class="catH" id="hd_qty" type="button"><svg viewBox="0 0 24 24"><path d="M17 5H7l6 7-6 7h10"/></svg><b>수량</b><i class="chev"></i></button>
+    <button class="catH" id="hd_qty" type="button"><svg viewBox="0 0 24 24"><path d="M17 5H7l6 7-6 7h10"/></svg><b>개략공사비</b><i class="chev"></i></button>
     <div class="catB">
+      <!-- 개략공사비 (JACK 1127 · 셈 = viewer/cost.js): 관로 포장 · [단가표] 창 · (i) 단가 출처 -->
+      <div id="qCost" class="row"><label class="cl" title="관로 본공사 포장 종류">포장<select id="qPave"><option value="asphalt">아스팔트</option><option value="concrete">콘크리트</option><option value="soil">토사</option></select></label><button id="qPrice" class="qBtn" type="button" title="단가 · 출처 · 고치기">단가표</button><button id="qInfo" class="qI" type="button" title="어떤 단가를 썼나" aria-label="단가 출처">i</button></div>
+      <div id="qInfoBox" hidden></div>
       <div class="fgrid c3" role="group" aria-label="수량 갈래">
         <button class="fb" id="tgQty" type="button" data-q="all" title="수량 전체 (이 관 · 전체)"><svg viewBox="0 0 24 24"><path d="M17 5H7l6 7-6 7h10"/></svg><span>전체</span></button>
         <button class="fb" id="qkPipe" type="button" data-q="pipe" title="관로 연장"><svg viewBox="0 0 24 24"><path d="M3 12h18"/><path d="M6 8l-3 4 3 4M18 8l3 4-3 4"/><path d="M8 7h8M8 17h8" opacity=".5"/></svg><span>관로</span></button>
@@ -557,6 +624,7 @@ body.flat:not(.host) #side, body.flat:not(.host) #tgSide, body.flat #bHelp { dis
       <div id="qtyBox" hidden>
         <div class="qHead"><b id="qTitle">수량</b><span id="qLine"></span><button id="qX" class="x" type="button" title="닫기">×</button></div>
         <div id="qTab"></div>
+        <div id="qSum" hidden></div>
         <div id="qNote"></div>
       </div>
     </div>
@@ -690,6 +758,12 @@ body.flat:not(.host) #side, body.flat:not(.host) #tgSide, body.flat #bHelp { dis
     <div class="dlgFoot"><button id="npGo" class="primary" type="button">넣기</button></div>
   </section>
 </div>
+<!-- 단가표 (개략공사비 카테고리 [단가표] · 몸 = cost.js dlgFill · 고친 값 = 이 PC 에 기억) -->
+<section id="cpDlg" class="dlg" role="dialog" aria-label="단가표" hidden>
+  <div class="dlgHead"><b>단가표</b><button id="cpX" class="dlgX" type="button" title="닫기">×</button></div>
+  <div id="cpBody" class="dlgBody"></div>
+  <div class="dlgFoot"><button id="cpDef" type="button" title="고친 단가 · 보정 계수를 기본값으로">기본값</button><button id="cpCsv" type="button" title="단가표를 CSV 로 (프로그램 안 = 복사)">CSV 내보내기</button></div>
+</section>
 <section id="secDlg" class="dlg" role="dialog" aria-label="터파기 설정" hidden>
   <div class="dlgHead"><b>터파기 설정</b><span id="secTag" class="tag"></span><button id="secX" class="dlgX" type="button" title="닫기">×</button></div>
   <div class="dlgBody">
@@ -706,6 +780,20 @@ body.flat:not(.host) #side, body.flat:not(.host) #tgSide, body.flat #bHelp { dis
     <div id="rvRows"></div>
   </div>
 </section>
+<!-- 저장 (JACK 1127): 저장 안 한 변경 묻기 · 튜토리얼 «일반 프로젝트로 저장» (map3d.js svDlg) -->
+<div id="svBack" hidden>
+  <section id="svDlg" class="dlg" role="dialog" aria-label="저장">
+    <div class="dlgHead"><b id="svHead">저장 안 한 변경</b><button id="svX" class="dlgX" type="button" title="취소 (Esc)">×</button></div>
+    <div class="dlgBody">
+      <div id="svMsg" class="hint"></div>
+      <div id="svAs" class="fields" hidden>
+        <label>이름<input id="svName" type="text" spellcheck="false" autocomplete="off"></label>
+        <div class="svDirRow"><span id="svDir"></span><button id="svPick" type="button">위치 바꾸기</button></div>
+      </div>
+    </div>
+    <div class="dlgFoot"><button id="svNo" type="button">저장 안 함</button><button id="svOk" class="primary" type="button">저장</button></div>
+  </section>
+</div>
 <div id="load">불러오는 중…</div>
 <div id="info"></div>
 <div id="toast"></div>
@@ -717,6 +805,7 @@ body.flat:not(.host) #side, body.flat:not(.host) #tgSide, body.flat #bHelp { dis
 <script src="data/ai_budae.js" onerror="void 0"></script>
 <script src="data/grade.js" onerror="void 0"></script>
 <script src="viewer/river.js" onerror="void 0"></script>
+<script src="viewer/cost.js" onerror="void 0"></script>
 <script src="viewer/map3d.js"></script>
 </body>
 </html>

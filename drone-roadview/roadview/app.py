@@ -20,7 +20,7 @@ import uuid
 from pathlib import Path
 
 APP_NAME = 'DH 에어로사이트'   # JACK 1127 (드론 로드뷰 → 360 · 3D 매핑 · 노선검토 · 실행 파일 · 설정 폴더 이름은 그대로)
-APP_VERSION = '1.0.21'
+APP_VERSION = '1.0.22'
 FROZEN = getattr(sys, 'frozen', False)
 BASE = Path(sys._MEIPASS) if FROZEN else Path(__file__).resolve().parent.parent      # noqa: SLF001
 HOME_HTML = (BASE / 'roadview' / 'app_home' / 'index.html') if not FROZEN else (BASE / 'app_home' / 'index.html')
@@ -38,6 +38,55 @@ def _tut_meta(d):
         return json.loads((Path(d) / 'tutorial.json').read_text(encoding='utf-8'))
     except (OSError, ValueError):
         return {}
+
+
+def _docs_dir():
+    """문서 폴더 (OneDrive 로 옮긴 것도 · Windows 셸 폴더) → 못 읽으면 home\\Documents."""
+    if os.name == 'nt':
+        try:
+            import ctypes
+            buf = ctypes.create_unicode_buffer(1024)
+            if ctypes.windll.shell32.SHGetFolderPathW(None, 5, None, 0, buf) == 0 and buf.value:   # 5 = CSIDL_PERSONAL (문서)
+                return Path(buf.value)
+        except Exception:                                # noqa: BLE001
+            pass
+    return Path.home() / 'Documents'
+
+
+def _is_tut(path):
+    """튜토리얼 작업 복사본 (TUT_USER\\<이름>) 인가 — 최근 목록에 안 넣음 · [저장] = 일반 프로젝트로 저장 (JACK 1127)."""
+    try:
+        return bool(path) and os.path.normcase(str(Path(path).resolve().parent)) == os.path.normcase(str(TUT_USER.resolve()))
+    except OSError:
+        return False
+
+
+def _mirror(src, dst):
+    """dst 를 src 와 똑같이 (튜토리얼을 열 때마다 처음 상태로 · JACK 1127 «처음으로 돌아가지지가 않아»).
+    크기 · 시각이 다른 파일만 다시 복사 · src 에 없는 파일 · 폴더 (튜토리얼에서 새로 생긴 것) 는 지움 → 400 MB 를 통째 복사하지 않음."""
+    src, dst = Path(src), Path(dst)
+    for root, dirs, files in os.walk(src):
+        r = Path(root)
+        d = dst / r.relative_to(src)
+        d.mkdir(parents=True, exist_ok=True)
+        for fn in files:
+            a, b = r / fn, d / fn
+            sa = a.stat()
+            try:
+                sb = b.stat()
+                same = sb.st_size == sa.st_size and abs(sb.st_mtime - sa.st_mtime) < 0.01
+            except OSError:
+                same = False
+            if not same:
+                shutil.copy2(a, b)
+    for root, dirs, files in os.walk(dst, topdown=False):
+        r = Path(root)
+        s = src / r.relative_to(dst)
+        for fn in files:
+            if not (s / fn).is_file():
+                (r / fn).unlink()
+        if not s.is_dir():
+            r.rmdir()
 CFG_DIR = Path(os.environ.get('APPDATA', str(Path.home()))) / 'DH.Roadview'
 PROJ_LIST = CFG_DIR / 'projects.json'
 CLUSTER_CFG = CFG_DIR / 'cluster.json'     # 함께 처리 (공유 폴더 · 내 매핑에 쓰기 · 도우미 모드)
@@ -250,6 +299,9 @@ class Api:
         self._jobs = {}
         self._media = {}
         self._helper = None      # 도우미 모드 (HelperProc)
+        self._opened = 0         # 프로젝트를 연 시각 (화면이 «튜토리얼에서 고친 것» 기억을 이번에 연 것만 쓰게)
+        self._close_ok = False   # 창 닫기 허락 (화면이 저장 · 저장 안 함을 고른 뒤)
+        self._ask_t, self._ask_ans = 0.0, True
 
     # ------------------------------------------------------------ 공통
     def app_info(self):
@@ -291,6 +343,8 @@ class Api:
 
     def _remember(self, folder):
         folder = str(Path(folder).resolve())
+        if _is_tut(folder):                             # 튜토리얼 작업 복사본 = 최근 목록에 안 넣음 ([저장] = 일반 프로젝트로 저장 · JACK 1127)
+            return
         info = {'path': folder, 'title': Path(folder).name, 'shots': 0, 'updated': time.strftime('%Y-%m-%d %H:%M')}
         mp = Path(folder) / 'data' / 'mapping.js'
         if mp.exists():                                 # 3D 매핑 프로젝트: 썸네일 = 정사영상 미리보기
@@ -336,18 +390,20 @@ class Api:
         out = []
         for x in self._load_list():
             x = dict(x)
+            if _is_tut(x.get('path')):                  # 옛 판이 넣어 둔 튜토리얼 복사본 = 안 보임 (JACK 1127)
+                continue
             x['exists'] = bool(_page_url(x['path']))
             t = x.get('thumb')
             x['thumb_url'] = Path(t).as_uri() if t and os.path.exists(t) else ''
             x['cut_urls'] = [Path(c).as_uri() for c in x.get('cuts', []) if os.path.exists(c)]
             if x.get('kind') not in ('mapping', '360'):       # 옛 기록 = 폴더를 보고 (3D 매핑 = data/mapping.js)
                 x['kind'] = 'mapping' if (Path(x['path']) / 'data' / 'mapping.js').exists() else '360'
-            x['tutorial'] = os.path.normcase(str(Path(x['path']).parent)) == os.path.normcase(str(TUT_USER))
             out.append(x)
         return out
 
     # ------------------------------------------------------------ 튜토리얼 (JACK 1127 «매핑된 결과는 튜토리얼로 프로그램에 이미 담겨있으면 · 3d · 360 둘 다»)
-    # 설치본 = 프로그램 폴더 tutorial\<이름>\ (보기 자료만 · tutorial.json = 제목 · 설명 · 판) · 열 때 사용자 폴더로 복사 (설치 폴더는 쓰기 안 됨 · 고친 것은 남음)
+    # 설치본 = 프로그램 폴더 tutorial\<이름>\ (보기 자료만 · tutorial.json = 제목 · 설명 · 판) · 열 때마다 사용자 폴더로 처음 상태 복사 (설치 폴더는 쓰기 안 됨)
+    # 고친 것은 [저장] = «일반 프로젝트로 저장» (save_as · 문서\DH 에어로사이트\이름) 해야 남음 · 저장 안 하고 나가면 다음에 다시 처음 상태 (JACK 1127)
     def tutorials(self):
         out = []
         d0 = _tut_dir()
@@ -369,15 +425,9 @@ class Api:
         names = {d.name for d in d0.iterdir() if d.is_dir()} if d0 else set()
         if not key or key not in names:                  # 이름만 받음 (경로 넘기기 막음)
             return {'ok': False, 'msg': '튜토리얼 없음'}
-        def put(k):                                      # 원본 → 사용자 폴더 (판이 바뀌면 새로)
+        def put(k):                                      # 원본 → 사용자 폴더 (열 때마다 처음 상태 · 바뀐 파일만 다시 복사 · 새로 생긴 파일은 지움)
             src, dst = d0 / k, TUT_USER / k
-            ver = str(_tut_meta(src).get('ver', ''))
-            mark = dst / '.tutorial_ver'
-            if not dst.exists() or not mark.exists() or mark.read_text(encoding='utf-8') != ver:
-                if dst.exists():
-                    shutil.rmtree(dst, ignore_errors=True)
-                shutil.copytree(src, dst)
-                mark.write_text(ver, encoding='utf-8')
+            _mirror(src, dst)
             return dst
         try:
             dst = put(key)
@@ -397,6 +447,101 @@ class Api:
         except OSError as ex:
             return {'ok': False, 'msg': '튜토리얼 복사 못 함 · %s' % str(ex)[:80]}
         return self.open_project(str(dst))
+
+    # ------------------------------------------------------------ 저장 (JACK 1127 «작업 끝나고 [저장] 해야 저장 · 튜토리얼은 저장 = 일반 프로젝트로»)
+    # 보기 화면이 고친 것을 모았다가 [저장] 때 save_pipes · save_grade · save_calib · ai_save 를 부르고 mark_saved · 튜토리얼이면 save_as.
+    def project_info(self):
+        """{path, tutorial, title, opened (연 시각 · 화면 기억 구분), name · parent (튜토리얼 기본 저장 이름 · 위치)}."""
+        p = self._project
+        if not p:
+            return {'path': '', 'tutorial': False, 'title': '', 'opened': 0}
+        tut = _is_tut(p)
+        return {'path': p, 'tutorial': tut, 'title': Path(p).name, 'opened': self._opened,
+                'name': Path(p).name + time.strftime('_%Y%m%d_%H%M') if tut else '',
+                'parent': str(_docs_dir() / APP_NAME) if tut else ''}
+
+    def mark_saved(self):
+        """[저장] 으로 파일을 다 쓴 뒤 → 최근 목록 맨 위 · 시각 (튜토리얼 복사본은 안 넣음)."""
+        if self._project:
+            self._remember(self._project)
+        return {'ok': True}
+
+    def save_as(self, opts=None):
+        """튜토리얼 [저장] = 일반 프로젝트로: 작업 복사본 (화면이 모은 것을 먼저 씀) → 부모\\이름 통째 복사 · 짝 (3D ↔ 360) 도 같은 부모에
+        · AI 짝 새로 · 3D AI 의 src360 = 새 360 · 최근 목록 → 그 프로젝트로 다시 엶 (open = False 면 안 엶 · [처음] · 창 닫기 때)."""
+        o = opts if isinstance(opts, dict) else {}
+        if not self._project or not _is_tut(self._project):
+            return {'ok': False, 'msg': '튜토리얼이 아님'}
+        cur = Path(self._project)
+        name = re.sub(r'[\\/:*?"<>|]+', '_', str(o.get('name') or '')).strip().strip('.')[:80] or cur.name + time.strftime('_%Y%m%d_%H%M')
+        parent = Path(str(o.get('parent') or '').strip() or str(_docs_dir() / APP_NAME))
+        tut_root = os.path.normcase(str(TUT_USER.resolve()))
+        if os.path.normcase(str(parent.resolve())).startswith(tut_root):
+            return {'ok': False, 'msg': '튜토리얼 폴더 안에는 저장 못 함'}
+
+        def free(p):                                     # 같은 이름이 있으면 _2 · _3 …
+            q, k = p, 2
+            while q.exists():
+                q, k = p.with_name('%s_%d' % (p.name, k)), k + 1
+            return q
+        pk = _tut_meta(cur).get('pair')
+        pair = TUT_USER / pk if pk and (TUT_USER / pk / 'index.html').exists() else None
+        skip = shutil.ignore_patterns('.tutorial_ver', 'tutorial.json', '*.tmp')
+        pd = None
+        try:
+            parent.mkdir(parents=True, exist_ok=True)
+            dst = free(parent / name)
+            shutil.copytree(cur, dst, ignore=skip)
+            if pair:
+                pd = free(parent / (dst.name + ('_3D' if (pair / 'data' / 'mapping.js').exists() else '_360')))
+                shutil.copytree(pair, pd, ignore=skip)
+        except OSError as ex:
+            return {'ok': False, 'msg': '저장 못 함 · %s' % str(ex)[:100]}
+        if pd:
+            try:
+                from . import ai_budae
+                ai_budae.link(str(dst), str(pd))
+                for a, b in ((dst, pd), (pd, dst)):
+                    dd = ai_budae.load(str(a))
+                    if dd and (a / 'data' / 'mapping.js').exists():
+                        dd['src360'] = str(b)
+                        ai_budae.save(str(a), dd)
+            except Exception:                            # noqa: BLE001 — 짝이 안 돼도 저장은 됨
+                pass
+            self._remember(str(pd))
+        self._remember(str(dst))                         # 최근 목록 맨 위 = 방금 저장한 것
+        out = {'ok': True, 'path': str(dst), 'pair': str(pd) if pd else ''}
+        if o.get('open', True):
+            r = self.open_project(str(dst))
+            if not r.get('ok'):
+                out.update(ok=False, msg=r.get('msg', '열지 못함'))
+        return out
+
+    def close_app(self):
+        """화면이 «나가도 됨» (저장했거나 저장 안 함) → 창 닫기."""
+        self._close_ok = True
+        threading.Timer(0.05, self._window.destroy).start()
+        return {'ok': True}
+
+    def _on_closing(self):
+        """창 닫기 (×): 보기 화면이면 저장 안 한 것을 화면에 물음 (__rvClose → close_app) · 화면이 5 초 넘게 답이 없으면 다음 × 에 닫음."""
+        if self._close_ok or not self._project:
+            return True
+        now = time.time()
+        if not self._ask_ans and now - self._ask_t > 5:
+            return True
+        self._ask_t, self._ask_ans = now, False
+        threading.Thread(target=self._ask_close, daemon=True).start()   # 화면 스레드에서 evaluate_js 를 기다리면 멈춤 → 따로
+        return False
+
+    def _ask_close(self):
+        try:
+            r = self._window.evaluate_js('window.__rvClose ? window.__rvClose() : "none"')
+        except Exception:                                # noqa: BLE001
+            r = 'none'
+        self._ask_ans = True
+        if r != 'wait':
+            self.close_app()
 
     def list_shares(self):
         """NAS 에 올린 로드뷰 (share.py 기록)."""
@@ -426,10 +571,13 @@ class Api:
         dst = Path(folder)
         pairs = [(src / 'app.js', dst / 'viewer' / 'app.js'), (src / 'style.css', dst / 'viewer' / 'style.css'),
                  (src / 'river.js', dst / 'viewer' / 'river.js'),     # 하천 추진 · 횡단 셈 (360 도 같은 셈 · 1126)
+                 (src / 'cost.js', dst / 'viewer' / 'cost.js'),       # 개략공사비 셈 (3D 와 같은 셈 · 1127)
                  (src / 'index.html', dst / 'index.html'), (src / 'index.html', dst / '로드뷰.html')]
         if (dst / 'data' / 'mapping.js').exists():      # 3D 매핑 프로젝트 = 3D 보기 화면
             pairs = [(src / 'map3d.js', dst / 'viewer' / 'map3d.js'), (src / 'river.js', dst / 'viewer' / 'river.js'),   # river.js = 하천 추진 · 횡단 셈 (1126)
+                     (src / 'cost.js', dst / 'viewer' / 'cost.js'),   # 개략공사비 셈 (1127)
                      (src / 'map3d.html', dst / 'index.html')]
+            pairs += [(src / 'textures' / fn, dst / 'viewer' / 'textures' / fn) for fn in ('gd_color.jpg', 'gd_normal.jpg', 'LICENSE.txt')]   # 부지정지 질감 (1127)
             if not (dst / 'data' / 'dem.js').exists():  # 1.0.15 까지 만든 프로젝트: 관로 땅 높이(매끈한 땅) 를 지금 만듦 (몇 초)
                 try:
                     from .mapping import write_dem_js
@@ -451,7 +599,8 @@ class Api:
         self._refresh_viewer(path)
         url = _page_url(path)
         self._project = str(Path(path).resolve())
-        self._remember(self._project)
+        self._opened = round(time.time(), 3)
+        self._remember(self._project)                    # 튜토리얼 복사본은 안 넣음 (_remember)
         self._window.load_url(url)
         return {'ok': True}
 
@@ -1524,6 +1673,7 @@ def _selftest(api, w, out_path, project):
     except Exception as ex:
         res['error'] = repr(ex)
     Path(out_path).write_text(json.dumps(res, ensure_ascii=False, indent=1), encoding='utf-8')
+    api._close_ok = True                                 # noqa: SLF001 — 자가 시험은 묻지 않고 닫음
     w.destroy()
 
 
@@ -1541,6 +1691,7 @@ def main():
     else:
         if api._cluster_cfg()['helper']:            # 지난번에 도우미 모드를 켜 두었으면 다시 켬 (옆 PC 는 앱만 켜 두면 됨)
             api.helper_toggle(True)
+        w.events.closing += api._on_closing         # 창 × = 저장 안 한 변경이 있으면 화면이 물음 (JACK 1127)
         try:
             webview.start(gui='edgechromium', private_mode=False, storage_path=str(CFG_DIR / 'webview'))
         finally:

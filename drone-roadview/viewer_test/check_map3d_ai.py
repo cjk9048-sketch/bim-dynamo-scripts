@@ -21,6 +21,7 @@ import math
 import os
 import shutil
 import sys
+import time
 
 import numpy as np
 from PIL import Image
@@ -137,7 +138,7 @@ def make_data(out):
 
 def prep(out):
     os.makedirs(os.path.join(out, 'viewer'), exist_ok=True)
-    for fn in ('map3d.js', 'river.js'):
+    for fn in ('map3d.js', 'river.js', 'cost.js'):     # cost.js = 개략공사비 셈 (1127)
         shutil.copy2(os.path.join(REPO, 'viewer', fn), os.path.join(out, 'viewer', fn))
     shutil.copy2(os.path.join(HERE, 'hostmock.js'), os.path.join(out, 'viewer', 'hostmock.js'))
     open(os.path.join(out, 'viewer', 'hostmock_ai.js'), 'w', encoding='utf-8').write(MOCK_JS)
@@ -299,12 +300,15 @@ def main():
         st = {i: J(ed, "__map3d.ai.feat('%s')" % i) for i in ('c1', 'c2', 'as2', 'w1')}
         report('m 상태 (c1 맞음 · c2 아님 · as2 아님 → 미확인 · w1 → 연석 맞음)', st['c1']['st'] == 'ok' and st['c2']['st'] == 'no' and st['as2']['st'] == 'ai' and st['w1']['cls'] == 'curb' and st['w1']['st'] == 'ok',
                str({k: (v['cls'], v['st']) for k, v in st.items()}))
+        time.sleep(1.2)
+        held = len(J(ed, '__ai.saves()')) == n0                         # JACK 1127: 저절로 안 씀 · 윗줄 [저장] 을 눌러야
+        ed.js("document.getElementById('bSave').click()")
         ok = ed.wait_js('__host.calls.filter((c) => c.name === "ai_save").length > %d' % n0, 5)
         ed.frames(10)
         sv = J(ed, '__ai.saves()')
         last = sv[-1]['data'] if sv else None
         fs = {f['id']: f for f in (last or {}).get('features', [])}
-        report('m ai_save 한 번에 모아 (0.8 초)', ok and len(sv) - n0 == 1, '%d 번' % (len(sv) - n0))
+        report('m ai_save = [저장] 에 한 번 (그 전엔 안 씀)', held and ok and len(sv) - n0 == 1, '%d 번' % (len(sv) - n0))
         report('m ai_save 자료 = 고친 것 (상태 · 종류 · 나머지 그대로)', bool(fs) and fs['c1']['status'] == 'ok' and fs['c2']['status'] == 'no' and fs['as2']['status'] == 'ai' and
                fs['w1']['cls'] == 'curb' and fs['w1']['status'] == 'ok' and fs['sw1']['status'] == 'ai' and last['version'] == 1 and len(fs) == 10 and
                fs['w1']['pts'] == ai['features'][3]['pts'], str({k: (fs[k]['cls'], fs[k]['status']) for k in ('c1', 'c2', 'as2', 'w1')} if fs else None))

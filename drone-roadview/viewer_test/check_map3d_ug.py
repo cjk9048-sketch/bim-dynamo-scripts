@@ -206,6 +206,7 @@ def main():
     shutil.copy2(os.path.join(REPO, 'viewer', 'map3d.html'), os.path.join(out, 'index.html'))
     shutil.copy2(os.path.join(REPO, 'viewer', 'map3d.js'), os.path.join(out, 'viewer', 'map3d.js'))
     shutil.copy2(os.path.join(REPO, 'viewer', 'river.js'), os.path.join(out, 'viewer', 'river.js'))   # 하천 추진 · 횡단 셈
+    shutil.copy2(os.path.join(REPO, 'viewer', 'cost.js'), os.path.join(out, 'viewer', 'cost.js'))     # 개략공사비 셈 (1127)
     shutil.copy2(os.path.join(HERE, 'hostmock.js'), os.path.join(out, 'viewer', 'hostmock.js'))
     html = open(os.path.join(out, 'index.html'), encoding='utf-8').read()
     open(os.path.join(out, 'index_host.html'), 'w', encoding='utf-8').write(
@@ -398,7 +399,10 @@ def main():
         h1 = next(h for h in hn if h[0] == 1)
         inp.drag((h1[1], h1[2]), (h1[1] + 50, h1[2] + 20))
         time.sleep(1.3)
-        calls = J(ed, "__host.calls.filter((c) => c.name === 'save_pipes').map((c) => c.arg)")
+        held = J(ed, "__host.calls.filter((c) => c.name === 'save_pipes').length") == 0   # JACK 1127: 저절로 안 씀 · [저장] 을 눌러야
+        ed.js("document.getElementById('bSave').click()")
+        ed.wait_js("__host.calls.some((c) => c.name === 'save_pipes')", 5)
+        calls = J(ed, "__host.calls.filter((c) => c.name === 'save_pipes').map((c) => c.arg)") if held else []
         P1 = J(ed, 'window.RV_PIPES.lines[1]')
         okp = len(calls) == 1 and calls[0].startswith('window.RV_PIPES') and json.loads(calls[0].split('=', 1)[1].strip().rstrip(';'))['lines'][1]['pts'] == P1['pts']
         report('p save_pipes 한 번 (고친 줄)', okp, '%d 번' % len(calls))
@@ -406,6 +410,8 @@ def main():
         inp.key('Escape', 'Escape', 27)
         ed.js("__map3d.trSet({ margin: 0.4 })")
         time.sleep(1.2)
+        ed.js("document.getElementById('bSave').click()")
+        ed.wait_js("__host.calls.some((c) => c.name === 'save_calib')", 5)
         cal = J(ed, "__host.calls.filter((c) => c.name === 'save_calib').map((c) => c.arg)")
         okc = len(cal) >= 1 and '"trench"' in cal[-1] and json.loads(cal[-1].split('=', 1)[1].strip().rstrip(';'))['trench']['margin'] == 0.4
         report('p save_calib (calib.js 의 trench)', okc, '%d 번' % len(cal))
@@ -506,6 +512,7 @@ def main():
         shutil.copy2(os.path.join(REPO, 'viewer', 'map3d.html'), os.path.join(fd, 'index.html'))
         shutil.copy2(os.path.join(REPO, 'viewer', 'map3d.js'), os.path.join(fd, 'viewer', 'map3d.js'))
         shutil.copy2(os.path.join(REPO, 'viewer', 'river.js'), os.path.join(fd, 'viewer', 'river.js'))
+        shutil.copy2(os.path.join(REPO, 'viewer', 'cost.js'), os.path.join(fd, 'viewer', 'cost.js'))
         shutil.copy2(os.path.join(out, 'data', '미리보기.png'), os.path.join(fd, 'data', '미리보기.png'))
         Mf = json.loads(open(os.path.join(out, 'data', 'mapping.js'), encoding='utf-8').read().split('=', 1)[1].strip().rstrip(';'))
         Mf['outputs'] = ['ortho', 'dsm']

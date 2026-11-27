@@ -17,6 +17,7 @@
 import argparse
 import base64
 import collections
+import io
 import json
 import math
 import os
@@ -84,8 +85,11 @@ def read_js(path):
 
 def prep(out):
     os.makedirs(os.path.join(out, 'viewer'), exist_ok=True)
-    for fn in ('map3d.js', 'river.js'):
+    for fn in ('map3d.js', 'river.js', 'cost.js'):     # cost.js = 개략공사비 셈 (1127)
         shutil.copy2(os.path.join(REPO, 'viewer', fn), os.path.join(out, 'viewer', fn))
+    os.makedirs(os.path.join(out, 'viewer', 'textures'), exist_ok=True)
+    for fn in ('gd_color.jpg', 'gd_normal.jpg', 'LICENSE.txt'):                  # 부지정지 실사 질감 (보기 파일 복사와 같은 셋)
+        shutil.copy2(os.path.join(REPO, 'viewer', 'textures', fn), os.path.join(out, 'viewer', 'textures', fn))
     shutil.copy2(os.path.join(HERE, 'hostmock.js'), os.path.join(out, 'viewer', 'hostmock.js'))
     open(os.path.join(out, 'viewer', 'hostmock_grade.js'), 'w', encoding='utf-8').write(MOCK_JS)
     html = open(os.path.join(REPO, 'viewer', 'map3d.html'), encoding='utf-8').read()
@@ -199,6 +203,33 @@ def py_grade(site, org, ext, ground, c=0.25):
     return {'cut': float(-dz[dz < 0].sum() * A), 'fill': float(dz[dz > 0].sum() * A), 'area': float(keep.sum() * A)}
 
 
+def seg_dist(x, y, P):
+    """점 → 닫힌 다각형 테두리 거리."""
+    best = float('inf')
+    for i in range(len(P)):
+        a, b = P[i], P[(i + 1) % len(P)]
+        dx, dy = b[0] - a[0], b[1] - a[1]
+        t = max(0.0, min(1.0, ((x - a[0]) * dx + (y - a[1]) * dy) / (dx * dx + dy * dy)))
+        best = min(best, math.hypot(a[0] + dx * t - x, a[1] + dy * t - y))
+    return best
+
+
+def sharp_turns(pts, deg=60.0):
+    """닫힌 꺾은선 (데이라이트) 에서 이웃 마디 방향이 deg 넘게 꺾인 곳 수 (계단 = 90° 꺾임이 줄줄이) · 0.05 m 안 짧은 마디는 건너뜀."""
+    q = [pts[0]]
+    for p in pts[1:]:
+        if math.hypot(p[0] - q[-1][0], p[1] - q[-1][1]) > 0.05:
+            q.append(p)
+    n, c = len(q), 0
+    for i in range(n):
+        a, b, d = q[i - 1], q[i], q[(i + 1) % n]
+        u, v = (b[0] - a[0], b[1] - a[1]), (d[0] - b[0], d[1] - b[1])
+        lu, lv = math.hypot(*u), math.hypot(*v)
+        if lu > 0 and lv > 0 and math.degrees(math.acos(max(-1, min(1, (u[0] * v[0] + u[1] * v[1]) / lu / lv)))) > deg:
+            c += 1
+    return c
+
+
 def close(a, b, rel, ab=0.0):
     return a is not None and b is not None and abs(a - b) <= max(abs(b) * rel, ab)
 
@@ -207,6 +238,15 @@ def poly_mask(shape, pts):
     m = Image.new('L', (shape[1], shape[0]), 0)
     ImageDraw.Draw(m).polygon([tuple(p) for p in pts], fill=1)
     return np.asarray(m).astype(bool)
+
+
+def glshot(ed, shape):
+    """3D 캔버스 (#c · WebGL) 그림만 — 이름표 · 칸 (2D 겹침) 빼고 빈 화소 (배경색) 를 봄 · 화면 그림 크기로."""
+    d = ed.js("document.getElementById('c').toDataURL('image/png')")
+    im = Image.open(io.BytesIO(base64.b64decode(d.split(',', 1)[1]))).convert('RGB')
+    if im.size != (shape[1], shape[0]):
+        im = im.resize((shape[1], shape[0]), Image.NEAREST)
+    return np.asarray(im).astype(int)
 
 
 def bg_frac(img, mask):
@@ -292,8 +332,12 @@ def check_app(out, SD):
     shutil.rmtree(tmp, ignore_errors=True)
 
 
-def wait_save(ed, n, timeout=6):
-    return ed.wait_js('__g.saves().length >= %d' % n, timeout)
+def wait_save(ed, inp, n, timeout=6):
+    """저장 = 윗줄 [저장] (JACK 1127 · 고친 것은 모아 두었다가 [저장] 때 씀) → save_grade 가 n 번 불릴 때까지."""
+    time.sleep(1.0)                                                  # 0.8 초 모음 → 저장 대기
+    dirty = J(ed, "document.getElementById('bSave').classList.contains('dirty')")
+    inp.el_click('bSave')
+    return ed.wait_js('__g.saves().length >= %d' % n, timeout) and dirty
 
 
 def page(ed, url):
@@ -342,16 +386,32 @@ def main():
         L = 2 * 1.5
         aA = (20 + 2 * L) ** 2 - (4 - math.pi) * L * L
         report('a 정지 면적 (평탄면 + 사면 · 둥근 모서리) 3 % 안', close(rA['area'], aA, 0.03), '%.1f / %.1f' % (rA['area'], aA))
-        pts = {'안': (40, 0.25, 1, ZF - 8), '절토 d 3.25': (40, 13.25, 2, ZF - 8 + 3.25), '소단 d 5.75': (40, 15.75, 4, ZF - 3), '그대로 d 9.75': (40, 19.75, 0, ZF)}
+        pts = {'안': (40, 0.25, 1), '절토 d 3.25': (40, 13.25, 2), '소단 d 5.75': (40, 15.75, 4), '그대로 d 9.75': (40, 19.75, 0)}
         okc = True
-        for nm, (x, y, k, z) in pts.items():
-            q = J(ed, '__map3d.gd.at(1, %f, %f)' % (x, y))
-            good = q and q['cls'] == k and abs(q['z'] - z) < 0.01
+        for nm, (x, y, k) in pts.items():
+            q = J(ed, '__map3d.gd.at(1, %f, %f)' % (x, y))                    # 마디 가운데 (x, y) 의 손셈 높이 (위 변 y = 10 · 1:1 · 5 m 마다 소단 1 m)
+            z = None if not q else ZF - 8 if q['y'] <= 10 else ZF - 8 + float(prof(q['y'] - 10, 1.0, 5, 1)[0][()])
+            good = (k == 0 and (q is None or q['cls'] == 0)) or (q and q['cls'] == k and abs(q['z'] - z) < 0.01)
             okc &= bool(good)
             if not good:
                 print('     ', nm, q, '기대', k, z)
         report('a 마디 갈래 · 높이 (안 · 절토 · 소단 · 그대로)', okc)
-        report('a 그물 · 높이 질감', J(ed, '__map3d.gd.tris()') > 1000 and J(ed, '__map3d.gd.tex()'), str(J(ed, '__map3d.gd.tris()')))
+        report('a 그물 · 범위 질감 · 실사 질감 읽힘', J(ed, '__map3d.gd.tris()') > 200 and J(ed, '__map3d.gd.tex()') and J(ed, '__map3d.gd.tx().ok'), '%s · %s' % (J(ed, '__map3d.gd.tris()'), J(ed, '__map3d.gd.tx()')))
+        ok_v = True
+        for i, (sq, L) in enumerate(((sqA, 2 * 1.5), (sqB, 9.0))):
+            g = J(ed, '__map3d.gd.geo(%d)' % i)
+            P = [(p[0] - org[0], p[1] - org[1]) for p in sq]
+            el = ZF + 2 if i == 0 else ZF - 8
+            pv = [v for t in g['pad'] for v in t]
+            pad_ok = all(min(abs(v[0] - p[0]) + abs(v[1] - p[1]) for p in P) < 1e-6 and abs(v[2] - el) < 1e-9 for v in pv)
+            pad_a = sum(abs((t[1][0] - t[0][0]) * (t[2][1] - t[0][1]) - (t[1][1] - t[0][1]) * (t[2][0] - t[0][0])) / 2 for t in g['pad'])
+            dl = [seg_dist(e[0], e[1], P) for e in g['ends'] if e[3]]
+            turns = sharp_turns([e[:2] for e in g['ends'] if e[3]])
+            good = pad_ok and abs(pad_a - 400) < 1e-6 and dl and max(abs(d - L) for d in dl) < 0.02 and turns == 0
+            ok_v &= good
+            print('     부지 %d: 평탄면 세모 %d · 넓이 %.6f · 데이라이트 광선 %d · 테두리 거리 %.3f ~ %.3f (손셈 %.2f) · 급한 꺾임 %d · 갈래 세모 %s' % (
+                i + 1, len(g['pad']), pad_a, len(dl), min(dl or [0]), max(dl or [0]), L, turns, g['kn']))
+        report('a 평탄면 = 다각형 그대로 (꼭짓점 · 계획고 · 넓이) · 데이라이트 = 테두리에서 손셈 거리 (2 cm 안) · 급한 꺾임 0', ok_v)
         ed.js('__g.look(20, 0, 110, 89.5, 0)')
         imf = shot(ed, SD, '09_평평_위에서.png')
         cs = {nm: color_at(imf, J(ed, '__g.scr(%f, %f, %f)' % (x, y, z)), 2) for nm, (x, y, z) in
@@ -366,7 +426,7 @@ def main():
         img_f = shot(ed, SD, '04_평평_절토_소단.png')
         ring = [J(ed, '__g.scr(%f, %f, %f)' % (x - org[0], y - org[1], ZF + 1)) for x, y in [W(19, -21), W(61, -21), W(61, 21), W(19, 21)]]
         mkf = poly_mask(img_f.shape, ring) if all(ring) else np.zeros(img_f.shape[:2], bool)
-        report('g 맨땅이 모델보다 낮아도 절토 둘레 틈 (배경색) 없음', mkf.any() and bg_frac(img_f, mkf) < 0.002, '%.2f %%' % (100 * bg_frac(img_f, mkf)))
+        report('g 맨땅이 모델보다 낮아도 절토 둘레 틈 (배경색) 없음', mkf.any() and bg_frac(glshot(ed, img_f.shape), mkf) < 0.002, '%.2f %%' % (100 * bg_frac(glshot(ed, img_f.shape), mkf)))
         errs(ed, '평평한 땅')
 
         print('== d 그리기 (실제 땅 dem.js)')
@@ -406,6 +466,16 @@ def main():
             r0['cut'], r0['fill'], r0['area'], py['cut'], py['fill'], py['area'], time.time() - t0, r0['c'], r0['nx'], r0['ny'], r0['R']))
         report('q 절토 · 성토 · 정지 면적 = 따로 셈 3 % 안', close(r0['cut'], py['cut'], 0.03, 3) and close(r0['fill'], py['fill'], 0.03, 3) and close(r0['area'], py['area'], 0.03, 5))
         report('q 절토 · 성토 둘 다 있음 (계획고 = 평균)', r0['cut'] > 1 and r0['fill'] > 1)
+        g0 = J(ed, '__map3d.gd.geo(0)')
+        ends = [e for e in g0['ends'] if e[3] and not e[4]]
+        gd_e = J(ed, '(%s).map((e) => __map3d.gd.ground(e[0], e[1]))' % json.dumps([e[:2] for e in ends]))
+        err_e = [abs(g - e[2]) for g, e in zip(gd_e, ends) if g is not None]
+        P0 = [(p[0] - org[0], p[1] - org[1]) for p in site['pts']]
+        pv0 = [v for t in g0['pad'] for v in t]
+        turns0 = sharp_turns([e[:2] for e in g0['ends'] if e[3]])
+        print('     광선 %d (사면 %d) · 데이라이트 땅 차 최대 %.4f m · 급한 꺾임 %d' % (len(g0['ends']), len(ends), max(err_e or [0]), turns0))
+        report('q 데이라이트 = 땅과 만나는 곳 (3 cm 안) · 급한 꺾임 (계단) 거의 없음', err_e and max(err_e) < 0.03 and turns0 <= max(2, len(g0['ends']) // 50))
+        report('q 평탄면 세모 꼭짓점 = 다각형 꼭짓점 · 계획고', pv0 and all(min(abs(v[0] - p[0]) + abs(v[1] - p[1]) for p in P0) < 1e-6 and abs(v[2] - site['el']) < 1e-9 for v in pv0))
         el0 = site['el']
         ed.js("__g.setIn('el', %f)" % (el0 + 1))
         ed.frames(2)
@@ -439,7 +509,7 @@ def main():
         img1 = shot(ed, SD, '01_정지_위에서.png')
         sp = [J(ed, '__g.scr(%f, %f, %f)' % (p[0] - org[0], p[1] - org[1], site['el'])) for p in site['pts']]
         mk = poly_mask(img1.shape, sp)
-        report('g 위에서: 부지 안 배경색 화소 없음', bg_frac(img1, mk) < 0.003, '%.2f %%' % (100 * bg_frac(img1, mk)))
+        report('g 위에서: 부지 안 배경색 화소 없음', bg_frac(glshot(ed, img1.shape), mk) < 0.003, '%.2f %%' % (100 * bg_frac(glshot(ed, img1.shape), mk)))
         chg = (np.abs(img1 - img0).sum(2)[mk] > 30).mean()
         report('g 평탄면 = 원래 모델과 다름 (질감)', chg > 0.5, '%.0f %%' % (100 * chg))
         cols = {}
@@ -455,7 +525,13 @@ def main():
         img2 = shot(ed, SD, '02_정지_비스듬히.png')
         sp2 = [J(ed, '__g.scr(%f, %f, %f)' % (p[0] - org[0], p[1] - org[1], site['el'])) for p in site['pts']]
         mk2 = poly_mask(img2.shape, sp2) if all(sp2) else np.zeros(img2.shape[:2], bool)
-        report('g 비스듬히: 부지 안 배경색 화소 없음', mk2.any() and bg_frac(img2, mk2) < 0.003, '%.2f %%' % (100 * bg_frac(img2, mk2)))
+        report('g 비스듬히: 부지 안 배경색 화소 없음', mk2.any() and bg_frac(glshot(ed, img2.shape), mk2) < 0.003, '%.2f %%' % (100 * bg_frac(glshot(ed, img2.shape), mk2)))
+        cx_, cy_ = site['pts'][1][0] - org[0], site['pts'][1][1] - org[1]
+        ed.js('__g.look(%f, %f, 16, 40, 220)' % (cx_, cy_))
+        img5 = shot(ed, SD, '10_가까이_모서리.png')
+        rng = [J(ed, '__g.scr(%f, %f, %f)' % (cx_ + dx, cy_ + dy, site['el'])) for dx, dy in ((-3, -3), (3, -3), (3, 3), (-3, 3))]
+        mk5 = poly_mask(img5.shape, rng) if all(rng) else np.zeros(img5.shape[:2], bool)
+        report('g 가까이 모서리: 배경색 화소 없음', mk5.any() and bg_frac(glshot(ed, img5.shape), mk5) < 0.002, '%.2f %%' % (100 * bg_frac(glshot(ed, img5.shape), mk5)))
         ed.js('__g.look(0, 0, 95, 89.5, 0)')
         ui_click(ed, inp, 'gdShow')
         ed.frames(4)
@@ -467,13 +543,13 @@ def main():
         ed.js('__map3d.dtSet(true)')
         ed.frames(4)
         img4 = shot(ed, SD, '07_정지_맨땅보기.png')
-        report('g 맨땅 보기: 부지 안 배경색 화소 없음 · 정지 그물 그대로', J(ed, '__map3d.DT.on') and bg_frac(img4, mk) < 0.003 and J(ed, '__map3d.gd.tris()') > 1000, '%.2f %%' % (100 * bg_frac(img4, mk)))
+        report('g 맨땅 보기: 부지 안 배경색 화소 없음 · 정지 그물 그대로', J(ed, '__map3d.DT.on') and bg_frac(glshot(ed, img4.shape), mk) < 0.003 and J(ed, '__map3d.gd.tris()') > 100, '%.2f %%' % (100 * bg_frac(glshot(ed, img4.shape), mk)))
         ed.js('__map3d.dtSet(false)')
         ed.frames(2)
         errs(ed, '그림')
 
         print('== s 저장 · SHP · 고르기 · 지우기')
-        report('s 저장 (save_grade · 모아서)', wait_save(ed, 1))
+        report('s 고치면 [저장] 표시 → [저장] → save_grade', J(ed, '__g.saves().length') == 0 and wait_save(ed, inp, 1))
         sv = J(ed, '__g.saves()')
         D = read_js_text(sv[-1]) if sv else {}
         report('s 저장 글 = window.RV_GRADE · 부지 하나 · 계획고 · 점', sv and sv[-1].startswith('window.RV_GRADE') and len(D.get('sites', [])) == 1 and abs(D['sites'][0]['el'] - el0) < 1e-9 and D['sites'][0]['pts'] == site['pts'])
@@ -495,7 +571,7 @@ def main():
         c0 = J(ed, '__g.scr(0, 0, %f)' % site['el'])
         inp.click(c0[0], c0[1])
         report('s 3D 에서 부지 누르기 → 그 부지 고름', J(ed, '__map3d.gd.sel()') == 0 and J(ed, "document.querySelector('#gdList .gdRow.sel').dataset.i") == '0')
-        ed.js('__map3d.gd.flush()')
+        wait_save(ed, inp, 2)
         ok = ed.wait_js('__g.saves().length >= 2 && JSON.parse(__g.saves().slice(-1)[0].slice(__g.saves().slice(-1)[0].indexOf("{"), __g.saves().slice(-1)[0].lastIndexOf("}") + 1)).sites.length === 2', 6)
         last = J(ed, '__g.saves()')[-1]
         open(os.path.join(out, 'data', 'grade_saved.js'), 'w', encoding='utf-8').write(last)
@@ -516,7 +592,7 @@ def main():
         tb = J(ed, "(() => { const r = document.querySelector('#toast button').getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; })()")
         inp.click(tb[0], tb[1])
         ed.frames(2)
-        ok = ok and wait_save(ed, 1)
+        ok = ok and wait_save(ed, inp, 1)
         D2 = read_js_text(J(ed, '__g.saves()')[-1]) if ok else {}
         report('s × → 묻기 → 지우기 → 하나 남음 · 저장', ok and len(J(ed, '__map3d.gd.sites()')) == 1 and len(D2.get('sites', [])) == 1 and J(ed, "document.querySelectorAll('#gdList .gdRow').length") == 1)
         shot(ed, SD, '08_지운뒤.png')
@@ -531,7 +607,7 @@ def main():
         el_b = J(ed, '__map3d.gd.sites()[0].el')
         ed.js("__g.setIn('el', %f)" % (el_b + 3))
         report('b 칸 고쳐도 안 바뀜', abs(J(ed, '__map3d.gd.sites()[0].el') - el_b) < 1e-9)
-        report('b 그물 · 높이 질감', J(ed, '__map3d.gd.tris()') > 1000 and J(ed, '__map3d.gd.tex()'))
+        report('b 그물 · 높이 질감', J(ed, '__map3d.gd.tris()') > 100 and J(ed, '__map3d.gd.tex()'))
         ui_click(ed, inp, 'gdQty')
         ed.frames(2)
         report('b [정지 수량] → 수량 «정지» 갈래', J(ed, "__map3d.QT.on && __map3d.QT.view === 'grade'") and J(ed, '__g.rows()') == GK)

@@ -4,7 +4,7 @@
 ; 관리자 권한 없이 현재 사용자에게 설치 (회사 PC 에서 바로 깔리게).
 
 #define AppName "DH 에어로사이트"
-#define AppVersion "1.0.21"
+#define AppVersion "1.0.22"
 #define Publisher "DHEC Water and Sewage"
 #define ExeName "드론로드뷰.exe"
 

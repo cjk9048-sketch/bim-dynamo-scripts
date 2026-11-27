@@ -40,6 +40,7 @@ input[type=number]::-webkit-outer-spin-button, input[type=number]::-webkit-inner
 .tag.bad { background: rgba(239, 68, 68, .16); color: #f87171; }
 .tag.ok { background: rgba(34, 197, 94, .16); color: #4ade80; }
 .tag:empty { display: none; }
+.beta { flex: none; margin-left: 2px; padding: 0 6px; border-radius: 999px; background: rgba(168, 85, 247, .18); color: #c4a3fa; font-size: 10px; font-weight: 700; letter-spacing: .3px; line-height: 16px; text-transform: uppercase; }   /* 시험판 표시 (AI 구조물 인식 · 1127) */
 .pb2 { flex: none; height: 26px; padding: 0 10px; border: 0; border-radius: var(--r-s); background: var(--wall); box-shadow: inset 0 0 0 1px var(--line); color: var(--ink); font-size: 12px; font-weight: 600; white-space: nowrap; }
 .pb2:hover { background: var(--dhDim); }
 .pb2:disabled { opacity: .45; pointer-events: none; }
@@ -51,6 +52,22 @@ input[type=number]::-webkit-outer-spin-button, input[type=number]::-webkit-inner
 #top .ib { color: #bdbdbd; }
 #top .ib:hover { background: var(--panel-2); color: #fff; }
 #top .ib.on { background: var(--acc-soft); color: #fff; }
+/* 저장 (JACK 1127 · map3d.html 과 같음): 윗줄 [저장] · 저장 안 한 것 있으면 파랑 + 노란 점 · 묻는 창 #svBack */
+.svb { position: relative; flex: none; height: 30px; padding: 0 12px 0 9px; display: inline-flex; align-items: center; gap: 6px; border: 0; border-radius: var(--r-s);
+  background: var(--panel-2); color: #bdbdbd; font-weight: 600; font-size: 13px; transition: background .12s, color .12s; }
+.svb svg { width: 17px; height: 17px; stroke-width: 1.8; }
+.svb:hover { background: var(--panel-3); color: #fff; }
+.svb.dirty { background: var(--dh); color: #fff; }
+.svb.dirty:hover { background: var(--dhHi); }
+.svb.dirty::after { content: ''; position: absolute; right: -2px; top: -2px; width: 9px; height: 9px; border-radius: 50%; background: var(--yel); box-shadow: 0 0 0 2px var(--panel); }
+.svb:disabled { opacity: .6; pointer-events: none; }
+#svBack { position: fixed; inset: 0; z-index: 40; display: flex; align-items: center; justify-content: center; padding: 16px; background: rgba(0, 0, 0, .55); }
+#svDlg .fields label { grid-template-columns: 52px 1fr; }
+.svDirRow { display: flex; align-items: center; gap: 8px; min-width: 0; color: var(--sub); font-size: 12px; }
+.svDirRow span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#svNo { margin-right: auto; }
+#svDlg #svOk { background: var(--dh); color: #fff; box-shadow: none; }
+#svDlg #svOk:hover { background: var(--dhHi); }
 #dohwa { flex: none; display: block; height: 19px; width: auto; margin-left: 4px; opacity: .92; pointer-events: none; user-select: none; } /* 회사 로고 (흰색 · 누르지 않음) */
 .brand { display: flex; align-items: center; gap: 9px; min-width: 0; flex: 0 1 auto; padding-left: 4px; }
 .logo { flex: none; width: 16px; height: 16px; border-radius: 50%; background: radial-gradient(circle at 35% 35%, #9cc9ff, var(--acc) 60%, #173a73); }
@@ -167,6 +184,51 @@ input[type=number]::-webkit-outer-spin-button, input[type=number]::-webkit-inner
 #qTab .qv { text-align: right; white-space: nowrap; }
 #qNote { color: var(--sub); font-size: 11px; }
 #qNote:empty { display: none; }
+/* 개략공사비 (수량 줄 밑 단가 · 금액 · 소계 · 합계 · 단가표 창 · 3D map3d.html 과 같음) */
+#qCost { gap: 6px; }
+#qCost select { height: 24px; margin-left: 5px; }
+.qBtn { margin-left: auto; height: 24px; padding: 0 11px; border: 0; border-radius: 999px; background: var(--wall); box-shadow: inset 0 0 0 1px var(--line); color: var(--ink); font-size: 11.5px; font-weight: 600; }
+.qBtn:hover, .qBtn.on { background: var(--dhDim); color: var(--dh); }
+.qI { flex: none; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 50%; background: transparent; box-shadow: inset 0 0 0 1.5px var(--sub); color: var(--sub); font: italic 700 12px Georgia, serif; line-height: 1; }
+.qI:hover { color: var(--dh); box-shadow: inset 0 0 0 1.5px var(--dh); }
+.qI.on { background: var(--dh); color: #fff; box-shadow: none; }
+#qInfoBox { padding: 6px 8px; background: var(--wall); border-radius: var(--r-s); box-shadow: inset 0 0 0 1px var(--line); color: var(--sub); font-size: 11px; line-height: 1.5; }
+#qInfoBox ul { margin: 0; padding-left: 14px; }
+#qTab .qc { grid-column: 1 / -1; display: flex; justify-content: space-between; gap: 8px; margin: -2px 0 1px 10px; color: var(--sub); font-size: 11px; white-space: nowrap; }
+#qTab .qc span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+#qTab .qc b { font-weight: 600; color: var(--ink); }
+#qTab .qc.incl { opacity: .75; }
+#qTab .qc.none span, #qTab .qc.warn span { color: #f59e0b; }
+#qTab .qc.empty { display: none; }
+#qSum { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; padding-top: 5px; border-top: 1px solid var(--line); }
+#qSum .sl { color: var(--sub); white-space: nowrap; }
+#qSum .sv { text-align: right; white-space: nowrap; }
+#qSum .tot { font-weight: 700; color: var(--dh); }
+#qSum .ko { grid-column: 1 / -1; margin-top: -2px; text-align: right; color: var(--sub); font-size: 11px; }
+#cpDlg { position: fixed; right: 18px; top: calc(var(--topH) + 18px); z-index: 8; width: min(470px, calc(100% - 24px)); max-height: calc(100% - var(--topH) - 30px); }
+#cpDlg .dlgHead b { flex: none; }
+#cpDlg .dlgHead .dlgX { margin-left: auto; }
+#cpDlg .dlgFoot { position: sticky; bottom: 0; justify-content: space-between; padding-top: 10px; background: var(--panel); border-top: 1px solid var(--line); }
+.cpTop { display: flex; align-items: center; gap: 14px; }
+.cpTop select, .cpTop input { height: 26px; margin-left: 6px; }
+.cpTop input { width: 70px; }
+.cpHint, .cpSrc { color: var(--sub); font-size: 11px; }
+.cpSec { margin-top: 2px; color: var(--dh); font-size: 12px; font-weight: 700; }
+.cpTab { display: grid; gap: 5px 10px; align-items: center; font-size: 12px; font-variant-numeric: tabular-nums; }
+.cpPipe { grid-template-columns: 1fr auto auto auto; }
+.cpItems { grid-template-columns: 1fr auto auto; }
+.cpTab .h { color: var(--sub); font-size: 11px; }
+.cpTab .r { text-align: right; white-space: nowrap; }
+.cpTab .b { font-weight: 700; }
+.cpTab .u { color: var(--sub); white-space: nowrap; }
+.cpTab .nm { min-width: 0; }
+.cpTab .nm b { display: block; font-weight: 600; }
+.cpTab .nm small { display: block; color: var(--sub); font-size: 10.5px; line-height: 1.35; }
+.cpTab .nm small.src { opacity: .75; }
+.cpTab .nm small.w { color: #f59e0b; }
+.cpTab input { width: 96px; height: 26px; text-align: right; }
+.cpTab input.mod { font-weight: 700; color: var(--dh); }
+.cpNone { grid-column: 1 / -1; color: var(--sub); }
 /* 간섭 (간섭 카테고리 안) */
 #qClr { display: flex; align-items: center; gap: 10px; }
 #qClr label { display: flex; align-items: center; gap: 5px; color: var(--sub); font-weight: 600; font-size: 12px; }

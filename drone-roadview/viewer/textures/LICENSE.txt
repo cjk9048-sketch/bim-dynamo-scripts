@@ -1,0 +1,14 @@
+부지정지 질감 (3D 매핑 보기 · map3d.js «부지정지»)
+================================================
+
+gd_color.jpg (색 × 주변광 차폐^0.5) · gd_normal.jpg (노멀 · OpenGL 꼴) = 1024 × 1024 네 층을 세로로 이음 (위에서부터 0 ~ 3).
+원본 = ambientCG 1K-JPG 묶음 (2026-11-27 받음) · 크기 · 품질만 바꿈.
+
+층  쓰는 곳          원본         주소
+0   평탄면 (쇄석)    Gravel041    https://ambientcg.com/view?id=Gravel041
+1   절토 사면 (흙)   Ground067    https://ambientcg.com/view?id=Ground067
+2   성토 사면 (풀)   Grass004     https://ambientcg.com/view?id=Grass004
+3   소단 (자갈)      Gravel040    https://ambientcg.com/view?id=Gravel040
+
+라이선스: CC0 1.0 Universal (Public Domain Dedication) — https://creativecommons.org/publicdomain/zero/1.0/
+ambientCG 의 모든 자료는 CC0 (상업 사용 · 고치기 · 다시 배포 자유 · 출처 표시 의무 없음) — https://docs.ambientcg.com/license/

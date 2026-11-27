@@ -59,6 +59,13 @@ console.log('== 터파기 빠지는 구간 = 수직구 바깥 벽 사이 (JACK 1
 pl = R.plan({ k: 'jack', a: 30, b: 70 }, P, ground, OD);
 eq('사각 시점 = 30 − (6/2 + 0.4)', pl.ta, 26.6, 1e-9);
 eq('사각 종점 = 70 + (3/2 + 0.4)', pl.tb, 71.9, 1e-9);
+eq('수직구 바닥 자리 = 터파기 영역 (발진 6.8 × 3.8)', pl.foot[0].area, 6.8 * 3.8, 1e-9);
+eq('수직구 바닥 자리 (도달 3.8 × 3.3)', pl.foot[1].area, 3.8 * 3.3, 1e-9);
+eq('바닥 자리 꼭짓점 = 바깥 벽 (발진 x = 30 − 3.4)', Math.min(...pl.foot[0].poly.map((p) => p[0])), 26.6, 1e-9);
+pl = R.plan({ k: 'jack', a: 30, b: 70, shape: 'circ' }, P, ground, OD);
+eq('원형 바닥 자리 = 24각형 (r = 3.07)', pl.foot[0].area, 12 * 3.07 * 3.07 * Math.sin(Math.PI / 12), 1e-9);
+pl = R.plan({ k: 'open', a: 40, b: 60 }, P, ground, OD);
+eq('횡단 = 바닥 자리 없음', pl.foot === undefined, true);
 pl = R.plan({ k: 'jack', a: 30, b: 70, rev: true }, P, ground, OD);
 eq('바꾸기 → 시점 쪽 = 도달 (3/2 + 0.4)', pl.ta, 28.1, 1e-9);
 eq('바꾸기 → 종점 쪽 = 발진 (6/2 + 0.4)', pl.tb, 73.4, 1e-9);

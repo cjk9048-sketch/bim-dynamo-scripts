@@ -817,9 +817,13 @@ def run_host(ed, out_dir, shots_dir):
         n04 = len(calls('save_pipes'))
         while time.time() - t_up < 1.4:
             ed.pump(0.05)
+        n14 = len(calls('save_pipes'))                    # JACK 1127: 저절로 안 씀 · 윗줄 [저장] 을 눌러야 씀
+        dirty = ed.js("document.getElementById('hSave').classList.contains('dirty')")
+        inp.el_click('hSave')
+        ed.wait_js("window.__host.calls.some((c) => c.name === 'save_pipes')", 5)
         sv = calls('save_pipes')
         text = ed.js("'window.RV_PIPES = ' + JSON.stringify(window.RV_PIPES) + ';\\n'")
-        report('host 0.4 초엔 아직 · 1.4 초에 save_pipes 한 번', n04 == 0 and len(sv) == 1, '%d → %d' % (n04, len(sv)))
+        report('host 1.4 초 뒤에도 안 씀 (저장 안 함 표시) · [저장] → save_pipes 한 번', n04 == 0 and n14 == 0 and dirty and len(sv) == 1, '%d → %d → %d' % (n04, n14, len(sv)))
         report('host 저장 글 = 파일 꼴 전체 (ctrl · edited)', bool(sv) and sv[0]['arg'] == text and '"ctrl":' in text and '"edited":true' in text
                and text.startswith('window.RV_PIPES = {') and text.endswith('};\n'), '%d 글자' % len(text))
         report('host 이 브라우저에는 저장 안 함', not ed.js("!!localStorage.getItem('rv_pipes:' + window.RV_PROJECT.title)"))
@@ -827,9 +831,14 @@ def run_host(ed, out_dir, shots_dir):
         inp.drag(a2, (a2[0] + 5, a2[1]))
         inp.drag((a2[0] + 5, a2[1]), (a2[0] + 9, a2[1] + 3))
         ed.pump(1.4)
-        report('host 빨리 두 번 고침 → 한 번 저장', len(calls('save_pipes')) == 2, '%d' % len(calls('save_pipes')))
+        n_a = len(calls('save_pipes'))
+        inp.el_click('hSave')
+        ed.pump(0.4)
+        report('host 두 번 고침 → [저장] 에 한 번', n_a == 1 and len(calls('save_pipes')) == 2, '%d' % len(calls('save_pipes')))
         inp.key('z', 'KeyZ', 90, CTRL)
-        ed.pump(1.4)
+        ed.pump(1.0)
+        inp.key('s', 'KeyS', 83, CTRL)                   # Ctrl+S = [저장]
+        ed.pump(0.4)
         sv = calls('save_pipes')
         report('host Ctrl+Z → 저장', len(sv) == 3 and sv[-1]['arg'] == ed.js("'window.RV_PIPES = ' + JSON.stringify(window.RV_PIPES) + ';\\n'"), '%d' % len(sv))
         a3 = (a2[0] + 5, a2[1])
@@ -867,9 +876,11 @@ def run_host(ed, out_dir, shots_dir):
         a = (round(h[0]), round(h[1]))
         inp.drag(a, (a[0] + 6, a[1] + 6))
         inp.el_click('hHome')
+        asked = ed.wait_js("!document.getElementById('svBack').hidden", 5)    # 저장 안 한 변경 → 묻는 창 → [저장]
+        inp.el_click('svOk')
         ed.wait_js("window.__host.calls.some((c) => c.name === 'go_home')", 5)
         names = [c['name'] for c in calls()][-2:]
-        report('host [처음] → 안 쓴 고침 먼저 저장 → go_home', names == ['save_pipes', 'go_home'] and len(calls('save_pipes')) == 5, json.dumps(names))
+        report('host [처음] → 묻기 → [저장] → save_pipes → go_home', asked and names == ['save_pipes', 'go_home'] and len(calls('save_pipes')) == 5, json.dumps(names))
         errs(ed, 'host')
     finally:
         ci.cleanup(out_dir)

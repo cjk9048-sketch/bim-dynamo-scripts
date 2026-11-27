@@ -90,7 +90,7 @@ window.__rc = {
 def prep(out):
     """시험용 페이지 · 관로 파일 (원래 파일은 그대로)."""
     os.makedirs(os.path.join(out, 'viewer'), exist_ok=True)
-    for fn in ('map3d.js', 'river.js'):
+    for fn in ('map3d.js', 'river.js', 'cost.js'):     # cost.js = 개략공사비 셈 (1127)
         shutil.copy2(os.path.join(REPO, 'viewer', fn), os.path.join(out, 'viewer', fn))
     shutil.copy2(os.path.join(HERE, 'hostmock.js'), os.path.join(out, 'viewer', 'hostmock.js'))
     html = open(os.path.join(REPO, 'viewer', 'map3d.html'), encoding='utf-8').read().replace('data/pipes.js', 'data/pipes_river.js')
@@ -308,6 +308,7 @@ def main():
         ed.frames(2)
         rv = J(ed, 'window.RV_PIPES.lines[0].river')
         report('d 목록 × → 추진 지움 (횡단 남음)', len(rv) == 1 and rv[0]['k'] == 'open', str([x['k'] for x in rv]))
+        ed.js("document.getElementById('bSave').click()")              # JACK 1127: 윗줄 [저장] 을 눌러야 씀
         ed.wait_js("__host.calls.filter((c) => c.name === 'save_pipes').length > %d" % n0, 5)
         sv = calls(ed, 'save_pipes')
         txt = sv[-1] if sv else ''

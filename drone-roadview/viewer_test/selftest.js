@@ -241,7 +241,7 @@
     const r4 = rowRes();
     log('RES', '4 pairs', JSON.stringify(r4), $('alSum').textContent);
     if (!LOOSE) check('4 짝 어긋남 모두 < 0.05 m', r4.length === 4 && r4.every((v) => v < 0.05), JSON.stringify(r4));
-    check('요약 글', /^맞춤 오차 \d+\.\d\d m · 점 4개$/.test($('alSum').textContent) && $('alSum2').textContent === $('alSum').textContent, $('alSum').textContent);
+    check('요약 글', /^위치 보정 오차 \d+\.\d\d m · 점 4개$/.test($('alSum').textContent) && $('alSum2').textContent === $('alSum').textContent, $('alSum').textContent);
     await snap('solved');
 
     // 4번 지우기 → 3 짝으로 다시 풂
@@ -326,7 +326,7 @@
     await addPair(TR, '0001', 0);
     const c = calNow(TR.video);
     check('1 짝 → 동 · 북만 바뀜', c.dz === 0 && c.dyaw === 0 && c.dpitch === 0 && c.droll === 0 && (c.dx !== 0 || c.dy !== 0), JSON.stringify(c));
-    check('1 짝 어긋남 0.00 m', rowRes()[0] === 0 && $('alSum').textContent === '맞춤 오차 0.00 m · 점 1개', rowText() + ' / ' + $('alSum').textContent);
+    check('1 짝 어긋남 0.00 m', rowRes()[0] === 0 && $('alSum').textContent === '위치 보정 오차 0.00 m · 점 1개', rowText() + ' / ' + $('alSum').textContent);
   }
 
   if (T === 'al2') {
@@ -336,7 +336,7 @@
     await addPair(TR, '0001', 1);
     const c = calNow(TR.video);
     check('2 짝 → 동 · 북 · 방향 (높이 그대로)', c.dz === 0 && c.dpitch === 0 && c.droll === 0 && c.dyaw !== 0, JSON.stringify(c));
-    check('2 짝 요약', /^맞춤 오차 \d+\.\d\d m · 점 2개$/.test($('alSum').textContent), $('alSum').textContent);
+    check('2 짝 요약', /^위치 보정 오차 \d+\.\d\d m · 점 2개$/.test($('alSum').textContent), $('alSum').textContent);
     log('RES', '2 pairs', JSON.stringify(rowRes()), $('alSum').textContent);
     await snap('two');
   }
@@ -592,12 +592,15 @@
       && shown($('bShpOut')) && shown(catEl('out')) && shown(catEl('web')) && shown($('tgTrim')),
       ['hPipes', 'hObst', 'hHome'].map((id) => bName($(id))).join(','));
   }
-  if (T === 'host_late') { // 늦게 붙은 api 로도 맞춤 자동 저장
+  const saveNow = async () => { $('hSave').click(); await sleep(250); }; // JACK 1127: 저절로 안 씀 · 윗줄 [저장] 을 눌러야 씀
+  if (T === 'host_late') { // 늦게 붙은 api 로도 맞춤 → [저장] 에 씀
     $('calHead').click();
     await sleep(50);
     tap($('calRows').querySelectorAll('button')[1], 0, 0); // 동 +
     await sleep(1300);
-    check('늦게 붙어도 맞춤 저장 한 번', hcalls('save_calib').length === 1, hcalls('save_calib').length);
+    const held0 = hcalls('save_calib').length === 0 && $('hSave').classList.contains('dirty');
+    await saveNow();
+    check('늦게 붙어도 맞춤 → [저장] 에 한 번 (그 전엔 안 씀)', held0 && hcalls('save_calib').length === 1, hcalls('save_calib').length);
   }
   if (T === 'host') {
     const H = window.__host, NEW = [255, 59, 48], OLD = [0, 229, 255];
@@ -685,8 +688,10 @@
     await sleep(400);
     check('0.4 초 뒤엔 아직 안 저장', hcalls('save_calib').length === 0, hcalls('save_calib').length);
     await sleep(900);
+    const held1 = hcalls('save_calib').length === 0 && $('hSave').classList.contains('dirty');
+    await saveNow();
     const sv = hcalls('save_calib');
-    check('마지막으로 바꾼 지 0.8 초 뒤 한 번 저장', sv.length === 1 && sv[0].t - tLast >= 780 && sv[0].t - tLast < 1100, sv.length + ' · ' + (sv[0] ? Math.round(sv[0].t - tLast) + ' ms' : '-'));
+    check('1.3 초 뒤에도 안 씀 · [저장] → 한 번 (마지막 값)', held1 && sv.length === 1 && sv[0].t - tLast >= 1250, sv.length + ' · ' + (sv[0] ? Math.round(sv[0].t - tLast) + ' ms' : '-'));
     const pw = window.pywebview;
     window.pywebview = undefined; // 잠깐 프로그램 없는 척 → «파일로 저장» = 내려받기
     const dl = await exportCalib();
@@ -699,7 +704,7 @@
     $('calSave').click();
     await sleep(200);
     URL.createObjectURL = oc;
-    check('프로그램 안 «파일로 저장» → 바로 저장 (내려받기 안 함)', hcalls('save_calib').length === 2 && !blobbed && $('toast').textContent === '맞춤 저장됨', hcalls('save_calib').length + ' / ' + $('toast').textContent);
+    check('프로그램 안 [위치 보정] = [저장] (내려받기 안 함 · 고친 것 없으면 안 씀)', hcalls('save_calib').length === 1 && !blobbed && $('toast').textContent === '저장됨', hcalls('save_calib').length + ' / ' + $('toast').textContent);
     // 점 짝이 바뀌어도 한 번 저장
     await enterPick();
     const rc = $('ov').getBoundingClientRect(), mr = $('map').getBoundingClientRect();
@@ -708,12 +713,14 @@
     tap($('map'), mr.left + mr.width / 2 + 20, mr.top + mr.height / 2 + 10);
     await until(() => $('alList').querySelectorAll('.alRow').length === 1, 3000);
     await sleep(1300);
+    await saveNow();
     const sv3 = hcalls('save_calib');
-    check('점 짝 → 한 번 저장 (짝 포함)', sv3.length === 3 && sv3[2].arg.indexOf('"pairs"') >= 0, sv3.length);
+    check('점 짝 → [저장] 에 한 번 (짝 포함)', sv3.length === 2 && sv3[1].arg.indexOf('"pairs"') >= 0, sv3.length);
     $('alClear').click();
     await sleep(1300);
+    await saveNow();
     const sv4 = hcalls('save_calib');
-    check('짝 모두 지움 → 한 번 저장 (짝 없음)', sv4.length === 4 && sv4[3].arg.indexOf('"pairs"') < 0, sv4.length);
+    check('짝 모두 지움 → [저장] 에 한 번 (짝 없음)', sv4.length === 3 && sv4[2].arg.indexOf('"pairs"') < 0, sv4.length);
     $('alEnd').click();
     // 6) 웹 공유 카테고리: 웹 주소 (진행 → 주소 → 복사 · 열기) · 결과물 카테고리: 폴더
     $('hd_web').click();
@@ -745,14 +752,16 @@
     $('hd_web').click();
     $('hd_out').click();
     check('머리줄 → 웹 공유 · 결과물 접힘 (창 없음)', !shown($('exWeb')) && !shown($('exFolder')) && !shown($('dlgBack')));
-    // 7) [처음]: 아직 안 쓴 맞춤을 먼저 저장 → go_home (두 번 저장 안 함)
+    // 7) [처음]: 아직 안 쓴 맞춤 → 묻는 창 → [저장] → 저장 → go_home (두 번 저장 안 함)
     const nSave = hcalls('save_calib').length;
     tap(plusYaw, 0, 0);
     $('hHome').click();
+    const asked = await until(() => shown($('svBack')), 3000);
+    $('svOk').click();
     await until(() => hcalls('go_home').length === 1, 3000);
     const last = H.calls.slice(-2).map((c) => c.name).join(',');
     await sleep(1200);
-    check('처음 → 맞춤 먼저 저장 → go_home', last === 'save_calib,go_home' && hcalls('save_calib').length === nSave + 1, last + ' / ' + hcalls('save_calib').length);
+    check('처음 → 묻기 → [저장] → 맞춤 저장 → go_home', asked !== false && last === 'save_calib,go_home' && hcalls('save_calib').length === nSave + 1, last + ' / ' + hcalls('save_calib').length);
   }
 
   if (T === 'trench_host') { // 프로그램 안: 터파기 값이 바뀌면 0.8 초 뒤 save_calib 한 번 (trench 포함) · 단면 창 칸
@@ -770,9 +779,11 @@
     await sleep(400);
     check('0.4 초 뒤엔 아직 안 저장', hcalls('save_calib').length === 0, hcalls('save_calib').length);
     await sleep(900);
+    const held = hcalls('save_calib').length === 0;
+    await saveNow();
     let sv = hcalls('save_calib');
     const t1 = sv[0] && trOf(sv[0].arg);
-    check('기울기 0.5 → 저장 한 번 (trench 포함)', sv.length === 1 && !!t1 && t1.n === 0.5 && t1.tp === 0.2 && t1.margin === 0.3 && t1.bed === 0.1 && t1.on === true, sv.length + ' ' + JSON.stringify(t1));
+    check('기울기 0.5 → 1.3 초 뒤에도 안 씀 · [저장] 에 한 번 (trench 포함)', held && sv.length === 1 && !!t1 && t1.n === 0.5 && t1.tp === 0.2 && t1.margin === 0.3 && t1.bed === 0.1 && t1.on === true, sv.length + ' ' + JSON.stringify(t1));
     const pw = window.pywebview;
     window.pywebview = undefined; // 잠깐 프로그램 없는 척 → «파일로 저장» = 내려받기
     const dl = await exportCalib();
@@ -780,10 +791,12 @@
     check('저장한 글 = 내려받는 calib.js 글', !!sv[0] && sv[0].arg === dl, dl.length + ' 글자');
     $('secOn').click();
     await sleep(1300);
+    await saveNow();
     sv = hcalls('save_calib');
     check('터파기 끔 → 저장 (on false)', sv.length === 2 && trOf(sv[1].arg).on === false && $('secDlg').classList.contains('off'), sv.length + ' ' + JSON.stringify(sv[1] && trOf(sv[1].arg)));
     $('secDef').click();
     await sleep(1300);
+    await saveNow();
     sv = hcalls('save_calib');
     check('기본값 (SAC) → 저장', sv.length === 3 && JSON.stringify(trOf(sv[2].arg)) === JSON.stringify({ tp: 0.2, n: 0.3, margin: 0.3, bed: 0.1, prot: 0.3, on: true }) && $('sec_n').value === '0.3' && $('secOn').checked,
       JSON.stringify(sv[2] && trOf(sv[2].arg)));
@@ -798,6 +811,7 @@
     tap($('secRows').querySelectorAll('button')[3], 0, 0); // 포장 +
     check('± 단추 (포장 0.2 → 0.25)', $('sec_tp').value === '0.25', $('sec_tp').value);
     await sleep(1300);
+    await saveNow();
     check('± 도 저장', hcalls('save_calib').length === 4 && trOf(hcalls('save_calib')[3].arg).tp === 0.25, hcalls('save_calib').length);
     keyDown('Escape');
     await sleep(50);

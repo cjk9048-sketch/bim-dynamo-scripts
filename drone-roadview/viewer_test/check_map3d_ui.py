@@ -48,6 +48,83 @@ def on(ed, eid):
     return J(ed, "document.getElementById('%s').classList.contains('on')" % eid)
 
 
+# 개략공사비 손셈 (JACK 1127 · viewer/cost.js): 주철관 D500 m당 = 자재비 246,898 × 1.10 + 공사비 (아스팔트 476,740 · 콘크리트 399,122) × 1.50 (2016.01 환경부 표)
+CI500 = {'asphalt': 246898 * 1.10 + 476740 * 1.50, 'concrete': 246898 * 1.10 + 399122 * 1.50}
+HP, LAG, SP, CURB, WALK = 115883 + 58284, 40212 + 32031, 100112 + 59996, 16723, 11011   # 표준시장단가 (항타 + 항발 · 설치 + 철거) · × 1.50
+
+
+def cost_check(ed, ui, SD):
+    """가시설 갈래가 열린 채 (관 0 에 토류벽 5~14 · 시트파일 20~23.5) 부름 → 끝나면 다시 가시설 갈래."""
+    if not J(ed, '!!window.RVCost'):
+        report('$ cost.js 읽힘', False)
+        return
+    close = lambda a, b, t=0.5: abs(a - b) <= t     # noqa: E731
+    ck = lambda k: J(ed, "(() => { const e = document.querySelector('#qSum [data-k=%s]'); return e ? Number(e.dataset.v) : NaN; })()" % k)   # noqa: E731
+    C = lambda e: J(ed, '__map3d.QT.cost.' + e)    # noqa: E731
+    n_hp, a_hp, n_sp = C('rows.sh_hpile.parts[0].q'), C('rows.sh_hpile.parts[2].q'), C('rows.sh_sheet.parts[0].q')
+    want_sh = n_hp * HP * 1.5 + a_hp * LAG * 1.5 + n_sp * SP * 1.5
+    report('$ 가시설 소계 = 손셈 (H파일 2 × (9 ÷ 1.8 + 1) = 12 본 · 흙막이판 2 × ∫깊이 · 시트파일 2 × ⌈3.5 ÷ 0.4⌉ = 18 본)',
+           n_hp == 12 and n_sp == 18 and 2 * 9 * 0.8 < a_hp < 2 * 9 * 6 and close(ck('sub'), want_sh), '소계 %.0f · 손셈 %.0f · 흙막이판 %.2f m²' % (ck('sub'), want_sh, a_hp))
+    rows = J(ed, "[...document.querySelectorAll('#qTab .qc')].filter((e) => !e.hidden && getComputedStyle(e).display !== 'none').map((e) => e.id)")
+    report('$ 가시설 표 밑줄 = 토류벽 · 시트파일 (간이흙막이 0 m = 숨김)', rows == ['qc_sh_hpile', 'qc_sh_sheet'], str(rows))
+
+    ui('tgQty')
+    Ls = J(ed, "__map3d.lines().map((L) => [L.src, L.mat, Math.round(L.dia * 1000), __map3d.rv.lineQty(L.src).tlen])")
+    bd = J(ed, "Object.fromEntries(['bd_curb', 'bd_sidewalk', 'bd_wallA'].map((k) => [k, Number(document.getElementById('qt_' + k).dataset.v) || 0]))")
+    def want_tot(pave, k=1.0, hp_in=115883):
+        pipe = 0.0
+        for src, mat, D, tl in Ls:
+            r = CI500[pave] if (mat, D) == ('ci', 500) else J(ed, "RVCost.pipeRate('%s', %d, '%s').rate" % (mat, D, pave))
+            pipe += r * k * tl
+        ex = n_hp * (HP - 115883 + hp_in) * 1.5 + a_hp * LAG * 1.5 + n_sp * SP * 1.5 + bd['bd_curb'] * CURB * 1.5 + bd['bd_sidewalk'] * WALK * 1.5
+        return pipe, pipe + ex
+    wp, wt = want_tot('asphalt')
+    report('$ 전체 = 관로 본공사 + 부대 공종 = 합계 (손셈 · 주철 D500 아스팔트 m당 %.1f)' % CI500['asphalt'],
+           close(ck('pipe'), wp) and close(ck('total'), wt) and close(ck('pipe') + ck('extra'), ck('total')),
+           '관로 %.0f (손셈 %.0f) · 합계 %.0f (손셈 %.0f) · 관 %d 개' % (ck('pipe'), wp, ck('total'), wt, len(Ls)))
+    ko = J(ed, "document.querySelector('#qSum .ko') ? document.querySelector('#qSum .ko').textContent : ''")
+    report('$ 합계 밑 «억 · 만» 글', ('억' in ko or '만' in ko) if wt >= 1e4 else ko == '', ko)
+    # 연장 밑줄: m당 단가가 하나 = «단가 …원/m» · 관마다 다름 = «관 N개 · 평균 …원/m» (평균 = 관로 본공사 ÷ Σ 개착 길이)
+    ql = J(ed, "document.getElementById('qc_len').firstChild.textContent")
+    rates = {round(CI500['asphalt']) if (m, D) == ('ci', 500) else round(J(ed, "RVCost.pipeRate('%s', %d, 'asphalt').rate" % (m, D))) for _, m, D, _ in Ls}
+    avg = J(ed, "RVCost.won(%r)" % (wp / sum(t for *_, t in Ls)))
+    want_l = ('단가 ' if len(rates) == 1 else '관 %d개 · 평균 ' % len(Ls)) + avg + '원/m'
+    report('$ 연장 밑줄 = %s · 금액' % ('단가 원/m' if len(rates) == 1 else '관 %d개 · 평균 원/m' % len(Ls)), ql == want_l, '%s · 기대 %s' % (ql, want_l))
+    report('$ 터파기 밑줄 = 관로에 포함', J(ed, "document.getElementById('qc_cut').textContent") == '관로 본공사에 포함')
+    shot(ed, SD, '30_개략공사비_전체.png')
+
+    # (i) 설명
+    ui('qInfo')
+    info = J(ed, "document.getElementById('qInfoBox').hidden ? '' : document.getElementById('qInfoBox').textContent")
+    report('$ (i) → 단가 출처 설명 (개략산정기준 · 표준시장단가 · × 1.50)', '개략산정기준' in info and '표준시장단가' in info and '제2026-652호' in info and '1.50' in info, info[:60])
+    shot(ed, SD, '31_개략공사비_i설명.png')
+    ui('qInfo')
+    report('$ (i) 다시 → 닫힘', J(ed, "document.getElementById('qInfoBox').hidden"))
+
+    # 단가표 창 · 단가 고치기 → 금액 바뀜 · 기본값
+    ui('qPrice')
+    dlg_vis = lambda: J(ed, "(() => { const e = document.getElementById('cpDlg'), r = e.getBoundingClientRect(); return !e.hidden && r.width > 0 && r.height > 0; })()")   # noqa: E731  (fixed 창 = offsetParent 없음)
+    report('$ [단가표] → 창 (그 밖 공종 %d 줄 · 관로 줄)' % J(ed, 'RVCost.ITEMS.length'),
+           dlg_vis() and J(ed, "document.querySelectorAll('#cpBody .cpItems input').length") == J(ed, 'RVCost.ITEMS.length') and J(ed, "document.querySelectorAll('#cpBody .cpPipe .nm').length") >= 1)
+    report('$ 공인 단가 없음 = 빈 칸 · «직접 넣기»', J(ed, "document.getElementById('cp_panel').value === '' && document.getElementById('cp_panel').placeholder === '직접 넣기'"))
+    shot(ed, SD, '32_단가표_창.png')
+    ed.js("(() => { const e = document.getElementById('cp_hp_in'); e.value = '200000'; e.dispatchEvent(new Event('change', { bubbles: true })); })()"); ed.frames(2)
+    _, wt2 = want_tot('asphalt', hp_in=200000)
+    report('$ H파일 항타 단가 200,000 → 합계 = 손셈 · 고친 칸 굵게', close(ck('total'), wt2) and J(ed, "document.getElementById('cp_hp_in').classList.contains('mod')"), '%.0f · 손셈 %.0f' % (ck('total'), wt2))
+    report('$ 고친 값 = 이 PC 에 기억', J(ed, "JSON.parse(localStorage.getItem('rv_cost:v1')).price.hp_in") == 200000)
+    ed.js("(() => { const e = document.getElementById('cpK'); e.value = '1.2'; e.dispatchEvent(new Event('change', { bubbles: true })); })()"); ed.frames(2)
+    ed.js("(() => { const e = document.getElementById('qPave'); e.value = 'concrete'; e.dispatchEvent(new Event('change', { bubbles: true })); })()"); ed.frames(2)
+    wp3, wt3 = want_tot('concrete', k=1.2, hp_in=200000)
+    report('$ 보정 계수 1.2 · 포장 콘크리트 → 관로 = 손셈 × 1.2', close(ck('pipe'), wp3) and close(ck('total'), wt3) and J(ed, "document.getElementById('cpPave').value") == 'concrete', '%.0f · 손셈 %.0f' % (ck('pipe'), wp3))
+    ui('cpDef'); ed.frames(2)
+    ed.js("(() => { const e = document.getElementById('qPave'); e.value = 'asphalt'; e.dispatchEvent(new Event('change', { bubbles: true })); })()"); ed.frames(2)
+    report('$ [기본값] → 합계 처음대로', close(ck('total'), wt) and J(ed, "document.getElementById('cp_hp_in').value") == '115883', '%.0f' % ck('total'))
+    ui('cpX')
+    report('$ × → 창 닫힘', not dlg_vis() and not on(ed, 'qPrice'))
+    errs(ed, '개략공사비')
+    ui('qkShore')
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--out', required=True)
@@ -74,7 +151,7 @@ def main():
 
         print('== t 윗줄')
         top = J(ed, "[...document.querySelectorAll('#top button')].filter((b) => b.offsetParent !== null).map((b) => b.id)")
-        report('t 윗줄 단추 = 처음 · 조작법 · 오른쪽 칸', top == ['bHome', 'bHelp', 'tgSide'], str(top))
+        report('t 윗줄 단추 = 처음 · 저장 · 조작법 · 오른쪽 칸', top == ['bHome', 'bSave', 'bHelp', 'tgSide'], str(top))
         report('t 이름', J(ed, "document.getElementById('title').textContent") == J(ed, "window.RV_MAPPING.title || '3D 매핑'"))
         inp.el_click('bHelp')
         report('t 조작법 열림', vis(ed, 'helpPop'))
@@ -232,6 +309,7 @@ def main():
         shot(ed, SD, '07_수량_가시설.png')
         sh = J(ed, "[Number(document.getElementById('qt_sh_hpile').dataset.v), Number(document.getElementById('qt_sh_sheet').dataset.v), Number(document.getElementById('qt_sh_panel').dataset.v)]")
         report('q 가시설 연장 = 구간 합 (토류벽 9 · 시트파일 3.5)', abs(sh[0] - 9) < 1e-6 and abs(sh[1] - 3.5) < 1e-6 and sh[2] == 0 and L0 > 24, str(sh))
+        cost_check(ed, ui, SD)
         ui('qkShore')
         report('q 같은 단추 → 닫힘', not vis(ed, 'qtyBox') and not on(ed, 'qkShore'))
         ui('qkEarth')

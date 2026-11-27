@@ -457,7 +457,7 @@ def main():
 
     shutil.copyfile(os.path.join(VIEWER, 'index.html'), os.path.join(out, '로드뷰.html'))
     shutil.copyfile(os.path.join(VIEWER, 'index.html'), os.path.join(out, 'index.html'))  # 빌더처럼 같은 쪽을 둘로
-    for f in ('app.js', 'style.css', 'river.js'):     # river.js = 하천 추진 · 횡단 셈 (빌더와 같음)
+    for f in ('app.js', 'style.css', 'river.js', 'cost.js'):     # river.js = 하천 추진 · 횡단 셈 · cost.js = 개략공사비 셈 (빌더와 같음)
         shutil.copyfile(os.path.join(VIEWER, f), os.path.join(out, 'viewer', f))
     print('out', out)
 

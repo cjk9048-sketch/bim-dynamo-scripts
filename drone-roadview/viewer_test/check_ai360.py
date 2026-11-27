@@ -134,6 +134,7 @@ def main():
         ed.frames(2)
         r = J(ed, "(() => { const b = [...document.querySelectorAll('#aiList .aiRow')].find((x) => x.dataset.id === 'c1').querySelector('.aiOk'); b.scrollIntoView({block: 'nearest'}); const q = b.getBoundingClientRect(); return [q.left + q.width / 2, q.top + q.height / 2]; })()")
         inp.click(r[0], r[1])
+        ed.js("document.getElementById('hSave').click()")              # JACK 1127: 윗줄 [저장] 을 눌러야 씀
         ok = ed.wait_js('(window.__aiSaves || []).length > 0', 5)
         ed.frames(10)
         sv = J(ed, 'window.__aiSaves || []')

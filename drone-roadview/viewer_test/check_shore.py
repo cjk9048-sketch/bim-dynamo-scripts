@@ -639,6 +639,8 @@ def test_host(ed, out_dir, shots_dir):
         click_ground(inp, cc, B_E, 3.0)
         click_ground(inp, cc, A_E, 3.0)  # 거꾸로 찍어도 a < b
         time.sleep(1.4)
+        ed.js("document.getElementById('hSave').click()")              # JACK 1127: 윗줄 [저장] 을 눌러야 씀
+        ed.wait_js("window.__host.calls.some((c) => c.name === 'save_pipes')", 5)
         calls = js_json(ed, "window.__host.calls.filter((c) => c.name === 'save_pipes').map((c) => c.arg)")
         sh = None
         if calls:
@@ -654,6 +656,8 @@ def test_host(ed, out_dir, shots_dir):
         ed.frames(2)
         inp.click(*aria(ed, '비금속관'))
         time.sleep(1.4)
+        ed.js("document.getElementById('hSave').click()")
+        ed.wait_js("window.__host.calls.filter((c) => c.name === 'save_pipes').length >= 2", 5)
         calls = js_json(ed, "window.__host.calls.filter((c) => c.name === 'save_pipes').map((c) => c.arg)")
         mat = None
         if calls:

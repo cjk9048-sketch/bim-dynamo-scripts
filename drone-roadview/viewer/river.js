@@ -7,6 +7,7 @@
  *   RVRiver.path([[x, y], …])         → 관 줄 { len, at(s) → {x, y, tx, ty} }  (s = 관 처음부터 평면 거리 m)
  *   RVRiver.plan(q, path, ground, od) → 계획 (ground(x, y) = 땅 표고 절대 · 없으면 NaN · od = 관 바깥지름 m)
  *                                       ta · tb = 터파기가 빠지는 측점 구간 (추진 = 두 수직구 바깥 벽 사이 · 횡단 = a · b)
+ *                                       foot = 추진 수직구 바닥 자리 [{poly: [[x, y], …] 반시계, area}] (터파기 영역 · 임시점용 · 포장 깨기 · AI 영역)
  *   RVRiver.qty(plan)                 → 수량 {jack, shaft, exc, hp, hpm, lag, liner, linerA, open, dam, bag, sheet}
  *   RVRiver.rows(plan)                → 이 구간 표 [[이름, 값 글], …]
  *   RVRiver.svg(plan, {W, col})       → 종단 그림 {w, h, body} (svg viewBox = 0 0 w h · innerHTML = body)
@@ -152,6 +153,18 @@
       ext = Math.max(L.l, A.l) / 2 + 2;
       const shA = q.rev ? A : L, shB = q.rev ? L : A;                    // 측점 a 쪽 · b 쪽 수직구 (관 끝에서 멈춤)
       out.ta = Math.max(0, q.a - shaftOut(shA)); out.tb = Math.min(P.len, q.b + shaftOut(shB));
+      // 수직구 바닥 자리 = 터파기 영역 (임시점용 · 포장 깨기 · AI 부대공 영역 · JACK 1127 «추진도 터파기 영역이 잡혀야») · 바깥 벽 테두리 (반시계)
+      out.foot = [L, A].map((sh) => {
+        const poly = [];
+        if (sh.shape === 'rect') {
+          const hl = sh.l / 2 + SHAFT_OUT_RECT, hw = sh.w / 2 + SHAFT_OUT_RECT, nx = -sh.ty, ny = sh.tx;
+          for (const [u, v] of [[-hl, -hw], [hl, -hw], [hl, hw], [-hl, hw]]) poly.push([sh.x + sh.tx * u + nx * v, sh.y + sh.ty * u + ny * v]);
+          return { poly: poly, area: 4 * hl * hw };
+        }
+        const r = sh.w / 2 + SHAFT_OUT_CIRC, N = 24;
+        for (let i = 0; i < N; i++) { const t = i / N * 2 * Math.PI; poly.push([sh.x + r * Math.cos(t), sh.y + r * Math.sin(t)]); }
+        return { poly: poly, area: N / 2 * r * r * Math.sin(2 * Math.PI / N) };
+      });
     } else {
       const sm = (q.a + q.b) / 2, damTop = gMin + q.h;
       const leg = (pts) => {                       // [[x, y]…] → 점마다 땅 · 길이
