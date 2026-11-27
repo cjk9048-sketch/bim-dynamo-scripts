@@ -246,7 +246,201 @@ public sealed class SelfTest
             Check("⑥ 3D 모형", n >= 5, $"{msg} · 객체 {n}");
         });
 
+        // ---------------------------------------------------------------- 지층면(부지정지의 지층 지표면을 그대로 읽는 길)
+        Step("⑦ 지층면", () =>
+        {
+            // 부지정지 [지층]이 만드는 것과 같은 꼴: «DH_지층_n_이름» = n번 층의 윗면 · 설명란에 암 분류 · «DH_지하수위»
+            void Surf(string name, double below, string? desc)
+            {
+                var id = CivilDb.TinSurface.Create(db, name);
+                using var tr = db.TransactionManager.StartTransaction();
+                var tin = (CivilDb.TinSurface)tr.GetObject(id, OpenMode.ForWrite);
+                var pts = new Point3dCollection();
+                for (double x = DemoTerrain.X0; x <= DemoTerrain.X1 + 1e-9; x += 10)
+                    for (double y = DemoTerrain.Y0; y <= DemoTerrain.Y1 + 1e-9; y += 10)
+                        pts.Add(new Point3d(x, y, DemoTerrain.Z(x, y) - below));
+                tin.AddVertices(pts);
+                if (desc != null) tin.Description = desc;
+                tr.Commit();
+            }
+            Surf("DH_지층_1_매립토", 0.0, "DH_ROCK=Soil;DH_SHOW=0;DH_SVER=2");
+            Surf("DH_지층_2_풍화암", 2.0, "DH_ROCK=Weathered;DH_SHOW=1;DH_SVER=2");
+            Surf("DH_지층_3_연암", 3.5, "DH_SHOW=1;DH_SVER=2");                  // 분류 없음 → 이름으로 어림
+            Surf("DH_지층_4_경암", 4.5, "DH_ROCK=Hard;DH_SHOW=1;DH_SVER=2");
+            Surf("DH_지하수위", 2.5, null);
+
+            Check("⑦ 지층면은 원지반 후보가 아님", RouteBuilder.Surfaces(db).Count == 1, $"원지반 후보 {RouteBuilder.Surfaces(db).Count}");
+            var c = Ops.Compute(db, route);
+            var st = c.B.Ctx.Strata;
+            Check("⑦ 지층면 읽기", st.Count == 4 && st.Select(x => x.Rock).SequenceEqual(new[] { 0, 1, 2, 4 }) && c.B.Ctx.WaterTin != null,
+                string.Join(" · ", st.Select(x => $"{x.Order} {x.Name}={DH.Pipe.Core.Section.Q.RockName[x.Rock]}")) + (c.B.Ctx.WaterTin != null ? " · 지하수위 면" : ""));
+            // 자연 터파기 한 곳: 토사 2.0 m · 그 아래는 풍화암(깊이 2.2 m 안팎) · 하천 횡단(깊이 4.8 m)에는 경암까지
+            var open = c.Rows.First(r => r.After.Ok && r.After.Method == MethodKind.Open && r.Sta > 20 && r.Sta < 100).After;
+            bool layerLine = open.Lines.Any(l => l.Key == "LAYER" && l.Label == "풍화암");
+            bool hard = c.Earth.AreaKeys.Any(k => k.EndsWith(".HR", StringComparison.Ordinal));
+            Check("⑦ 단면이 지층면을 따름", layerLine && hard && !open.Lines.Any(l => l.Key is "STRATA1" or "STRATA2"),
+                $"No.{open.Label} 층 선 {string.Join("/", open.Lines.Where(l => l.Key == "LAYER").Select(l => l.Label))} · 터파기 {open.ExcTotal:0.00} · 암 분류 {string.Join(" ", c.Earth.AreaKeys.Where(k => k.StartsWith("EXC")).Select(k => k.Split('.')[3]).Distinct())}");
+            // 옛 지층면(«DH_SVER» 없음 = 층의 아랫면 기준): 한 칸 밀어 읽고 알린다 → 풍화암의 윗면 = 1번 면(지반) → 토사 0
+            void Describe(Func<string, string> edit)
+            {
+                var cdoc = Autodesk.Civil.ApplicationServices.CivilDocument.GetCivilDocument(db);
+                using var tr = db.TransactionManager.StartTransaction();
+                foreach (ObjectId sid in cdoc.GetSurfaceIds())
+                    if (tr.GetObject(sid, OpenMode.ForRead) is CivilDb.TinSurface t && t.Name.StartsWith(RouteBuilder.StrataPrefix, StringComparison.Ordinal))
+                    { t.UpgradeOpen(); t.Description = edit(t.Description ?? ""); }
+                tr.Commit();
+            }
+            Describe(d => d.Replace("DH_SVER=2", "DH_SVER=1"));
+            var cOld = Ops.Compute(db, route);
+            var openOld = cOld.Rows.First(r => Math.Abs(r.Sta - open.Station) < 1e-6).After;
+            double soilOld = openOld.A(DH.Pipe.Core.Section.Q.Exc(false, false, 0)) + openOld.A(DH.Pipe.Core.Section.Q.Exc(true, false, 0));
+            double soilNew = open.A(DH.Pipe.Core.Section.Q.Exc(false, false, 0)) + open.A(DH.Pipe.Core.Section.Q.Exc(true, false, 0));
+            Describe(d => d.Replace("DH_SVER=1", "DH_SVER=2"));
+            Check("⑦ 옛 지층면(아래 기준)은 한 칸 밀어 읽음", cOld.Notes.Any(n => n.StartsWith("옛 지층면")) && soilOld < 0.01 && soilNew > 1.0 && !Ops.Compute(db, route).Notes.Any(n => n.StartsWith("옛 지층면")),
+                $"No.{open.Label} 토사 — 새 방식 {soilNew:0.00} · 옛 방식으로 읽으면 {soilOld:0.00} · 알림 {(cOld.Notes.Any(n => n.StartsWith("옛 지층면")) ? "있음" : "없음")}");
+            // 도면도 다시: 횡단도에 층 선 · 종단도면에 지층선 · 수위선
+            Ops.DrawXsec(doc, route, new Point3d(0, -1500, 0));
+            string pm = Ops.DrawProfileSheet(doc, route, new Point3d(0, -900, 0));
+            int nStrata = CountOnLayer(db, CivilUtil.GroupName("PROF", route.AlignHandle), DH.Pipe.Core.Draw.Lay.Name("종단", DH.Pipe.Core.Draw.Lay.Strata));
+            int nWater = CountOnLayer(db, CivilUtil.GroupName("PROF", route.AlignHandle), DH.Pipe.Core.Draw.Lay.Name("종단", DH.Pipe.Core.Draw.Lay.Water));
+            Check("⑦ 종단도면에 지층선 · 수위선", nStrata >= 3 && nWater >= 1 && pm.Contains("지층면 4"), $"{pm} · 지층선 객체 {nStrata} · 수위선 객체 {nWater}");
+        });
+
+        // ---------------------------------------------------------------- 도면화(배치탭)
+        Step("⑧ 도면화", () =>
+        {
+            new SheetInput { Project = "시험 공사", NoPrefix = "C-", NoStart = 101 }.Save(db);
+            var r = PipeSheets.Make(doc, route, SheetInput.Load(db));
+            Check("⑧ 도면화 작성", r.Ok && r.Tabs == 3, r.Line);
+            if (!r.Ok) return;
+            int xs = PipeSheets.ModelSheets(db, CivilUtil.GroupName("XSEC", route.AlignHandle), DH.Pipe.Core.Draw.Lay.Name("횡단", DH.Pipe.Core.Draw.Lay.Frame)).Count;
+            int pf = PipeSheets.ModelSheets(db, CivilUtil.GroupName("PROF", route.AlignHandle), DH.Pipe.Core.Draw.Lay.Name("종단", DH.Pipe.Core.Draw.Lay.Frame)).Count;
+            var plan = PipeSheets.Inspect(db, r.TabNames[0]);
+            var prof = PipeSheets.Inspect(db, r.TabNames[1]);
+            var xsec = PipeSheets.Inspect(db, r.TabNames[2]);
+            Check("⑧ 장마다 도곽 · 뷰포트", plan.Frames == 1 && plan.Viewports == 1 && prof.Frames == pf && prof.Viewports == pf && xsec.Frames == xs && xsec.Viewports == xs && pf >= 1 && xs >= 1,
+                $"평면 {plan.Frames}/{plan.Viewports} · 종단 {prof.Frames}/{prof.Viewports}(모형 {pf}) · 횡단 {xsec.Frames}/{xsec.Viewports}(모형 {xs})");
+            Check("⑧ 뷰포트 축척", plan.Scales.All(v => Math.Abs(v - 1.0) < 1e-9) && prof.Scales.All(v => Math.Abs(v - 1.0) < 1e-9) && xsec.Scales.All(v => Math.Abs(v - 10.0) < 1e-9),
+                $"평면 {string.Join(",", plan.Scales.Select(v => v.ToString("0.###")))} · 종단 {string.Join(",", prof.Scales.Select(v => v.ToString("0.###")))} · 횡단 {xsec.Scales.FirstOrDefault():0.###}");
+            // 평면: 시작 → 끝 현이 가로가 되게 돌림(노선 (0,0) → (600,20))
+            double want = -Math.Atan2(20, 600);
+            Check("⑧ 평면 돌림", plan.Twists.Count == 1 && Math.Abs(plan.Twists[0] - want) < 1e-6, $"돌림 {plan.Twists.FirstOrDefault() * 180 / Math.PI:0.###}° (바라는 값 {want * 180 / Math.PI:0.###}°)");
+            int setups = CountSetups(db);
+            Check("⑧ 페이지 설정(A1 · A3)", setups == 2 * (1 + pf + xs), $"페이지 설정 {setups} (장 {1 + pf + xs} × 2)");
+            // 다시 만들면 바꿔치기(탭이 늘지 않음) · 지우면 0
+            var r2 = PipeSheets.Make(doc, route, SheetInput.Load(db));
+            int tabs2 = CountTabs(db);
+            Check("⑧ 다시 만들면 바꿔치기", r2.Ok && tabs2 == 3 && CountSetups(db) == setups, $"탭 {tabs2} · 페이지 설정 {CountSetups(db)}");
+            // 평면 축척을 1:500 으로 — 한 장 380 m → 노선 629 m 가 두 장 · 꺾인 노선이라 장마다 돌림이 다르다
+            var rp = PipeSheets.Make(doc, route, new SheetInput { Plan = true, Prof = false, Xsec = false, PlanScale = 500 });
+            var plan2 = rp.Ok ? PipeSheets.Inspect(db, rp.TabNames[0]) : default;
+            var bb = RouteBuilder.Build(db, route);
+            var wins = DH.Pipe.Core.Draw.PlanSheets.Windows(bb.Ctx.Plan, DH.Pipe.Core.Draw.PlanSheets.Ranges(Math.Max(bb.S0, bb.Ctx.Profile.S0), Math.Min(bb.S1, bb.Ctx.Profile.S1), 380));
+            Check("⑧ 평면 여러 장(1:500)", rp.Ok && plan2.Frames == 2 && plan2.Viewports == 2 && plan2.Scales.All(v => Math.Abs(v - 2.0) < 1e-9) && wins.Count == 2
+                && Math.Abs(plan2.Twists[0] - wins[0].RotRad) < 1e-6 && Math.Abs(plan2.Twists[1] - wins[1].RotRad) < 1e-6 && Math.Abs(wins[0].RotRad - wins[1].RotRad) > 0.05 && CountTabs(db) == 3,
+                rp.Ok ? $"장 {plan2.Frames} · 축척 {string.Join(",", plan2.Scales.Select(v => v.ToString("0.#")))} · 돌림 {string.Join(" / ", plan2.Twists.Select(v => (v * 180 / Math.PI).ToString("0.##") + "°"))} · 탭 {CountTabs(db)}" : rp.Line);
+            int erased = PipeSheets.Erase(db, route, new StringBuilder());
+            Check("⑧ 지우기", erased == 3 && CountTabs(db) == 0 && CountSetups(db) == 0, $"지운 탭 {erased} · 남은 탭 {CountTabs(db)} · 페이지 설정 {CountSetups(db)}");
+            var r3 = PipeSheets.Make(doc, route, SheetInput.Load(db));
+            // 눈으로 볼 PDF(첫 장씩) — 못 뽑아도 시험은 안 떨어뜨림(화면 없는 Civil 의 출력 장치 사정)
+            foreach (var tab in r3.TabNames)
+            {
+                try
+                {
+                    string pdf = Path.Combine(dir, "sheet_" + (r3.TabNames.IndexOf(tab) + 1) + ".pdf");
+                    string how = PlotFirstSheet(doc, tab, pdf);
+                    _out.AppendLine($"      PDF «{tab}» — {how}");
+                }
+                catch (System.Exception ex) { _out.AppendLine($"      PDF «{tab}» 못 뽑음 — {ex.GetType().Name}: {ex.Message}"); }
+            }
+        });
+
         Finish(dir);
+    }
+
+    private static int CountOnLayer(Database db, string group, string layer)
+    {
+        using var tr = db.TransactionManager.StartTransaction();
+        var gd = (DBDictionary)tr.GetObject(db.GroupDictionaryId, OpenMode.ForRead);
+        int n = 0;
+        if (gd.Contains(group))
+            foreach (ObjectId id in ((Group)tr.GetObject(gd.GetAt(group), OpenMode.ForRead)).GetAllEntityIds())
+                if (!id.IsErased && tr.GetObject(id, OpenMode.ForRead) is Entity e && e is not DBText && string.Equals(e.Layer, layer, StringComparison.OrdinalIgnoreCase)) n++;
+        tr.Commit();
+        return n;
+    }
+
+    private static string[] TagOf(Transaction tr, DBObject o)
+    {
+        try
+        {
+            if (o.ExtensionDictionary.IsNull) return Array.Empty<string>();
+            var xd = (DBDictionary)tr.GetObject(o.ExtensionDictionary, OpenMode.ForRead);
+            if (!xd.Contains(PipeSheets.TabTag)) return Array.Empty<string>();
+            return ((Xrecord)tr.GetObject(xd.GetAt(PipeSheets.TabTag), OpenMode.ForRead)).Data?.AsArray().Select(v => v.Value?.ToString() ?? "").ToArray() ?? Array.Empty<string>();
+        }
+        catch { return Array.Empty<string>(); }
+    }
+
+    private static int CountTabs(Database db)
+    {
+        using var tr = db.TransactionManager.StartTransaction();
+        int n = 0;
+        foreach (DBDictionaryEntry de in (DBDictionary)tr.GetObject(db.LayoutDictionaryId, OpenMode.ForRead))
+            if (TagOf(tr, tr.GetObject(de.Value, OpenMode.ForRead)).Length >= 4) n++;
+        tr.Commit();
+        return n;
+    }
+
+    private static int CountSetups(Database db)
+    {
+        using var tr = db.TransactionManager.StartTransaction();
+        int n = 0;
+        foreach (DBDictionaryEntry de in (DBDictionary)tr.GetObject(db.PlotSettingsDictionaryId, OpenMode.ForRead))
+            if (TagOf(tr, tr.GetObject(de.Value, OpenMode.ForRead)).Length >= 4) n++;
+        tr.Commit();
+        return n;
+    }
+
+    /// <summary>그 탭의 첫 장을 A3 페이지 설정으로 PDF 로 뽑는다(눈 확인용).</summary>
+    private static string PlotFirstSheet(Document doc, string tab, string pdf)
+    {
+        var db = doc.Database;
+        try { File.Delete(pdf); } catch { }
+        var lm = LayoutManager.Current;
+        lm.CurrentLayout = tab;
+        using (var tr = db.TransactionManager.StartTransaction())
+        {
+            var lo = (Layout)tr.GetObject(lm.GetLayoutId(tab), OpenMode.ForRead);
+            var kind = TagOf(tr, lo);
+            PlotSettings? named = null;
+            foreach (DBDictionaryEntry de in (DBDictionary)tr.GetObject(db.PlotSettingsDictionaryId, OpenMode.ForRead))
+            {
+                var ps0 = tr.GetObject(de.Value, OpenMode.ForRead);
+                var t = TagOf(tr, ps0);
+                if (t.Length >= 4 && t[0] == kind[0] && t[2] == "1" && t[3] == "A3") { named = (PlotSettings)ps0; break; }
+            }
+            if (named == null) return "A3 페이지 설정 없음";
+            using var ps = new PlotSettings(false);
+            ps.CopyFrom(named);
+            var pi = new Autodesk.AutoCAD.PlottingServices.PlotInfo { Layout = lo.ObjectId, OverrideSettings = ps };
+            var piv = new Autodesk.AutoCAD.PlottingServices.PlotInfoValidator { MediaMatchingPolicy = Autodesk.AutoCAD.PlottingServices.MatchingPolicy.MatchEnabled };
+            piv.Validate(pi);
+            using var pe = Autodesk.AutoCAD.PlottingServices.PlotFactory.CreatePublishEngine();
+            pe.BeginPlot(null, null);
+            pe.BeginDocument(pi, doc.Name, null, 1, true, pdf);
+            using var ppi = new Autodesk.AutoCAD.PlottingServices.PlotPageInfo();
+            pe.BeginPage(ppi, pi, true, null);
+            pe.BeginGenerateGraphics(null);
+            pe.EndGenerateGraphics(null);
+            pe.EndPage(null);
+            pe.EndDocument(null);
+            pe.EndPlot(null);
+            tr.Commit();
+        }
+        lm.CurrentLayout = "Model";
+        var fi = new FileInfo(pdf);
+        return fi.Exists ? $"{fi.Length} 바이트" : "파일 안 생김";
     }
 
     /// <summary>모형 공간에서 그 표식이 달린 객체 수(묶음에 들었든 아니든).</summary>

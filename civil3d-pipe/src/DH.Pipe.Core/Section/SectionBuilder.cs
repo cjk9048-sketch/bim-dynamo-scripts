@@ -13,6 +13,7 @@ public static class SectionBuilder
     public static SectionResult Build(SectionInput s)
     {
         var r = new SectionResult { Station = s.Station, Label = s.Label, Method = s.Method.Kind };
+        r.Messages.AddRange(s.Notes);
         var U = s.Ground;
         r.DomainX0 = U.X0;
         r.DomainX1 = U.X1;
@@ -72,9 +73,28 @@ public static class SectionBuilder
         var (tb, tt) = Thickness(zones, std, U.X0, U.X1);
         Pl P1 = tb == null ? U : U.Minus(tb);                   // 묶인 포장 밑
         Pl P2 = tt == null ? U : U.Minus(tt);                   // 보조기층 밑
-        Pl? S1 = s.SoilThk.HasValue ? U.Shift(-Math.Max(0, s.SoilThk.Value)) : null;            // 토사 밑 = 풍화암 위
-        Pl? S2 = S1 != null && s.WrThk.HasValue ? S1.Shift(-Math.Max(0, s.WrThk.Value)) : null;  // 풍화암 밑 = 연암 위
-        Pl? W = s.WaterElev.HasValue ? Pl.Const(U.X0, U.X1, s.WaterElev.Value) : null;
+        // S[k] = 암 분류 k 의 윗면(k = 1 풍화암 … 4 경암). null = 그 분류와 그보다 단단한 것이 없음.
+        var S = new Pl?[Q.RockCount];
+        if (s.Layers.Count > 0)
+        {
+            // 지층면에서 뜬 선: 분류 k 의 윗면 = 첫 «k 이상» 층의 윗면(풍화암 없이 바로 연암이면 둘이 같은 선 = 풍화암 두께 0).
+            // 지반 위로 솟은 곳은 지반에 붙이고(그 층이 드러난 것), 아래 경계가 위 경계보다 높을 수 없게 한다.
+            Pl? above = null;
+            for (int k = 1; k < Q.RockCount; k++)
+            {
+                var lk = s.Layers.FirstOrDefault(l => l.Rock >= k);
+                if (lk == null) break;
+                var top = Pl.Min(U, OnDomain(lk.Top, U));
+                S[k] = above == null ? top : Pl.Min(above, top);
+                above = S[k];
+            }
+        }
+        else
+        {
+            S[1] = s.SoilThk.HasValue ? U.Shift(-Math.Max(0, s.SoilThk.Value)) : null;                 // 토사 밑 = 풍화암 위
+            S[2] = S[1] != null && s.WrThk.HasValue ? S[1]!.Shift(-Math.Max(0, s.WrThk.Value)) : null;  // 풍화암 밑 = 연암 위
+        }
+        Pl? W = s.WaterLine != null ? OnDomain(s.WaterLine, U) : s.WaterElev.HasValue ? Pl.Const(U.X0, U.X1, s.WaterElev.Value) : null;
         Pl? D = std.DepthLimit > 0 ? U.Shift(-std.DepthLimit) : null;
 
         // ---------------------------------------------------------------- 벽
@@ -82,9 +102,11 @@ public static class SectionBuilder
         bool paveVert = vertical || (m.PaveVertical ?? std.PaveVertical);
         double nSoil = m.SlopeSoil ?? (m.Kind == MethodKind.RiverOpen ? std.RiverSlope : std.SlopeSoil);
         double nWr = m.SlopeWr ?? std.SlopeWr, nRock = m.SlopeRock ?? std.SlopeRock;
+        // 분류마다의 기울기: 토사 · 풍화암 · 연암 · 보통암(연암과 같게) · 경암
+        var slopes = new[] { nSoil, nWr, nRock, nRock, Math.Min(nRock, std.SlopeHard) };
         Pl stop = paveVert ? P1 : U;
-        var wl = Wall(xbL, zBot, -1, vertical, U, stop, S1, S2, nSoil, nWr, nRock);
-        var wr = Wall(xbR, zBot, +1, vertical, U, stop, S1, S2, nSoil, nWr, nRock);
+        var wl = Wall(xbL, zBot, -1, vertical, U, stop, S, slopes);
+        var wr = Wall(xbR, zBot, +1, vertical, U, stop, S, slopes);
         if (wl == null || wr == null || wl[^1].X < U.X0 + 1e-6 || wr[^1].X > U.X1 - 1e-6)
         {
             r.Ok = false;
@@ -138,10 +160,10 @@ public static class SectionBuilder
         }
 
         // ---------------------------------------------------------------- 터파기 조각(토질 × 육상/용수 × 깊이)
-        for (int rock = 0; rock < 3; rock++)
+        for (int rock = 0; rock < Q.RockCount; rock++)
         {
-            Pl? lowK = rock == 0 ? S1 : rock == 1 ? S2 : null;
-            Pl? upK = rock == 0 ? null : rock == 1 ? S1 : S2;
+            Pl? lowK = rock + 1 < Q.RockCount ? S[rock + 1] : null;
+            Pl? upK = rock == 0 ? null : S[rock];
             if (rock > 0 && upK == null) continue;              // 그 층이 없음
             for (int wet = 0; wet < 2; wet++)
             {
@@ -230,11 +252,23 @@ public static class SectionBuilder
             r.Lines.Add(new SectionLine { Key = "SHORE", Pts = { new P2(xbR, U.At(xbR) + 0.2), new P2(xbR, zBot - emb) } });
         }
         double lx0 = Math.Max(U.X0, xOutL - 1.0), lx1 = Math.Min(U.X1, xOutR + 1.0);
-        if (W != null && s.WaterElev!.Value > zBot)
-            r.Lines.Add(new SectionLine { Key = "WATER", Pts = { new P2(lx0, s.WaterElev.Value), new P2(lx1, s.WaterElev.Value) } });
+        if (W != null && W.At(mid) > zBot) r.Lines.Add(LineOf("WATER", W, lx0, lx1));
         if (D != null && D.At(mid) > zBot) r.Lines.Add(LineOf("DEPTH", D, lx0, lx1));
-        if (S1 != null && S1.At(mid) > zBot) r.Lines.Add(LineOf("STRATA1", S1, lx0, lx1));
-        if (S2 != null && S2.At(mid) > zBot) r.Lines.Add(LineOf("STRATA2", S2, lx0, lx1));
+        if (s.Layers.Count > 0)
+        {
+            // 층마다 윗면 선과 이름(부지정지 지층면 그대로). 지반과 겹치는 맨 위 층 · 터파기 바닥보다 아래 층은 뺀다.
+            foreach (var l in s.Layers)
+            {
+                if (!l.Show) continue;
+                var top = Pl.Min(U, OnDomain(l.Top, U));
+                if (top.At(mid) > zBot && U.At(mid) - top.At(mid) > 0.02) r.Lines.Add(LineOf("LAYER", top, lx0, lx1, l.Name));
+            }
+        }
+        else
+        {
+            if (S[1] != null && S[1]!.At(mid) > zBot) r.Lines.Add(LineOf("STRATA1", S[1]!, lx0, lx1, "풍화암"));
+            if (S[2] != null && S[2]!.At(mid) > zBot) r.Lines.Add(LineOf("STRATA2", S[2]!, lx0, lx1, "연암"));
+        }
         return r;
     }
 
@@ -270,8 +304,17 @@ public static class SectionBuilder
         list.Add((p.X, p.Y));
     }
 
-    private static SectionLine LineOf(string key, Pl f, double a, double b)
-        => new() { Key = key, Pts = f.Clip(a, b).Points().Select(p => new P2(p.X, p.Y)).ToList() };
+    private static SectionLine LineOf(string key, Pl f, double a, double b, string label = "")
+        => new() { Key = key, Label = label, Pts = f.Clip(a, b).Points().Select(p => new P2(p.X, p.Y)).ToList() };
+
+    /// <summary>f 를 U 의 범위에 맞춘다 — 범위 밖은 끝값으로 이어 준다(지층면이 단면 폭보다 좁을 때).</summary>
+    internal static Pl OnDomain(Pl f, Pl U)
+    {
+        var pts = new List<(double, double)> { (U.X0, f.At(U.X0)) };
+        foreach (var (x, y) in f.Points()) if (x > U.X0 + Pl.EpsX && x < U.X1 - Pl.EpsX) pts.Add((x, y));
+        pts.Add((U.X1, f.At(U.X1)));
+        return Pl.From(pts);
+    }
 
     private static void AddFill(SectionResult r, string key, Pl lower, Pl upper, double a, double b)
     {
@@ -285,8 +328,9 @@ public static class SectionBuilder
     /// 벽 한쪽: 바닥 모서리에서 위로. 수직이면 곧장, 아니면 지층마다 경사를 바꿔 가며 멈출 선(지반 또는 묶인 포장 밑)까지.
     /// 돌려주는 점 = 모서리 … 꼭대기. 못 만나면 null.
     /// </summary>
-    private static List<P2>? Wall(double xb, double zBot, int dir, bool vertical, Pl U, Pl stop, Pl? S1, Pl? S2,
-        double nSoil, double nWr, double nRock)
+    /// <param name="S">S[k] = 암 분류 k 의 윗면(없으면 null).</param>
+    /// <param name="slopes">분류마다의 기울기 1:n.</param>
+    private static List<P2>? Wall(double xb, double zBot, int dir, bool vertical, Pl U, Pl stop, Pl?[] S, double[] slopes)
     {
         var pts = new List<P2> { new(xb, zBot) };
         if (U.At(xb) <= zBot + 1e-9) return pts;                // 바닥이 지반 위 — 벽 없음
@@ -298,11 +342,14 @@ public static class SectionBuilder
         }
         double x = xb, z = zBot;
         if (stop.At(x) <= z + 1e-9) return pts;                 // 포장 밑이 이미 바닥 아래
-        for (int guard = 0; guard < 16; guard++)
+        for (int guard = 0; guard < 32; guard++)
         {
-            int layer = S2 != null && z < S2.At(x) - 1e-9 ? 2 : S1 != null && z < S1.At(x) - 1e-9 ? 1 : 0;
-            double n = Math.Max(0, layer == 2 ? nRock : layer == 1 ? nWr : nSoil);
-            Pl? top = layer == 2 ? S2 : layer == 1 ? S1 : null;
+            // 지금 높이가 든 분류 = 그 윗면보다 아래에 있는 가장 단단한 분류
+            int layer = 0;
+            for (int k = S.Length - 1; k >= 1; k--)
+                if (S[k] != null && z < S[k]!.At(x) - 1e-9) { layer = k; break; }
+            double n = Math.Max(0, slopes[Math.Min(layer, slopes.Length - 1)]);
+            Pl? top = layer > 0 ? S[layer] : null;
             P2? hitStop = stop.RayHit(x, z, dir * n, 1);
             P2? hitTop = top?.RayHit(x, z, dir * n, 1);
             if (hitTop.HasValue && (!hitStop.HasValue || hitTop.Value.Y < hitStop.Value.Y - 1e-9))

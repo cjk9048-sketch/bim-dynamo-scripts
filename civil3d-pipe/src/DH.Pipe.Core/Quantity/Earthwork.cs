@@ -96,7 +96,7 @@ public sealed class EarthTable
         var l = new List<string>();
         for (int wet = 0; wet < 2; wet++)
             for (int deep = 0; deep < 2; deep++)
-                for (int rock = 0; rock < 3; rock++)
+                for (int rock = 0; rock < Q.RockCount; rock++)
                     l.Add(Q.Exc(wet == 1, deep == 1, rock));
         l.AddRange(new[] { Q.PavAsp, Q.PavCon, Q.PavBlk, Q.Subbase, Q.Bed, Q.Zone, Q.Upper, Q.Encase, Q.Bore });
         return l.ToArray();

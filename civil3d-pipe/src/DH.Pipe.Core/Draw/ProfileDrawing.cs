@@ -25,6 +25,54 @@ public static class ProfileDrawing
         public List<double> Stations { get; set; } = new();
         public List<SpanQty> Spans { get; set; } = new();
         public List<PipeQty> Pipes { get; set; } = new();
+        /// <summary>지층선(노선 따라 뜬 층 윗면 — 층 이름 · 토막들). 없으면 «땅속 값»으로 그린다.</summary>
+        public List<(string Name, List<Pl> Runs)> Strata { get; set; } = new();
+        /// <summary>지하수위선(지하수위 면에서 뜬 토막들). 없으면 «땅속 값»으로.</summary>
+        public List<Pl> Water { get; set; } = new();
+        /// <summary>이 측점 구간만 그린다(여러 장으로 나눌 때). null = 전체.</summary>
+        public double? From { get; set; }
+        public double? To { get; set; }
+        /// <summary>위 제목 · 축척 글을 그릴지(장으로 나눌 때는 장의 제목을 따로 쓴다).</summary>
+        public bool ShowTitle { get; set; } = true;
+    }
+
+    /// <summary>
+    /// 종단도면을 A1 장으로 나눠 모형 공간에 왼쪽 → 오른쪽으로 놓는다. 장마다 측점 구간 하나 — 표고 막대 · 밴드 제목 칸이 장마다 있다.
+    /// 장의 그림 자리는 배치탭 뷰포트가 보는 곳과 같다(<see cref="SheetGeom"/>).
+    /// </summary>
+    public static SheetSet Sheets(Input a)
+    {
+        var std = a.Route.Std;
+        double hs = Math.Max(1, std.ProfileHScale), vs = Math.Max(1, std.ProfileVScale), f = hs / 1000.0;
+        var set = new SheetSet { SheetW = SheetGeom.PaperW * f, SheetH = SheetGeom.PaperH * f, Scale = hs };
+        if (a.Line.IsEmpty) return set;
+        double s0 = Math.Max(a.Line.S0, a.Ground.X0), s1 = Math.Min(a.Line.S1, a.Ground.X1);
+        var ranges = PlanSheets.Ranges(s0, s1, PlanSheets.SheetLength(hs, std.StationInterval));
+        set.Sheets = ranges.Count;
+        string scaleText = Math.Abs(hs - vs) < 1e-9 ? $"S = 1:{hs:0}" : $"S ( H = 1:{hs:0}  V = 1:{vs:0} )";
+        for (int k = 0; k < ranges.Count; k++)
+        {
+            var (ra, rb) = ranges[k];
+            var strip = Draw(new Input
+            {
+                Title = a.Title, Ground = a.Ground, Line = a.Line, Route = a.Route, Stations = a.Stations, Spans = a.Spans, Pipes = a.Pipes,
+                Strata = a.Strata, Water = a.Water, From = ra, To = rb, ShowTitle = false,
+            });
+            double ox = SheetGeom.OriginX(k, f);
+            set.Origins.Add((ox, 0));
+            set.Ranges.Add((ra, rb));
+            SheetGeom.Decorate(set.Draw, ox, 0, f, $"{a.Title} 종단면도", scaleText, k, ranges.Count);
+            if (strip.Items.Count == 0) continue;
+            var (bx0, by0, bx1, by1) = strip.Bounds();
+            double roomW = (SheetGeom.ContentW - 2 * SheetGeom.Pad) * f, roomH = (SheetGeom.ContentH - 2 * SheetGeom.Pad) * f;
+            if (bx1 - bx0 > roomW + 1e-6) set.Notes.Add($"종단 {k + 1}장: 가로가 용지보다 큼");
+            if (by1 - by0 > roomH + 1e-6 && !set.Notes.Any(n => n.StartsWith("종단이 용지보다 높음"))) set.Notes.Add($"종단이 용지보다 높음 → 세로 축척 1:{vs:0} 을 키울 것");
+            // 왼쪽 맞춤(밴드 제목 칸이 그림 자리 왼쪽 끝) · 위아래는 가운데
+            double dx = ox + (SheetGeom.DrawL + SheetGeom.Pad) * f - bx0;
+            double dy = (SheetGeom.DrawB + SheetGeom.Pad) * f + Math.Max(0, (roomH - (by1 - by0)) * 0.5) - by0;
+            set.Draw.Add(strip, dx, dy);
+        }
+        return set;
     }
 
     public static DrawList Draw(Input a)
@@ -36,14 +84,27 @@ public static class ProfileDrawing
         double f = hs / 1000.0;             // 종이 1 mm = 가로 f m
         double ev = hs / vs;                // 세로 과장
         double s0 = Math.Max(a.Line.S0, a.Ground.X0), s1 = Math.Min(a.Line.S1, a.Ground.X1);
+        double sBase = s0;                  // 누가거리의 기준 = 노선(종단)의 시작 — 장으로 나눠도 이어진다
+        if (a.From.HasValue) s0 = Math.Max(s0, a.From.Value);
+        if (a.To.HasValue) s1 = Math.Min(s1, a.To.Value);
         if (s1 - s0 < 1e-6) return d;
 
-        // ---- 높이 범위
+        // ---- 높이 범위(이 구간 안의 것만)
         double zmin = double.MaxValue, zmax = double.MinValue;
         foreach (var p in a.Ground.Points()) if (p.X >= s0 - 1e-9 && p.X <= s1 + 1e-9) { zmin = Math.Min(zmin, p.Y); zmax = Math.Max(zmax, p.Y); }
-        foreach (var p in a.Line.Pvi) { zmin = Math.Min(zmin, p.Z - 1.0); zmax = Math.Max(zmax, p.Z + 1.0); }
+        foreach (double se in new[] { s0, s1 })
+        {
+            zmin = Math.Min(zmin, Math.Min(a.Ground.At(se), a.Line.At(se) - 1.0));
+            zmax = Math.Max(zmax, Math.Max(a.Ground.At(se), a.Line.At(se) + 1.0));
+        }
+        foreach (var p in a.Line.Pvi)
+        {
+            if (p.S < s0 - 1e-9 || p.S > s1 + 1e-9) continue;
+            zmin = Math.Min(zmin, p.Z - 1.0); zmax = Math.Max(zmax, p.Z + 1.0);
+        }
         foreach (var o in route.Obstacles)
         {
+            if (o.Sta < s0 - 1e-9 || o.Sta > s1 + 1e-9) continue;
             double top = o.TopElev ?? a.Ground.At(o.Sta) - o.Depth;
             zmin = Math.Min(zmin, top - o.Height - 0.5);
         }
@@ -78,7 +139,78 @@ public static class ProfileDrawing
             d.Line(Lay.Pipe, sa, Y(PipeGeom.OuterBottom(pipe, za)), sa, Y(PipeGeom.OuterTop(pipe, za)));
             if (i + 2 == cl.Count) d.Line(Lay.Pipe, sb, Y(PipeGeom.OuterBottom(pipe, zb)), sb, Y(PipeGeom.OuterTop(pipe, zb)));
         }
-        if (route.Strata.Any(p => p.WaterDepth.HasValue))
+        // ---- 지층선: 지층면에서 뜬 것(층 이름마다) → 없으면 «땅속 값»(토사 밑 = 풍화암 · 풍화암 밑 = 연암)
+        int strataNo = 0;                   // 글자를 층마다 옆으로 벌려 적는다(층 선이 몇 mm 간격이라 한 자리에 적으면 겹친다)
+        void StrataRun(string name, IEnumerable<(double X, double Y)> pts)
+        {
+            // 표고 틀 아래로 내려간 곳은 틀 바닥에서 자르지 않고 그 점을 뺀다(선이 밴드 위로 지나가지 않게)
+            var seg = new List<P2>();
+            int k = strataNo++;
+            bool named = false;
+            void Flush()
+            {
+                if (seg.Count >= 2)
+                {
+                    d.Poly(Lay.Strata, seg);
+                    if (!named)
+                    {
+                        double want = seg[0].X + (3 + 22 * k) * f;
+                        var at = seg.FirstOrDefault(p => p.X >= want - 1e-9, seg[^1]);
+                        d.Text(Lay.Strata, at.X, at.Y + 0.8 * f, 2.2 * f, name);
+                        named = true;
+                    }
+                }
+                seg = new List<P2>();
+            }
+            foreach (var (x, z) in pts)
+            {
+                // 범위 밖 · 표고 틀 아래 · 지반과 겹치는 곳(맨 위 층 · 두께 0)은 끊는다
+                if (x < s0 - 1e-6 || x > s1 + 1e-6 || z < datum + 1e-6 || a.Ground.At(x) - z <= 0.02) { Flush(); continue; }
+                seg.Add(new P2(x, Y(z)));
+            }
+            Flush();
+        }
+        if (a.Strata.Count > 0)
+        {
+            foreach (var (name, runs) in a.Strata)
+                foreach (var run in runs)
+                    StrataRun(name, run.Points());
+        }
+        else if (route.Strata.Any(p => p.SoilThk.HasValue))
+        {
+            var top1 = new List<(double, double)>(); var top2 = new List<(double, double)>();
+            foreach (double s in a.Stations)
+            {
+                var st = route.StrataAt(s);
+                if (!st.SoilThk.HasValue) continue;
+                double z1 = a.Ground.At(s) - Math.Max(0, st.SoilThk.Value);
+                top1.Add((s, z1));
+                if (st.WrThk.HasValue) top2.Add((s, z1 - Math.Max(0, st.WrThk.Value)));
+            }
+            StrataRun("풍화암", top1);
+            StrataRun("연암", top2);
+        }
+
+        // ---- 지하수위선
+        if (a.Water.Count > 0)
+        {
+            bool named = false;
+            foreach (var run in a.Water)
+            {
+                if (run.X1 <= s0 + 1e-6 || run.X0 >= s1 - 1e-6) continue;
+                var wpts = run.Clip(Math.Max(s0, run.X0), Math.Min(s1, run.X1)).Points().Where(p => p.Y > datum).Select(p => new P2(p.X, Y(p.Y))).ToList();
+                if (wpts.Count < 2) continue;
+                d.Poly(Lay.Water, wpts);
+                if (!named)
+                {
+                    double want = wpts[0].X + (3 + 22 * strataNo) * f;
+                    var at = wpts.FirstOrDefault(p => p.X >= want - 1e-9, wpts[^1]);
+                    d.Text(Lay.Water, at.X, at.Y + 0.8 * f, 2.5 * f, "지하수위추정선");
+                }
+                named = true;
+            }
+        }
+        else if (route.Strata.Any(p => p.WaterDepth.HasValue))
         {
             var wpts = new List<P2>();
             foreach (double s in a.Stations)
@@ -97,6 +229,7 @@ public static class ProfileDrawing
         foreach (var oc in ProfileCheck.Obstacles(a.Line, a.Ground, route))
         {
             var o = oc.Obstacle;
+            if (o.Sta < s0 - 1e-6 || o.Sta > s1 + 1e-6) continue;
             double cz = 0.5 * (oc.Top + oc.Bottom), rx = o.Width * 0.5, ry = o.Height * 0.5;
             if (o.Round)
             {
@@ -187,7 +320,7 @@ public static class ProfileDrawing
             double g = a.Ground.At(s), inv = a.Line.At(s);
             string[] vals =
             {
-                F2(PipeGeom.Cover(pipe, inv, g)), F2(inv), F2(g), F2(s - s0), F2(s - prevS),
+                F2(PipeGeom.Cover(pipe, inv, g)), F2(inv), F2(g), F2(s - sBase), F2(s - prevS),
                 StationPlan.Name(s, std.StationInterval),
             };
             for (int i = 0; i < vals.Length; i++)
@@ -197,9 +330,12 @@ public static class ProfileDrawing
         }
 
         // ---- 제목 · 축척
-        double yt2 = Y(ztop) + 16 * f;
-        d.Text(Lay.Title, 0.5 * (s0 + s1), yt2, 7 * f, $"{a.Title} 종단면도", 1);
-        d.Text(Lay.Title, 0.5 * (s0 + s1), yt2 - 7 * f, 3.5 * f, $"S ( H = 1:{hs:0}  V = 1:{vs:0} )", 1);
+        if (a.ShowTitle)
+        {
+            double yt2 = Y(ztop) + 16 * f;
+            d.Text(Lay.Title, 0.5 * (s0 + s1), yt2, 7 * f, $"{a.Title} 종단면도", 1);
+            d.Text(Lay.Title, 0.5 * (s0 + s1), yt2 - 7 * f, 3.5 * f, $"S ( H = 1:{hs:0}  V = 1:{vs:0} )", 1);
+        }
         return d;
     }
 

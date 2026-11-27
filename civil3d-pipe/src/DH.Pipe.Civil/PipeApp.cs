@@ -80,11 +80,13 @@ public sealed class PipeApp : IExtensionApplication
                 Btn("종단\n도면", "DHPIPEPROFSHEET", "2D 종단면도를 그립니다(밴드 · 구간 치수선 · 지장물 · 부속).", "profsheet"));
             Panel(tab, "④ 공법 · 횡단",
                 Btn("구간\n공법", "DHPIPEMETHOD", "두 점을 찍고 터파기 방식을 고릅니다:\n자연 터파기 · 조립식 · 조절식 · H파일 · 시트파일 · 하천 횡단 · 추진", "method"),
-                Btn("땅속\n값", "DHPIPESTRATA", "시추 자리의 토사 · 풍화암 두께 · 지하수위를 넣습니다.", "strata"),
+                Btn("지층", "DHPIPEBORE", "시추공 · 층 · 지하수위를 넣는 지층 구성 창을 엽니다(부지정지).\n만든 지층면이 단면 · 종단 · 토적표에 반영됩니다.", "strata"),
+                Btn("땅속\n값", "DHPIPESTRATA", "지층면이 없을 때: 시추 자리의 토사 · 풍화암 두께 · 지하수위를 넣습니다.", "strata"),
                 Btn("횡단도", "DHPIPEXSEC", "측점마다 단면과 토적표를 A1 장에 그립니다.", "xsec"));
             Panel(tab, "⑥ 수량 · 3D",
                 Btn("토적표\n엑셀", "DHPIPEQTY", "토적표 · 토공 집계 · 공법 구간 · 관 · 부속 · 지장물을 엑셀로 냅니다.", "xlsx"),
-                Btn("3D\n모형", "DHPIPE3D", "터파기 · 관 · 케이싱 · 수직구 · 흙막이를 3D 로 만듭니다.", "cube"));
+                Btn("3D\n모형", "DHPIPE3D", "터파기 · 관 · 케이싱 · 수직구 · 흙막이를 3D 로 만듭니다.", "cube"),
+                Btn("도면화", "DHPIPESHEET", "배치탭에 납품 도면 꼴로 만듭니다: 평면도 · 종단면도 · 횡단면도 · 도곽 · 표제란 · A1/A3 페이지 설정.\n값은 «DH 관로» 창의 ⑦ 도면화에서 넣습니다.", "sheet"));
             Panel(tab, "창",
                 Btn("관로\n창", "DHPIPE", "오른쪽에 «DH 관로» 창을 엽니다. 단계마다 상태와 단면 미리보기가 보입니다.", "panel"),
                 Btn("검사", "DHPIPECHECK", "토피 · 이격 · 경사 · 못 만든 단면을 알려 줍니다.", "check"),

@@ -21,6 +21,17 @@ internal sealed class PipePanel : UserControl
 {
     private readonly TextBlock _surf = Status(), _route = Status(), _prof = Status(), _qty = Status(), _draw = Status();
     private readonly TextBlock _secInfo = Status(), _secQty = Status(), _secWarn = Status();
+    private readonly TextBlock _strata = Status(), _sheet = Status();
+    // 도면화 칸
+    private readonly Dictionary<string, TextBox> _sh = new();
+    private readonly ComboBox _frame = new() { Height = 26, MinWidth = 150 };
+    private readonly CheckBox _shPlan = new() { Content = "평면도", Margin = new Thickness(0, 4, 12, 0) };
+    private readonly CheckBox _shProf = new() { Content = "종단면도", Margin = new Thickness(0, 4, 12, 0) };
+    private readonly CheckBox _shXsec = new() { Content = "횡단면도", Margin = new Thickness(0, 4, 0, 0) };
+    private List<(string Id, string Label)> _frames = new();
+    /// <summary>도면화 칸을 사용자가 고쳤는지(고친 값은 새로 고침이 덮지 않는다).</summary>
+    private bool _sheetDirty;
+    private string _sheetFor = "";
     private readonly StackPanel _methods = new();
     private readonly DrawCanvas _canvas = new() { Height = 250, Margin = new Thickness(0, 6, 0, 2) };
     private readonly Slider _slider = new() { Minimum = 0, Maximum = 0, SmallChange = 1, LargeChange = 5, IsSnapToTickEnabled = true, TickFrequency = 1, Margin = new Thickness(6, 0, 6, 0) };
@@ -89,6 +100,7 @@ internal sealed class PipePanel : UserControl
         nav.Children.Add(_slider);
         var body4 = new StackPanel();
         body4.Children.Add(_methods);
+        body4.Children.Add(_strata);
         body4.Children.Add(new Border { BorderBrush = DhBrand.Line, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(4), Child = _canvas, Margin = new Thickness(0, 6, 0, 2) });
         body4.Children.Add(nav);
         body4.Children.Add(_secInfo);
@@ -98,13 +110,15 @@ internal sealed class PipePanel : UserControl
         stack.Children.Add(Card("④", "구간 공법 · 횡단", body4,
             B("구간 더하기", "DHPIPEMETHOD", "두 점을 찍고 방식 고르기: 자연 터파기 · 가시설 · 하천 횡단 · 추진"),
             B("구간 지우기", "DHPIPEMETHODDEL", "그 구간을 자연 터파기로"),
-            B("땅속 값", "DHPIPESTRATA", "시추 자리의 토사 · 풍화암 두께 · 지하수위")));
+            B("지층", "DHPIPEBORE", "시추공 · 층 · 지하수위(부지정지의 지층 구성 창) — 만든 지층면이 단면 · 종단 · 토적표에 반영"),
+            B("땅속 값", "DHPIPESTRATA", "지층면이 없을 때: 시추 자리의 토사 · 풍화암 두께 · 지하수위")));
 
         stack.Children.Add(Card("⑤", "도면", _draw,
             B("횡단도", "DHPIPEXSEC", "측점마다 단면 + 토적표 · A1 장 나눔")));
         stack.Children.Add(Card("⑥", "수량 · 3D", _qty,
             B("토적표 엑셀", "DHPIPEQTY", "토적표 · 집계 · 공법 구간 · 관 · 부속 · 지장물"),
             B("3D 모형", "DHPIPE3D", "터파기 · 관 · 수직구")));
+        stack.Children.Add(SheetCard());
         stack.Children.Add(StdCard());
 
         var foot = new DockPanel { Margin = new Thickness(2, 2, 2, 8) };
@@ -135,7 +149,7 @@ internal sealed class PipePanel : UserControl
         ["DHPIPESURF"] = "surf", ["DHPIPEGRADING"] = "ground", ["DHPIPEROUTE"] = "route", ["DHPIPERUN"] = "pipe", ["DHPIPEZONE"] = "zone",
         ["DHPIPEPICK"] = "pick", ["DHPIPEPROFILE"] = "profile", ["DHPIPEOBST"] = "obst", ["DHPIPEOBSTSEL"] = "obstsel", ["DHPIPEOBSTDEL"] = "del",
         ["DHPIPEGUIDE"] = "guide", ["DHPIPECHECK"] = "check", ["DHPIPEPROFSHEET"] = "profsheet", ["DHPIPEMETHOD"] = "method",
-        ["DHPIPEMETHODDEL"] = "del", ["DHPIPESTRATA"] = "strata", ["DHPIPEXSEC"] = "xsec", ["DHPIPEQTY"] = "xlsx", ["DHPIPE3D"] = "cube",
+        ["DHPIPEMETHODDEL"] = "del", ["DHPIPESTRATA"] = "strata", ["DHPIPEBORE"] = "strata", ["DHPIPEXSEC"] = "xsec", ["DHPIPEQTY"] = "xlsx", ["DHPIPE3D"] = "cube",
     };
 
     private static Button B(string text, string command, string tip)
@@ -174,6 +188,127 @@ internal sealed class PipePanel : UserControl
             Background = DhBrand.Card, BorderBrush = DhBrand.Line, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(8),
             Padding = new Thickness(12, 10, 8, 6), Margin = new Thickness(0, 0, 0, 8), Child = sp,
         };
+    }
+
+    private static readonly (string Key, string Label, string Tip)[] SheetFields =
+    {
+        ("Project", "공사명", "표제란의 공사명"), ("Prefix", "도면명 앞말", "비우면 노선 이름 — 뒤에 «평면도» · «종단면도» · «횡단면도»"),
+        ("NoPrefix", "도면번호 앞말", "예: C-"), ("NoStart", "시작 번호", "평면 → 종단 → 횡단 차례로 이어 매김"),
+        ("Date", "날짜", "비우면 오늘"), ("PlanScale", "평면 축척 1:", "비우면 종단 가로 축척과 같게(평면 장 = 종단 장)"),
+    };
+
+    /// <summary>⑦ 도면화 — 배치탭에 도곽 · 뷰포트 · 표제란까지(부지정지 도면화와 같은 방식).</summary>
+    private Border SheetCard()
+    {
+        var grid = new System.Windows.Controls.Primitives.UniformGrid { Columns = 2 };
+        foreach (var (key, label, tip) in SheetFields)
+        {
+            var cell = new StackPanel { Margin = new Thickness(0, 0, 6, 6) };
+            cell.Children.Add(new TextBlock { Text = label, Foreground = DhBrand.Sub, FontSize = 11 });
+            var tb = new TextBox { Height = 26, ToolTip = tip };
+            tb.TextChanged += (_, _) => { if (!_filling) _sheetDirty = true; };
+            _sh[key] = tb;
+            cell.Children.Add(tb);
+            grid.Children.Add(cell);
+        }
+        var body = new StackPanel();
+        body.Children.Add(_sheet);
+        body.Children.Add(grid);
+        // 도곽: 이 PC 에 저장한 도곽 · 기본 K-water · 단순 도곽(부지정지와 같은 보관함)
+        var fr = new DockPanel { Margin = new Thickness(0, 0, 6, 4) };
+        var pick = new Button { Content = "도곽 파일…", Height = 26, Padding = new Thickness(8, 0, 8, 0), Margin = new Thickness(6, 0, 0, 0), ToolTip = "도곽 DWG 를 골라 이 PC 에 저장(DHPIPEFRAME)" };
+        pick.Click += (_, _) => Send("DHPIPEFRAME");
+        DockPanel.SetDock(pick, Dock.Right);
+        fr.Children.Add(pick);
+        var fl = new TextBlock { Text = "도곽", Foreground = DhBrand.Sub, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0) };
+        DockPanel.SetDock(fl, Dock.Left);
+        fr.Children.Add(fl);
+        _frame.SelectionChanged += (_, _) =>
+        {
+            if (_filling || _frame.SelectedIndex < 0 || _frame.SelectedIndex >= _frames.Count) return;
+            try
+            {
+                var (ok, msg) = FrameLibrary.Select(_frames[_frame.SelectedIndex].Id);
+                if (!ok) PipeCommands_Say("도곽 못 고름 — " + msg);
+            }
+            catch (System.Exception ex) { PipeLog.Line("[도곽] 고르기 실패 — " + ex.Message); }
+        };
+        fr.Children.Add(_frame);
+        body.Children.Add(fr);
+        var checks = new WrapPanel();
+        foreach (var cb in new[] { _shPlan, _shProf, _shXsec })
+        {
+            cb.Click += (_, _) => _sheetDirty = true;
+            checks.Children.Add(cb);
+        }
+        body.Children.Add(checks);
+        var make = new Button { Content = "작성하기", Height = 28, Padding = new Thickness(14, 0, 14, 0), Margin = new Thickness(0, 0, 6, 6), ToolTip = "배치탭에 도면 만들기(DHPIPESHEET) — 종단도면 · 횡단도를 먼저 그려 둘 것" };
+        make.Click += (_, _) => { if (SaveSheet()) Send("DHPIPESHEET"); };
+        var del = new Button { Content = "지우기", Height = 28, Padding = new Thickness(12, 0, 12, 0), Margin = new Thickness(0, 0, 6, 6), ToolTip = "이 노선의 도면화 탭 지우기(DHPIPESHEETDEL)" };
+        del.Click += (_, _) => Send("DHPIPESHEETDEL");
+        return Card("⑦", "도면화", body, make, del);
+    }
+
+    /// <summary>도면화 칸의 값을 모은다.</summary>
+    internal SheetInput ReadSheet()
+    {
+        string T(string k) => _sh[k].Text.Trim();
+        int.TryParse(T("NoStart"), out int no);
+        double.TryParse(T("PlanScale").Replace(',', '.'), NumberStyles.Float, CultureInfo.InvariantCulture, out double ps);
+        return new SheetInput
+        {
+            Project = T("Project"), Prefix = T("Prefix"), NoPrefix = _sh["NoPrefix"].Text, NoStart = Math.Max(0, no), Date = T("Date"), PlanScale = Math.Max(0, ps),
+            Plan = _shPlan.IsChecked == true, Prof = _shProf.IsChecked == true, Xsec = _shXsec.IsChecked == true,
+        };
+    }
+
+    /// <summary>도면화 칸의 값을 도면에 저장한다([작성하기] 직전). 못 쓰면 false.</summary>
+    private bool SaveSheet()
+    {
+        var doc = AcadApp.DocumentManager.MdiActiveDocument;
+        if (doc == null || _routeData == null) { PipeCommands_Say("노선 없음 → [노선 만들기]"); return false; }
+        if (doc.Database.UnmanagedObject != _dataDb) { PipeCommands_Say("도면 바뀜 → [새로 고침] 뒤 다시"); return false; }
+        try
+        {
+            using (doc.LockDocument()) ReadSheet().Save(doc.Database);
+            _sheetDirty = false;
+            return true;
+        }
+        catch (System.Exception ex)
+        {
+            PipeCommands_Say("명령 중 → 끝낸 뒤 [작성하기]");
+            PipeLog.Line("[도면화] 값 못 씀 — " + ex.Message);
+            return false;
+        }
+    }
+
+    private void FillSheet(PanelData d)
+    {
+        _sheet.Text = d.SheetText;
+        string who = _routeData?.AlignHandle ?? "";
+        _filling = true;
+        try
+        {
+            // 도곽 목록은 늘 다시(다른 창 · 명령에서 바뀔 수 있다)
+            _frames = d.Frames;
+            _frame.Items.Clear();
+            foreach (var (_, label) in _frames) _frame.Items.Add(label);
+            _frame.SelectedIndex = _frames.FindIndex(f => f.Id == d.FrameCurrent);
+            if (_sheetDirty && who == _sheetFor) return;      // 적어 놓고 아직 안 쓴 값은 덮지 않는다
+            _sheetFor = who;
+            var v = d.Sheet;
+            _sh["Project"].Text = v.Project;
+            _sh["Prefix"].Text = v.Prefix;
+            _sh["NoPrefix"].Text = v.NoPrefix;
+            _sh["NoStart"].Text = v.NoStart.ToString(CultureInfo.InvariantCulture);
+            _sh["Date"].Text = v.Date;
+            _sh["PlanScale"].Text = v.PlanScale > 0 ? v.PlanScale.ToString("0.##", CultureInfo.InvariantCulture) : "";
+            _shPlan.IsChecked = v.Plan;
+            _shProf.IsChecked = v.Prof;
+            _shXsec.IsChecked = v.Xsec;
+        }
+        finally { _filling = false; }
+        _sheetDirty = false;
     }
 
     private static readonly (string Key, string Label)[] StdFields =
@@ -329,6 +464,15 @@ internal sealed class PipePanel : UserControl
         catch (InvalidOperationException ex) { d.RouteText = $"«{route.Name}» · {ex.Message}"; }
         if (b == null) return d;
         d.SetRoute(route, b.Ctx.Plan.Length, b.Ctx.Plan.Deflections().Count, b.Ctx.Zones.Count, b.Notes);
+        d.SetStrata(route, b.Ctx.Strata.Select(x => x.Name + "=" + Q.RockName[Math.Clamp(x.Rock, 0, Q.RockCount - 1)]).ToList(), b.Ctx.WaterTin != null);
+        try
+        {
+            d.Sheet = SheetInput.Load(db);
+            d.SheetText = PipeSheets.Status(db, route.AlignHandle);
+            d.Frames = FrameLibrary.Items();
+            d.FrameCurrent = FrameLibrary.CurrentItemId();
+        }
+        catch (System.Exception ex) { d.SheetText = "원인: " + ex.Message; }
         if (b.Ctx.Profile.IsEmpty) { d.ProfText = "종단 없음 → [처음 종단]"; return d; }
         try
         {
@@ -370,6 +514,8 @@ internal sealed class PipePanel : UserControl
             }
         }
         if (d.Light) return;
+        _strata.Text = d.StrataText;
+        FillSheet(d);
         _secs = d.Secs;
         _keys = d.Keys;
         double keep = _slider.Value;
@@ -434,6 +580,19 @@ internal sealed class PanelData
     public List<string> Keys { get; set; } = new();
     /// <summary>가벼운 새로 고침(도면을 안 읽음 — 저장된 노선 값만).</summary>
     public bool Light { get; set; }
+    public string StrataText { get; set; } = "";
+    public SheetInput Sheet { get; set; } = new();
+    public string SheetText { get; set; } = "";
+    public List<(string Id, string Label)> Frames { get; set; } = new();
+    public string FrameCurrent { get; set; } = "";
+
+    /// <summary>지층 한 줄: 지층면(부지정지)이 먼저 · 없으면 «땅속 값» · 둘 다 없으면 전부 토사.</summary>
+    public void SetStrata(RouteData route, IReadOnlyList<string> layers, bool water)
+    {
+        if (layers.Count > 0) StrataText = $"지층면 {layers.Count}: {string.Join(" · ", layers)}" + (water ? " · 지하수위 면" : "");
+        else if (route.Strata.Count > 0) StrataText = $"땅속 값 {route.Strata.Count}곳(지층면 없음)";
+        else StrataText = "지층 없음 = 전부 토사 → [지층]";
+    }
 
     public void SetRoute(RouteData route, double length, int bends, int zones, IReadOnlyList<string> notes)
     {

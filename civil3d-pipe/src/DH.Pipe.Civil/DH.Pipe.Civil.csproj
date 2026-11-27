@@ -57,6 +57,10 @@
     <Compile Include="$(GradingSrc)DockClose.cs" Link="Shared\DockClose.cs" />
     <Compile Include="$(GradingSrc)BusyPopup.cs" Link="Shared\BusyPopup.cs" />
     <Compile Include="$(GradingSrc)ModalWatch.cs" Link="Shared\ModalWatch.cs" />
+    <!-- 도면화: 도곽 보관함(이 PC 에 저장한 도곽 · 기본 K-water · 단순 도곽) · 번들 폴더 찾기 · 도면화 규칙(순수 계산) -->
+    <Compile Include="$(GradingSrc)SheetBook\FrameLibrary.cs" Link="Shared\FrameLibrary.cs" />
+    <Compile Include="$(GradingSrc)BundleContents.cs" Link="Shared\BundleContents.cs" />
+    <Compile Include="$(GradingSrc)..\DH.Grading.Core\SheetBookRules.cs" Link="Shared\SheetBookRules.cs" />
     <EmbeddedResource Include="$(GradingSrc)Resources\DohwaLogo.png" Link="Resources\DohwaLogo.png" />
     <EmbeddedResource Include="Resources\ReleaseNotes.txt" LogicalName="DH.Pipe.ReleaseNotes.txt" />
   </ItemGroup>
@@ -68,6 +72,11 @@
       <_BundlePayload Include="$(OutDir)DH.Pipe.*.pdb" />
     </ItemGroup>
     <Copy SourceFiles="@(_BundlePayload)" DestinationFolder="$(MSBuildProjectDirectory)\DH.Pipe.bundle\Contents$(_BundleSub)" SkipUnchangedFiles="true" />
+    <!-- 기본 도곽(K-water DWG + 정의)은 부지정지 번들의 것을 그대로 가져온다 — 2026 · 2027 이 함께 쓰는 Contents\Frames 한 벌. 파일이 없으면 «단순 도곽»으로 돈다 -->
+    <ItemGroup>
+      <_FramePayload Include="$(GradingSrc)DH.Grading.bundle\Contents\Frames\*.*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_FramePayload)" DestinationFolder="$(MSBuildProjectDirectory)\DH.Pipe.bundle\Contents\Frames" SkipUnchangedFiles="true" Condition="'@(_FramePayload)' != ''" />
     <Message Importance="high" Text="번들 갱신 — 구성 $(Configuration) · Civil $(CivilYear) → Contents$(_BundleSub)" />
   </Target>
 

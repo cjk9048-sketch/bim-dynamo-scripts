@@ -6,7 +6,7 @@ namespace DH.Pipe.Civil;
 public static class PipeSettings
 {
     /// <summary>판 — 도구가 이 줄을 읽는다(형식 유지).</summary>
-    public const string Version = "v0.1.0 (2026-11-27)";
+    public const string Version = "v0.2.0 (2026-11-27)";
 
     public const string ProductName = "DH 관로";
     internal const string PrefsRegKey = @"Software\DHPipe";

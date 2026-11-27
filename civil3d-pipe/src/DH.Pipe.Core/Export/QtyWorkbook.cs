@@ -357,7 +357,7 @@ public static class QtyWorkbook
         L("관 기초", $"{s.Bedding:0.00} m", "표준굴착단면도");
         L("관주위 윗면", $"관 윗면 + {s.ZoneTop:0.00} m", "표준굴착단면도 · K-water 설계적산지침 1.3.1");
         L("여유폭(한쪽)", $"{s.Clearance:0.00} m", "표준굴착단면도");
-        L("경사 1:n", $"토사 {s.SlopeSoil:0.0#} · 풍화암 {s.SlopeWr:0.0#} · 연암 {s.SlopeRock:0.0#}", "산업안전보건기준에 관한 규칙 별표 11 · 구간에서 고침");
+        L("경사 1:n", $"토사 {s.SlopeSoil:0.0#} · 풍화암 {s.SlopeWr:0.0#} · 연암 · 보통암 {s.SlopeRock:0.0#} · 경암 {s.SlopeHard:0.0#}", "산업안전보건기준에 관한 규칙 별표 11 · 구간에서 고침");
         L("깊이 구분", s.DepthLimit > 0 ? $"{s.DepthLimit:0.0} m" : "안 나눔", "산출서 관행");
         L("포장 층(묶인 층 / 보조기층)", $"아스콘 {s.Asphalt.Bound:0.00}/{s.Asphalt.Subbase:0.00} · 콘크리트 {s.Concrete.Bound:0.00}/{s.Concrete.Subbase:0.00} · 블록 {s.Block.Bound:0.00}/{s.Block.Subbase:0.00}", "포장공 산출서");
         L("포장 수직 절단", s.PaveVertical ? "함" : "안 함", "설정");

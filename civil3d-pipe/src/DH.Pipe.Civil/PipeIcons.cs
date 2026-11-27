@@ -14,7 +14,7 @@ internal static class PipeIcons
         "surf", "ground", "route", "pipe", "zone", "profile", "obst", "obstsel", "guide", "profsheet",
         "method", "strata", "xsec", "xlsx", "cube", "panel", "check", "info",
         // 도킹 창 단추에만 쓰는 것
-        "pick", "del",
+        "pick", "del", "sheet",
     };
 
     /// <summary>단추 그림 — 코드로 그린다(회사 색 선 그림).</summary>
@@ -53,6 +53,8 @@ internal static class PipeIcons
                 // 고르기: 노선 둘 가운데 하나를 짚는 화살표 / 지우기: 가위표
                 case "pick": Lines(thin, 3, 9, 13, 5, 29, 9); Lines(ink, 3, 22, 14, 17, 29, 23); Lines(warm, 20, 28, 15, 19, 22, 20, 15, 19, 16, 26); break;
                 case "del": Segs(warm, 8, 8, 24, 24, 24, 8, 8, 24); break;
+                // 도면화: 도곽(바깥 네모 + 아래 표제란) 안의 그림
+                case "sheet": dc.DrawRectangle(null, ink, new Rect(3, 6, 26, 20)); Segs(thin, 3, 21, 29, 21, 19, 21, 19, 26); Lines(warm, 7, 16, 12, 11, 17, 14, 24, 10); break;
                 default: dc.DrawEllipse(null, ink, new Point(16, 16), 11, 11); Lines(ink, 16, 14, 16, 23); dc.DrawEllipse(DhBrand.Brand, null, new Point(16, 9.5), 1.6, 1.6); break;
             }
             dc.Pop();

@@ -582,6 +582,41 @@ public sealed class PipeCommands
         doc.SendStringToExecute(cmd + " ", true, false, true);
     });
 
+    [CommandMethod("DH_PIPE", "DHPIPEBORE", CommandFlags.Modal)]
+    public void Boreholes() => Run("지층", doc =>
+    {
+        // 지층(시추공 · 층 · 지하수위)은 부지정지의 «지층 구성» 창에서 넣는다 — 거기서 만든 지층면을 관로가 그대로 읽는다(자료 한 벌)
+        if (!GradingLoaded()) throw new InvalidOperationException("부지정지 애드인 없음 → [땅속 값]으로 넣기");
+        doc.SendStringToExecute("DHSTRATA ", true, false, true);
+    });
+
+    [CommandMethod("DH_PIPE", "DHPIPESHEET", CommandFlags.Modal)]
+    public void MakeSheets() => Run("도면화", doc =>
+    {
+        var route = NeedRoute(doc);
+        var r = PipeSheets.Make(doc, route, SheetInput.Load(doc.Database));
+        Say(r.Line);
+    });
+
+    [CommandMethod("DH_PIPE", "DHPIPESHEETDEL", CommandFlags.Modal)]
+    public void EraseSheets() => Run("도면화 지우기", doc =>
+    {
+        var route = NeedRoute(doc);
+        if (!PipeSheets.ConfirmLoss(doc, PipeSheets.TabNames(doc.Database, route.AlignHandle))) { Say("취소 — 탭 그대로"); return; }
+        int n = PipeSheets.Erase(doc.Database, route, new StringBuilder());
+        Say(n > 0 ? $"도면화 탭 {n}개 지움" : "지울 도면화 탭 없음");
+    });
+
+    [CommandMethod("DH_PIPE", "DHPIPEFRAME", CommandFlags.Modal)]
+    public void PickFrame() => Run("도곽", doc =>
+    {
+        var o = new PromptOpenFileOptions("\n도곽 DWG 고르기") { Filter = "도면 (*.dwg)|*.dwg" };
+        var r = doc.Editor.GetFileNameForOpen(o);
+        if (r.Status != PromptStatus.OK) return;
+        var (ok, msg) = DH.Grading.Civil.FrameLibrary.Pick(r.StringResult);
+        Say(ok ? "도곽 저장 — 이 PC 의 모든 도면에 씀" + (msg.Length > 0 ? " · " + msg : "") : "원인: " + msg);
+    });
+
     internal static bool GradingLoaded()
     {
         try { return AppDomain.CurrentDomain.GetAssemblies().Any(a => a.GetName().Name == "DH.Grading.Civil"); }

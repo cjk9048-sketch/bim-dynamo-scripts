@@ -22,6 +22,12 @@ public sealed class SheetSet
     public int PerSheet { get; set; }
     public double SheetW { get; set; }
     public double SheetH { get; set; }
+    /// <summary>축척의 분모(1:N 의 N).</summary>
+    public double Scale { get; set; }
+    /// <summary>장마다의 왼쪽 아래(모형 m — 그린 자리 기준 · 도면에 넣을 때 옮긴 만큼 더한다).</summary>
+    public List<(double X, double Y)> Origins { get; } = new();
+    /// <summary>종단: 장마다의 측점 구간.</summary>
+    public List<(double A, double B)> Ranges { get; } = new();
     public List<string> Notes { get; } = new();
 }
 
@@ -117,12 +123,10 @@ public static class SectionDrawing
                     d.Text(Lay.Depth, l.Pts[0].X, l.Pts[0].Y + 0.8 * f, 2.0 * f, $"{depthLimit:0.#}m 구분선");
                     break;
                 case "STRATA1":
-                    d.Poly(Lay.Strata, l.Pts);
-                    d.Text(Lay.Strata, l.Pts[0].X - 1 * f, l.Pts[0].Y - 3 * f, 2.0 * f, "풍화암", 2);
-                    break;
                 case "STRATA2":
+                case "LAYER":
                     d.Poly(Lay.Strata, l.Pts);
-                    d.Text(Lay.Strata, l.Pts[0].X - 1 * f, l.Pts[0].Y - 3 * f, 2.0 * f, "연암", 2);
+                    d.Text(Lay.Strata, l.Pts[0].X - 1 * f, l.Pts[0].Y - 3 * f, 2.0 * f, l.Label.Length > 0 ? l.Label : l.Key == "STRATA2" ? "연암" : "풍화암", 2);
                     break;
             }
         }
@@ -191,13 +195,14 @@ public static class SectionDrawing
     public static SheetSet Sheets(IReadOnlyList<SectionResult> secs, IReadOnlyList<string> tableKeys, double depthLimit, double scale, string title)
     {
         double f = scale / 1000.0;
-        var set = new SheetSet { SheetW = 841 * f, SheetH = 594 * f };
+        var set = new SheetSet { SheetW = SheetGeom.PaperW * f, SheetH = SheetGeom.PaperH * f, Scale = scale };
         var cells = secs.Select(s => Cell(s, tableKeys, depthLimit, scale)).ToList();
         set.Cells = cells.Count;
         if (cells.Count == 0) return set;
         double gap = 6 * f;
-        double left = 25 * f, right = 10 * f, bottom = 28 * f, topM = 38 * f;
-        double uw = set.SheetW - left - right, uh = set.SheetH - bottom - topM;
+        // 그림 자리 = 도곽의 그림 자리에서 제목 띠를 뺀 곳(배치탭 뷰포트가 보는 곳과 같다)
+        double left = SheetGeom.DrawL * f, topM = (SheetGeom.PaperH - SheetGeom.ContentT) * f;
+        double uw = SheetGeom.ContentW * f, uh = SheetGeom.ContentH * f;
         if (cells.Any(c => c.W + gap > uw || c.H + gap > uh)) set.Notes.Add($"단면이 용지보다 큼 → 축척 1:{scale:0} 을 키울 것");
 
         // 칸을 측점 순서대로 채운다: 한 줄(열)에 위 → 아래로 쌓고, 높이가 차면 오른쪽 열, 폭이 차면 다음 장
@@ -215,21 +220,16 @@ public static class SectionDrawing
         }
         set.Sheets = sheet + 1;
         set.PerSheet = (int)Math.Ceiling(cells.Count / (double)set.Sheets);
-        double pitch = set.SheetW + 60 * f;
         for (int k = 0; k < set.Sheets; k++)
         {
-            double ox = k * pitch;
-            set.Draw.Rect(Lay.Frame, ox, 0, ox + set.SheetW, set.SheetH);
-            set.Draw.Rect(Lay.Frame, ox + left, 10 * f, ox + set.SheetW - right, set.SheetH - 10 * f);
-            set.Draw.Text(Lay.Title, ox + set.SheetW * 0.5, set.SheetH - 26 * f, 7 * f, $"{title} 횡단면도({k + 1})", 1);
-            set.Draw.Text(Lay.Title, ox + set.SheetW * 0.5 + 70 * f, set.SheetH - 33 * f, 4 * f, $"S = 1:{scale:0}", 1);
-            set.Draw.Text(Lay.Title, ox + set.SheetW - right - 6 * f, 18 * f, 5 * f, $"{title} 횡단면도({k + 1})", 2);
-            set.Draw.Text(Lay.Title, ox + set.SheetW - right - 6 * f, 12 * f, 3 * f, $"{k + 1} / {set.Sheets}", 2);
+            double ox = SheetGeom.OriginX(k, f);
+            set.Origins.Add((ox, 0));
+            SheetGeom.Decorate(set.Draw, ox, 0, f, $"{title} 횡단면도", $"S = 1:{scale:0}", k, set.Sheets);
         }
         for (int i = 0; i < cells.Count; i++)
         {
             var (sh, px, py) = place[i];
-            double ox = sh * pitch;
+            double ox = SheetGeom.OriginX(sh, f);
             set.Draw.Add(cells[i].Draw, ox + left + px + gap * 0.5, set.SheetH - topM - py - cells[i].H - gap * 0.5);
         }
         return set;

@@ -56,6 +56,8 @@ internal static class Ops
         double s0 = Math.Max(b.S0, b.Ctx.Profile.S0), s1 = Math.Min(b.S1, b.Ctx.Profile.S1);
         if (s1 - s0 < 0.5) throw new InvalidOperationException("종단이 노선과 안 겹침 → [처음 종단]");
         c.Rows = RouteEngine.BuildRows(b.Ctx, s0, s1);
+        int outside = c.Rows.Count(r => r.After.Messages.Contains(RouteEngine.OutsideStrata) || r.Before.Messages.Contains(RouteEngine.OutsideStrata));
+        if (outside > 0) b.Notes.Add($"지층면 밖 측점 {outside}곳 — " + (route.Strata.Count > 0 ? "땅속 값으로 셈" : "토사로 셈"));
         c.Earth = EarthTable.Build(c.Rows, route.Std.DepthLimit);
         c.Sum = Summary.Build(b.Ctx, c.Rows, b.Ground);
         c.Issues = ProfileCheck.Run(b.Ctx.Profile, b.Ground, route);
@@ -307,18 +309,24 @@ internal static class Ops
     {
         var db = doc.Database;
         var c = Compute(db, route);
-        var list = ProfileDrawing.Draw(new ProfileDrawing.Input
+        var input = new ProfileDrawing.Input
         {
             Title = route.Name, Ground = c.B.Ground, Line = c.B.Ctx.Profile, Route = route,
             Stations = c.Rows.Select(r => r.Sta).ToList(), Spans = c.Sum.Spans, Pipes = c.Sum.Pipes,
-        });
+        };
+        // 지층면 · 지하수위 면이 있으면 노선을 따라 떠서 지층선 · 수위선으로(없으면 «땅속 값»으로 그린다)
+        foreach (var ly in c.B.Ctx.Strata.Where(x => x.Show)) input.Strata.Add((ly.Name, RouteEngine.SurfaceAlong(c.B.Ctx.Plan, ly.Tin)));
+        if (c.B.Ctx.WaterTin != null) input.Water = RouteEngine.SurfaceAlong(c.B.Ctx.Plan, c.B.Ctx.WaterTin);
+        // 장마다 측점 구간 하나(A1 그림 자리에 맞춤 — 도면화가 이 장을 그대로 본다)
+        var set = ProfileDrawing.Sheets(input);
         using var tr = db.TransactionManager.StartTransaction();
         string g = CivilUtil.GroupName("PROF", route.AlignHandle);
         int old = CivilUtil.EraseGroup(db, tr, g);
-        var ids = DrawWriter.Write(db, tr, list, "종단", at, route.Std.ProfileHScale);
+        var ids = DrawWriter.Write(db, tr, set.Draw, "종단", at, route.Std.ProfileHScale);
         CivilUtil.MakeGroup(db, tr, g, ids, route.Name + " 종단면도");
         tr.Commit();
-        string msg = $"종단도면 · 측점 {c.Rows.Count} · PVI {c.B.Ctx.Profile.Pvi.Count}";
+        string msg = $"종단도면 {set.Sheets}장 · 측점 {c.Rows.Count} · PVI {c.B.Ctx.Profile.Pvi.Count}"
+            + (c.B.Ctx.Strata.Count > 0 ? $" · 지층면 {c.B.Ctx.Strata.Count}" : "") + (set.Notes.Count > 0 ? " · " + string.Join(" · ", set.Notes) : "");
         PipeLog.Line($"[종단도면] «{route.Name}» {msg} · 객체 {ids.Count}(옛 것 {old} 지움)");
         return msg;
     }
@@ -380,21 +388,57 @@ internal static class Ops
         ObjectId style = CivilUtil.EnsureTextStyle(db, tr);
         var ids = new ObjectIdCollection();
         void Put(Entity e) { e.LayerId = lay; ids.Add(ms.AppendEntity(e)); tr.AddNewlyCreatedDBObject(e, true); }
+        // 크기는 평면도 축척(종단 가로 축척과 같게 쓴다)의 종이 mm 로 — 1:1000 이면 글자 2.2 mm = 2.2 m
+        double f = Math.Max(1, route.Std.ProfileHScale) / 1000.0;
+        var plan = b.Ctx.Plan;
+        // 노선 방향으로 눕힌 글(거꾸로 서지 않게 뒤집음). side: 왼쪽(+) · 오른쪽(−)으로 띄울 거리
+        void Along(double sta, double side, double h, string text)
+        {
+            var p = plan.PointAt(sta);
+            var r = plan.RightAt(sta);
+            double ang = Math.Atan2(r.X, -r.Y);          // 진행 방향 = 오른쪽 직각을 왼쪽으로 90° 돌린 것
+            var q = new Point3d(p.X - r.X * side, p.Y - r.Y * side, 0);
+            if (ang > Math.PI / 2 + 1e-9 || ang < -Math.PI / 2 - 1e-9) ang += Math.PI;
+            var t = new DBText { TextString = text, Height = h, TextStyleId = style, Rotation = ang, Position = q, HorizontalMode = TextHorizontalMode.TextCenter, VerticalMode = TextVerticalMode.TextVerticalMid, AlignmentPoint = q };
+            Put(t);
+            try { t.AdjustAlignment(db); } catch { }
+        }
+        void Tick(double sta, double half)
+        {
+            var p = plan.PointAt(sta);
+            var r = plan.RightAt(sta);
+            Put(new Line(new Point3d(p.X - r.X * half, p.Y - r.Y * half, 0), new Point3d(p.X + r.X * half, p.Y + r.Y * half, 0)));
+        }
+        // 공법 구간(왼쪽) · 관(오른쪽) 이름표
+        foreach (var m in route.Methods)
+        {
+            double a0 = Math.Max(b.S0, m.StaFrom), a1 = Math.Min(b.S1, m.StaTo);
+            if (a1 - a0 < 1e-6) continue;
+            Tick(a0, 4 * f);
+            Tick(a1, 4 * f);
+            Along(0.5 * (a0 + a1), 6 * f, 2.2 * f, $"{MethodSpan.NameOf(m.Kind)} L={a1 - a0:0.0}m");
+        }
+        foreach (var run in route.Runs)
+        {
+            double a0 = Math.Max(b.S0, run.StaFrom), a1 = Math.Min(b.S1, run.StaTo);
+            if (a1 - a0 < 1e-6) continue;
+            Along(a0 + 0.25 * (a1 - a0), -6 * f, 2.2 * f, $"{run.Pipe.Name} L={a1 - a0:0.0}m");
+        }
         foreach (var o in route.Obstacles)
         {
-            var p = b.Ctx.Plan.PointAt(o.Sta);
-            Put(new Circle(new Point3d(p.X, p.Y, 0), Vector3d.ZAxis, Math.Max(0.4, o.Width * 0.5)));
-            Put(new DBText { Position = new Point3d(p.X + 0.8, p.Y + 0.8, 0), Height = 0.6, TextString = o.Kind, TextStyleId = style });
+            var p = plan.PointAt(o.Sta);
+            Put(new Circle(new Point3d(p.X, p.Y, 0), Vector3d.ZAxis, Math.Max(1.0 * f, o.Width * 0.5)));
+            Put(new DBText { Position = new Point3d(p.X + 1.6 * f, p.Y + 1.6 * f, 0), Height = 2.0 * f, TextString = o.Kind, TextStyleId = style });
         }
         foreach (var a in route.Appts)
         {
-            var p = b.Ctx.Plan.PointAt(a.Sta);
-            var r = b.Ctx.Plan.RightAt(a.Sta);
+            var p = plan.PointAt(a.Sta);
+            var r = plan.RightAt(a.Sta);
             string tag = a.Kind switch { ApptKind.AirValve => "AV", ApptKind.Drain => "DV", ApptKind.GateValve => "GV", _ => "FH" };
-            var q = new Point3d(p.X - r.X * 2.0, p.Y - r.Y * 2.0, 0);
+            var q = new Point3d(p.X - r.X * 12 * f, p.Y - r.Y * 12 * f, 0);
             Put(new Line(new Point3d(p.X, p.Y, 0), q));
-            Put(new Circle(q, Vector3d.ZAxis, 0.6));
-            var t = new DBText { TextString = tag, Height = 0.5, TextStyleId = style, Position = q, HorizontalMode = TextHorizontalMode.TextCenter, VerticalMode = TextVerticalMode.TextVerticalMid, AlignmentPoint = q };
+            Put(new Circle(q, Vector3d.ZAxis, 2.2 * f));
+            var t = new DBText { TextString = tag, Height = 1.8 * f, TextStyleId = style, Position = q, HorizontalMode = TextHorizontalMode.TextCenter, VerticalMode = TextVerticalMode.TextVerticalMid, AlignmentPoint = q };
             Put(t);
             try { t.AdjustAlignment(db); } catch { }
         }

@@ -100,7 +100,15 @@ internal static class RouteBuilder
         using var tr = db.TransactionManager.StartTransaction();
         foreach (ObjectId sid in cdoc.GetSurfaceIds())
         {
-            try { if (tr.GetObject(sid, OpenMode.ForRead) is CivilDb.TinSurface t) res.Add((sid, t.Name)); } catch { }
+            try
+            {
+                if (tr.GetObject(sid, OpenMode.ForRead) is not CivilDb.TinSurface t) continue;
+                // 부지정지의 지층면 · 지하수위 면은 원지반 후보가 아니다(원지반이 하나인데 «여럿 → 고르기»가 뜨지 않게)
+                string nm = t.Name ?? "";
+                if (nm.StartsWith(StrataPrefix, StringComparison.Ordinal) || nm == WaterSurface) continue;
+                res.Add((sid, nm));
+            }
+            catch { }
         }
         tr.Commit();
         return res;
@@ -253,6 +261,86 @@ internal static class RouteBuilder
         tr.Commit();
     }
 
+    internal const string StrataPrefix = "DH_지층_", WaterSurface = "DH_지하수위";
+
+    /// <summary>
+    /// 부지정지의 지층 기능이 만든 지층 지표면(«DH_지층_n_이름» = n번 층의 윗면)과 지하수위 면(«DH_지하수위»)을 읽는다.
+    /// 암 분류는 지표면 설명란에 적힌 것(«DH_ROCK=Soft» …)을 쓰고, 없으면 층 이름으로 어림한다.
+    /// 면은 원지반처럼 사본을 만들어 두고(고쳐지면 버림) 단면 선 · 노선을 따라 뜬다.
+    /// </summary>
+    internal static void ReadStrata(Database db, RouteContext c, ObjectId groundId, List<string> notes)
+    {
+        c.Strata.Clear();
+        c.WaterTin = null;
+        var found = new List<(int Order, string Name, int Rock, bool Show, ObjectId Id)>();
+        bool oldBase = false, newBase = false;   // 옛 지층면(«DH_SVER» 가 2 미만 — n번 면 = n번 층의 아랫면) / 지금 방식(윗면)
+        ObjectId water = ObjectId.Null;
+        var cdoc = CivilApp.CivilDocument.GetCivilDocument(db);
+        using (var tr = db.TransactionManager.StartTransaction())
+        {
+            foreach (ObjectId sid in cdoc.GetSurfaceIds())
+            {
+                try
+                {
+                    if (sid == groundId || tr.GetObject(sid, OpenMode.ForRead) is not CivilDb.TinSurface t) continue;
+                    string nm = t.Name ?? "";
+                    if (nm == WaterSurface) { water = sid; continue; }
+                    if (!nm.StartsWith(StrataPrefix, StringComparison.Ordinal)) continue;
+                    string rest = nm.Substring(StrataPrefix.Length);
+                    int us = rest.IndexOf('_');
+                    if (us <= 0 || !int.TryParse(rest.Substring(0, us), out int ord)) continue;
+                    string name = rest.Substring(us + 1);
+                    int rock = -1;
+                    string desc = "";
+                    try { desc = t.Description ?? ""; } catch { }
+                    int at = desc.IndexOf("DH_ROCK=", StringComparison.Ordinal);
+                    if (at >= 0)
+                    {
+                        string v = desc.Substring(at + "DH_ROCK=".Length);
+                        int semi = v.IndexOf(';');
+                        rock = StrataSurface.RockOfClass(semi >= 0 ? v.Substring(0, semi) : v);
+                    }
+                    if (rock < 0) rock = StrataSurface.RockOfName(name);
+                    // 선을 그릴지: 부지정지 [지층]에서 고른 값(«DH_SHOW=1/0») · 없으면 맨 위 층(지반과 같은 면)만 안 그림
+                    bool show = ord > 1;
+                    int sh = desc.IndexOf("DH_SHOW=", StringComparison.Ordinal);
+                    if (sh >= 0 && sh + 8 < desc.Length) show = desc[sh + 8] == '1' && ord > 1;
+                    // 만든 방식: «DH_SVER=2» = 층의 윗면(지금) · 없거나 1 = 옛 아랫면 기준(부지정지 0831 이전)
+                    int ver = 1;
+                    int vt = desc.IndexOf("DH_SVER=", StringComparison.Ordinal);
+                    if (vt >= 0) { string v = desc.Substring(vt + 8); int semi = v.IndexOf(';'); int.TryParse(semi >= 0 ? v.Substring(0, semi) : v, out ver); }
+                    if (ver < 2) oldBase = true; else newBase = true;
+                    found.Add((ord, name, rock, show, sid));
+                }
+                catch { }
+            }
+            tr.Commit();
+        }
+        foreach (var f in found.OrderBy(x => x.Order))
+        {
+            try { c.Strata.Add(new StrataSurface { Order = f.Order, Name = f.Name, Rock = f.Rock, Show = f.Show, Tin = ReadTin(db, f.Id) }); }
+            catch (System.Exception ex) { notes.Add($"지층면 «{f.Name}» 못 읽음 — {ex.Message}"); }
+        }
+        if (oldBase && newBase)
+        {
+            // 만든 방식 표식이 있는 면과 없는 면이 섞여 있다(손으로 만든 면 · 지우다 만 옛 면) — 밀지 않고 지금 방식으로 읽는다(재검토 낮음)
+            notes.Add("지층면 일부에 만든 방식 표식 없음 — 위 기준으로 읽음 → 부지정지 [지층]에서 [확인] 다시");
+        }
+        else if (oldBase && c.Strata.Count > 0)
+        {
+            // 옛 면은 층의 아랫면이다 → 윗면 기준으로 바꿔 읽는다(그대로 읽으면 암 분류가 한 층씩 밀린다)
+            var top = StrataSurface.FromBottomBased(c.Strata, c.Tin);
+            c.Strata.Clear();
+            c.Strata.AddRange(top);
+            notes.Add("옛 지층면(층 아래 기준)을 위 기준으로 바꿔 읽음 → 부지정지 [지층]에서 [확인]을 다시 누르면 새 방식");
+        }
+        if (!water.IsNull)
+        {
+            try { c.WaterTin = ReadTin(db, water); }
+            catch (System.Exception ex) { notes.Add("지하수위 면 못 읽음 — " + ex.Message); }
+        }
+    }
+
     /// <summary>
     /// 구역 · 연석 레이어에 있는 선 · 폴리선 후보.
     /// 빠른 길 = 레이어로 걸러 고르기(도면의 선을 하나하나 열지 않는다 — 수치지도처럼 선이 수십만 개인 도면에서 명령마다 느려지지 않게).
@@ -324,6 +412,7 @@ internal static class RouteBuilder
         if (!b.Ctx.Profile.IsEmpty && (b.Ctx.Profile.S0 > b.S0 + 0.5 || b.Ctx.Profile.S1 < b.S1 - 0.5))
             b.Notes.Add($"종단이 노선보다 짧음({b.Ctx.Profile.S0:0.0} ~ {b.Ctx.Profile.S1:0.0}) — 그 범위만 셈");
         ReadZones(db, b.Ctx);
+        ReadStrata(db, b.Ctx, b.SurfId, b.Notes);
         // 관 구간이 비었으면 기본 관으로 전체
         if (route.Runs.Count == 0) route.Runs.Add(new PipeRun { StaFrom = 0, StaTo = plan.Length, Pipe = PipeCatalog.Make("DCIP", 300) });
         return b;

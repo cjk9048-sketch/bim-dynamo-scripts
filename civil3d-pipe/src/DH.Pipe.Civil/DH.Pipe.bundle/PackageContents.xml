@@ -1,7 +1,7 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
 <!-- Civil 3D 자동 로드 매니페스트 — tools/setup/pkg.py 가 다시 쓴다(손으로 고치지 말 것).
      이 .bundle 폴더를 %APPDATA%\Autodesk\ApplicationPlugins\DH.Pipe.bundle 에 두면 Civil 3D 시작 때 올라온다. -->
-<ApplicationPackage SchemaVersion="1.0" AppVersion="0.1.0" ProductType="Application" Name="DH 관로"
+<ApplicationPackage SchemaVersion="1.0" AppVersion="0.2.0" ProductType="Application" Name="DH 관로"
                     Description="상수 관로 — 노선 · 종단 · 구간 공법 · 횡단 · 토적표 · 3D">
   <CompanyDetails Name="도화엔지니어링 상하수도부" />
   <Components Description="DH Pipe">
@@ -11,7 +11,9 @@
         <Command Global="DHPIPE" Local="DHPIPE" />
         <Command Global="DHPIPE3D" Local="DHPIPE3D" />
         <Command Global="DHPIPEABOUT" Local="DHPIPEABOUT" />
+        <Command Global="DHPIPEBORE" Local="DHPIPEBORE" />
         <Command Global="DHPIPECHECK" Local="DHPIPECHECK" />
+        <Command Global="DHPIPEFRAME" Local="DHPIPEFRAME" />
         <Command Global="DHPIPEGRADING" Local="DHPIPEGRADING" />
         <Command Global="DHPIPEGUIDE" Local="DHPIPEGUIDE" />
         <Command Global="DHPIPEMETHOD" Local="DHPIPEMETHOD" />
@@ -26,6 +28,8 @@
         <Command Global="DHPIPEROUTE" Local="DHPIPEROUTE" />
         <Command Global="DHPIPERUN" Local="DHPIPERUN" />
         <Command Global="DHPIPESELFTEST" Local="DHPIPESELFTEST" />
+        <Command Global="DHPIPESHEET" Local="DHPIPESHEET" />
+        <Command Global="DHPIPESHEETDEL" Local="DHPIPESHEETDEL" />
         <Command Global="DHPIPESTRATA" Local="DHPIPESTRATA" />
         <Command Global="DHPIPESURF" Local="DHPIPESURF" />
         <Command Global="DHPIPEXSEC" Local="DHPIPEXSEC" />
@@ -40,7 +44,9 @@
         <Command Global="DHPIPE" Local="DHPIPE" />
         <Command Global="DHPIPE3D" Local="DHPIPE3D" />
         <Command Global="DHPIPEABOUT" Local="DHPIPEABOUT" />
+        <Command Global="DHPIPEBORE" Local="DHPIPEBORE" />
         <Command Global="DHPIPECHECK" Local="DHPIPECHECK" />
+        <Command Global="DHPIPEFRAME" Local="DHPIPEFRAME" />
         <Command Global="DHPIPEGRADING" Local="DHPIPEGRADING" />
         <Command Global="DHPIPEGUIDE" Local="DHPIPEGUIDE" />
         <Command Global="DHPIPEMETHOD" Local="DHPIPEMETHOD" />
@@ -55,6 +61,8 @@
         <Command Global="DHPIPEROUTE" Local="DHPIPEROUTE" />
         <Command Global="DHPIPERUN" Local="DHPIPERUN" />
         <Command Global="DHPIPESELFTEST" Local="DHPIPESELFTEST" />
+        <Command Global="DHPIPESHEET" Local="DHPIPESHEET" />
+        <Command Global="DHPIPESHEETDEL" Local="DHPIPESHEETDEL" />
         <Command Global="DHPIPESTRATA" Local="DHPIPESTRATA" />
         <Command Global="DHPIPESURF" Local="DHPIPESURF" />
         <Command Global="DHPIPEXSEC" Local="DHPIPEXSEC" />

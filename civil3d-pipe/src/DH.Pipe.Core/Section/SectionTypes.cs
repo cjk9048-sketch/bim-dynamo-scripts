@@ -23,6 +23,18 @@ public sealed class SectionPipe
         => new() { Dx = dx, Invert = invert, Od = p.Od, Wall = p.Wall, Dn = p.Dn };
 }
 
+/// <summary>지층 경계선 하나 = 그 층의 윗면. 목록은 위에서 아래 차례.</summary>
+public sealed class StrataLine
+{
+    public string Name { get; set; } = "";
+    /// <summary>암 분류: 0 토사 · 1 풍화암 · 2 연암 · 3 보통암 · 4 경암(<see cref="Q.RockName"/>).</summary>
+    public int Rock { get; set; }
+    /// <summary>그 층 윗면 z(x).</summary>
+    public Pl Top { get; set; } = Pl.Const(-6, 6, 0);
+    /// <summary>도면에 선을 그릴지(수량에는 늘 쓴다). 맨 위 층은 지반과 같은 면이라 안 그린다.</summary>
+    public bool Show { get; set; } = true;
+}
+
 /// <summary>한 측점 단면의 입력.</summary>
 public sealed class SectionInput
 {
@@ -41,6 +53,15 @@ public sealed class SectionInput
     public double? WrThk { get; set; }
     /// <summary>지하수위 표고. null = 없음.</summary>
     public double? WaterElev { get; set; }
+    /// <summary>
+    /// 지층면에서 뜬 층 선들(위에서 아래). 있으면 <see cref="SoilThk"/> · <see cref="WrThk"/> 대신 쓴다 —
+    /// 암 분류 k 의 윗면 = 첫 «k 이상» 층의 윗면(풍화암 없이 바로 연암이면 풍화암 두께 0).
+    /// </summary>
+    public List<StrataLine> Layers { get; set; } = new();
+    /// <summary>지하수위 선(지하수위 면에서 뜬 것). 있으면 <see cref="WaterElev"/> 대신 쓴다.</summary>
+    public Pl? WaterLine { get; set; }
+    /// <summary>입력을 만들면서 생긴 알림(예: 지층면이 이 자리를 안 덮음) — 단면 결과의 알림으로 옮겨진다.</summary>
+    public List<string> Notes { get; set; } = new();
     /// <summary>연석 선의 x 들.</summary>
     public List<double> Curbs { get; set; } = new();
     /// <summary>터파기 폭 안을 가로지르는 지장물 수(보호공).</summary>
@@ -54,8 +75,10 @@ public static class Q
     public static string Exc(bool wet, bool deep, int rock)
         => $"EXC.{(wet ? "WET" : "DRY")}.{(deep ? "GT" : "LE")}.{RockCode[rock]}";
 
-    public static readonly string[] RockCode = { "SOIL", "WR", "SR" };
-    public static readonly string[] RockName = { "토사", "풍화암", "연암" };
+    /// <summary>암 분류 다섯(부지정지의 지층 분류와 같다): 토사 · 풍화암 · 연암 · 보통암 · 경암.</summary>
+    public static readonly string[] RockCode = { "SOIL", "WR", "SR", "MR", "HR" };
+    public static readonly string[] RockName = { "토사", "풍화암", "연암", "보통암", "경암" };
+    public static int RockCount => RockCode.Length;
 
     public const string PavAsp = "PAV.ASP";       // 포장 깨기(㎡ 단면 → ㎥)
     public const string PavCon = "PAV.CON";
@@ -95,7 +118,8 @@ public static class Q
             var p = key.Split('.');
             string wet = p[1] == "WET" ? "용수" : "육상";
             string deep = depthLimit > 0 ? (p[2] == "GT" ? $"{depthLimit:0.#}m초과" : $"{depthLimit:0.#}m이하") : "";
-            string rock = p[3] switch { "SOIL" => "토사", "WR" => "풍화암", _ => "연암" };
+            int ri = Array.IndexOf(RockCode, p[3]);
+            string rock = ri >= 0 ? RockName[ri] : p[3];
             return $"터파기 {wet} {deep} {rock}".Replace("  ", " ");
         }
         return key switch
@@ -123,6 +147,8 @@ public sealed class SectionLine
 {
     /// <summary>GROUND · TRENCH · SHORE · WATER · DEPTH · STRATA1 · STRATA2 · LAYER</summary>
     public string Key { get; set; } = "";
+    /// <summary>선 옆에 적을 글(LAYER = 층 이름).</summary>
+    public string Label { get; set; } = "";
     public List<P2> Pts { get; set; } = new();
 }
 

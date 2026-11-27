@@ -270,6 +270,8 @@ public sealed class Standards
     public double SlopeSoil { get; set; } = 1.2;
     public double SlopeWr { get; set; } = 1.0;
     public double SlopeRock { get; set; } = 1.0;
+    /// <summary>경암 굴착면 기울기 1:n(산업안전보건기준에 관한 규칙 별표 11 — 경암 1:0.5). 연암 · 보통암은 <see cref="SlopeRock"/>.</summary>
+    public double SlopeHard { get; set; } = 0.5;
     /// <summary>묶인 포장 층 수직 절단.</summary>
     public bool PaveVertical { get; set; } = true;
     /// <summary>포장 절단 여유(터파기 윗폭 바깥 한쪽 m).</summary>

@@ -43,6 +43,7 @@ internal static class DrawWriter
                     var pl = new Polyline();
                     for (int i = 0; i < it.Pts.Count; i++) pl.AddVertexAt(i, new Point2d(it.Pts[i].X + ox, it.Pts[i].Y + oy), 0, 0, 0);
                     pl.Closed = it.Closed;
+                    pl.Plinegen = true;             // 선종류 무늬를 꼭짓점을 넘어 이어 그린다(점이 촘촘한 지층선 · 수위선이 실선으로 나오지 않게)
                     Add(pl, it.Layer);
                     break;
                 }

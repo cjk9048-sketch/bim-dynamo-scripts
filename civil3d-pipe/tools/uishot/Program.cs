@@ -40,6 +40,11 @@ internal static class Program
         var d = new PanelData { Route = route, SurfText = "원지반 = 시험 지형" };
         d.SetRoute(route, c.Plan.Length, c.Plan.Deflections().Count, c.Zones.Count, Array.Empty<string>());
         d.SetCalc(route, c.Profile.Pvi.Count, rows, earth, issues.Count);
+        d.SetStrata(route, new[] { "매립토=토사", "풍화암=풍화암", "연암=연암" }, true);
+        d.Sheet = new SheetInput { Project = "○○ 송수관로 공사", NoPrefix = "C-", NoStart = 101 };
+        d.SheetText = "아직 없음";
+        d.Frames = new List<(string, string)> { ("KWATER", "K-water(기본)"), ("SIMPLE", "단순 도곽") };
+        d.FrameCurrent = "KWATER";
         var panel = new PipePanel();
         panel.Fill(d);
         // 실제 도킹 창 크기(첫 화면) · 전체 길이(스크롤 끝까지)

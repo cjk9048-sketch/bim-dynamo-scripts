@@ -258,6 +258,63 @@ public sealed class ZonePoly
 }
 
 /// <summary>노선 하나를 계산하는 데 필요한 것 모두.</summary>
+/// <summary>지층면 하나(부지정지의 지층 지표면 사본) = 그 층의 윗면.</summary>
+public sealed class StrataSurface
+{
+    /// <summary>층 번호(위에서 1 …).</summary>
+    public int Order { get; set; }
+    public string Name { get; set; } = "";
+    /// <summary>암 분류: 0 토사 · 1 풍화암 · 2 연암 · 3 보통암 · 4 경암.</summary>
+    public int Rock { get; set; }
+    public TinIndex Tin { get; set; } = null!;
+    /// <summary>도면에 선을 그릴지(부지정지 [지층]에서 고른 값 · 없으면 맨 위 층만 안 그림). 수량에는 늘 쓴다.</summary>
+    public bool Show { get; set; } = true;
+
+    /// <summary>
+    /// 층 이름으로 암 분류를 어림한다(지표면에 적힌 분류를 못 읽었을 때): «암»이 들면 암 —
+    /// 풍화암 = 1 · 보통암 = 3 · 경암(극경암) = 4 · 그 밖의 암(연암 · 기반암 · 암반 …) = 2.
+    /// 풍화토 · 매립토 · 퇴적토 · 붕적토 · 표토 = 토사.
+    /// </summary>
+    public static int RockOfName(string name)
+    {
+        string n = (name ?? "").Replace(" ", "");
+        if (!n.Contains('암')) return 0;
+        if (n.Contains("토사") || n.EndsWith("토", StringComparison.Ordinal) || n.Contains("전석")) return 0;     // «암괴 섞인 토사» · «암편 섞인 점토»
+        if (n.Contains("풍화암") || n.Contains("리핑")) return 1;
+        if (n.Contains("보통암")) return 3;
+        if (n.Contains("경암")) return 4;
+        return 2;
+    }
+
+    /// <summary>
+    /// 옛 지층면(부지정지 0831 이전 — n번 면 = n번 층의 **아랫면**)을 윗면 기준으로 바꾼다:
+    /// n번 층의 윗면 = (n − 1)번 면 · 1번 층의 윗면 = 원지반. 맨 아래 면(마지막 층의 아랫면)은 쓰지 않는다(그 아래는 마지막 층이 이어진다고 본다).
+    /// 그대로 윗면으로 읽으면 암 분류가 한 층씩 밀린다 — 합계는 같아서 대조로는 안 잡힌다.
+    /// </summary>
+    public static List<StrataSurface> FromBottomBased(IReadOnlyList<StrataSurface> bottoms, TinIndex ground)
+    {
+        // 층 번호로 짝짓는다: n번 층의 윗면 = (n − 1)번 면. 가운데 면 하나를 못 읽어 빠졌으면 그 아래 층은 윗면을 모르므로 뺀다
+        // (목록 차례로 밀면 틀린 면과 짝지어진다 — 재검토 낮음).
+        var byOrder = new Dictionary<int, StrataSurface>();
+        foreach (var b in bottoms) byOrder[b.Order] = b;
+        int first = bottoms.Count > 0 ? bottoms.Min(b => b.Order) : 0;
+        var res = new List<StrataSurface>();
+        foreach (var b in bottoms.OrderBy(x => x.Order))
+        {
+            if (b.Order == first) { res.Add(new StrataSurface { Order = b.Order, Name = b.Name, Rock = b.Rock, Show = false, Tin = ground }); continue; }
+            if (!byOrder.TryGetValue(b.Order - 1, out var above)) continue;
+            res.Add(new StrataSurface { Order = b.Order, Name = b.Name, Rock = b.Rock, Show = b.Show, Tin = above.Tin });
+        }
+        return res;
+    }
+
+    /// <summary>부지정지가 지표면 설명란에 적는 분류 이름(Soil · Weathered · Soft · Medium · Hard) → 번호. 모르면 −1.</summary>
+    public static int RockOfClass(string? className) => (className ?? "").Trim() switch
+    {
+        "Soil" => 0, "Weathered" => 1, "Soft" => 2, "Medium" => 3, "Hard" => 4, _ => -1,
+    };
+}
+
 public sealed class RouteContext
 {
     public RouteData Route { get; set; } = new();
@@ -266,6 +323,10 @@ public sealed class RouteContext
     public ProfileLine Profile { get; set; } = new();
     public List<ZonePoly> Zones { get; set; } = new();
     public List<List<P2>> Curbs { get; set; } = new();
+    /// <summary>지층면들(위에서 아래 차례). 있으면 «땅속 값»보다 먼저 쓴다.</summary>
+    public List<StrataSurface> Strata { get; set; } = new();
+    /// <summary>지하수위 면. 있으면 «땅속 값»의 지하수위보다 먼저 쓴다.</summary>
+    public TinIndex? WaterTin { get; set; }
 }
 
 /// <summary>노선 · 지형 · 종단 · 공법을 엮어 측점마다 단면을 만든다.</summary>
@@ -273,6 +334,20 @@ public static class RouteEngine
 {
     /// <summary>노선을 따라간 지반 종단(측점 → 지반고). 세모망 밖 구간은 빠진다 — 가장 긴 이어진 토막을 준다.</summary>
     public static Pl? GroundAlong(PlanLine plan, TinIndex tin, List<string>? notes = null)
+    {
+        var runs = RunsAlong(plan, tin);
+        if (runs.Count == 0) return null;
+        var best = runs.OrderByDescending(r => r[^1].S - r[0].S).First();
+        if (runs.Count > 1 || best[0].S > 0.01 || best[^1].S < plan.Length - 0.01)
+            notes?.Add($"원지반 범위 밖 구간 있음(쓰는 범위 {best[0].S:0.0} ~ {best[^1].S:0.0})");
+        return Pl.From(best.Select(q => (q.S, q.Z)));
+    }
+
+    /// <summary>노선을 따라 뜬 면의 높이 — 면이 덮는 토막마다 하나(지층면 · 지하수위 면은 노선 일부만 덮을 수 있다).</summary>
+    public static List<Pl> SurfaceAlong(PlanLine plan, TinIndex tin)
+        => RunsAlong(plan, tin).Select(r => Pl.From(r.Select(q => (q.S, q.Z)))).ToList();
+
+    private static List<List<(double S, double Z)>> RunsAlong(PlanLine plan, TinIndex tin)
     {
         var runs = new List<List<(double S, double Z)>>();
         List<(double S, double Z)>? cur = null;
@@ -297,14 +372,13 @@ public static class RouteEngine
             baseS += len;
         }
         runs.RemoveAll(r => r.Count < 2);
-        if (runs.Count == 0) return null;
-        var best = runs.OrderByDescending(r => r[^1].S - r[0].S).First();
-        if (runs.Count > 1 || best[0].S > 0.01 || best[^1].S < plan.Length - 0.01)
-            notes?.Add($"원지반 범위 밖 구간 있음(쓰는 범위 {best[0].S:0.0} ~ {best[^1].S:0.0})");
-        return Pl.From(best.Select(q => (q.S, q.Z)));
+        return runs;
     }
 
     /// <summary>측점 목록(꼭 있어야 하는 곳 포함).</summary>
+    /// <summary>지층면이 있는데 그 단면 자리를 안 덮을 때의 알림 글.</summary>
+    public const string OutsideStrata = "지층면 밖";
+
     /// <summary>경계(공법 · 관이 바뀌는 곳)에서 이 거리(m) 안의 다른 측점은 뺀다.</summary>
     public const double NearBreak = 0.10;
 
@@ -380,9 +454,32 @@ public static class RouteEngine
         };
         input.Pipes.Add(SectionPipe.Of(pipe, invert));
 
-        // 지표 구역 · 연석: 단면 선과 만나는 범위
         var a = new P2(center.X - right.X * half, center.Y - right.Y * half);
         var b = new P2(center.X + right.X * half, center.Y + right.Y * half);
+        // 지층면 · 지하수위 면: 단면 선을 따라 뜬다(면이 이 자리를 안 덮으면 그 층은 «땅속 값»으로 물러난다)
+        // 면이 단면 가운데 절반(중심 ± 반폭의 절반)을 덮어야 쓴다 — 귀퉁이만 걸친 면의 끝값을 트렌치 한가운데까지 늘려 쓰지 않게(검토 높음).
+        // 그 밖(바깥 사분의 일)은 끝값으로 이어 준다.
+        bool Covers(List<(double D, double Z)>? run) => run != null && run.Count >= 2 && run[0].D <= half * 0.5 + 1e-6 && run[^1].D >= half * 1.5 - 1e-6;
+        foreach (var ly in c.Strata)
+        {
+            var lr = ly.Tin.ProfileAround(a.X, a.Y, b.X, b.Y, half);
+            if (!Covers(lr))
+            {
+                // 한 층이라도 못 덮으면 이 측점은 통째로 «땅속 값»으로 물러난다(풍화암 면은 없고 연암 면만 있으면 풍화암이 토사로 세어진다)
+                input.Layers.Clear();
+                break;
+            }
+            input.Layers.Add(new StrataLine { Name = ly.Name, Rock = ly.Rock, Show = ly.Show, Top = Pl.From(lr!.Select(q => (q.D - half, q.Z))) });
+        }
+        // 지층면이 있는데 이 자리를 안 덮는다 — 말없이 토사로 세지 않게 알린다(«땅속 값»이 있으면 그것으로, 없으면 전부 토사)
+        if (c.Strata.Count > 0 && input.Layers.Count == 0) input.Notes.Add(OutsideStrata);
+        if (c.WaterTin != null)
+        {
+            var wr = c.WaterTin.ProfileAround(a.X, a.Y, b.X, b.Y, half);
+            if (Covers(wr)) input.WaterLine = Pl.From(wr!.Select(q => (q.D - half, q.Z)));
+        }
+
+        // 지표 구역 · 연석: 단면 선과 만나는 범위
         foreach (var z in c.Zones)
         {
             // 단면 선을 구역 테두리와 만나는 점에서 자르고, 토막마다 가운데 점이 구역 안인지 본다.
