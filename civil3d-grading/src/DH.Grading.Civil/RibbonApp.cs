@@ -1025,7 +1025,8 @@ public sealed class RibbonApp : IExtensionApplication
             var btnRoadview = MakeButton("로드뷰", "DHROADVIEW ", "도면에서 위치를 찍으면 그 자리 위 작은 창에 로드뷰", "로드뷰");
             btnRoadview.ToolTip = MakeTip("로드뷰 (DHROADVIEW)",
                 "도면에서 **위치를 찍으면** 그 자리 위 작은 창에 카카오 로드뷰\n" +
-                "· 계속 찍기 — 찍을 때마다 창이 따라옴 · **Esc**로 끝\n" +
+                "· 계속 찍기 — 찍을 때마다 창이 따라옴 · **Esc** = 끝 + 창 닫기 · Enter = 창 남김\n" +
+                "· 창 가장자리 끌어 크기 조절(다음에도 그 크기)\n" +
                 "· 보는 방향 = 도면의 주황 부채꼴(임시 · 창 닫으면 사라짐)\n" +
                 "· 카카오 지도 키 = [공통설정] «기타»", null);
             pMisc.Items.Add(btnRoadview);

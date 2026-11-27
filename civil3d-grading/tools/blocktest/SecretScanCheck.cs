@@ -53,6 +53,12 @@ static class SecretScanCheck
                 void Add(JsonElement e, string k) { if (e.TryGetProperty(k, out var v) && v.ValueKind == JsonValueKind.String && v.GetString() is { Length: >= 6 } s) secrets.Add(s); }
                 Add(doc.RootElement, "vworld");
                 Add(doc.RootElement, "gisapi");   // ★[v117.19] 회사 GIS API 주소 — 소스 · 문서 · 설정에 0곳
+                // ★[v117.44.1] 내장 카카오 키 — 암호문과 푼 값 둘 다
+                if (doc.RootElement.TryGetProperty("kakao", out var kk) && kk.ValueKind == JsonValueKind.String && kk.GetString() is { Length: >= 6 } ks)
+                {
+                    secrets.Add(ks);
+                    if (DH.Grading.Core.SealedText.Open(ks, "kakao") is { Length: >= 6 } kp) secrets.Add(kp);
+                }
                 if (doc.RootElement.TryGetProperty("gisdb", out var g)) { Add(g, "host"); Add(g, "password"); }
             }
             catch (Exception ex) { check("S177 설치 키 파일 읽기", false, "형식 오류 — " + ex.GetType().Name); return; }   // ★[검토 L12] 값은 안 찍음

@@ -50,6 +50,12 @@ internal static class DhKeys
             b.VWorld = S(r, "vworld");
             b.GisApi = S(r, "gisapi");
             b.Kakao = S(r, "kakao");
+            // ★[v117.44.1 · JACK 1127] 내장 카카오 키는 암호문(enc1: · tools/setup/sealkey.py) — 글자 그대로도 받음(손으로 넣은 파일)
+            if (DH.Grading.Core.SealedText.IsSealed(b.Kakao))
+            {
+                b.Kakao = (DH.Grading.Core.SealedText.Open(b.Kakao, "kakao") ?? "").Trim();
+                if (b.Kakao.Length == 0) b.Note = "설치 키 파일의 카카오 키를 못 풀었습니다(암호문 깨짐)";
+            }
             if (b.Kakao.Length > 0 && !KakaoKey.LooksValid(b.Kakao)) { b.Kakao = ""; b.Note = "설치 키 파일의 카카오 키 꼴이 틀렸습니다(16진 32자)"; }
             if (r.TryGetProperty("update", out var up))
             {
@@ -132,6 +138,42 @@ internal static class KakaoKey
     }
 
     internal const string NoKeyHelp = "카카오 키 없음 → [공통설정] «기타»에서 넣기";
+
+    // ── ★[v117.44.1 · JACK 1127 «못 불러옴»] 지도 SDK가 안 뜰 때 원인 — 창 페이지와 같은 출처(Referer)로 카카오에 직접 물음 ──
+    //   실측 1127: 도메인 미등록 = 401 «domain mismatched» · 카카오맵 꺼짐 = 403 «disabled OPEN_MAP_AND_LOCAL»(출처 없이 물어야 보임)
+    //   · 없는 키 = 401 «does not exist» · 꼴 틀림 = 401 «wrong appKey … format»
+    static readonly HttpClient Http = new() { Timeout = System.TimeSpan.FromSeconds(10) };
+
+    /// <summary>원인 글(초보용 단답 · 여러 줄) — 카카오가 받아 주면 null(그때는 인터넷 · 잠깐 끊김). 아무 스레드에서나.</summary>
+    internal static async System.Threading.Tasks.Task<string?> Diagnose(string key)
+    {
+        key = (key ?? "").Trim();
+        string url = "https://dapi.kakao.com/v2/maps/sdk.js?appkey=" + System.Uri.EscapeDataString(key) + "&autoload=false";
+        async System.Threading.Tasks.Task<(int Code, string Body)> Ask(bool withOrigin)
+        {
+            using var req = new HttpRequestMessage(HttpMethod.Get, url);
+            if (withOrigin) req.Headers.Referrer = new System.Uri(Domain + "/");
+            using var resp = await Http.SendAsync(req).ConfigureAwait(false);
+            string body = resp.IsSuccessStatusCode ? "" : await resp.Content.ReadAsStringAsync().ConfigureAwait(false);
+            return ((int)resp.StatusCode, body.Length > 600 ? body.Substring(0, 600) : body);
+        }
+        try
+        {
+            var a = await Ask(true).ConfigureAwait(false);
+            if (a.Code == 200) return null;
+            var b = await Ask(false).ConfigureAwait(false);
+            string all = a.Body + "\n" + b.Body;
+            if (all.Contains("does not exist", System.StringComparison.OrdinalIgnoreCase) || all.Contains("wrong appKey", System.StringComparison.OrdinalIgnoreCase))
+                return "카카오 키 틀림 → [공통설정] «기타» 키 확인";
+            var why = new List<string>();
+            if (all.Contains("domain mismatched", System.StringComparison.OrdinalIgnoreCase))
+                why.Add("도메인 미등록 → 카카오 앱 [플랫폼 키] JavaScript 키에 " + Domain);
+            if (all.Contains("OPEN_MAP_AND_LOCAL", System.StringComparison.OrdinalIgnoreCase))
+                why.Add("카카오맵 꺼짐 → 카카오 앱 [제품 설정] [카카오맵] 사용 ON");
+            return why.Count > 0 ? string.Join("\n", why) : $"카카오 응답 {a.Code} → 잠시 뒤 다시";
+        }
+        catch (System.Exception) { return "카카오 응답 없음 → 인터넷 확인"; }
+    }
 }
 
 /// <summary>★★[v109 · 계획_v109.md 2] VWorld 인증키 — <b>내 키</b>([기타 설정] · %APPDATA% · DPAPI)가 있으면 그것, 없으면 <b>내장 키</b>(JACK 1028 «처음 써 볼 때 진입장벽을 낮추고 싶어»).

@@ -22,13 +22,15 @@ using Polyline = Autodesk.AutoCAD.DatabaseServices.Polyline;
 namespace DH.Grading.Civil;
 
 /// <summary>★★[v117.44 · JACK 1126 «기타 → 로드뷰 · 단추 누르고 도면에서 위치를 찍으면 찍은 위치 위에 작은 팝업 · 그 안에 해당 위치 로드뷰»]
-/// <para>인터뷰(1126): 카카오 로드뷰 · 보는 방향을 도면에 부채꼴로(임시 그림 · 도면에 안 남음) · 계속 찍기(찍을 때마다 창이 그 자리로 · Esc로 끝 · 창은 남음).</para>
+/// <para>인터뷰(1126): 카카오 로드뷰 · 보는 방향을 도면에 부채꼴로(임시 그림 · 도면에 안 남음) · 계속 찍기(찍을 때마다 창이 그 자리로 · Esc로 끝).</para>
+/// <para>★[v117.44.1 · JACK 1127] Esc = 찍기 끝 + 창 닫기(명령 줄 · 창 · 웹 화면 어디서나) · Enter = 창 두고 찍기만 끝 · 가장자리 끌어 크기(기억).</para>
 /// <para>창 하나를 돌려 쓴다(<see cref="ShowAt"/>). 페이지는 가짜 도메인 <see cref="KakaoKey.Domain"/>에서 연다 — 카카오 JavaScript 키는 등록한 도메인에서만 돈다.
 /// 키는 문서를 만들 때 메모리에서 넣는다(PC 폴더의 index.html에는 안 씀 — 지도 도킹바와 같은 규칙).</para>
 /// <para>WebView2는 투명 창(AllowsTransparency)에서 안 그려진다 → 보통 창 + 테두리 없음 + Win11 둥근 모서리.</para></summary>
 internal sealed class RoadviewWindow : Window
 {
     const double W0 = 480, H0 = 330, W1 = 960, H1 = 640;   // 작게 · 크게(DIP)
+    const double MinW = 320, MinH = 220, Grip = 5;          // 가장 작은 크기 · 가장자리 끌기 띠(DIP)
     const double HeadH = 28;
     const int Radius0 = 50, Radius1 = 200;                  // 가까운 로드뷰 찾기 반경(m) — 50 m 안에 없으면 200 m
 
@@ -59,10 +61,20 @@ internal sealed class RoadviewWindow : Window
     {
         Title = "로드뷰";
         WindowStyle = WindowStyle.None;
-        ResizeMode = ResizeMode.NoResize;
+        // ★[v117.44.1 · JACK 1127 «창 크기도 드래그로 조절»] 가장자리 끌어 크기 — WindowChrome(테두리 없는 창의 흰 띠 없이) ·
+        //   웹 화면(자식 창)이 덮은 곳은 끌기가 안 잡혀 본문 둘레에 Grip 만큼 띠를 둠(아래 _body 바깥)
+        ResizeMode = ResizeMode.CanResize;
+        System.Windows.Shell.WindowChrome.SetWindowChrome(this, new System.Windows.Shell.WindowChrome
+        {
+            CaptionHeight = 0, ResizeBorderThickness = new Thickness(Grip), GlassFrameThickness = new Thickness(0),
+            CornerRadius = new CornerRadius(0), UseAeroCaptionButtons = false,
+        });
+        MinWidth = MinW; MinHeight = MinH;
         ShowInTaskbar = false;
         ShowActivated = false;   // ★계속 찍기 — 창이 떠도 초점은 도면에(다음 점을 바로 찍게)
-        Width = W0; Height = H0;
+        var (uw, uh) = SavedSize();
+        Width = uw; Height = uh;
+        PreviewKeyDown += (_, e) => { if (e.Key == Key.Escape) { e.Handled = true; CloseByEsc(); } };
         Background = DhBrand.Brand;
         BorderBrush = DhBrand.Brand;
         BorderThickness = new Thickness(1);
@@ -90,7 +102,8 @@ internal sealed class RoadviewWindow : Window
         Grid.SetRow(head, 0);
         root.Children.Add(head);
 
-        _body = new Grid { Background = new SolidColorBrush(Color.FromRgb(0x1B, 0x26, 0x28)) };
+        // 둘레 Grip 띠(창 배경 = 머리띠 색) — 웹 화면(자식 창) 위에서는 가장자리 끌기가 안 잡힌다
+        _body = new Grid { Background = new SolidColorBrush(Color.FromRgb(0x1B, 0x26, 0x28)), Margin = new Thickness(Grip, 0, Grip, Grip) };
         _msg = new TextBlock { Foreground = new SolidColorBrush(Color.FromRgb(0xCF, 0xD8, 0xD9)), FontSize = 12.5, TextAlignment = TextAlignment.Center, TextWrapping = TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(16), Text = "여는 중…" };
         _body.Children.Add(_msg);
         Grid.SetRow(_body, 1);
@@ -104,7 +117,11 @@ internal sealed class RoadviewWindow : Window
         _vpTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(60) };
         _vpTimer.Tick += (_, __) => DrawFan();
 
-        SourceInitialized += (_, __) => RoundCorners();
+        SourceInitialized += (_, __) =>
+        {
+            RoundCorners();
+            try { (PresentationSource.FromVisual(this) as System.Windows.Interop.HwndSource)?.AddHook(SizeHook); } catch { }
+        };
         // ★[검토 낮음] 배율이 다른 모니터로 옮겨져 WPF가 크기를 다시 정했다 — 찍은 자리 위로 다시(한 번 · 같은 모니터면 더 안 옴)
         //   사용자가 끌어서 다른 모니터로 옮긴 것은 그대로 둠 — 막 놓은 직후(1.5초)만
         DpiChanged += (_, __) =>
@@ -236,7 +253,9 @@ internal sealed class RoadviewWindow : Window
             else return;
             Rect work = WorkArea(c);
             double cx = c.X * sx, cy = c.Y * sy, gap = 16;
-            double w = Width, hh = Height;
+            double w = Math.Min(Width, work.Width), hh = Math.Min(Height, work.Height);   // ★[v117.44.1] 기억한 크기가 이 모니터보다 크면 줄임
+            if (w < Width) Width = w;
+            if (hh < Height) Height = hh;
             double left = cx - w / 2, top = cy - hh - gap;
             if (top < work.Top) top = cy + gap;                                    // 위로 자리 없음 → 아래로
             left = Math.Max(work.Left, Math.Min(left, work.Right - w));
@@ -246,17 +265,94 @@ internal sealed class RoadviewWindow : Window
         catch (Exception ex) { try { DiagLog.Append("\n[로드뷰] 창 자리 실패 — " + ex.Message); } catch { } }
     }
 
-    /// <summary>[크게] ↔ [작게] — 아래 가운데를 붙든 채(찍은 점 위 자리 그대로).</summary>
+    /// <summary>[크게] ↔ [작게] — 아래 가운데를 붙든 채(찍은 점 위 자리 그대로).
+    /// <para>★[v117.44.1] 작게 = 사용자가 끌어 맞춘 크기(<see cref="SavedSize"/>) · 크게 = 960×640(작게가 그보다 크면 작게의 1.5배) · 모니터 작업 영역 안.</para></summary>
     void ToggleBig()
     {
         _big = !_big;
-        double nw = _big ? W1 : W0, nh = _big ? H1 : H0;
+        var (sw, sh) = SavedSize();
+        double nw = _big ? Math.Max(W1, sw * 1.5) : sw, nh = _big ? Math.Max(H1, sh * 1.5) : sh;
         double cx = Left + Width / 2, bottom = Top + Height;
-        Width = nw; Height = nh;
         var work = WorkArea(null);   // ★[검토 낮음] 이 창이 있는 모니터 안으로(머리띠가 빈 곳으로 나가 못 옮기는 일 없게)
+        nw = Math.Min(nw, work.Width); nh = Math.Min(nh, work.Height);
+        Width = nw; Height = nh;
         Left = Math.Max(work.Left, Math.Min(cx - nw / 2, work.Right - nw));
         Top = Math.Max(work.Top, Math.Min(bottom - nh, work.Bottom - nh));
         _bigBtn.ToolTip = _big ? "작게" : "크게";
+    }
+
+    // ── ★[v117.44.1 · JACK 1127] 끌어 맞춘 크기 기억(%APPDATA%\DH.Grading\roadview.json — 다음에 열어도 그 크기) ──
+    static (double W, double H)? _size;
+    static string SizePath => System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "DH.Grading", "roadview.json");
+
+    static (double W, double H) SavedSize()
+    {
+        if (_size is { } s) return s;
+        double w = W0, h = H0;
+        try
+        {
+            if (System.IO.File.Exists(SizePath))
+            {
+                using var d = JsonDocument.Parse(System.IO.File.ReadAllText(SizePath));
+                if (d.RootElement.TryGetProperty("w", out var a) && a.TryGetDouble(out double aw) && double.IsFinite(aw)) w = aw;
+                if (d.RootElement.TryGetProperty("h", out var b) && b.TryGetDouble(out double bh) && double.IsFinite(bh)) h = bh;
+            }
+        }
+        catch { }
+        _size = (Math.Clamp(w, MinW, 4000), Math.Clamp(h, MinH, 3000));
+        return _size.Value;
+    }
+
+    static void SaveSize(double w, double h)
+    {
+        _size = (Math.Clamp(w, MinW, 4000), Math.Clamp(h, MinH, 3000));
+        try
+        {
+            System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(SizePath)!);
+            System.IO.File.WriteAllText(SizePath, JsonSerializer.Serialize(new { w = Math.Round(_size.Value.W), h = Math.Round(_size.Value.H) }));
+        }
+        catch { }
+    }
+
+    Size _sizeAtStart;
+    /// <summary>가장자리를 끌어 크기를 바꿨다(끌기 시작 · 끝 크기가 다름 — 머리띠로 옮기기만 한 것은 아님) → 그 크기 = 작게 · 기억.</summary>
+    IntPtr SizeHook(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+    {
+        const int WM_ENTERSIZEMOVE = 0x0231, WM_EXITSIZEMOVE = 0x0232;
+        if (msg == WM_ENTERSIZEMOVE) _sizeAtStart = new Size(ActualWidth, ActualHeight);
+        else if (msg == WM_EXITSIZEMOVE && (Math.Abs(ActualWidth - _sizeAtStart.Width) > 0.5 || Math.Abs(ActualHeight - _sizeAtStart.Height) > 0.5))
+        {
+            _big = false;
+            _bigBtn.ToolTip = "크게";
+            SaveSize(ActualWidth, ActualHeight);
+        }
+        return IntPtr.Zero;
+    }
+
+    // ── ★[v117.44.1 · JACK 1127 «ESC 하면 로드뷰 창 닫히게»] ──
+    /// <summary>창(웹 화면 포함)에서 Esc — 창을 닫고, 우리 명령이 그 도면에서 점을 기다리는 중이면 찍기도 끝냄(명령 줄 Esc 와 같게).</summary>
+    void CloseByEsc()
+    {
+        if (_closed) return;
+        var doc = _doc;
+        try { Close(); } catch { }
+        try
+        {
+            if (doc != null && Commands.RoadviewCommand.PickingDoc == doc && AcadApp.DocumentManager.MdiActiveDocument == doc)
+            {
+                try { Autodesk.AutoCAD.Internal.Utils.SetFocusToDwgView(); } catch { }
+                doc.SendStringToExecute("\x03\x03", true, false, false);   // 매크로 ^C^C — 점 기다림 취소
+            }
+        }
+        catch (Exception ex) { try { DiagLog.Append("\n[로드뷰] Esc 찍기 끝내기 실패 — " + ex.Message); } catch { } }
+    }
+
+    /// <summary>명령 줄에서 Esc 로 찍기를 끝냄 → 창도 닫음.</summary>
+    internal static void CloseIfOpen()
+    {
+        var w = _win;
+        if (w == null || w._closed) return;
+        try { w.Close(); } catch { }
     }
 
     void RoundCorners()
@@ -415,6 +511,8 @@ internal sealed class RoadviewWindow : Window
             var r = d.RootElement;
             string t = r.TryGetProperty("t", out var tv) ? tv.GetString() ?? "" : "";
             double N(string k) => r.TryGetProperty(k, out var v) && v.ValueKind == JsonValueKind.Number ? v.GetDouble() : double.NaN;
+            if (t == "esc") { CloseByEsc(); return; }           // 웹 화면에서 Esc(페이지가 키를 먼저 받은 경우)
+            if (t is "pos" or "none" or "vp") _mapOk = true;   // 지도가 답함(앞 찍기의 늦은 알림이라도)
             if (t != "ready")
             {
                 double s = N("s");
@@ -426,6 +524,7 @@ internal sealed class RoadviewWindow : Window
                 case "ready":
                     // ★[검토 낮음] 페이지가 (다시) 읽혔다 — 마지막 찍은 자리를 늘 다시 보냄(엔진이 페이지를 다시 띄운 경우 등)
                     _pageReady = true;
+                    _mapOk = false;
                     _pending = true;
                     SendPending();
                     break;
@@ -451,11 +550,39 @@ internal sealed class RoadviewWindow : Window
                     if (_doc != null) _mark.Show(_doc, _pick, null, null, _fan);
                     break;
                 case "err":
-                    _note.Text = r.TryGetProperty("why", out var w) ? w.GetString() ?? "" : "오류";
+                {
+                    string why = r.TryGetProperty("why", out var w) ? w.GetString() ?? "" : "오류";
+                    _note.Text = why;
+                    // ★[v117.44.1 · JACK 1127 «못 불러옴»] 지도 SDK가 안 뜸 — 카카오에 직접 물어 원인(도메인 · 카카오맵 꺼짐 · 키)을 띄움
+                    if (N("s") == 0 && why != "카카오 키 없음") _ = ExplainLoadFail();
                     break;
+                }
             }
         }
         catch (Exception ex) { try { DiagLog.Append("\n[로드뷰] 알림 처리 실패 — " + ex.Message); } catch { } }
+    }
+
+    bool _diagBusy, _mapOk;          // _mapOk = 지도가 한 번이라도 답함(pos · none · vp) — 페이지를 다시 읽으면(ready) 끔
+    string? _diagKey;
+    DateTime _diagAt;
+
+    /// <summary>못 불러온 원인 — <see cref="KakaoKey.Diagnose"/>(창 페이지와 같은 출처로 물음) · 한 번에 하나 · 같은 키는 30초에 한 번 · 받아 주면(null) 그대로 둠.
+    /// <para>★[검토 보통] 묻는 동안(최대 20초) 지도가 떴거나 키가 바뀌었으면 쓰지 않음.</para></summary>
+    async System.Threading.Tasks.Task ExplainLoadFail()
+    {
+        string key = KakaoKey.Current;
+        if (_diagBusy || (_diagKey == key && DateTime.UtcNow - _diagAt < TimeSpan.FromSeconds(30))) return;
+        _diagBusy = true; _diagKey = key; _diagAt = DateTime.UtcNow;
+        try
+        {
+            string? why = await KakaoKey.Diagnose(key);
+            if (_closed || why == null || _mapOk || KakaoKey.Current != key || _web?.CoreWebView2 == null) return;
+            _note.Text = why.Split('\n')[0];
+            try { DiagLog.Append("\n[로드뷰] 못 불러옴 원인 — " + why.Replace('\n', ' ')); } catch { }
+            await _web.CoreWebView2.ExecuteScriptAsync("dhSay(" + JsonSerializer.Serialize(why) + ")");
+        }
+        catch (Exception ex) { try { DiagLog.Append("\n[로드뷰] 원인 재기 실패 — " + ex.GetType().Name); } catch { } }
+        finally { _diagBusy = false; }
     }
 
     /// <summary>카메라 자리 + 보는 방향 부채꼴(마지막 값만 · 바뀐 것이 없으면 그리지 않음).</summary>
@@ -642,6 +769,10 @@ html,body{margin:0;height:100%;overflow:hidden;background:#1b2628;font-family:'M
   var rv=null, client=null, ready=false, want=null, aim=null, last=null, probe=0, dead=true;
   // C# → 찍은 자리 · s = 찍기 번호(모든 알림에 실어 보냄 — C#은 지금 번호만 받음 · 앞 찍기의 늦은 알림은 버려짐)
   window.dhShow=function(s,lat,lng,r0,r1){ want={s:s,lat:lat,lng:lng,r0:r0,r1:r1}; if(ready) go(want); };
+  // C# → 못 불러온 원인(카카오에 직접 물어 본 결과) — 지도가 뜬 뒤면 무시
+  window.dhSay=function(t){ if(!ready) say(t); };
+  // Esc → 창 닫기(C#) — 로드뷰를 눌러 돌리던 중이면 키가 페이지로 옴
+  document.addEventListener('keydown',function(e){ if(e.key==='Escape'||e.keyCode===27){ e.preventDefault(); post({t:'esc'}); } },true);
   function go(p){
     say('찾는 중…'); dead=true; aim=null; clearTimeout(probe);
     var pos=new kakao.maps.LatLng(p.lat,p.lng), done=false;
