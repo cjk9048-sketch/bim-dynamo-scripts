@@ -24,6 +24,8 @@ namespace DH.Grading.Civil;
 /// <summary>★★[v117.44 · JACK 1126 «기타 → 로드뷰 · 단추 누르고 도면에서 위치를 찍으면 찍은 위치 위에 작은 팝업 · 그 안에 해당 위치 로드뷰»]
 /// <para>인터뷰(1126): 카카오 로드뷰 · 보는 방향을 도면에 부채꼴로(임시 그림 · 도면에 안 남음) · 계속 찍기(찍을 때마다 창이 그 자리로 · Esc로 끝).</para>
 /// <para>★[v117.44.1 · JACK 1127] Esc = 찍기 끝 + 창 닫기(명령 줄 · 창 · 웹 화면 어디서나) · Enter = 창 두고 찍기만 끝 · 가장자리 끌어 크기(기억).</para>
+/// <para>★[v117.44.2 · JACK 1127] 찍은 점이 화면 밖(다른 도면 · 배치 공간 포함)이면 창 숨김 · 새로 안 찍고 Esc 도 안 했는데 다시 보이면 다시(<see cref="CheckView"/>).
+/// 창을 끌어 옮기면 그 자리 고정 — 어디를 찍어도 그 자리 · 그 크기(기억) · 머리띠 핀 단추로 풀기(다시 찍은 점 위로).</para>
 /// <para>창 하나를 돌려 쓴다(<see cref="ShowAt"/>). 페이지는 가짜 도메인 <see cref="KakaoKey.Domain"/>에서 연다 — 카카오 JavaScript 키는 등록한 도메인에서만 돈다.
 /// 키는 문서를 만들 때 메모리에서 넣는다(PC 폴더의 index.html에는 안 씀 — 지도 도킹바와 같은 규칙).</para>
 /// <para>WebView2는 투명 창(AllowsTransparency)에서 안 그려진다 → 보통 창 + 테두리 없음 + Win11 둥근 모서리.</para></summary>
@@ -41,12 +43,13 @@ internal sealed class RoadviewWindow : Window
     readonly Grid _body;
     readonly TextBlock _note;
     readonly TextBlock _msg;
-    readonly Button _bigBtn;
+    readonly Button _bigBtn, _pinBtn;
     WebView2? _web;
     string? _keyScript;
     bool _pageReady, _closed, _big, _initStarted;
     readonly Mark _mark = new();
-    readonly System.Windows.Threading.DispatcherTimer _focusTimer, _vpTimer;
+    readonly System.Windows.Threading.DispatcherTimer _focusTimer, _vpTimer, _viewTimer;
+    bool _offScreen;            // 찍은 점이 화면 밖이라 숨김(닫은 것 아님 — 다시 보이면 다시 띄움)
 
     // 지금 보는 자리
     AcDoc? _doc;
@@ -74,6 +77,7 @@ internal sealed class RoadviewWindow : Window
         ShowActivated = false;   // ★계속 찍기 — 창이 떠도 초점은 도면에(다음 점을 바로 찍게)
         var (uw, uh) = SavedSize();
         Width = uw; Height = uh;
+        Loaded += (_, __) => ShowPinState();
         PreviewKeyDown += (_, e) => { if (e.Key == Key.Escape) { e.Handled = true; CloseByEsc(); } };
         Background = DhBrand.Brand;
         BorderBrush = DhBrand.Brand;
@@ -91,9 +95,15 @@ internal sealed class RoadviewWindow : Window
         close.Click += (_, __) => Close();
         _bigBtn = HeadButton("⤢", "크게");
         _bigBtn.Click += (_, __) => ToggleBig();
-        DockPanel.SetDock(close, Dock.Right); DockPanel.SetDock(_bigBtn, Dock.Right);
+        // ★[v117.44.2 · JACK 1127] 끌어 옮겨 고정한 동안만 보이는 핀 — 누르면 고정 풀기(다시 찍은 점 위로)
+        _pinBtn = HeadButton("", "고정 풀기 → 찍은 점 따라가기");
+        _pinBtn.FontFamily = new FontFamily("Segoe Fluent Icons, Segoe MDL2 Assets");
+        _pinBtn.FontSize = 12;
+        _pinBtn.Click += (_, __) => Unpin();
+        DockPanel.SetDock(close, Dock.Right); DockPanel.SetDock(_bigBtn, Dock.Right); DockPanel.SetDock(_pinBtn, Dock.Right);
         head.Children.Add(close);
         head.Children.Add(_bigBtn);
+        head.Children.Add(_pinBtn);
         var title = new TextBlock { Text = "로드뷰", Foreground = Brushes.White, FontWeight = FontWeights.SemiBold, FontSize = 12.5, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(10, 0, 8, 0) };
         DockPanel.SetDock(title, Dock.Left);
         head.Children.Add(title);
@@ -116,6 +126,9 @@ internal sealed class RoadviewWindow : Window
         // ★돌릴 때 방향 알림이 1초에 수십 번 온다 — 그림은 60 ms마다 마지막 값 하나만
         _vpTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(60) };
         _vpTimer.Tick += (_, __) => DrawFan();
+        // ★[v117.44.1 · JACK 1127] 찍은 점이 화면 밖이면 창을 숨기고 · 다시 보이면 그 점 위로 다시(0.2초마다 지금 화면을 봄)
+        _viewTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(200) };
+        _viewTimer.Tick += (_, __) => CheckView();
 
         SourceInitialized += (_, __) =>
         {
@@ -127,7 +140,7 @@ internal sealed class RoadviewWindow : Window
         DpiChanged += (_, __) =>
         {
             if ((DateTime.UtcNow - _placedAt).TotalSeconds > 1.5) return;
-            Dispatcher.BeginInvoke(new Action(() => PlaceAt(again: true)), System.Windows.Threading.DispatcherPriority.Background);
+            Dispatcher.BeginInvoke(new Action(() => { if (_pin == null || !PlacePinned()) PlaceAt(again: true); }), System.Windows.Threading.DispatcherPriority.Background);
         };
         Closed += (_, __) => OnClosed();
     }
@@ -165,8 +178,12 @@ internal sealed class RoadviewWindow : Window
         w._note.Text = "찾는 중…";
         w._mark.Show(doc, pickWcs, null, null, fanSize);
 
-        w.PlaceAt();
+        w._offScreen = false;
+        // ★[v117.44.2 · JACK 1127 «창을 이동시켜 배치한 뒤에는 어딜 찍어도 그 위치 · 그 크기»] 고정이면 보이는 창은 그대로 · 새로 뜨는 창만 고정 자리로
+        if (_pin == null) w.PlaceAt();
+        else if (!w.IsVisible && !w.PlacePinned()) w.PlaceAt();
         if (!w.IsVisible) { w.Show(); w._focusTimer.Start(); }
+        w._viewTimer.Start();
         w._pending = true;
         if (!w._initStarted) { w._initStarted = true; _ = w.InitAsync(); } else w.SendPending();   // ★[검토 보통] 엔진 뜨는 동안 두 번째 찍기가 웹 화면을 또 만들지 않게
     }
@@ -181,6 +198,13 @@ internal sealed class RoadviewWindow : Window
             var dm = AcadApp.DocumentManager;
             dm.DocumentToBeDeactivated += (_, e) => { var w = _win; if (w != null && !w._closed && w._doc == e.Document) w._mark.Clear(); };
             dm.DocumentToBeDestroyed += (_, e) => { DocClosing(e.Document); Mark.ReleaseFor(e.Document); };
+            // ★[v117.44.2 · 검토 낮음] 다른 도면에 잠깐(0.2초 안) 갔다 오면 창은 안 숨겨졌는데 도면 표시는 걷혀 있다 — 돌아오면 다시 그림
+            dm.DocumentActivated += (_, e) =>
+            {
+                var w = _win;
+                if (w == null || w._closed || w._doc != e.Document || w._offScreen) return;
+                w.Dispatcher.BeginInvoke(new Action(() => { if (!w._closed && !w._offScreen) w.RedrawMark(); }), System.Windows.Threading.DispatcherPriority.Background);
+            };
             _docsHooked = true;
         }
         catch { }
@@ -241,7 +265,7 @@ internal sealed class RoadviewWindow : Window
 
     /// <summary>찍은 점(마우스 자리) 위 가운데에 · 위로 자리가 없으면 아래로 · 화면 밖으로 안 나가게.
     /// <paramref name="again"/> = 앞서 잡은 자리로 다시(배율 바뀜).</summary>
-    void PlaceAt(bool again = false)
+    void PlaceAt(bool again = false, POINT? at = null)
     {
         try
         {
@@ -249,6 +273,7 @@ internal sealed class RoadviewWindow : Window
             var (sx, sy) = Scale();
             POINT c;
             if (again && _anchor is POINT a0) c = a0;
+            else if (at is POINT a1) { c = a1; _anchor = c; _placedAt = DateTime.UtcNow; }   // ★[v117.44.1] 다시 보일 때 = 찍은 점의 지금 화면 자리
             else if (GetCursorPos(out c)) { _anchor = c; _placedAt = DateTime.UtcNow; }
             else return;
             Rect work = WorkArea(c);
@@ -276,13 +301,27 @@ internal sealed class RoadviewWindow : Window
         var work = WorkArea(null);   // ★[검토 낮음] 이 창이 있는 모니터 안으로(머리띠가 빈 곳으로 나가 못 옮기는 일 없게)
         nw = Math.Min(nw, work.Width); nh = Math.Min(nh, work.Height);
         Width = nw; Height = nh;
-        Left = Math.Max(work.Left, Math.Min(cx - nw / 2, work.Right - nw));
-        Top = Math.Max(work.Top, Math.Min(bottom - nh, work.Bottom - nh));
+        if (_pin != null)
+        {
+            // ★[v117.44.2] 고정이면 왼쪽 위를 붙든 채 커지고(놓은 자리 그대로) · 모니터 안으로 · 고정 자리도 그것으로
+            Left = Math.Max(work.Left, Math.Min(Left, work.Right - nw));
+            Top = Math.Max(work.Top, Math.Min(Top, work.Bottom - nh));
+            var (sx, sy) = Scale();
+            _pin = new POINT { X = (int)Math.Round(Left / sx), Y = (int)Math.Round(Top / sy) };
+            SaveState();
+        }
+        else
+        {
+            Left = Math.Max(work.Left, Math.Min(cx - nw / 2, work.Right - nw));
+            Top = Math.Max(work.Top, Math.Min(bottom - nh, work.Bottom - nh));
+        }
         _bigBtn.ToolTip = _big ? "작게" : "크게";
     }
 
-    // ── ★[v117.44.1 · JACK 1127] 끌어 맞춘 크기 기억(%APPDATA%\DH.Grading\roadview.json — 다음에 열어도 그 크기) ──
+    // ── ★[v117.44.1 · JACK 1127] 끌어 맞춘 크기 기억 + ★[v117.44.2] 끌어 옮긴 고정 자리(장치 픽셀 왼쪽 위)
+    //    %APPDATA%\DH.Grading\roadview.json {w, h[, x, y]} — 다음에 열어도 그 크기 · 그 자리 ──
     static (double W, double H)? _size;
+    static POINT? _pin;
     static string SizePath => System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "DH.Grading", "roadview.json");
 
     static (double W, double H) SavedSize()
@@ -294,8 +333,11 @@ internal sealed class RoadviewWindow : Window
             if (System.IO.File.Exists(SizePath))
             {
                 using var d = JsonDocument.Parse(System.IO.File.ReadAllText(SizePath));
-                if (d.RootElement.TryGetProperty("w", out var a) && a.TryGetDouble(out double aw) && double.IsFinite(aw)) w = aw;
-                if (d.RootElement.TryGetProperty("h", out var b) && b.TryGetDouble(out double bh) && double.IsFinite(bh)) h = bh;
+                var r = d.RootElement;
+                if (r.TryGetProperty("w", out var a) && a.TryGetDouble(out double aw) && double.IsFinite(aw)) w = aw;
+                if (r.TryGetProperty("h", out var b) && b.TryGetDouble(out double bh) && double.IsFinite(bh)) h = bh;
+                if (r.TryGetProperty("x", out var x) && x.TryGetInt32(out int px) && r.TryGetProperty("y", out var y) && y.TryGetInt32(out int py))
+                    _pin = new POINT { X = px, Y = py };
             }
         }
         catch { }
@@ -303,28 +345,91 @@ internal sealed class RoadviewWindow : Window
         return _size.Value;
     }
 
-    static void SaveSize(double w, double h)
+    static void SaveState()
     {
-        _size = (Math.Clamp(w, MinW, 4000), Math.Clamp(h, MinH, 3000));
+        var (w, h) = SavedSize();
         try
         {
             System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(SizePath)!);
-            System.IO.File.WriteAllText(SizePath, JsonSerializer.Serialize(new { w = Math.Round(_size.Value.W), h = Math.Round(_size.Value.H) }));
+            object o = _pin is POINT p
+                ? new { w = Math.Round(w), h = Math.Round(h), x = p.X, y = p.Y }
+                : new { w = Math.Round(w), h = Math.Round(h) };
+            // ★[검토 낮음] 다 쓴 뒤 바꿔 끼움(쓰다 끊겨도 깨진 파일 안 남김)
+            string tmp = SizePath + ".tmp";
+            System.IO.File.WriteAllText(tmp, JsonSerializer.Serialize(o));
+            System.IO.File.Move(tmp, SizePath, overwrite: true);
         }
         catch { }
     }
 
-    Size _sizeAtStart;
-    /// <summary>가장자리를 끌어 크기를 바꿨다(끌기 시작 · 끝 크기가 다름 — 머리띠로 옮기기만 한 것은 아님) → 그 크기 = 작게 · 기억.</summary>
+    static void SaveSize(double w, double h)
+    {
+        SavedSize();   // 고정 자리를 먼저 읽어 둠(덮어써 지우지 않게)
+        _size = (Math.Clamp(w, MinW, 4000), Math.Clamp(h, MinH, 3000));
+        SaveState();
+    }
+
+    /// <summary>고정 자리로 — 그 자리가 든(없으면 가장 가까운) 모니터 작업 영역 안으로 맞춤.
+    /// ★[검토 보통] 맞추느라 자리가 바뀌었으면 고정 자리도 그것으로(핀은 켜졌는데 다른 곳에 뜨는 일 없게).</summary>
+    bool PlacePinned()
+    {
+        try
+        {
+            if (_pin is not POINT p) return false;
+            new System.Windows.Interop.WindowInteropHelper(this).EnsureHandle();
+            var (sx, sy) = Scale();
+            Rect work = WorkArea(p);   // MonitorFromPoint(가장 가까운 화면)
+            double w = Math.Min(Width, work.Width), hh = Math.Min(Height, work.Height);
+            if (w < Width) Width = w;
+            if (hh < Height) Height = hh;
+            Left = Math.Max(work.Left, Math.Min(p.X * sx, work.Right - w));
+            Top = Math.Max(work.Top, Math.Min(p.Y * sy, work.Bottom - hh));
+            var np = new POINT { X = (int)Math.Round(Left / sx), Y = (int)Math.Round(Top / sy) };
+            if (Math.Abs(np.X - p.X) > 2 || Math.Abs(np.Y - p.Y) > 2) { _pin = np; SaveState(); }
+            _placedAt = DateTime.UtcNow;
+            return true;
+        }
+        catch { return false; }
+    }
+
+    /// <summary>[핀] — 고정 풀기 · 찍은 점이 화면에 보이면 그 위로.</summary>
+    void Unpin()
+    {
+        _pin = null;
+        SaveState();
+        ShowPinState();
+        if (PickOnScreen(out POINT? at) == true && at is POINT p) PlaceAt(at: p);
+    }
+
+    void ShowPinState() => _pinBtn.Visibility = _pin != null ? Visibility.Visible : Visibility.Collapsed;
+
+    RECT _rectAtStart;
+    bool _dragging;   // 창 이동 · 크기 루프 중(WM_ENTERSIZEMOVE ~ EXITSIZEMOVE)
+    /// <summary>끌기 끝 — 크기가 바뀌었으면(가장자리) 그 크기 = 작게 · 기억 · 고정이면 고정 자리도 새로.
+    /// 크기는 그대로 자리만 바뀌었으면(머리띠로 옮김) = 그 자리 고정(JACK 1127 «이동시켜 배치한 뒤에는 어딜 찍어도 그 위치»).</summary>
     IntPtr SizeHook(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
     {
         const int WM_ENTERSIZEMOVE = 0x0231, WM_EXITSIZEMOVE = 0x0232;
-        if (msg == WM_ENTERSIZEMOVE) _sizeAtStart = new Size(ActualWidth, ActualHeight);
-        else if (msg == WM_EXITSIZEMOVE && (Math.Abs(ActualWidth - _sizeAtStart.Width) > 0.5 || Math.Abs(ActualHeight - _sizeAtStart.Height) > 0.5))
+        if (msg == WM_ENTERSIZEMOVE) { _dragging = true; GetWindowRect(hwnd, out _rectAtStart); }
+        else if (msg == WM_EXITSIZEMOVE) _dragging = false;
+        if (msg == WM_EXITSIZEMOVE && GetWindowRect(hwnd, out var r))
         {
-            _big = false;
-            _bigBtn.ToolTip = "크게";
-            SaveSize(ActualWidth, ActualHeight);
+            var s = _rectAtStart;
+            bool sized = Math.Abs((r.R - r.L) - (s.R - s.L)) > 1 || Math.Abs((r.B - r.T) - (s.B - s.T)) > 1;
+            bool moved = Math.Abs(r.L - s.L) > 4 || Math.Abs(r.T - s.T) > 4;   // ★[검토 낮음] 머리띠 누를 때 손떨림은 고정 아님
+            if (sized)
+            {
+                _big = false;
+                _bigBtn.ToolTip = "크게";
+                if (_pin != null) _pin = new POINT { X = r.L, Y = r.T };
+                SaveSize(ActualWidth, ActualHeight);
+            }
+            else if (moved)
+            {
+                _pin = new POINT { X = r.L, Y = r.T };
+                SaveState();
+                ShowPinState();
+            }
         }
         return IntPtr.Zero;
     }
@@ -382,6 +487,82 @@ internal sealed class RoadviewWindow : Window
     }
 
     static bool AnyMouseButtonDown() => GetAsyncKeyState(0x01) < 0 || GetAsyncKeyState(0x02) < 0 || GetAsyncKeyState(0x04) < 0;
+
+    // ── ★[v117.44.1 · JACK 1127 «찍은 점이 화면 밖으로 나가면 창이 닫히게 · 다른 위치를 안 찍고 Esc도 안 했는데 다시 보이면 다시 나와야»] ──
+    //   닫지 않고 숨긴다(같은 로드뷰 · 방향 그대로 다시) · 찍기 명령은 그대로라 바로 또 찍으면 됨 · Esc · [✕] 만 닫음
+    /// <summary>0.2초마다 — 찍은 점이 지금 화면 안인가. 밖이면 숨김 · 숨긴 뒤 다시 안이면 그 점의 지금 화면 자리 위로 다시.</summary>
+    void CheckView()
+    {
+        if (_closed || _doc == null || _dragging) return;   // ★[검토 보통] 창을 끄는 중(이동 · 크기 루프)엔 숨기거나 옮기지 않음
+        bool? inView = PickOnScreen(out POINT? at);
+        if (inView == null) return;   // 모르겠음(명령 중 등) — 그대로
+        if (inView == false)
+        {
+            if (IsVisible && !_offScreen) { _offScreen = true; Hide(); }
+            return;
+        }
+        if (!_offScreen) return;
+        _offScreen = false;
+        if (_pin == null && at is POINT p) PlaceAt(at: p);   // 고정이면 고정 자리 그대로
+        Show();
+        RedrawMark();   // 다른 도면에 갔다 왔으면 도면 표시가 걷혀 있다
+    }
+
+    /// <summary>도면 표시(찍은 점 · 카메라 · 부채꼴) 다시 그리기 — 지금 도면이 그 도면일 때만 그려짐(Mark.Show 규칙).</summary>
+    void RedrawMark()
+    {
+        if (_doc == null) return;
+        if (_camLon != null) { _panDrawn = null; DrawFan(); }
+        else _mark.Show(_doc, _pick, null, null, _fan);
+    }
+
+    /// <summary>찍은 점이 지금 화면(현재 뷰포트) 안인가 — 다른 도면이 앞이면 · 배치(종이) 공간이면 false · 못 재면 null.
+    /// 안이면 <paramref name="at"/> = 그 점의 화면 자리(장치 픽셀 · 도면 창 안 비율로 셈).</summary>
+    bool? PickOnScreen(out POINT? at)
+    {
+        at = null;
+        try
+        {
+            var act = AcadApp.DocumentManager.MdiActiveDocument;
+            if (act == null) return null;
+            if (act != _doc) return false;
+            if (Convert.ToInt32(AcadApp.GetSystemVariable("TILEMODE")) == 0)
+            {
+                if (Convert.ToInt32(AcadApp.GetSystemVariable("CVPORT")) == 1) return false;   // 배치(종이) 공간
+                return null;   // ★[검토 낮음] 배치의 부동 뷰포트 안 — 뷰포트 사각형을 몰라 숨기거나 옮기지 않음
+            }
+            using var v = _doc.Editor.GetCurrentView();
+            if (v.Width <= 0 || v.Height <= 0) return null;
+            // 월드 → 눈(DCS) — 표준 꼴(대상점 · 보는 방향 · 비틀기)
+            var eyeToWorld = Matrix3d.Rotation(-v.ViewTwist, v.ViewDirection, v.Target)
+                           * Matrix3d.Displacement(v.Target - Point3d.Origin)
+                           * Matrix3d.PlaneToWorld(v.ViewDirection);
+            var e = _pick.TransformBy(eyeToWorld.Inverse());
+            double fx = (e.X - (v.CenterPoint.X - v.Width / 2)) / v.Width;
+            double fy = ((v.CenterPoint.Y + v.Height / 2) - e.Y) / v.Height;
+            if (fx < 0 || fx > 1 || fy < 0 || fy > 1) return false;
+            at = ScreenOf(fx, fy, v.Width, v.Height);
+            return true;
+        }
+        catch { return null; }
+    }
+
+    /// <summary>뷰 안 비율 → 화면 장치 픽셀. 도면 창 안쪽 왼쪽 위 기준 · 그림 영역 높이 = 폭 × (뷰 높이 / 뷰 폭)(아래 배치 탭 띠가 창 안에 있어도 맞게).</summary>
+    POINT? ScreenOf(double fx, double fy, double vw, double vh)
+    {
+        try
+        {
+            var h = _doc!.Window.Handle;
+            if (h == IntPtr.Zero || !GetClientRect(h, out RECT r)) return null;
+            var tl = new POINT { X = 0, Y = 0 };
+            if (!ClientToScreen(h, ref tl)) return null;
+            double cw = r.R - r.L, ch = r.B - r.T;
+            if (cw <= 0 || ch <= 0) return null;
+            double dh = Math.Min(ch, cw * vh / vw);
+            return new POINT { X = tl.X + (int)Math.Round(fx * cw), Y = tl.Y + (int)Math.Round(fy * dh) };
+        }
+        catch { return null; }
+    }
 
     bool IsMouseOverWindow()
     {
@@ -609,7 +790,7 @@ internal sealed class RoadviewWindow : Window
     void OnClosed()
     {
         _closed = true;
-        try { _focusTimer.Stop(); _vpTimer.Stop(); } catch { }
+        try { _focusTimer.Stop(); _vpTimer.Stop(); _viewTimer.Stop(); } catch { }
         _mark.Clear();
         try { if (_web?.CoreWebView2 != null) _web.CoreWebView2.WebMessageReceived -= OnMessage; } catch { }
         try { _web?.Dispose(); } catch { }
@@ -857,6 +1038,8 @@ html,body{margin:0;height:100%;overflow:hidden;background:#1b2628;font-family:'M
     [StructLayout(LayoutKind.Sequential)] struct MONITORINFO { public int cbSize; public RECT rcMonitor, rcWork; public uint dwFlags; }
     [DllImport("user32.dll")] static extern bool GetCursorPos(out POINT p);
     [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr h, out RECT r);
+    [DllImport("user32.dll")] static extern bool GetClientRect(IntPtr h, out RECT r);
+    [DllImport("user32.dll")] static extern bool ClientToScreen(IntPtr h, ref POINT p);
     [DllImport("user32.dll")] static extern IntPtr MonitorFromPoint(POINT pt, uint flags);
     [DllImport("user32.dll")] static extern IntPtr MonitorFromWindow(IntPtr h, uint flags);
     [DllImport("user32.dll")] static extern short GetAsyncKeyState(int vKey);

@@ -7,7 +7,7 @@
   ★[1125] Civil 3D 2027(R26.0) = 둘째 <Components>(DLL은 Contents/2027/) — tools/setup/pkg.py 가 2026 묶음을 베껴 다시 만든다(손으로 고치지 말 것).
 -->
 <ApplicationPackage SchemaVersion="1.0"
-                    AppVersion="117.44.1"
+                    AppVersion="117.44.2"
                     ProductType="Application"
                     Name="DH 정지(절성토)"
                     Description="계단식 정지 비탈면 자동 생성 (distance-field)">
