@@ -20,7 +20,7 @@ import uuid
 from pathlib import Path
 
 APP_NAME = 'DH 에어로사이트'   # JACK 1127 (드론 로드뷰 → 360 · 3D 매핑 · 노선검토 · 실행 파일 · 설정 폴더 이름은 그대로)
-APP_VERSION = '1.0.24'
+APP_VERSION = '1.0.25'
 FROZEN = getattr(sys, 'frozen', False)
 BASE = Path(sys._MEIPASS) if FROZEN else Path(__file__).resolve().parent.parent      # noqa: SLF001
 HOME_HTML = (BASE / 'roadview' / 'app_home' / 'index.html') if not FROZEN else (BASE / 'app_home' / 'index.html')
@@ -248,7 +248,8 @@ class Job:
             subprocess.run(['taskkill', '/PID', str(self.proc.pid), '/T', '/F'], capture_output=True,
                            creationflags=NO_WINDOW)
             self.state = 'fail'
-            self.line = '멈춤 · 다시 [만들기] 누르면 만든 사진은 그대로 쓰고 이어 함'
+            self.line = ('멈춤 · 다시 [3D 매핑] 누르면 끝난 단계는 그대로 쓰고 이어 함' if self.kind == 'map'
+                         else '멈춤 · 다시 [만들기] 누르면 만든 사진은 그대로 쓰고 이어 함')
 
     def info(self):
         line, pill = self.line, ''

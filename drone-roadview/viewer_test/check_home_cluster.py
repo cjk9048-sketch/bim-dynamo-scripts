@@ -60,11 +60,10 @@ def run(w, api):
         time.sleep(1.5)
         ok('처음 화면 [병렬 처리 참여] 보임 · 꺼짐', vis('bHelper') and not on('bHelper') and txt('bHelper') == '병렬 처리 참여', txt('bHelper'))
         ok('왼쪽 메뉴 «함께 처리»', J('!!document.querySelector(".nav[data-page=cluster]")'))
-        # 큰 카드 = 드론 사진 (tutorial/_media/card_*.jpg · 평소 멈춤 · 마우스 올리면 움직임 = CSS) · 사진 있으면 3D 드론 · 영상 안 씀 (JACK 1127)
-        ph = "[...document.querySelectorAll('.hero .art')].map((a) => { const i = a.querySelector('img.photo'); return [a.classList.contains('phon'), !!i && i.naturalWidth > 0, a.classList.contains('g3on'), i ? getComputedStyle(i).animationName : '']; })"
-        wait("[...document.querySelectorAll('.hero .art')].every((a) => a.classList.contains('phon'))", 10)
-        r = J(ph)
-        ok('큰 카드 둘 = 드론 사진 (평소 멈춤 · 3D 드론 안 씀)', len(r) == 2 and all(x[0] and x[1] and not x[2] and x[3] in ('none', '') for x in r), r)
+        # 큰 카드 = 움직이는 3D 드론 + 영상 바탕 (사진 안 씀 · JACK 1127 «애니메이션으로»)
+        wait("[...document.querySelectorAll('.hero .art')].every((a) => a.classList.contains('g3on'))", 10)
+        r = J("[...document.querySelectorAll('.hero .art')].map((a) => [a.classList.contains('g3on'), !!a.querySelector('img.photo'), a.classList.contains('phon')])")
+        ok('큰 카드 둘 = 움직이는 3D 드론 (사진 없음)', len(r) == 2 and all(x[0] and not x[1] and not x[2] for x in r), r)
         # 공유 폴더 없이 도우미 모드 → 알림 + «함께 처리» 화면으로
         click('bHelper')
         ok('공유 폴더 없음 → «함께 처리» 화면', wait('!document.getElementById("pageCluster").classList.contains("hide")', 5))

@@ -342,8 +342,9 @@
   }
   function heroKick() { if (!hRaf && !hTimer) hRaf = requestAnimationFrame(heroTick); }
   function heroStart() {
-    heroSetup('hCvMap', frameMap, 'hG3Map', 'mapping', 'hVidMap', 'home_3d', 'card_3d.jpg');
-    heroSetup('hCv360', frame360, 'hG3360', '360', 'hVid360', 'home_360', 'card_360.jpg');
+    // 카드 = 움직이는 3D 드론 + 우리 영상 바탕 (JACK 1127 «실제 드론 사진 쓴 거 그냥 애니메이션으로» · 사진 인자를 안 넘김 = 사진 안 씀)
+    heroSetup('hCvMap', frameMap, 'hG3Map', 'mapping', 'hVidMap', 'home_3d');
+    heroSetup('hCv360', frame360, 'hG3360', '360', 'hVid360', 'home_360');
     if (reduce) return;
     document.addEventListener('visibilitychange', heroKick);
     heroKick();
