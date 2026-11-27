@@ -3122,8 +3122,8 @@
     $('next').disabled = $('vNext').disabled = S.cur >= shots.length - 1;
   }
   function setOn(el, on) { el.classList.toggle('on', !!on); }
-  $('title').textContent = String(PRJ.title || '드론 로드뷰');
-  document.title = (PRJ.title ? String(PRJ.title) + ' · ' : '') + '드론 로드뷰';
+  $('title').textContent = String(PRJ.title || 'DH 에어로사이트');
+  document.title = (PRJ.title ? String(PRJ.title) + ' · ' : '') + '360 로드뷰 · DH 에어로사이트';
   function setPipes(on) {
     S.pipes = !!on;
     if (!S.pipes && ED.on) edMode(false); // 관로를 끄면 고치기도 끝
