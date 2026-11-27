@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>DH.Pipe.Core</AssemblyName>
+    <RootNamespace>DH.Pipe.Core</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 엑셀 쓰기 · 부지정지(DH.Grading)와 같은 판이어야 한다 — 두 애드인이 한 Civil 에 같이 뜨면 먼저 뜬 DLL 하나만 쓰이기 때문 -->
+    <PackageReference Include="ClosedXML" Version="0.105.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="DH.Pipe.Core.Tests" />
+  </ItemGroup>
+
+</Project>

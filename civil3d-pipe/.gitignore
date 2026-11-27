@@ -1,0 +1,14 @@
+# 빌드 산출물
+[Bb]in/
+[Oo]bj/
+# 번들에 복사된 DLL · PDB(소스에서 다시 만든다)
+src/DH.Pipe.Civil/DH.Pipe.bundle/Contents/*.dll
+src/DH.Pipe.Civil/DH.Pipe.bundle/Contents/*.pdb
+src/DH.Pipe.Civil/DH.Pipe.bundle/Contents/2027/
+# 검토 · 계획 문서(현장 이름이 들어 있음) — 저장소에 올리지 않는다
+계획_*.md
+조사_*.md
+# 배포본(설치 파일 · zip)
+배포/
+# Civil 이 떨어뜨리는 오류 보고(시험 실행 때)
+ErrorReports/

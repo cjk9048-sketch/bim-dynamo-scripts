@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- DH 관로 — 화면 밖 그리기: 도킹 창 · 리본 그림을 Civil 없이 PNG 로 찍는다(눈으로 확인하는 용도). -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>dhpipe-uishot</AssemblyName>
+    <RootNamespace>DH.Pipe.UiShot</RootNamespace>
+    <NoWarn>$(NoWarn);MSB3277</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\DH.Pipe.Core\DH.Pipe.Core.csproj" />
+    <ProjectReference Include="..\..\src\DH.Pipe.Civil\DH.Pipe.Civil.csproj" />
+    <Compile Include="..\preview\Demo.cs" Link="Demo.cs" />
+  </ItemGroup>
+
+</Project>

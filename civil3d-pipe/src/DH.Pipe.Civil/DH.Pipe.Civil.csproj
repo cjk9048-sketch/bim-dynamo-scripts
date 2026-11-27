@@ -1,0 +1,74 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <UseWPF>true</UseWPF>
+    <PlatformTarget>x64</PlatformTarget>
+    <AssemblyName>DH.Pipe.Civil</AssemblyName>
+    <RootNamespace>DH.Pipe.Civil</RootNamespace>
+    <NoWarn>$(NoWarn);CS1701;CS1702</NoWarn>
+    <!-- NuGet 의존(ClosedXML 등)을 출력에 복사 → 번들에 함께 -->
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+  </PropertyGroup>
+
+  <!-- Civil 3D 2026(기본 · .NET 8) / 2027(-p:CivilYear=2027 · .NET 10 · 번들 Contents\2027) — 부지정지(DH.Grading)와 같은 방식 -->
+  <PropertyGroup>
+    <CivilYear Condition="'$(CivilYear)' == ''">2026</CivilYear>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(CivilYear)' == '2027'">
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <DefineConstants>$(DefineConstants);CIVIL2027</DefineConstants>
+    <_BundleSub>\2027</_BundleSub>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <AcadDir Condition="'$(AcadDir)' == ''">C:\Program Files\Autodesk\AutoCAD $(CivilYear)\</AcadDir>
+    <CivilDir Condition="'$(CivilDir)' == ''">$(AcadDir)C3D\</CivilDir>
+    <AcaDir Condition="'$(AcaDir)' == ''">$(AcadDir)ACA\</AcaDir>
+    <!-- 부지정지 소스 폴더 — 화면 틀(색 · 창 · 도킹)을 «파일 연결»로 함께 빌드한다(같은 이름 DLL 을 두 번들이 갖지 않게 · 검토서 11장) -->
+    <GradingSrc Condition="'$(GradingSrc)' == ''">..\..\..\civil3d-grading\src\DH.Grading.Civil\</GradingSrc>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="acmgd"><HintPath>$(AcadDir)acmgd.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="acdbmgd"><HintPath>$(AcadDir)acdbmgd.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="accoremgd"><HintPath>$(AcadDir)accoremgd.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="AdWindows"><HintPath>$(AcadDir)AdWindows.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="AecBaseMgd"><HintPath>$(AcaDir)AecBaseMgd.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="AeccDbMgd"><HintPath>$(CivilDir)AeccDbMgd.dll</HintPath><Private>false</Private></Reference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\DH.Pipe.Core\DH.Pipe.Core.csproj" />
+  </ItemGroup>
+
+  <!-- 화면 밖 그리기 도구(tools/uishot)가 도킹 창 · 리본 그림을 PNG 로 찍어 볼 수 있게 -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="dhpipe-uishot" />
+  </ItemGroup>
+
+  <!-- 부지정지 화면 틀 연결: 색 · 글꼴 · 둥근 창(DhBrand) · 오른쪽 도킹(DhDock) · 도킹 닫기 띠(DockClose) · 바쁨 알림(BusyPopup) + 회사 로고 -->
+  <ItemGroup>
+    <Compile Include="$(GradingSrc)DhBrand.cs" Link="Shared\DhBrand.cs" />
+    <Compile Include="$(GradingSrc)DhDock.cs" Link="Shared\DhDock.cs" />
+    <Compile Include="$(GradingSrc)DockClose.cs" Link="Shared\DockClose.cs" />
+    <Compile Include="$(GradingSrc)BusyPopup.cs" Link="Shared\BusyPopup.cs" />
+    <Compile Include="$(GradingSrc)ModalWatch.cs" Link="Shared\ModalWatch.cs" />
+    <EmbeddedResource Include="$(GradingSrc)Resources\DohwaLogo.png" Link="Resources\DohwaLogo.png" />
+    <EmbeddedResource Include="Resources\ReleaseNotes.txt" LogicalName="DH.Pipe.ReleaseNotes.txt" />
+  </ItemGroup>
+
+  <!-- 빌드 결과를 번들 폴더에 곧바로(Release 만) — OutDir 의 DLL 을 통째로(이름 목록을 손으로 적지 않는다) -->
+  <Target Name="CopyToBundle" AfterTargets="Build" Condition="'$(Configuration)' == 'Release'">
+    <ItemGroup>
+      <_BundlePayload Include="$(OutDir)*.dll" />
+      <_BundlePayload Include="$(OutDir)DH.Pipe.*.pdb" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_BundlePayload)" DestinationFolder="$(MSBuildProjectDirectory)\DH.Pipe.bundle\Contents$(_BundleSub)" SkipUnchangedFiles="true" />
+    <Message Importance="high" Text="번들 갱신 — 구성 $(Configuration) · Civil $(CivilYear) → Contents$(_BundleSub)" />
+  </Target>
+
+</Project>

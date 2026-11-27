@@ -1,0 +1,65 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<!-- Civil 3D 자동 로드 매니페스트 — tools/setup/pkg.py 가 다시 쓴다(손으로 고치지 말 것).
+     이 .bundle 폴더를 %APPDATA%\Autodesk\ApplicationPlugins\DH.Pipe.bundle 에 두면 Civil 3D 시작 때 올라온다. -->
+<ApplicationPackage SchemaVersion="1.0" AppVersion="0.1.0" ProductType="Application" Name="DH 관로"
+                    Description="상수 관로 — 노선 · 종단 · 구간 공법 · 횡단 · 토적표 · 3D">
+  <CompanyDetails Name="도화엔지니어링 상하수도부" />
+  <Components Description="DH Pipe">
+    <RuntimeRequirements OS="Win64" Platform="AutoCAD*" SeriesMin="R25.1" SeriesMax="R25.1" />
+    <ComponentEntry AppName="DH.Pipe" ModuleName="./Contents/DH.Pipe.Civil.dll" LoadOnAutoCADStartup="True" PerDocument="False">
+      <Commands GroupName="DH_PIPE">
+        <Command Global="DHPIPE" Local="DHPIPE" />
+        <Command Global="DHPIPE3D" Local="DHPIPE3D" />
+        <Command Global="DHPIPEABOUT" Local="DHPIPEABOUT" />
+        <Command Global="DHPIPECHECK" Local="DHPIPECHECK" />
+        <Command Global="DHPIPEGRADING" Local="DHPIPEGRADING" />
+        <Command Global="DHPIPEGUIDE" Local="DHPIPEGUIDE" />
+        <Command Global="DHPIPEMETHOD" Local="DHPIPEMETHOD" />
+        <Command Global="DHPIPEMETHODDEL" Local="DHPIPEMETHODDEL" />
+        <Command Global="DHPIPEOBST" Local="DHPIPEOBST" />
+        <Command Global="DHPIPEOBSTDEL" Local="DHPIPEOBSTDEL" />
+        <Command Global="DHPIPEOBSTSEL" Local="DHPIPEOBSTSEL" />
+        <Command Global="DHPIPEPICK" Local="DHPIPEPICK" />
+        <Command Global="DHPIPEPROFILE" Local="DHPIPEPROFILE" />
+        <Command Global="DHPIPEPROFSHEET" Local="DHPIPEPROFSHEET" />
+        <Command Global="DHPIPEQTY" Local="DHPIPEQTY" />
+        <Command Global="DHPIPEROUTE" Local="DHPIPEROUTE" />
+        <Command Global="DHPIPERUN" Local="DHPIPERUN" />
+        <Command Global="DHPIPESELFTEST" Local="DHPIPESELFTEST" />
+        <Command Global="DHPIPESTRATA" Local="DHPIPESTRATA" />
+        <Command Global="DHPIPESURF" Local="DHPIPESURF" />
+        <Command Global="DHPIPEXSEC" Local="DHPIPEXSEC" />
+        <Command Global="DHPIPEZONE" Local="DHPIPEZONE" />
+      </Commands>
+    </ComponentEntry>
+  </Components>
+  <Components Description="DH Pipe 2027">
+    <RuntimeRequirements OS="Win64" Platform="AutoCAD*" SeriesMin="R26.0" SeriesMax="R26.0" />
+    <ComponentEntry AppName="DH.Pipe" ModuleName="./Contents/2027/DH.Pipe.Civil.dll" LoadOnAutoCADStartup="True" PerDocument="False">
+      <Commands GroupName="DH_PIPE">
+        <Command Global="DHPIPE" Local="DHPIPE" />
+        <Command Global="DHPIPE3D" Local="DHPIPE3D" />
+        <Command Global="DHPIPEABOUT" Local="DHPIPEABOUT" />
+        <Command Global="DHPIPECHECK" Local="DHPIPECHECK" />
+        <Command Global="DHPIPEGRADING" Local="DHPIPEGRADING" />
+        <Command Global="DHPIPEGUIDE" Local="DHPIPEGUIDE" />
+        <Command Global="DHPIPEMETHOD" Local="DHPIPEMETHOD" />
+        <Command Global="DHPIPEMETHODDEL" Local="DHPIPEMETHODDEL" />
+        <Command Global="DHPIPEOBST" Local="DHPIPEOBST" />
+        <Command Global="DHPIPEOBSTDEL" Local="DHPIPEOBSTDEL" />
+        <Command Global="DHPIPEOBSTSEL" Local="DHPIPEOBSTSEL" />
+        <Command Global="DHPIPEPICK" Local="DHPIPEPICK" />
+        <Command Global="DHPIPEPROFILE" Local="DHPIPEPROFILE" />
+        <Command Global="DHPIPEPROFSHEET" Local="DHPIPEPROFSHEET" />
+        <Command Global="DHPIPEQTY" Local="DHPIPEQTY" />
+        <Command Global="DHPIPEROUTE" Local="DHPIPEROUTE" />
+        <Command Global="DHPIPERUN" Local="DHPIPERUN" />
+        <Command Global="DHPIPESELFTEST" Local="DHPIPESELFTEST" />
+        <Command Global="DHPIPESTRATA" Local="DHPIPESTRATA" />
+        <Command Global="DHPIPESURF" Local="DHPIPESURF" />
+        <Command Global="DHPIPEXSEC" Local="DHPIPEXSEC" />
+        <Command Global="DHPIPEZONE" Local="DHPIPEZONE" />
+      </Commands>
+    </ComponentEntry>
+  </Components>
+</ApplicationPackage>
