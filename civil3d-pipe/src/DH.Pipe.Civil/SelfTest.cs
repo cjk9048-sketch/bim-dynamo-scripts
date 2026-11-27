@@ -198,6 +198,29 @@ public sealed class SelfTest
             }
             Ops.DrawXsec(doc, route, new Point3d(0, -1500, 0));
             Check("⑤ 묶음을 풀어도 옛 그림을 지움", Tagged(db, g) == all1, $"표식 달린 것 {Tagged(db, g)} (한 벌 = {all1})");
+            // 사용자가 그림 일부를 복사해 둔 것(표식은 따라가지만 묶음에는 안 듦)은 다시 그려도 남아야 한다(2차 검토 권장)
+            ObjectId copyId;
+            using (var tr = db.TransactionManager.StartTransaction())
+            {
+                var gd = (DBDictionary)tr.GetObject(db.GroupDictionaryId, OpenMode.ForRead);
+                var grp = (Group)tr.GetObject(gd.GetAt(g), OpenMode.ForRead);
+                var src = (Entity)tr.GetObject(grp.GetAllEntityIds().First(id => id.ObjectClass.DxfName == "LINE"), OpenMode.ForRead);
+                var cp = (Entity)src.Clone();
+                var ms = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForWrite);
+                copyId = ms.AppendEntity(cp);
+                tr.AddNewlyCreatedDBObject(cp, true);
+                using (var xd = src.GetXDataForApplication(CivilUtil.TagApp)) if (xd != null) cp.XData = xd;     // COPY 명령처럼 표식이 따라가게
+                tr.Commit();
+            }
+            int withCopy = Tagged(db, g);
+            Ops.DrawXsec(doc, route, new Point3d(0, -1500, 0));
+            Check("⑤ 복사해 둔 그림은 남김", withCopy == all1 + 1 && !copyId.IsErased && Tagged(db, g) == all1 + 1,
+                $"복사 뒤 표식 {withCopy} · 다시 그린 뒤 {Tagged(db, g)} (한 벌 {all1} + 복사 1) · 복사본 {(copyId.IsErased ? "지워짐" : "남음")}");
+            using (var tr = db.TransactionManager.StartTransaction())
+            {
+                if (!copyId.IsErased) tr.GetObject(copyId, OpenMode.ForWrite).Erase();
+                tr.Commit();
+            }
         });
 
         Step("③ 종단도면", () =>
