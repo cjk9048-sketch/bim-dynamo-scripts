@@ -773,6 +773,8 @@
     if (viewStep) hint.textContent = act.name + ' · 뷰에서 같은 자리를 누르세요 · Esc 취소';
     else if (G.mapAdd) hint.textContent = '지도에서 ' + (G.pts.length ? '다음 ' : '') + 'GCP 자리 누르기 · Esc 끝';
     $('fv').style.cursor = viewStep ? 'crosshair' : '';
+    $('map').classList.toggle('pickOn', G.mapAdd && !viewStep);          // 지금 누를 칸 = 밝은 테두리 (지도 단계 → 위성지도 · 뷰 단계 → 3D 뷰)
+    $('fv').classList.toggle('pickOn', viewStep);
     // 결과: 영상마다
     const lines = [];
     for (const md of S.media) {
@@ -858,25 +860,27 @@
     MAP.z = z; MAP.cx = c[0]; MAP.cy = c[1]; MAP.fitted = true;
     return true;
   }
+  const MAP_ZT = 19, MAP_ZMAX = 22;                                      // 위성 타일 최대 단계 · 화면 확대 최대 (19 넘으면 늘려 그림)
   function mapTiles() {
     const box = document.querySelector('#map .tiles');
     if (!MAP.key) { box.textContent = ''; return; }
     const [w, h] = mapSize(), z = MAP.z, x0 = MAP.cx - w / 2, y0 = MAP.cy - h / 2;
-    const want = new Set(), n = Math.pow(2, z);
-    for (let ty = Math.floor(y0 / 256); ty <= Math.floor((y0 + h) / 256); ty++) {
-      for (let tx = Math.floor(x0 / 256); tx <= Math.floor((x0 + w) / 256); tx++) {
+    const zt = Math.min(z, MAP_ZT), T = 256 * Math.pow(2, z - zt);       // 19 단계 넘으면 19 단계 타일을 늘려 그림 (JACK 1127 «확대가 많이 돼야»)
+    const want = new Set(), n = Math.pow(2, zt);
+    for (let ty = Math.floor(y0 / T); ty <= Math.floor((y0 + h) / T); ty++) {
+      for (let tx = Math.floor(x0 / T); tx <= Math.floor((x0 + w) / T); tx++) {
         if (ty < 0 || ty >= n) continue;
-        const k = z + '/' + tx + '/' + ty;
+        const k = zt + '/' + tx + '/' + ty;
         want.add(k);
         let im = MAP.imgs.get(k);
         if (!im) {
           im = document.createElement('img');
           im.draggable = false;
           im.onerror = () => { im.style.visibility = 'hidden'; };
-          im.src = 'https://api.vworld.kr/req/wmts/1.0.0/' + MAP.key + '/Satellite/' + z + '/' + ty + '/' + ((tx % n) + n) % n + '.jpeg';
+          im.src = 'https://api.vworld.kr/req/wmts/1.0.0/' + MAP.key + '/Satellite/' + zt + '/' + ty + '/' + ((tx % n) + n) % n + '.jpeg';
           MAP.imgs.set(k, im); box.appendChild(im);
         }
-        im.style.left = (tx * 256 - x0) + 'px'; im.style.top = (ty * 256 - y0) + 'px';
+        im.style.left = (tx * T - x0) + 'px'; im.style.top = (ty * T - y0) + 'px'; im.style.width = im.style.height = T + 'px';
       }
     }
     for (const [k, im] of MAP.imgs) if (!want.has(k)) { im.remove(); MAP.imgs.delete(k); }
@@ -971,7 +975,7 @@
     });
     el.addEventListener('wheel', (e) => {
       e.preventDefault();
-      const nz = Math.max(6, Math.min(19, MAP.z + (e.deltaY < 0 ? 1 : -1)));
+      const nz = Math.max(6, Math.min(MAP_ZMAX, MAP.z + (e.deltaY < 0 ? 1 : -1)));
       if (nz === MAP.z) return;
       const r = el.getBoundingClientRect(), mx = e.clientX - r.left, my = e.clientY - r.top;
       const [w, h] = mapSize(), f = Math.pow(2, nz - MAP.z);

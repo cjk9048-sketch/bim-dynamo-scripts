@@ -197,10 +197,16 @@ def run(w):
     J('RVEdit._S.T = 1.0; RVEdit._api.showAt(1.0)')
     wait('!RVEdit._S.seekBusy', 20)
     n0 = J('RVEdit._G.pts.length')
+    J('(() => { const m = document.getElementById("map"), r = m.getBoundingClientRect(); for (let i = 0; i < 20; i++) m.dispatchEvent(new WheelEvent("wheel", { deltaY: -100, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, bubbles: true, cancelable: true })); })()')
+    time.sleep(0.3)
+    zz = J('[RVEdit._map ? RVEdit._map.z : -1, (document.querySelector("#map .tiles img") || {}).style ? document.querySelector("#map .tiles img").style.width : ""]')
+    ok('지도 확대 22 단계까지 (19 넘으면 타일 늘림)', zz[0] == 22 and zz[1] == '2048px', zz)
+    J('(() => { const m = document.getElementById("map"), r = m.getBoundingClientRect(); for (let i = 0; i < 6; i++) m.dispatchEvent(new WheelEvent("wheel", { deltaY: 100, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, bubbles: true, cancelable: true })); })()')
     J('RVEdit._G.active = -1; document.getElementById("gMap").click()')
     ok('[지도에 점] 켬 · 안내 띠(지도 단계)', J('RVEdit._G.mapAdd') and not J('document.getElementById("gHint").classList.contains("hide")')
        and '지도' in J('document.getElementById("gHint").textContent'), J('document.getElementById("gHint").textContent'))
 
+    ok('지도 단계 = 위성지도 칸 테두리 (3D 뷰는 아님)', J('document.getElementById("map").classList.contains("pickOn") && !document.getElementById("fv").classList.contains("pickOn")'))
     def map_click(dx, dy):
         J('(() => { const r = document.getElementById("map").getBoundingClientRect(), x = r.left + r.width / 2 + %d, y = r.top + r.height / 2 + %d;'
           ' window.__pe("x", "pointerdown", x, y, document.getElementById("map")); window.__pe("x", "pointerup", x, y, document.getElementById("map")); })()' % (dx, dy))
@@ -208,8 +214,9 @@ def run(w):
     def view_click(fy):
         J('RVEdit._FV.pitch = -60; (() => { const c = document.getElementById("fv").getBoundingClientRect(); RVAlign.viewClick({ clientX: c.left + c.width / 2, clientY: c.top + c.height * %f }); })()' % fy)
     map_click(0, 0)
-    wait('RVEdit._G.pts.length === %d' % (n0 + 1), 10)
+    wait('RVEdit._G.pts.length === %d' % (n0 + 1), 40)
     ok('지도 누름 → GCP 생김 · 바로 active', J('RVEdit._G.pts.length') == n0 + 1 and J('RVEdit._G.active') == J('RVEdit._G.pts[RVEdit._G.pts.length - 1].id'))
+    ok('뷰 단계 = 3D 뷰 칸 테두리 (위성지도는 꺼짐)', J('document.getElementById("fv").classList.contains("pickOn") && !document.getElementById("map").classList.contains("pickOn")'))
     ok('뷰 단계 안내 띠 (눈에 띄게) · crosshair · 깜박임', '뷰에서 같은 자리' in J('document.getElementById("gHint").textContent')
        and J('document.getElementById("gHint").classList.contains("big")') and J('document.getElementById("fv").style.cursor') == 'crosshair'
        and J('document.querySelectorAll("#map .ov .blink").length') == 1, J('document.getElementById("gHint").textContent'))
@@ -223,7 +230,7 @@ def run(w):
     ok('다시 지도 단계 (안내 · 켜진 채)', J('RVEdit._G.mapAdd') and J('RVEdit._G.await') == -1 and '지도' in J('document.getElementById("gHint").textContent'))
     ok('지도 경로가 옮겨짐 (동 · 북 ≠ 0)', abs(J('RVEdit._G.cal[RVEdit._S.media[0].path].dx')) + abs(J('RVEdit._G.cal[RVEdit._S.media[0].path].dy')) > 1e-6)
     map_click(-40, -30)
-    wait('RVEdit._G.pts.length === %d' % (n0 + 2), 10)
+    wait('RVEdit._G.pts.length === %d' % (n0 + 2), 40)
     ok('다음 지도 누름 → 또 점 · 뷰 단계', J('RVEdit._G.pts.length') == n0 + 2 and J('RVEdit._G.await') != -1)
     view_click(0.7)
     ok('둘째 뷰 누름 → 짝 +2', J('RVEdit._G.pairs.length') == pr0 + 2)

@@ -91,6 +91,9 @@
 .mapGrip:hover, .mapGrip.on { background:rgba(47,129,247,.55); }
 .map .tiles { position:absolute; inset:0; }
 .map .tiles img { position:absolute; width:256px; height:256px; user-select:none; -webkit-user-drag:none; }
+/* GCP 이어 찍기: 지금 누를 칸 (지도 단계 = 위성지도 · 뷰 단계 = 3D 뷰) */
+.pickOn { outline:3px solid #f5a623; outline-offset:-3px; box-shadow:0 0 0 2px rgba(245,166,35,.35), 0 0 22px rgba(245,166,35,.45); animation:pickPulse 1.1s ease-in-out infinite alternate; }
+@keyframes pickPulse { from { outline-color:#f5a623; } to { outline-color:#ffd27a; } }
 .map .ov { position:absolute; inset:0; width:100%; height:100%; }
 .mapnote { position:absolute; left:8px; bottom:6px; font-size:11px; color:#777; }
 .eside .form { grid-template-columns:78px 1fr; margin:12px 0 6px; }

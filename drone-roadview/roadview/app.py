@@ -182,7 +182,15 @@ class Job:
             self.inner = self.stage is not None and label.strip() == self.label and float(pct) > self.stage[0] + 1e-6
             self.pct = max(self.pct, float(pct))
             left = int(left)
-            self.eta_at = time.time() + left if left >= 0 else None
+            # 끝 시각을 바로 바꾸지 않고 천천히 따라감 (JACK 1127 «남은 시간이 올라갔다 내려갔다 신뢰성 떨어져»):
+            # 새 값이 이르면 25 % · 늦으면 8 % 만 옮김 · 처음 · 크게 벗어나면 (지금보다 앞 · 2 배 넘게 늦음) 바로 씀
+            if left >= 0:
+                now, new = time.time(), time.time() + left
+                old = self.eta_at
+                if old is None or old <= now or new - now > 2 * (old - now) + 120:
+                    self.eta_at = new
+                else:
+                    self.eta_at = old + (new - old) * (0.25 if new < old else 0.08)
             self.label = label.strip()
         except ValueError:
             pass
