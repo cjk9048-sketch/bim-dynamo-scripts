@@ -454,6 +454,23 @@ def main():
         report('d 계획고 = 다각형 안 땅 평균 · 기본 구배 1:1 · 1:1.5 · 소단 5 m · 1 m', st and abs(st[0]['el'] - mean) < 1e-9 and (st[0]['cs'], st[0]['fs'], st[0]['bh'], st[0]['bw']) == (1, 1.5, 5, 1),
                str(st and (st[0]['name'], st[0]['el'])))
         report('d 목록 한 줄 (고름) · 설정 칸 다섯 · 머리줄 1', J(ed, "document.querySelectorAll('#gdList .gdRow.sel').length === 1 && !document.getElementById('gdSet').hidden && document.querySelectorAll('#gdSet input').length === 5 && document.getElementById('gdTag').textContent === '1' && document.getElementById('gdNone').hidden"))
+        # 계획고 ▲ ▼ (±0.1 m · 누르고 있으면 계속 · JACK 1127)
+        el0 = st[0]['el']
+        ub = J(ed, "(() => { const r = document.getElementById('gdUp').getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; })()")
+        inp.click(ub[0], ub[1]); ed.frames(2)
+        el1 = J(ed, '__map3d.gd.sites()[0].el')
+        inp.press(ub[0], ub[1]); time.sleep(1.2); inp.release(ub[0], ub[1]); ed.frames(2)
+        el2 = J(ed, '__map3d.gd.sites()[0].el')
+        report('d 계획고 ▲ 한 번 = +0.1 m · 누르고 있으면 계속 오름', abs(el1 - el0 - 0.1) < 1e-6 and el2 > el1 + 0.4, '%.3f → %.3f → %.3f' % (el0, el1, el2))
+        ed.js("(() => { const i = document.getElementById('gd_el'); i.value = '%r'; i.dispatchEvent(new Event('input')); })()" % el0); ed.frames(2)
+        # 보기 › 레이어 › 이름표 끄면 부지 경계 · 이름표도 꺼짐 (JACK 1127) — 겹쳐 그림 칸 (ov) 의 노랑 화소로
+        ylw = "(() => { const c = document.getElementById('ov'), x = c.getContext('2d').getImageData(0, 0, c.width, c.height).data; let n = 0; for (let i = 0; i < x.length; i += 4) if (x[i] > 230 && x[i + 1] > 190 && x[i + 2] < 140 && x[i + 3] > 200) n++; return n; })()"
+        ed.js('__map3d.redraw()'); ed.frames(3)
+        y_on = J(ed, ylw)
+        ed.js("document.getElementById('tgLbl').click()"); ed.frames(3)
+        y_off = J(ed, ylw)
+        ed.js("document.getElementById('tgLbl').click()"); ed.frames(3)
+        report('d 이름표 끄면 부지 경계 · 이름표 꺼짐 · 켜면 다시', y_on > 50 and y_off < y_on * 0.1 and J(ed, ylw) > 50, '켬 %d · 끔 %d 화소' % (y_on, y_off))
         report('d 그리기 끝 (안내 줄 닫힘)', J(ed, "__map3d.MS.kind === '' && !document.getElementById('gdDraw').classList.contains('on')"))
         errs(ed, '그리기')
 

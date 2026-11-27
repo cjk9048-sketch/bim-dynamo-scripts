@@ -114,6 +114,13 @@ def cost_check(ed, ui, SD):
     _, wt2 = want_tot('asphalt', hp_in=200000)
     report('$ H파일 항타 단가 200,000 → 합계 = 손셈 · 고친 칸 굵게', close(ck('total'), wt2) and J(ed, "document.getElementById('cp_hp_in').classList.contains('mod')"), '%.0f · 손셈 %.0f' % (ck('total'), wt2))
     report('$ 고친 값 = 이 PC 에 기억', J(ed, "JSON.parse(localStorage.getItem('rv_cost:v2')).price.hp_in") == 200000)
+    # 터파기 설정 창 «포장» = 개략공사비 «포장» 같은 값 (JACK 1127)
+    pv = lambda: J(ed, "[document.getElementById('secPave').value, document.getElementById('qPave').value, JSON.parse(localStorage.getItem('rv_cost:v2')).pave]")   # noqa: E731
+    ed.js("(() => { const s = document.getElementById('secPave'); s.value = 'concrete'; s.dispatchEvent(new Event('change')); })()"); ed.frames(2)
+    a1 = pv()
+    ed.js("(() => { const s = document.getElementById('qPave'); s.value = 'asphalt'; s.dispatchEvent(new Event('change')); })()"); ed.frames(2)
+    a2 = pv()
+    report('$ 터파기 설정 «포장» ↔ 개략공사비 «포장» 같이 바뀜 (기억 포함)', a1 == ['concrete'] * 3 and a2 == ['asphalt'] * 3, json.dumps([a1, a2]))
     ed.js("(() => { const e = document.getElementById('cpK'); e.value = '1.2'; e.dispatchEvent(new Event('change', { bubbles: true })); })()"); ed.frames(2)
     ed.js("(() => { const e = document.getElementById('qPave'); e.value = 'concrete'; e.dispatchEvent(new Event('change', { bubbles: true })); })()"); ed.frames(2)
     wp3, wt3 = want_tot('concrete', k=1.2, hp_in=200000)
@@ -226,6 +233,9 @@ def main():
         st2 = mp()
         want = [mrr['width'] * 0.25, mrr['height'] * 0.3]
         report('g 지도 누르기 → 3D 중심이 그 자리 (오차 %.1f px)' % max(abs(st2['c'][0] - want[0]), abs(st2['c'][1] - want[1])), abs(st2['c'][0] - want[0]) < 3 and abs(st2['c'][1] - want[1]) < 3, json.dumps([s0, st2['c'], want]))
+        cg = J(ed, '__map3dMap.cg()')   # 누른 자리 땅이 3D 화면 한가운데 (JACK 1127 «누른 부분이 화면 중앙으로»)
+        report('g 지도 누르기 → 그 자리 땅이 3D 화면 가운데 (오차 %s px)' % ('%.1f' % max(abs(cg[0] - cg[2]), abs(cg[1] - cg[3])) if cg else '-'),
+               bool(cg) and abs(cg[0] - cg[2]) < 4 and abs(cg[1] - cg[3]) < 4, json.dumps(cg))
         # 높이 손잡이
         h0 = rc('mapPane')['height']
         gr = rc('mapGrip')
@@ -378,7 +388,7 @@ def main():
         L0 = J(ed, '__t.L(0).len')
         ed.js("window.RV_PIPES.lines[0].shore = [{ a: 5, b: 14, t: 'hpile' }, { a: 20, b: 23.5, t: 'sheet' }]; __map3d.rebuild()")
         rows = lambda: J(ed, "Object.keys(__map3d.QT.rowEl).filter((k) => !__map3d.QT.rowEl[k][0].hidden)")    # noqa: E731
-        want = {'tgQty': None, 'qkPipe': ['len'], 'qkEarth': ['cut', 'sand', 'fill'], 'qkPave': ['pav'], 'qkOcc': ['tmp', 'perm'], 'qkRiver': ['rv_jack', 'rv_shaft', 'rv_exc', 'rv_hp', 'rv_lag', 'rv_liner', 'rv_open', 'rv_dam', 'rv_bag', 'rv_sheet'],
+        want = {'tgQty': None, 'qkPipe': ['len'], 'qkEarth': ['cut', 'sand', 'fill'], 'qkPave': ['pav'], 'qkOcc': ['tmp', 'perm'], 'qkRiver': ['rv_jack', 'rv_shaft', 'rv_exc', 'rv_hp', 'rv_lag', 'rv_ssp', 'rv_liner', 'rv_open', 'rv_dam', 'rv_bag', 'rv_sheet'],
             'qkShore': ['sh_panel', 'sh_hpile', 'sh_sheet']}
         okq = True
         # 앞 단계에서 수량 표가 열려 있으면 먼저 닫음 («같은 단추 = 닫기» 라 «전체» 를 누르면 닫혀 버림 · 1126)

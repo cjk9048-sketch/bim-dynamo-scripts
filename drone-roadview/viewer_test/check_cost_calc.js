@@ -106,6 +106,21 @@ eq('  본 수 > 0', C.sheetN(pl) > 0, true);
 eq('톤마대 둑 = 0 본', C.sheetN(R.plan({ k: 'open', a: 40, b: 60, dam: 'bag' }, P, g, 0.5)), 0);
 eq('추진 = 0 본', C.sheetN(R.plan({ k: 'jack', a: 30, b: 70 }, P, g, 0.5)), 0);
 
+console.log('== 하천 추진 수직구 시트파일 (JACK 1127 · 장 수 = river.js 수량 · 가시설 시트파일과 같은 단가 · 줄은 따로)');
+eq('한 장 폭 = river.js 와 같음 (0.4)', C.SP_W, R.SP_W);
+const pls = R.plan({ k: 'jack', a: 30, b: 70, wall: 'sheet' }, P, g, 0.5), zs = R.qty(pls);
+eq('  수직구 시트파일 장 수 > 0', zs.ssp > 0, true);
+let cs = C.calc({ rv_ssp: zs.ssp }, [], {});
+eq('수직구 시트파일 = (항타 + 항발) × 1.5 × 장', cs.rows.rv_ssp.amt, (100112 + 59996) * 1.5 * zs.ssp, 1e-6);
+eq('  단가 = 한 장', cs.rows.rv_ssp.unit, (100112 + 59996) * 1.5, 1e-6);
+eq('  상태 = 셈', cs.rows.rv_ssp.st, 'ok');
+eq('  부대 공종에 들어감', cs.extra, (100112 + 59996) * 1.5 * zs.ssp, 1e-6);
+eq('  글 = 단가 …원/장', C.rowText('rv_ssp', cs, '장').l, '단가 ' + C.won((100112 + 59996) * 1.5) + '원/장');
+eq('가물막이 시트파일 줄과 따로 (rv_sheet = 0)', cs.rows.rv_sheet.amt, 0);
+cs = C.calc({ rv_ssp: 10 }, [], { price: { sp_in: 120000 } });
+eq('항타 단가 고침 → 수직구 시트파일도 바뀜', cs.rows.rv_ssp.amt, (120000 + 59996) * 1.5 * 10, 1e-6);
+eq('토류벽 수직구 = 0 장', R.qty(R.plan({ k: 'jack', a: 30, b: 70 }, P, g, 0.5)).ssp, 0);
+
 console.log('== 글 · 소계');
 eq('원 = 반올림 · 쉼표', C.won(1234567.5), '1,234,568');
 eq('억 · 만', C.wonKo(1234567890), '12억 3,456만 원');

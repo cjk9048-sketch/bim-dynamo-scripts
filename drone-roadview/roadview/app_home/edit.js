@@ -67,7 +67,7 @@
     after();
   }
   function delSel() {
-    if (S.sel < 0 || S.sel >= S.clips.length) { toast('지울 토막을 누르세요'); return; }
+    if (S.sel < 0 || S.sel >= S.clips.length) { toast('지울 클립을 먼저 고르세요'); return; }
     push();
     const st = starts()[S.sel];
     S.clips.splice(S.sel, 1);
@@ -552,7 +552,7 @@
   //   R = Rz(dyaw)·Rx(dpitch)·Ry(droll). 짝마다 광선이 GCP 표고 면에 닿는 곳 − GCP (m) 를 최소로 (Levenberg–Marquardt).
   //   짝 1 → 동 · 북 · 2 → + 방향 · 3 이상 → + 높이(zt) · 먼 점(40 m 넘게)이 있고 넉넉하면 + 남북 · 동서 기울기.
   //   표고 없는 점(지도에서 찍고 수치지도도 없음)은 이륙점 높이의 평평한 땅으로 본다.
-  const G = { pts: [], pairs: [], active: -1, mapAdd: false, cal: {}, res: {}, seq: 0 };
+  const G = { pts: [], pairs: [], active: -1, mapAdd: false, await: -1, cal: {}, res: {}, seq: 0 };
   const GA_FAR = 40, GA_TILT = 5;
   function rot64(c) {                   // 보기 화면 app.js rot64 와 같음 (행 순서)
     const a = (c.dyaw || 0) * Math.PI / 180, b = (c.dpitch || 0) * Math.PI / 180, g = (c.droll || 0) * Math.PI / 180;
@@ -693,12 +693,16 @@
     let k = 1; while (G.pts.some((g) => g.name === 'M' + k)) k++;
     const g = { name: 'M' + k, E: en[0], N: en[1], lat, lon, z: null, zd: null };
     await gAddPoints([g]);
-    G.active = g.id; gRender();
+    G.active = g.id; G.await = g.id; gRender(); mapDraw(); FV.dirty = true;
+  }
+  function gEnd() {                      // 지도 → 뷰 이어 찍기 끝 (점은 그대로 남김)
+    G.mapAdd = false; G.await = -1; $('gMap').classList.remove('on'); gRender(); mapDraw(); FV.dirty = true;
   }
   function gDel(id) {
     const paths = new Set(G.pairs.filter((q) => q.g === id).map((q) => q.path));
     G.pts = G.pts.filter((g) => g.id !== id); G.pairs = G.pairs.filter((q) => q.g !== id);
     if (G.active === id) G.active = -1;
+    if (G.await === id) G.await = -1;
     paths.forEach(gSolve); gRender(); mapDraw(); FV.dirty = true;
   }
   function gDelPair(q) { G.pairs = G.pairs.filter((x) => x !== q); gSolve(q.path); gRender(); mapDraw(); FV.dirty = true; }
@@ -714,7 +718,14 @@
     G.pairs = G.pairs.filter((q) => !(q.g === G.active && q.path === src.md.path && Math.abs(q.t - src.t) < 0.05));
     G.pairs.push({ g: G.active, path: src.md.path, t: +src.t.toFixed(3), p: d.map((v) => +(v / n).toFixed(7)) });
     const st = gSolve(src.md.path);
+    const gp = gById(G.active), c = G.cal[src.md.path], nPair = G.pairs.filter((q) => q.path === src.md.path).length;
     if (st === 'bad') toast('풀리지 않음 · 점을 다시 확인 (× 로 지우기)');
+    else if (st === 'ok' && c && gp) {
+      const L = G.res[src.md.path] || [], rms = Math.sqrt(L.reduce((a, o) => a + o.r * o.r, 0) / Math.max(1, L.length));
+      const sg = (v, d) => (v >= 0 ? '+' : '') + v.toFixed(d);
+      toast(gp.name + ' 보정 · 동 ' + sg(c.dx, 2) + ' · 북 ' + sg(c.dy, 2) + ' m · 어긋남 ' + rms.toFixed(2) + ' m (짝 ' + nPair + (nPair < 3 ? ' · 3곳 이상 권장' : '') + ')');
+    }
+    if (G.await === G.active) G.await = -1;       // 뷰 단계 끝 → (지도에 점 켜져 있으면) 다시 지도 단계
     gRender(); mapDraw(); FV.dirty = true;
   }
   window.RVAlign = { viewClick };
@@ -756,8 +767,12 @@
       }
     }
     const hint = $('gHint'), act = gById(G.active);
-    hint.classList.toggle('hide', !act || FV.mode !== 'free');
-    if (act) hint.textContent = '«' + act.name + '» 을 화면에서 누르기';
+    const viewStep = !!act && FV.mode === 'free' && (G.await !== -1 || !G.mapAdd);   // 지도에 점 켜진 채 뷰 누름이 끝나면 다시 지도 단계
+    hint.classList.toggle('hide', !viewStep && !G.mapAdd);
+    hint.classList.toggle('big', viewStep || G.mapAdd);
+    if (viewStep) hint.textContent = act.name + ' · 뷰에서 같은 자리를 누르세요 · Esc 취소';
+    else if (G.mapAdd) hint.textContent = '지도에서 ' + (G.pts.length ? '다음 ' : '') + 'GCP 자리 누르기 · Esc 끝';
+    $('fv').style.cursor = viewStep ? 'crosshair' : '';
     // 결과: 영상마다
     const lines = [];
     for (const md of S.media) {
@@ -899,7 +914,7 @@
     });
     for (const g of G.pts) {             // GCP ▲
       const [x, y] = P(g.lat, g.lon).split(',').map(Number), on = G.active === g.id, s = on ? 8 : 5.5;
-      svg += '<path d="M' + x + ',' + (y - s) + 'L' + (x + s) + ',' + (y + s * 0.8) + 'L' + (x - s) + ',' + (y + s * 0.8) + 'Z" fill="' + (on ? '#ff9a1f' : '#ffd166') + '" stroke="#000" stroke-width="1"/>';
+      svg += '<path d="M' + x + ',' + (y - s) + 'L' + (x + s) + ',' + (y + s * 0.8) + 'L' + (x - s) + ',' + (y + s * 0.8) + 'Z" fill="' + (on ? '#ff9a1f' : '#ffd166') + '" stroke="#000" stroke-width="1"' + (G.await === g.id ? ' class="blink"' : '') + '/>';
       if (on || MAP.z >= 17) svg += '<text x="' + (x + s + 2) + '" y="' + (y + 4) + '" fill="#fff" stroke="#000" stroke-width="3" paint-order="stroke" font-size="11">' + g.name.replace(/[<&]/g, '') + '</text>';
     }
     const L = locate(S.T);
@@ -930,7 +945,7 @@
   function mapInit() {
     const el = $('map');
     let down = null;
-    el.addEventListener('pointerdown', (e) => { down = { x: e.clientX, y: e.clientY, cx: MAP.cx, cy: MAP.cy, moved: false }; el.setPointerCapture(e.pointerId); });
+    el.addEventListener('pointerdown', (e) => { down = { x: e.clientX, y: e.clientY, cx: MAP.cx, cy: MAP.cy, moved: false }; try { el.setPointerCapture(e.pointerId); } catch (err) { /* 끌기는 계속 됨 */ } });
     el.addEventListener('pointermove', (e) => {
       if (!down) return;
       const dx = e.clientX - down.x, dy = e.clientY - down.y;
@@ -944,7 +959,8 @@
       const r = el.getBoundingClientRect();
       if (!down.moved) {
         const mx = e.clientX - r.left, my = e.clientY - r.top;
-        if (G.mapAdd) {                  // 지도에 점: 누른 곳 → GCP
+        if (G.mapAdd && G.await !== -1) toast('뷰에서 같은 자리를 먼저 누르세요 · Esc 끝');
+        else if (G.mapAdd) {             // 지도에 점: 누른 곳 → GCP
           const [w, h] = mapSize(), s = 256 * Math.pow(2, MAP.z);
           const wx = MAP.cx - w / 2 + mx, wy = MAP.cy - h / 2 + my;
           const lon = wx / s * 360 - 180, lat = Math.atan(Math.sinh(Math.PI * (1 - 2 * wy / s))) * 180 / Math.PI;
@@ -966,24 +982,86 @@
     el.addEventListener('dblclick', () => { MAP.fitted = false; mapDraw(); });
   }
 
+  // 지도 칸 높이 끌기 (JACK 1127) — 최소 120 px · 최대 창 높이의 70 % · 이 PC 에 기억 · 두 번 누르면 처음 높이
+  const MAP_H0 = 250, MAP_HKEY = 'rv_edit_maph';
+  function mapSetH(h, save) {
+    h = Math.round(Math.max(120, Math.min(window.innerHeight * 0.7, h)));
+    $('map').style.height = h + 'px';
+    mapDraw();
+    if (save) { try { localStorage.setItem(MAP_HKEY, String(h)); } catch (e) { /* 기억 못 해도 됨 */ } }
+    return h;
+  }
+  function mapGripInit() {
+    const g = $('mapGrip');
+    let d = null;
+    try { const v = Number(localStorage.getItem(MAP_HKEY)); if (v > 0) mapSetH(v, false); } catch (e) { /* 없어도 됨 */ }
+    g.addEventListener('pointerdown', (e) => {
+      d = { y: e.clientY, h: $('map').clientHeight }; g.classList.add('on');
+      try { g.setPointerCapture(e.pointerId); } catch (err) { /* 끌기는 계속 됨 */ }
+    });
+    g.addEventListener('pointermove', (e) => { if (d) mapSetH(d.h + e.clientY - d.y, false); });
+    const end = () => { if (!d) return; d = null; g.classList.remove('on'); mapSetH($('map').clientHeight, true); };
+    g.addEventListener('pointerup', end);
+    g.addEventListener('pointercancel', end);
+    g.addEventListener('dblclick', () => {
+      mapSetH(MAP_H0, false);
+      try { localStorage.removeItem(MAP_HKEY); } catch (e) { /* 없어도 됨 */ }
+    });
+  }
+
   // ------------------------------------------------------------ 타임라인 조작
   function tlX(e) { return e.clientX - $('tlIn').getBoundingClientRect().left; }
   function tlInit() {
     const tl = $('tl');
     let scrub = false;
     const toT = (e) => { S.T = Math.max(0, Math.min(total(), tlX(e) / S.pps)); const L = locate(S.T); if (L) S.T = L.start + snap(L.m, L.t) - S.clips[L.k].a; showAt(S.T); };
-    $('ruler').addEventListener('pointerdown', (e) => { pause(); scrub = true; $('ruler').setPointerCapture(e.pointerId); toT(e); });
+    $('ruler').addEventListener('pointerdown', (e) => { pause(); scrub = true; try { $('ruler').setPointerCapture(e.pointerId); } catch (err) { /* 끌기는 계속 됨 */ } toT(e); });
     $('ruler').addEventListener('pointermove', (e) => { if (scrub) toT(e); });
     $('ruler').addEventListener('pointerup', () => { scrub = false; });
+    // 재생 선(하얀 선)은 눈금자와 머리(▼)만 움직인다 (JACK 1127). 트랙은 클립 고르기 · 끌어 순서 바꾸기 · 풀기만.
+    $('ph').querySelector('i').addEventListener('pointerdown', (e) => { e.preventDefault(); pause(); scrub = true; try { $('ruler').setPointerCapture(e.pointerId); } catch (err) { /* 끌기는 계속 됨 */ } toT(e); });
+    const selClips = () => document.querySelectorAll('#track .clip').forEach((x) => x.classList.toggle('sel', +x.dataset.k === S.sel));
+    let dr = null;                   // 클립 누름 · 끌기 {k, x0, moved, el, to}
+    const dropIdx = (e, k) => {      // 끌고 있는 클립(k)을 뺀 나머지 중간점 기준 놓을 자리 (0..n, 원래 번호 기준)
+      const x = tlX(e), st = starts();
+      for (let i = 0; i < S.clips.length; i++) if (i !== k && x < (st[i] + len(S.clips[i]) / 2) * S.pps) return i;
+      return S.clips.length;
+    };
     $('track').addEventListener('pointerdown', (e) => {
       pause();
       const d = e.target.closest('.clip');
       S.sel = d ? +d.dataset.k : -1;
-      document.querySelectorAll('#track .clip').forEach((x) => x.classList.toggle('sel', +x.dataset.k === S.sel));
-      toT(e); scrub = true; $('track').setPointerCapture(e.pointerId);
+      selClips();
+      if (!d) return;
+      dr = { k: S.sel, x0: e.clientX, moved: false, el: d, to: -1 };
+      try { $('track').setPointerCapture(e.pointerId); } catch (err) { /* 끌기는 계속 됨 */ }
     });
-    $('track').addEventListener('pointermove', (e) => { if (scrub && e.buttons) toT(e); });
-    $('track').addEventListener('pointerup', () => { scrub = false; });
+    $('track').addEventListener('pointermove', (e) => {
+      if (!dr) return;
+      const dx = e.clientX - dr.x0;
+      if (!dr.moved && Math.abs(dx) <= 6) return;
+      if (!dr.moved) { dr.moved = true; dr.el.classList.add('drag'); }
+      dr.el.style.transform = 'translateX(' + dx + 'px)';
+      dr.to = dropIdx(e, dr.k);
+      let m = $('tlIn').querySelector('.ins');
+      if (!m) { m = document.createElement('div'); m.className = 'ins'; $('tlIn').appendChild(m); }
+      m.style.left = ((dr.to < S.clips.length ? starts()[dr.to] : total()) * S.pps) + 'px';
+    });
+    const endClip = () => {
+      if (!dr) return;
+      const o = dr; dr = null;
+      const m = $('tlIn').querySelector('.ins'); if (m) m.remove();
+      o.el.classList.remove('drag'); o.el.style.transform = '';
+      if (!o.moved || o.to < 0 || o.to === o.k || o.to === o.k + 1) return;   // 제자리면 그대로
+      push();
+      const c = S.clips.splice(o.k, 1)[0];
+      const at = o.to > o.k ? o.to - 1 : o.to;
+      S.clips.splice(at, 0, c);
+      S.sel = at;
+      after(true);
+    };
+    $('track').addEventListener('pointerup', endClip);
+    $('track').addEventListener('pointercancel', endClip);
     let raf = 0;
     tl.addEventListener('scroll', () => { cancelAnimationFrame(raf); raf = requestAnimationFrame(renderThumbs); });
     tl.addEventListener('wheel', (e) => {
@@ -1097,6 +1175,7 @@
     const tag = (e.target && e.target.tagName) || '';
     if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
     const k = e.key;
+    if (k === 'Escape') { if (G.mapAdd || G.await !== -1) gEnd(); else if (G.active !== -1) { G.active = -1; gRender(); mapDraw(); FV.dirty = true; } return; }
     if (e.ctrlKey && (k === 'z' || k === 'Z')) { e.preventDefault(); if (e.shiftKey) redo(); else undo(); return; }
     if (e.ctrlKey && (k === 'y' || k === 'Y')) { e.preventDefault(); redo(); return; }
     if (e.ctrlKey || e.altKey || e.metaKey) return;
@@ -1130,8 +1209,9 @@
     document.querySelectorAll('#lensSel button').forEach((b) => b.addEventListener('click', () => { setLens(b.dataset.l); gRender(); }));
     $('gLoad').addEventListener('click', gLoad);
     $('gMap').addEventListener('click', () => {
-      G.mapAdd = !G.mapAdd; $('gMap').classList.toggle('on', G.mapAdd);
-      if (G.mapAdd) toast('위성지도에서 GCP 자리 누르기 · 다시 누르면 끝');
+      if (G.mapAdd) { gEnd(); return; }
+      G.mapAdd = true; $('gMap').classList.add('on'); gRender();
+      toast('위성지도에서 GCP 자리 누르기 · 그다음 뷰에서 같은 자리');
     });
     $('tUndo').addEventListener('click', undo);
     $('tRedo').addEventListener('click', redo);
@@ -1152,11 +1232,12 @@
     document.addEventListener('keydown', onKey);
     window.addEventListener('resize', () => { if (isOpen()) { refresh(true); } });
     mapInit();
+    mapGripInit();
     tlInit();
     try { fvInit(); } catch (e) { toast('프리 뷰 못 씀 · ' + String(e.message || e).slice(0, 60)); }
     setLens(FV.gl ? 'free' : 'down');
     gRender();
   }
 
-  window.RVEdit = { init, open, close, _S: S, _map: MAP, _G: G, _FV: FV, _api: { addClip, split, delSel, delSide, undo, redo, locate, total, build, showAt, mergeSegs, gSolve, gAddPoints, viewClick, posAt, rotAt, fvView, rot64, vidOf, ensureZt0 } };
+  window.RVEdit = { init, open, close, _S: S, _map: MAP, _G: G, _FV: FV, _api: { gEnd, mapSetH, addClip, split, delSel, delSide, undo, redo, locate, total, build, showAt, mergeSegs, gSolve, gAddPoints, viewClick, posAt, rotAt, fvView, rot64, vidOf, ensureZt0 } };
 })();

@@ -8,13 +8,14 @@
  *   RVRiver.plan(q, path, ground, od) → 계획 (ground(x, y) = 땅 표고 절대 · 없으면 NaN · od = 관 바깥지름 m)
  *                                       ta · tb = 터파기가 빠지는 측점 구간 (추진 = 두 수직구 바깥 벽 사이 · 횡단 = a · b)
  *                                       foot = 추진 수직구 바닥 자리 [{poly: [[x, y], …] 반시계, area}] (터파기 영역 · 임시점용 · 포장 깨기 · AI 영역)
- *   RVRiver.qty(plan)                 → 수량 {jack, shaft, exc, hp, hpm, lag, liner, linerA, open, dam, bag, sheet}
+ *   RVRiver.qty(plan)                 → 수량 {jack, shaft, exc, hp, hpm, lag, ssp (수직구 시트파일 장), sspm (그 길이 합 m), liner, linerA, open, dam, bag, sheet}
  *   RVRiver.rows(plan)                → 이 구간 표 [[이름, 값 글], …]
  *   RVRiver.svg(plan, {W, col})       → 종단 그림 {w, h, body} (svg viewBox = 0 0 w h · innerHTML = body)
  *   RVRiver.build3d(plan, face)       → face(점들 [[x, y, z] ×3~4], 바깥 쪽 [dx, dy, dz], 재질 이름) 을 면마다 부름
  *                                       재질 이름 = wood · steel · hpile · liner · conc · case · bag · sheet
  * 구간 기록 (RV_PIPES.lines[i].river 한 칸 · 관 측점 a < b):
- *   추진 {k:'jack', a, b, shape:'rect'|'circ', rev (true = 종점 쪽이 발진구), cover (하상 → 관 윗면), base (관 바닥 → 수직구 바닥),
+ *   추진 {k:'jack', a, b, shape:'rect'|'circ', wall:'hpile'|'sheet' (사각 흙막이 = 토류벽 · 시트파일 · 없으면 토류벽 · 원형은 안 씀 · JACK 1127),
+ *         rev (true = 종점 쪽이 발진구), cover (하상 → 관 윗면), base (관 바닥 → 수직구 바닥),
  *         cas (케이싱 바깥지름 · 0 = 관 + 0.2), lw × ll (발진 사각 내공 폭 × 길이), aw × al (도달), ld · ad (원형 내경)}
  *   횡단 {k:'open', a, b, dam:'bag'|'sheet', st:1|2 (보이는 단계), cover, h (천단 = 구간 가장 낮은 땅 + h), w (관 → 둑 간격), emb (시트파일 근입)}
  * 좌표 = 부르는 쪽 그대로 (x = 동 · y = 북 · z = 표고 절대).
@@ -24,10 +25,10 @@
   const KINDS = ['jack', 'open'];
   const NAME = { jack: '하천 추진', open: '하천 횡단' };
   const DEF = {
-    jack: { shape: 'rect', rev: false, cover: 2.0, base: 0.5, cas: 0, lw: 3.0, ll: 6.0, aw: 2.5, al: 3.0, ld: 6.0, ad: 4.0 },
+    jack: { shape: 'rect', wall: 'hpile', rev: false, cover: 2.0, base: 0.5, cas: 0, lw: 3.0, ll: 6.0, aw: 2.5, al: 3.0, ld: 6.0, ad: 4.0 },
     open: { dam: 'bag', st: 1, cover: 1.5, h: 1.5, w: 5.0, emb: 3.0 },
   };
-  const OPTS = { shape: ['rect', 'circ'], dam: ['bag', 'sheet'] };
+  const OPTS = { shape: ['rect', 'circ'], wall: ['hpile', 'sheet'], dam: ['bag', 'sheet'] };
   const LIM = { cover: [0, 30], base: [0, 5], cas: [0, 6], lw: [0.5, 30], ll: [0.5, 30], aw: [0.5, 30], al: [0.5, 30], ld: [0.5, 30], ad: [0.5, 30],
     h: [0.2, 10], w: [0.5, 50], emb: [0, 30] };
   const MIN_LEN = 0.5;               // m, 구간 가장 짧은 것
@@ -35,7 +36,10 @@
   const HP_PITCH = 1.8;              // m, 수직구 H-파일 간격 (가시설 토류벽과 같음)
   const HP_EMB = 1.5;                // m, H-파일 근입 (수직구 바닥 아래)
   const BAG_W = 1.1, BAG_H = 0.8;    // m, 톤마대 한 개 자리 (가로 · 세로 간격) · 한 단 높이 · 쌓기 = 피라미드 (맨 위 1 줄 · 한 단 내려갈 때마다 1 줄 더)
-  const SP_PITCH = 0.8;              // m, 시트파일 한 장 폭
+  const SP_PITCH = 0.8;              // m, 시트파일 3D 골 한 주기 (두 장)
+  const SP_W = 0.4;                  // m, 시트파일 한 장 유효폭 (Type3 400 · cost.js SP_W 와 같음) · 수직구 장 수 = 둘레 ÷ 이 값 올림
+  const SP_EMB = 3.0;                // m, 수직구 시트파일 근입 (수직구 바닥 아래 · 가시설 시트파일 기본 근입과 같음)
+  const WALL_C = 0.23;               // m, 사각 수직구 내공 면 → 흙막이 줄 (토류판 0.08 + H-파일 반폭 0.15 · 시트파일도 이 줄)
   // 수직구 바깥 벽 (가운데 → 관 방향 바깥 면): 사각 = 내공 l/2 + 토류판 0.08 + H-파일 중심 0.15 + 플랜지 0.15 + 2 cm · 원형 = 내경/2 + 라이너 0.05 + 2 cm
   // 터파기는 여기서 끝남 (수직구 안으로 안 들어감 · 수직구 자리 = 수직구 굴착으로만 셈 · JACK 1127 «터파기와 겹쳐져서 이상»)
   const SHAFT_OUT_RECT = 0.4, SHAFT_OUT_CIRC = 0.07;
@@ -141,8 +145,11 @@
         const w = rect ? (launch ? q.lw : q.aw) : (launch ? q.ld : q.ad), l = rect ? (launch ? q.ll : q.al) : w;
         let g = G(p.x, p.y);
         if (!Number.isFinite(g)) { g = gMin; noGround = true; }
-        return { s: s, x: p.x, y: p.y, tx: pd.tx * dir, ty: pd.ty * dir, g: g, launch: launch, shape: q.shape, w: w, l: l, zb: zb, depth: g - zb,
-          area: rect ? w * l : Math.PI * w * w / 4, per: rect ? 2 * (w + l) : Math.PI * w, hp: rect ? 2 * ceilN(l / HP_PITCH) + 2 * ceilN(w / HP_PITCH) : 0 };
+        // 사각 흙막이: 토류벽 = H-파일 (1.8 m 간격) + 토류판 · 시트파일 = 흙막이 줄 둘레 ÷ 한 장 유효폭 올림 (JACK 1127 «시트파일도 선택»)
+        const wall = rect ? q.wall : '', sheet = wall === 'sheet';
+        return { s: s, x: p.x, y: p.y, tx: pd.tx * dir, ty: pd.ty * dir, g: g, launch: launch, shape: q.shape, wall: wall, w: w, l: l, zb: zb, depth: g - zb,
+          area: rect ? w * l : Math.PI * w * w / 4, per: rect ? 2 * (w + l) : Math.PI * w, hp: rect && !sheet ? 2 * ceilN(l / HP_PITCH) + 2 * ceilN(w / HP_PITCH) : 0,
+          sp: sheet ? ceilN((2 * (w + l) + 8 * WALL_C) / SP_W) : 0 };
       };
       const L = mk(sL, true), A = mk(sA, false);
       const c0 = sL + dir * L.l / 2, c1 = sA - dir * A.l / 2;
@@ -223,10 +230,10 @@
   }
 
   // ---------------------------------------------------------------- 수량
-  const QK = ['jack', 'shaft', 'exc', 'hp', 'hpm', 'lag', 'liner', 'linerA', 'open', 'dam', 'bag', 'sheet'];
-  // 수량 표 줄 (수량 카테고리 «하천» 갈래 · [열쇠, 이름, 단위])
+  const QK = ['jack', 'shaft', 'exc', 'hp', 'hpm', 'lag', 'ssp', 'sspm', 'liner', 'linerA', 'open', 'dam', 'bag', 'sheet'];
+  // 수량 표 줄 (수량 카테고리 «하천» 갈래 · [열쇠, 이름, 단위]) · 수직구 시트파일 길이 합 (sspm) 은 단면 창 표 · 표 아래 글에
   const QROWS = [['jack', '추진 길이', 'm'], ['shaft', '수직구', '개소'], ['exc', '수직구 굴착', 'm³'], ['hp', 'H-파일', '본'], ['lag', '토류판', 'm²'],
-    ['liner', '라이너 플레이트', 'm'], ['open', '개착 횡단', 'm'], ['dam', '가물막이', 'm'], ['bag', '톤마대', '개'], ['sheet', '시트파일', 'm²']];
+    ['ssp', '시트파일 (수직구)', '장'], ['liner', '라이너 플레이트', 'm'], ['open', '개착 횡단', 'm'], ['dam', '가물막이', 'm'], ['bag', '톤마대', '개'], ['sheet', '시트파일', 'm²']];
   function qty(pl) {
     const z = {};
     QK.forEach((k) => { z[k] = 0; });
@@ -236,7 +243,9 @@
       for (const sh of pl.shafts) {
         z.shaft += 1;
         z.exc += sh.area * sh.depth;
-        if (sh.shape === 'rect') { z.hp += sh.hp; z.hpm += sh.hp * (sh.depth + HP_EMB); z.lag += sh.per * sh.depth; } else { z.liner += sh.depth; z.linerA += sh.per * sh.depth; }
+        if (sh.shape !== 'rect') { z.liner += sh.depth; z.linerA += sh.per * sh.depth; }
+        else if (sh.wall === 'sheet') { z.ssp += sh.sp; z.sspm += sh.sp * (sh.depth + SP_EMB); }      // 한 장 길이 = 굴착 깊이 + 근입
+        else { z.hp += sh.hp; z.hpm += sh.hp * (sh.depth + HP_EMB); z.lag += sh.per * sh.depth; }
       }
     } else {
       z.open = pl.b - pl.a;
@@ -254,7 +263,8 @@
       r.push(['수직구 바닥', 'EL ' + f2(pl.zb) + ' · 여유 ' + f2(q.base)]);
       r.push(['발진구 ' + nm(L), '깊이 ' + f2(L.depth) + ' m'], ['도달구 ' + nm(A), '깊이 ' + f2(A.depth) + ' m']);
       r.push(['추진 길이 (케이싱 Ø' + f2(pl.cas) + ')', f2(Z.jack) + ' m'], ['수직구 굴착', f2(Z.exc) + ' m³']);
-      if (q.shape === 'rect') r.push(['H-파일 (근입 ' + HP_EMB.toFixed(1) + ' m)', Z.hp + ' 본 · ' + f2(Z.hpm) + ' m'], ['토류판', f2(Z.lag) + ' m²']);
+      if (q.shape === 'rect' && q.wall === 'sheet') r.push(['시트파일 (근입 ' + SP_EMB.toFixed(1) + ' m)', Z.ssp + ' 장 · ' + f2(Z.sspm) + ' m']);
+      else if (q.shape === 'rect') r.push(['H-파일 (근입 ' + HP_EMB.toFixed(1) + ' m)', Z.hp + ' 본 · ' + f2(Z.hpm) + ' m'], ['토류판', f2(Z.lag) + ' m²']);
       else r.push(['라이너 플레이트', f2(Z.liner) + ' m · ' + f2(Z.linerA) + ' m²']);
       if (!pl.ok) r.push(['확인', pl.msg]);
     } else {
@@ -277,7 +287,10 @@
     const q = pl.q, prof = pl.prof, s0 = prof[0][0], s1 = prof[prof.length - 1][0];
     let zhi = -Infinity, zlo = Infinity;
     prof.forEach((p) => { zhi = Math.max(zhi, p[1]); zlo = Math.min(zlo, p[1]); });
-    if (pl.k === 'jack') { zlo = Math.min(zlo, pl.zb - 0.6); pl.shafts.forEach((sh) => { zhi = Math.max(zhi, sh.g + 0.3); }); } else {
+    if (pl.k === 'jack') {
+      zlo = Math.min(zlo, pl.zb - 0.6, pl.shafts.some((sh) => sh.wall === 'sheet') ? pl.zb - SP_EMB - 0.3 : Infinity);   // 시트파일 = 근입 끝까지 보이게
+      pl.shafts.forEach((sh) => { zhi = Math.max(zhi, sh.g + 0.3); });
+    } else {
       zlo = Math.min(zlo, pl.bot - 0.6, q.dam === 'sheet' ? pl.gMin - q.emb - 0.3 : Infinity);
       zhi = Math.max(zhi, pl.damTop);
     }
@@ -298,8 +311,10 @@
       for (const sh of pl.shafts) {                                      // 수직구 = 빈 구덩이 (바탕색) + 흙막이 선
         const xa = X(sh.s - sh.l / 2), xb = X(sh.s + sh.l / 2);
         s += rect(xa, xb, Y(sh.g + 0.3), Y(sh.zb), '#141414', null, 'shaft');
-        const wc = sh.shape === 'rect' ? '#b07a45' : '#9aa6b4', zt = sh.shape === 'rect' ? sh.zb - HP_EMB : sh.zb;
-        s += ln(xa, Y(sh.g + 0.3), xa, Y(zt), wc, 2.4) + ln(xb, Y(sh.g + 0.3), xb, Y(zt), wc, 2.4);
+        // 흙막이 선: 토류벽 = H-파일 색 · 근입 HP_EMB / 시트파일 = 가물막이 시트파일과 같은 색 · 굵기 · 근입 SP_EMB / 라이너 = 바닥까지
+        const sp = sh.wall === 'sheet', wc = sp ? '#9aa6b4' : sh.shape === 'rect' ? '#b07a45' : '#9aa6b4', zt = sp ? sh.zb - SP_EMB : sh.shape === 'rect' ? sh.zb - HP_EMB : sh.zb;
+        s += ln(xa, Y(sh.g + 0.3), xa, Y(zt), wc, sp ? 3 : 2.4) + ln(xb, Y(sh.g + 0.3), xb, Y(zt), wc, sp ? 3 : 2.4);
+        if (sp && sh.launch) s += txt(xa > W / 2 ? xb - 4 : xa + 4, Y(sh.zb - SP_EMB / 2) + 4, '시트파일 근입 ' + SP_EMB.toFixed(1), xa > W / 2 ? 'end' : 'start', '#c9d0dc');
         s += rect(xa, xb, Y(sh.zb), Y(sh.zb - 0.2), '#9a9a92');
         const xm = (xa + xb) / 2, an = xm < 70 ? 'start' : xm > W - 70 ? 'end' : 'middle', xt = an === 'start' ? Math.max(4, xa) : an === 'end' ? Math.min(W - 4, xb) : xm;
         s += txt(xt, Y(sh.g + 0.3) - 6, (sh.launch ? '발진' : '도달') + ' 깊이 ' + f2(sh.depth), an);
@@ -340,6 +355,7 @@
 
   // ---------------------------------------------------------------- 3D 면 (face(점들, 바깥 쪽, 재질 이름))
   const BOX_F = [[0, 1, 2, 3], [4, 5, 6, 7], [0, 1, 5, 4], [1, 2, 6, 5], [2, 3, 7, 6], [3, 0, 4, 7]];
+  const SP_PROF = [[0, -0.075], [0.25, -0.075], [0.4, 0.075], [0.65, 0.075], [0.8, -0.075]], SP_T = 0.006;   // 시트파일 골 (한 주기 [u, 직각 거리] · 강판 반 두께)
   function build3d(pl, face) {
     if (!pl || !Number.isFinite(pl.gMin)) return 0;
     let nf = 0;
@@ -372,27 +388,50 @@
         }
       }
     };
+    // 곧은 시트파일 벽 (골진 강판): 시작 (ax, ay) · 방향 (ux, uy) · 길이 len · z0 ~ z1 · 골 = 방향에 직각으로 ± (가물막이와 같은 골 SP_PROF)
+    const spRun = (ax, ay, ux, uy, len, z0, z1) => {
+      const vx = -uy, vy = ux, nP = Math.ceil(len / SP_PITCH - 1e-9);
+      const Q = (u, d, z) => [ax + ux * u + vx * d, ay + uy * u + vy * d, z];
+      for (let k = 0; k < nP; k++) {
+        for (let i = 0; i + 1 < SP_PROF.length; i++) {
+          const u0 = k * SP_PITCH + SP_PROF[i][0], u1 = Math.min(k * SP_PITCH + SP_PROF[i + 1][0], len);
+          if (u1 - u0 < 1e-4) continue;
+          const da = SP_PROF[i][1], db = SP_PROF[i + 1][1];
+          box([Q(u0, da - SP_T, z0), Q(u1, db - SP_T, z0), Q(u1, db + SP_T, z0), Q(u0, da + SP_T, z0),
+            Q(u0, da - SP_T, z1), Q(u1, db - SP_T, z1), Q(u1, db + SP_T, z1), Q(u0, da + SP_T, z1)], 'sheet');
+        }
+      }
+    };
     if (pl.k === 'jack') {
       for (const sh of pl.shafts) {
         const zt = sh.g + 0.3, zb = sh.zb;
         if (sh.shape === 'rect') {
           const tx = sh.tx, ty = sh.ty, nx = -ty, ny = tx, hl = sh.l / 2, hw = sh.w / 2, T = 0.08;
           const at = (u, v) => [sh.x + tx * u + nx * v, sh.y + ty * u + ny * v];
-          // 토류판 (안쪽 면 = 내공)
-          for (const sg of [1, -1]) {
-            let p = at(0, sg * (hw + T / 2)); obox(p[0], p[1], tx, ty, hl + T, T / 2, zb, zt, 'wood');
-            p = at(sg * (hl + T / 2), 0); obox(p[0], p[1], nx, ny, hw, T / 2, zb, zt, 'wood');
-          }
-          // H-파일 (둘레 1.8 m 안 간격 · 구석 포함 · 바닥 아래 근입)
-          const hp = (u, v, ax, ay) => {
-            const p = at(u, v), bx = -ay, by = ax;
-            for (const sg of [1, -1]) obox(p[0] + bx * sg * 0.14, p[1] + by * sg * 0.14, ax, ay, 0.15, 0.01, zb - HP_EMB, sh.g + 0.6, 'hpile');
-            obox(p[0], p[1], bx, by, 0.13, 0.008, zb - HP_EMB, sh.g + 0.6, 'hpile');
-          };
-          const mL = ceilN(sh.l / HP_PITCH), mW = ceilN(sh.w / HP_PITCH), off = T + 0.15;
-          for (const sg of [1, -1]) {
-            for (let i = 0; i <= mL; i++) hp(-hl + sh.l * i / mL, sg * (hw + off), tx, ty);
-            for (let j = 1; j < mW; j++) hp(sg * (hl + off), -hw + sh.w * j / mW, nx, ny);
+          if (sh.wall === 'sheet') {
+            // 시트파일 (흙막이 줄 = H-파일 줄과 같은 자리 · 네 변 · 바닥 아래 근입 SP_EMB · 가물막이 시트파일과 같은 골 · 재질)
+            const HL = hl + WALL_C, HW = hw + WALL_C;
+            for (const sg of [1, -1]) {
+              let p = at(-HL, sg * HW); spRun(p[0], p[1], tx, ty, 2 * HL, zb - SP_EMB, zt);
+              p = at(sg * HL, -HW); spRun(p[0], p[1], nx, ny, 2 * HW, zb - SP_EMB, zt);
+            }
+          } else {
+            // 토류판 (안쪽 면 = 내공)
+            for (const sg of [1, -1]) {
+              let p = at(0, sg * (hw + T / 2)); obox(p[0], p[1], tx, ty, hl + T, T / 2, zb, zt, 'wood');
+              p = at(sg * (hl + T / 2), 0); obox(p[0], p[1], nx, ny, hw, T / 2, zb, zt, 'wood');
+            }
+            // H-파일 (둘레 1.8 m 안 간격 · 구석 포함 · 바닥 아래 근입)
+            const hp = (u, v, ax, ay) => {
+              const p = at(u, v), bx = -ay, by = ax;
+              for (const sg of [1, -1]) obox(p[0] + bx * sg * 0.14, p[1] + by * sg * 0.14, ax, ay, 0.15, 0.01, zb - HP_EMB, sh.g + 0.6, 'hpile');
+              obox(p[0], p[1], bx, by, 0.13, 0.008, zb - HP_EMB, sh.g + 0.6, 'hpile');
+            };
+            const mL = ceilN(sh.l / HP_PITCH), mW = ceilN(sh.w / HP_PITCH), off = T + 0.15;
+            for (const sg of [1, -1]) {
+              for (let i = 0; i <= mL; i++) hp(-hl + sh.l * i / mL, sg * (hw + off), tx, ty);
+              for (let j = 1; j < mW; j++) hp(sg * (hl + off), -hw + sh.w * j / mW, nx, ny);
+            }
           }
           // 띠장 (2 m 마다 · 안쪽)
           for (let z = sh.g - 0.5; z > zb + 0.6; z -= 2.0) {
@@ -448,7 +487,7 @@
             }
           }
         } else {
-          const prof = [[0, -0.075], [0.25, -0.075], [0.4, 0.075], [0.65, 0.075], [0.8, -0.075]], T2 = 0.006;
+          const prof = SP_PROF, T2 = SP_T;
           const nP = Math.ceil(L.len / SP_PITCH - 1e-9);
           for (let k = 0; k < nP; k++) {
             for (let i = 0; i + 1 < prof.length; i++) {
@@ -476,6 +515,7 @@
   }
 
   const API = { KINDS: KINDS, NAME: NAME, DEF: DEF, LIM: LIM, QK: QK, QROWS: QROWS, HP_EMB: HP_EMB, HP_PITCH: HP_PITCH, BAG_W: BAG_W, BAG_H: BAG_H,
+    SP_W: SP_W, SP_EMB: SP_EMB, WALL_C: WALL_C,
     clean: clean, fresh: fresh, path: path, plan: planOn, qty: qty, rows: rows, svg: svg, build3d: build3d };
   root.RVRiver = API;
   if (typeof module !== 'undefined' && module.exports) module.exports = API;

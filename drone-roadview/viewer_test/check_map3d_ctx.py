@@ -237,6 +237,35 @@ def zcut(ed, inp, SD, s0, A):
     over = [zs[b] + L['D'] / 2 - (L['g'][b] - 0.3) for b in range(len(zs))]     # 0 이하 = 관 윗면이 땅 0.3 m 아래
     report('z 한계 = 관 윗면 땅 0.3 m 아래 (닿은 곳 0) · 알림', max(over) <= 0.002 and max(over) > -0.002 and zt + L['D'] / 2 <= L['g'][k] - 0.3 + 0.002 and '0.3 m 아래' in tt,
            '가장 높은 곳 %.4f m · 고른 점 윗면 %.3f / 땅 %.3f · %s' % (max(over), zt + L['D'] / 2, L['g'][k], tt))
+    # 흰 점 누름 → 절점 표고 넣기 칸 → Enter (JACK 1127)
+    ed.js('__map3d.ED.hi = %d; __map3d.redraw()' % hi); ed.frames(3)
+    zg = J(ed, '__map3d.zg()')
+    inp.click(zg['s0'][0], zg['s0'][1]); ed.frames(3)
+    vis_ask = J(ed, "(() => { const b = document.getElementById('zAsk'); return !!b && b.style.display === 'block' && !!document.activeElement && document.activeElement.id === 'zAskIn'; })()")
+    want = round(L['g'][k] - L['D'] / 2 - 1.5, 2)                # 토피 1.5 m 자리
+    nu2 = J(ed, '__map3d.ED.undo.length')
+    ed.js("document.getElementById('zAskIn').value = '%.2f'" % want)
+    inp.key('Enter', 'Enter', 13)
+    ed.frames(2)
+    z4 = J(ed, 'window.RV_PIPES.lines[%d].pts[%d][2]' % (src, k))
+    report('z 흰 점 누름 → 표고 칸 → Enter = 그 표고 (기록 1개)', vis_ask and abs(z4 - want) < 1e-6 and J(ed, '__map3d.ED.undo.length') == nu2 + 1,
+           '칸 %s · %.3f (원함 %.2f)' % (vis_ask, z4, want))
+    shot(ed, SD, '44b_표고_넣기.png')
+    # 바로 위에서 봄 → 기즈모를 옆으로 비켜 그림 · 화면 위로 끌면 올라감
+    el0 = J(ed, '__map3d.V.el')
+    ed.js('__map3d.V.el = 89.5; __map3d.redraw()'); ed.frames(4)
+    zg = J(ed, '__map3d.zg()')
+    up = (zg['s0'][0], zg['s0'][1] - 24)                         # 위 화살표 가운데
+    z5 = J(ed, 'window.RV_PIPES.lines[%d].pts[%d][2]' % (src, k))
+    inp.press(up[0], up[1])
+    inp.drag_to(up, (up[0], up[1] - 40), steps=10)
+    inp.release(up[0], up[1] - 40)
+    z6 = J(ed, 'window.RV_PIPES.lines[%d].pts[%d][2]' % (src, k))
+    report('z 위에서 봄 → 기즈모 옆으로 (겹침 없음) · 위로 끌면 올라감', zg['off'] and z6 > z5 + 0.04, 'off %s · %.3f → %.3f' % (zg['off'], z5, z6))
+    shot(ed, SD, '44c_위에서_기즈모.png')
+    ed.js('__map3d.V.el = %f; __map3d.redraw()' % el0); ed.frames(2)
+    inp.key('z', 'KeyZ', 90, ce.CTRL); inp.key('z', 'KeyZ', 90, ce.CTRL)   # 위 두 고침 되돌림 → 뒤 시험 (저장 · 자르기) 은 앞 상태 그대로
+    report('z 되돌리기 두 번 → 표고 넣기 앞 높이', abs(J(ed, 'window.RV_PIPES.lines[%d].pts[%d][2]' % (src, k)) - zt) < 1e-6)
     nsv = len(calls(ed, 'save_pipes'))
     time.sleep(1.0)                                            # 고친 것 모음 (0.8 초) 뒤 [저장]
     ed.js("document.getElementById('bSave').click()")

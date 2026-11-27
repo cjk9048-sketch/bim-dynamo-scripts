@@ -74,7 +74,7 @@
   const ITEM = {};
   ITEMS.forEach((it) => { ITEM[it.id] = it; });
 
-  // 수량 줄 → 금액 (가시설 · 하천 H-파일 = 항타 + 항발 · 흙막이판 = 설치 + 철거 · 시트파일 = 본 수로 항타 + 항발)
+  // 수량 줄 → 금액 (가시설 · 하천 H-파일 = 항타 + 항발 · 흙막이판 = 설치 + 철거 · 시트파일 = 본 수로 항타 + 항발 · 수직구 시트파일 = 장 수로 같은 단가)
   const ROWS = {
     cut: 'incl', pav: 'incl', sand: 'incl', fill: 'incl',
     sh_panel: [['panel', 'sh_panel']],
@@ -83,6 +83,7 @@
     rv_jack: [['jack', 'rv_jack']], rv_shaft: [['shaft', 'rv_shaft']], rv_exc: 'sub', rv_hp: [['hp_in', 'rv_hp'], ['hp_out', 'rv_hp']],
     rv_lag: [['lag_in', 'rv_lag'], ['lag_out', 'rv_lag']], rv_liner: [['liner', 'rv_liner']], rv_open: 'incl', rv_dam: 'sub', rv_bag: [['bag', 'rv_bag']],
     rv_sheet: [['sp_in', 'rv_spN'], ['sp_out', 'rv_spN']],
+    rv_ssp: [['sp_in', 'rv_ssp'], ['sp_out', 'rv_ssp']],              // 수직구 시트파일 (사각 · 장 수 = 그 줄 수량 · 가물막이 줄과 따로 · JACK 1127)
     bd_curb: [['curb', 'bd_curb']], bd_wall: 'sub', bd_wallA: [['wall', 'bd_wallA']], bd_sidewalk: [['walk', 'bd_sidewalk']],
     bd_asphalt: 'incl', bd_concrete: 'incl', bd_unpaved: 'incl',
     gd_cut: [['gcut', 'gd_cut']], gd_fill: [['gfill', 'gd_fill']],

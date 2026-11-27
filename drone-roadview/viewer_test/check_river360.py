@@ -8,6 +8,7 @@ make_synth --trench 폴더를 복사해 화면 없는 Edge (cdp.py) 로 열고 �
      하상 = 360 땅 높이 (groundAt) 가장 낮은 곳 (따로 셈) · 관 윗면 = 하상 − 2 · 바닥 = 관 바닥 − 0.5 · 깊이 · 추진 길이 · 굴착 · H-파일 · 토류판 = 손셈 ·
      추진 구간 = 터파기 없음 (토공 줄어듦) · 터파기 보기 3D 그물 · 수직구 구멍 · 그림 바뀜 · 토피 3 → 바닥 1 m · 발진 길이 8 → 추진 1 m 줄어듦 ·
      원형 → 라이너 = 깊이 합 · 발진 ⇄ · 종단 창 (수직구 둘 · 깊이 · 추진 · 표) · Esc = 찍던 것 취소 · 창 닫기
+  s  사각 흙막이 = 시트파일 (JACK 1127): 장 수 · 길이 = 손셈 · H-파일 · 토류판 0 · 3D 그물 종류 · 그림 바뀜 · 원형 = 칸 숨김 · 종단 창 · 다시 열어도 남음
   o  횡단: [횡단] → 지도 두 점 → 기본값 · 관 윗면 = 하상 − 1.5 · 천단 = 하상 + 1.5 · 둑 길이 · 톤마대 = 따로 셈 · 개착 = b − a ·
      높이 2 → 천단 0.5 · 톤마대 늘어남 · 2단계 그림 다름 · 시트파일 m² = 따로 셈 · 근입 5 → 바뀜 · 종단 창 (단계 · 높이) · 영역 표현 땅 위 테두리
   p  3D 매핑 화면에서 만든 구간 (pipes.js 에 river · 3D 가 쓰는 꼴) → 360 에서 읽힘 · 목록 · 셈 · 3D · 수량
@@ -297,7 +298,7 @@ def main():
         want = {'jack': (B - A) - 4.5, 'shaft': 2, 'exc': 18 * dL + 7.5 * dA, 'hp': hp(3, 6) + hp(2.5, 3), 'lag': 18 * dL + 11 * dA}
         got = {k: J(ed, "__rc.qv('%s')" % k) for k in want}
         vis_rows = J(ed, "[...document.querySelectorAll('#qTab .ql')].filter((e) => !e.hidden).map((e) => e.textContent)")
-        report('j 수량 «하천» 표 = 손셈 (추진 · 수직구 · 굴착 · H-파일 · 토류판)', all(near(got[k], want[k], 0.05) for k in want) and len(vis_rows) == 10 and vis_rows[0].startswith('추진 길이'),
+        report('j 수량 «하천» 표 = 손셈 (추진 · 수직구 · 굴착 · H-파일 · 토류판)', all(near(got[k], want[k], 0.05) for k in want) and len(vis_rows) == 11 and vis_rows[0].startswith('추진 길이'),   # 11 = 시트파일 (수직구) 줄 (1127)
                str({k: round(got[k], 2) for k in got}))
         shot(ed, SD, '03_수량_하천.png')
         click(ed, inp, 'qkRiver')
@@ -317,7 +318,32 @@ def main():
         p3 = J(ed, '__rc.plans(%d)[0]' % src0)
         report('j 발진 길이 8 → 추진 길이 1 m 줄어듦', near(p3['jackLen'], p2['jackLen'] - 1.0, 1e-6), '%.3f → %.3f' % (p2['jackLen'], p3['jackLen']))
         ed.js("__rc.setIn('rv_ll', 6)")
+        # JACK 1127 «추진구 가시설도 시트파일 선택» (3D 화면과 같은 칸 · 같은 셈): 장 수 = ⌈(2 (w + l) + 8 × 0.23) ÷ 0.4⌉ · 길이 = 깊이 + 근입 3 ·
+        # H-파일 · 토류판 0 · 3D 그물 종류 (강판) · 그림 바뀜 · 원형 = 칸 숨김 · 사각으로 돌아오면 그대로 · 다시 열어도 남음 (d)
+        KINDS = "(() => { const k = {}; RVRiver.build3d(__rv360.rv.plans(%d).find((p) => p.k === 'jack'), (ps, h, m) => { k[m] = (k[m] || 0) + 1; }); return k; })()" % src0
+        ed.frames(3)
+        kh, tri_h = J(ed, KINDS), J(ed, '__rv360.rv.tris()')
+        img_h = view_png(ed, os.path.join(SD, '_j_토류벽.png'))
+        report('s 흙막이 칸 (사각 · 토류벽 켜짐)', J(ed, "!!document.getElementById('rvHp') && document.getElementById('rvHp').classList.contains('on') && !document.getElementById('rvSp').classList.contains('on')"))
+        click(ed, inp, 'rvSp')
+        ed.frames(3)
+        spn = lambda w, l: math.ceil((2 * (w + l) + 8 * 0.23) / 0.4 - 1e-9)   # noqa: E731
+        nL, nA = spn(3, 6), spn(2.5, 3)
+        want_sp, want_spm = nL + nA, nL * (dL + 1 + 3) + nA * (dA + 1 + 3)
+        lq = J(ed, '__rv360.lineQty(%d)' % src0)
+        zq = J(ed, "RVRiver.qty(__rv360.rv.plans(%d).find((p) => p.k === 'jack'))" % src0)
+        report('s 시트파일 → 기록 wall = sheet · 수량 장 = 손셈 · H-파일 · 토류판 0',
+               J(ed, "window.RV_PIPES.lines[%d].river[0].wall === 'sheet' && document.getElementById('rvSp').classList.contains('on')" % src0)
+               and lq['rv_ssp'] == want_sp and lq['rv_hp'] == 0 and lq['rv_lag'] == 0, '%s / %d 장' % (lq['rv_ssp'], want_sp))
+        report('s 시트파일 길이 = Σ 장 × (깊이 + 근입 3)', near(zq['sspm'], want_spm, 0.1), '%.2f / %.2f m' % (zq['sspm'], want_spm))
+        ks, tri_s = J(ed, KINDS), J(ed, '__rv360.rv.tris()')
+        img_s = view_png(ed, os.path.join(SD, '04a_추진_터파기_시트파일.png'))
+        report('s 3D 그물 = 강판 (H-파일 · 토류판 없음) · 세모 수 · 그림 바뀜', kh.get('hpile', 0) > 0 and ks.get('sheet', 0) > 500 and not ks.get('hpile') and not ks.get('wood')
+               and tri_s != tri_h and diff(img_h, img_s) > 0.002, '세모 %d → %d · 바뀐 화소 %.2f %%' % (tri_h, tri_s, 100 * diff(img_h, img_s)))
+        report('s 목록 줄 이름 «추진 · 사각 시트파일»', '추진 · 사각 시트파일' in J(ed, "document.querySelector('#rvList .shRow.sel .shGo').textContent"))
+        errs(ed, '시트파일')
         click(ed, inp, 'rvCirc')
+        report('s 원형 → 흙막이 칸 숨김 · 시트파일 0', J(ed, "!document.getElementById('rvHp') && !document.getElementById('rvSp')") and J(ed, '__rv360.lineQty(%d).rv_ssp' % src0) == 0)
         p4 = J(ed, '__rc.plans(%d)[0]' % src0)
         lq = J(ed, '__rv360.lineQty(%d)' % src0)
         sd = sum(s['depth'] for s in p4['shafts'])
@@ -329,9 +355,12 @@ def main():
         p5 = J(ed, '__rc.plans(%d)[0]' % src0)
         report('j 발진 ⇄ → 발진 = 종점', near(p5['shafts'][0]['s'], B, 1e-6) and J(ed, 'window.RV_PIPES.lines[%d].river[0].rev' % src0) is True)
         click(ed, inp, 'rvRect')
+        report('s 사각으로 돌아오면 흙막이 칸 · 시트파일 그대로', J(ed, "!!document.getElementById('rvSp') && document.getElementById('rvSp').classList.contains('on')") and J(ed, '__rv360.lineQty(%d).rv_ssp' % src0) > 0)
         click(ed, inp, 'rvSec')
-        dl = J(ed, "(() => { const d = document.getElementById('rvDlg'), s = document.getElementById('rvSvg').innerHTML; return { hid: d.hidden, k: d.dataset.k, shaft: (s.match(/class=\"shaft\"/g) || []).length, deep: s.indexOf('깊이') >= 0, jack: s.indexOf('추진 ') >= 0, rows: document.querySelectorAll('#rvRows .k').length }; })()")
+        dl = J(ed, "(() => { const d = document.getElementById('rvDlg'), s = document.getElementById('rvSvg').innerHTML; return { hid: d.hidden, k: d.dataset.k, shaft: (s.match(/class=\"shaft\"/g) || []).length, deep: s.indexOf('깊이') >= 0, jack: s.indexOf('추진 ') >= 0, rows: document.querySelectorAll('#rvRows .k').length,"
+                    " sp: (s.match(/stroke=\"#9aa6b4\" stroke-width=\"3\"/g) || []).length, emb: s.indexOf('시트파일 근입') >= 0 }; })()")
         report('j 종단 창 (수직구 둘 · 깊이 · 추진 · 표)', not dl['hid'] and dl['k'] == 'jack' and dl['shaft'] == 2 and dl['deep'] and dl['jack'] and dl['rows'] >= 7, str(dl))
+        report('s 종단 창 = 시트파일 선 넷 · 근입 글', dl['sp'] == 4 and dl['emb'])
         shot(ed, SD, '05_종단_추진.png')
         inp.key('Escape', 'Escape', 27)
         report('j Esc → 종단 창 닫힘', J(ed, "document.getElementById('rvDlg').hidden"))
@@ -399,6 +428,7 @@ def main():
         print('== d 지우기 · 저장 · 다시 열기 (프로그램 흉내)')
         pg.load(True, V_J, 'area', clear=True)
         report('d 파일 구간 둘 읽힘', len(J(ed, 'window.RV_PIPES.lines[%d].river || []' % src0)) == 2)
+        report('d 다시 열어도 추진 흙막이 = 시트파일', J(ed, "(window.RV_PIPES.lines[%d].river || []).some((r) => r.k === 'jack' && r.wall === 'sheet')" % src0))
         # ---- k 객체 누르기 → 카테고리 펼침 · 줄 열림 · 파란 테두리 · Delete 바로 지움 · Ctrl+Z (JACK 1127)
         print('== k 객체 누르기 · Delete · Ctrl+Z (하천 = 사진 · 가시설 = 지도)')
         ed.js("window.RV_PIPES.lines[%d].shore = [{ a: 3, b: 9, t: 'hpile' }, { a: 14, b: 18, t: 'sheet' }]; __rv360.obj.rebuild()" % src0)

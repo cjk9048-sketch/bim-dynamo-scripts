@@ -276,12 +276,16 @@
   const HERO = [];
   // 큰 카드 = 실제 드론 영상(있으면) 바탕 + 3D 드론 (three.js) · WebGL 이 안 되면 위에서 그린 canvas 그림
   const MEDIA = '../../tutorial/_media/';
-  function heroSetup(cid, draw, g3id, kind, vid, media) {
+  // 카드 사진 (JACK 1127 · tutorial/_media/card_*.jpg · 설치 파일에만 · 저장소엔 안 올림): 평소 = 멈춘 사진 · 마우스 올리면 움직임 (home.css .phon)
+  // 사진이 없으면 (개발 · 사진 빠진 설치) 예전 그대로 = 드론 영상 + 3D 드론 (three.js) · WebGL 도 안 되면 canvas 그림
+  function heroSetup(cid, draw, g3id, kind, vid, media, photo) {
     const cv = $(cid); if (!cv) return;
-    const o = { cv, c: cv.getContext('2d'), draw, w: 0, h: 0, dpr: 1, g3: null, v: null };
-    const g3 = window.Drone3D && $(g3id) ? window.Drone3D.create($(g3id), kind) : null;
-    if (g3) {
-      o.g3 = g3; cv.parentNode.classList.add('g3on');
+    const o = { cv, c: cv.getContext('2d'), draw, w: 0, h: 0, dpr: 1, g3: null, v: null, ph: false };
+    const art = cv.parentNode;
+    const g3init = () => {
+      const g3 = window.Drone3D && $(g3id) ? window.Drone3D.create($(g3id), kind) : null;
+      if (!g3) return;
+      o.g3 = g3; art.classList.add('g3on');
       const v = $(vid);
       if (v) {
         o.v = v;
@@ -290,7 +294,15 @@
         v.addEventListener('error', () => { v.classList.remove('on'); v.removeAttribute('src'); o.v = null; });
         v.src = MEDIA + media + '.mp4';
       }
-    }
+    };
+    if (photo) {
+      const im = new Image();
+      im.className = 'photo'; im.alt = ''; im.draggable = false; im.decoding = 'async';
+      im.addEventListener('load', () => { o.ph = true; art.classList.add('phon'); });
+      im.addEventListener('error', () => { im.remove(); g3init(); fit(); });
+      im.src = MEDIA + photo;
+      art.insertBefore(im, art.firstChild);
+    } else g3init();
     const fit = () => {
       const r = cv.parentNode.getBoundingClientRect();
       if (r.width < 2 || r.height < 2) return;
@@ -305,7 +317,7 @@
     HERO.push(o);
   }
   function paint(o, t) {
-    if (!o.w) return;
+    if (!o.w || o.ph) return;                                           // 사진 카드 = 그리지 않음 (움직임은 CSS)
     if (o.g3) { o.g3.render(t); return; }
     o.c.setTransform(o.dpr, 0, 0, o.dpr, 0, 0);
     o.draw(o.c, o.w, o.h, t);
@@ -330,8 +342,8 @@
   }
   function heroKick() { if (!hRaf && !hTimer) hRaf = requestAnimationFrame(heroTick); }
   function heroStart() {
-    heroSetup('hCvMap', frameMap, 'hG3Map', 'mapping', 'hVidMap', 'home_3d');
-    heroSetup('hCv360', frame360, 'hG3360', '360', 'hVid360', 'home_360');
+    heroSetup('hCvMap', frameMap, 'hG3Map', 'mapping', 'hVidMap', 'home_3d', 'card_3d.jpg');
+    heroSetup('hCv360', frame360, 'hG3360', '360', 'hVid360', 'home_360', 'card_360.jpg');
     if (reduce) return;
     document.addEventListener('visibilitychange', heroKick);
     heroKick();

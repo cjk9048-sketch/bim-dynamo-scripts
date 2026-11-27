@@ -7,6 +7,7 @@
   j  추진: [추진] → 관 위 두 점 → 구간 (측점 · 시점 = 발진구) · 하상 = dem.js 따로 셈 · 관 윗면 = 하상 − 2 · 바닥 = 관 바닥 − 0.5 ·
      깊이 · 추진 길이 · 굴착 · H-파일 · 토류판 = 손셈 · 3D 그물 · 토피 3 → 바닥 1 m 내려감 · 발진 길이 8 → 추진 길이 2 m 줄어듦 ·
      원형 → 라이너 = 깊이 합 · 바꾸기 → 발진 = 종점 · 수량 카테고리 «하천» 표 = 손셈 · 종단 창 (그림 · 표)
+  s  사각 흙막이 = 시트파일 (JACK 1127): 장 수 · 길이 = 손셈 · H-파일 · 토류판 0 · 3D 그물 종류 · 개략공사비 줄 · 종단 창 · 저장 글 · 토류벽으로 돌림 · 원형 = 칸 숨김
   o  횡단: [횡단] → 두 점 → 둑 길이 = 2 (b − a) + 4 w 근처 · 톤마대 개수 = 따로 셈 (dem.js 로 다리마다) · 높이 2 → 천단 0.5 올라감 ·
      2단계 그림 다름 · 시트파일 m² = 따로 셈 · 근입 바꾸면 m² 바뀜
   m  오른쪽 메뉴: 관 위 → «여기서 하천 추진 · 횡단» → 추진 → 시점 = 누른 자리 · Esc 취소
@@ -205,8 +206,54 @@ def main():
         p3 = J(ed, '__rc.plan(0)')
         report('j 발진 길이 8 → 추진 길이 1 m 줄어듦 (가운데 기준)', near(p3['jackLen'], p2['jackLen'] - 1.0, 1e-6), '%.3f → %.3f' % (p2['jackLen'], p3['jackLen']))
         ed.js("__rc.setIn('rv_ll', 6)")
+        # JACK 1127 «추진구 가시설도 시트파일 선택»: 사각 흙막이 = 시트파일 → 장 수 = ⌈(2 (w + l) + 8 × 0.23) ÷ 0.4⌉ · 길이 = 깊이 + 근입 3 ·
+        # H-파일 · 토류판 0 · 3D 그물 종류 (강판) · 수량 줄 · 개략공사비 (시트파일 항타 + 항발 × 1.5) · 저장 글 · 토류벽으로 돌리면 그대로
+        KINDS = "(() => { const k = {}; RVRiver.build3d(__map3d.rv.plans(0).find((p) => p.k === 'jack'), (ps, h, m) => { k[m] = (k[m] || 0) + 1; }); return k; })()"
+        ed.frames(3)
+        tri_h, kh = J(ed, '__map3d.rv.tris()'), J(ed, KINDS)
+        report('s 흙막이 칸 (사각 · 토류벽 켜짐)', J(ed, "!!document.getElementById('rvHp') && document.getElementById('rvHp').classList.contains('on') && !document.getElementById('rvSp').classList.contains('on')"))
+        ui_click(ed, inp, 'rvSp')
+        ed.frames(3)
+        spn = lambda w, l: math.ceil((2 * (w + l) + 8 * 0.23) / 0.4 - 1e-9)   # noqa: E731
+        nL, nA = spn(3, 6), spn(2.5, 3)
+        want_sp, want_spm = nL + nA, nL * (dL + 1 + 3) + nA * (dA + 1 + 3)
+        zq = J(ed, "RVRiver.qty(__map3d.rv.plans(0).find((p) => p.k === 'jack'))")
+        report('s 시트파일 고름 → 기록 wall = sheet · 시트파일 켜짐', J(ed, "window.RV_PIPES.lines[0].river[0].wall === 'sheet' && document.getElementById('rvSp').classList.contains('on')"))
+        report('s 수량 표 «시트파일 (수직구)» 장 = 손셈 · H-파일 · 토류판 0', near(J(ed, "__rc.qv('ssp')"), want_sp, 1e-9) and J(ed, "__rc.qv('hp')") == 0 and J(ed, "__rc.qv('lag')") == 0,
+               '%s / %d 장' % (J(ed, "__rc.qv('ssp')"), want_sp))
+        report('s 시트파일 길이 = Σ 장 × (깊이 + 근입 3)', near(zq['sspm'], want_spm, 0.1), '%.2f / %.2f m' % (zq['sspm'], want_spm))
+        ks = J(ed, KINDS)
+        tri_s = J(ed, '__map3d.rv.tris()')
+        report('s 3D 그물 = 강판 (H-파일 · 토류판 없음) · 세모 수 바뀜', kh.get('hpile', 0) > 0 and ks.get('sheet', 0) > 500 and not ks.get('hpile') and not ks.get('wood') and tri_s != tri_h,
+               '토류벽 %s → 시트파일 %s · 세모 %d → %d' % (kh, ks, tri_h, tri_s))
+        amt = J(ed, "Number(document.getElementById('qc_rv_ssp').dataset.v)")
+        report('s 개략공사비 줄 = (100,112 + 59,996) × 1.5 × 장', near(amt, (100112 + 59996) * 1.5 * want_sp, 1.0), '%s 원' % amt)
+        report('s 목록 줄 이름 «추진 · 사각 시트파일»', '추진 · 사각 시트파일' in J(ed, "document.querySelector('#rvList .shRow.sel .shGo').textContent"))
+        ed.js('__t.look(0, %f, 14, 30, 100)' % A)
+        shot(ed, SD, '01d_발진구_시트파일.png')
+        ed.js('__t.look(0, %f, 55, 38, 70)' % ((A + B) / 2))
+        shot(ed, SD, '01e_추진_시트파일.png')
+        ui_click(ed, inp, 'rvSec')
+        if J(ed, "document.getElementById('rvDlg').hidden"):
+            ui_click(ed, inp, 'rvSec')
+        sv_ = J(ed, "(() => { const s = document.getElementById('rvSvg').innerHTML; return { sp: (s.match(/stroke=\"#9aa6b4\" stroke-width=\"3\"/g) || []).length, emb: s.indexOf('시트파일 근입') >= 0, row: [...document.querySelectorAll('#rvRows .k')].some((e) => e.textContent.indexOf('시트파일') === 0) }; })()")
+        report('s 종단 창 = 시트파일 선 넷 · 근입 글 · 표 줄', sv_['sp'] == 4 and sv_['emb'] and sv_['row'], str(sv_))
+        shot(ed, SD, '04b_종단_추진_시트파일.png')
+        ed.js("document.getElementById('rvX').click()")
+        n_sv = len(calls(ed, 'save_pipes'))
+        ed.js("document.getElementById('bSave').click()")
+        ed.wait_js("__host.calls.filter((c) => c.name === 'save_pipes').length > %d" % n_sv, 5)
+        sv = calls(ed, 'save_pipes')
+        report('s 저장 글에 wall = sheet', bool(sv) and len(sv) > n_sv and re.search(r'"wall"\s*:\s*"sheet"', sv[-1]) is not None)
+        ui_click(ed, inp, 'rvHp')
+        ed.frames(3)
+        hp_ = J(ed, "__rc.qv('hp')")
+        report('s 토류벽으로 돌림 → H-파일 그대로 · 시트파일 0 · 그물 = 처음', hp_ == hp(3, 6) + hp(2.5, 3) and J(ed, "__rc.qv('ssp')") == 0 and J(ed, KINDS) == kh, '%s 본' % hp_)
+        errs(ed, '시트파일')
+        ui_click(ed, inp, 'rvSp')                                       # 원형 → 사각으로 돌아와도 시트파일 남는지 (아래)
         ui_click(ed, inp, 'rvCirc')
         ed.frames(3)
+        report('s 원형 → 흙막이 칸 숨김 · 시트파일 0', J(ed, "!document.getElementById('rvHp') && !document.getElementById('rvSp')") and J(ed, "__rc.qv('ssp')") == 0)
         p4 = J(ed, '__rc.plan(0)')
         sd = sum(s['depth'] for s in p4['shafts'])
         report('j 원형 → 라이너 = 깊이 합 · H-파일 0', p4['q']['shape'] == 'circ' and near(J(ed, "__rc.qv('liner')"), sd, 0.05) and J(ed, "__rc.qv('hp')") == 0, '%.2f / %.2f' % (J(ed, "__rc.qv('liner')"), sd))
@@ -219,6 +266,7 @@ def main():
         report('j 발진 ⇄ → 발진 = 종점', near(p5['shafts'][0]['s'], B, 1e-6) and J(ed, 'window.RV_PIPES.lines[0].river[0].rev') is True)
         ui_click(ed, inp, 'rvRect')
         ed.frames(2)
+        report('s 사각으로 돌아오면 흙막이 칸 · 시트파일 그대로', J(ed, "!!document.getElementById('rvSp') && document.getElementById('rvSp').classList.contains('on')") and J(ed, "__rc.qv('ssp')") > 0)
         ui_click(ed, inp, 'rvSec')
         dl = J(ed, "(() => { const d = document.getElementById('rvDlg'), s = document.getElementById('rvSvg').innerHTML; return { hid: d.hidden, k: d.dataset.k, shaft: (s.match(/class=\"shaft\"/g) || []).length, deep: s.indexOf('깊이') >= 0, jack: s.indexOf('추진 ') >= 0, rows: document.querySelectorAll('#rvRows .k').length }; })()")
         report('j 종단 창 (수직구 둘 · 깊이 · 추진 · 표)', not dl['hid'] and dl['k'] == 'jack' and dl['shaft'] == 2 and dl['deep'] and dl['jack'] and dl['rows'] >= 7, str(dl))

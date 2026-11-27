@@ -767,7 +767,7 @@ body.flat:not(.host) #side, body.flat:not(.host) #tgSide, body.flat #bHelp { dis
   <section id="pipeDlg" class="dlg" role="dialog" aria-label="관로 넣기" hidden>
     <div class="dlgHead"><b>관로 넣기</b><button class="dlgX" type="button" title="닫기">×</button></div>
     <div class="dlgBody">
-      <div class="fileRow"><button id="pmPick" type="button">파일 고르기</button><span id="pmFile"></span></div>
+      <div class="fileRow"><button id="pmPick" type="button">관로 SHP 불러오기</button><span id="pmFile"></span></div>
       <div id="pmShp" class="fields" hidden>
         <label>관경 항목 (mm)<select id="pmDia"></select></label>
         <div id="pmDiaEx" class="hint"></div>
@@ -785,7 +785,7 @@ body.flat:not(.host) #side, body.flat:not(.host) #tgSide, body.flat #bHelp { dis
   <section id="obstDlg" class="dlg" role="dialog" aria-label="지장물 넣기" hidden>
     <div class="dlgHead"><b>지장물 넣기</b><button class="dlgX" type="button" title="닫기">×</button></div>
     <div class="dlgBody">
-      <div class="fileRow"><button id="omPick" type="button">파일 고르기</button><span id="omFile"></span></div>
+      <div class="fileRow"><button id="omPick" type="button">지장물 SHP 불러오기</button><span id="omFile"></span></div>
       <div id="omShp" class="fields" hidden>
         <label>종류 항목<select id="omType"></select></label>
         <label>관경 항목 (mm)<select id="omDia"></select></label>
@@ -821,7 +821,7 @@ body.flat:not(.host) #side, body.flat:not(.host) #tgSide, body.flat #bHelp { dis
 <section id="secDlg" class="dlg" role="dialog" aria-label="터파기 설정" hidden>
   <div class="dlgHead"><b>터파기 설정</b><span id="secTag" class="tag"></span><button id="secX" class="dlgX" type="button" title="닫기">×</button></div>
   <div class="dlgBody">
-    <div class="secTop"><label>관경<select id="secDia"></select></label><label class="chk"><input id="secOn" type="checkbox">터파기 형상</label></div>
+    <div class="secTop"><label>관경<select id="secDia"></select></label><label title="포장 종류 (개략공사비 관로 단가 · 개략공사비 칸 «포장» 과 같은 값)">포장<select id="secPave"><option value="asphalt">아스팔트</option><option value="concrete">콘크리트</option><option value="soil">토사</option></select></label><label class="chk"><input id="secOn" type="checkbox">터파기 형상</label></div>
     <svg id="secSvg" viewBox="0 0 380 260" role="img" aria-label="단면 그림"></svg>
     <div id="secRows"></div>
   </div>

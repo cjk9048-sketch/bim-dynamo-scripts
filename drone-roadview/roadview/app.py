@@ -20,7 +20,7 @@ import uuid
 from pathlib import Path
 
 APP_NAME = 'DH 에어로사이트'   # JACK 1127 (드론 로드뷰 → 360 · 3D 매핑 · 노선검토 · 실행 파일 · 설정 폴더 이름은 그대로)
-APP_VERSION = '1.0.23'
+APP_VERSION = '1.0.24'
 FROZEN = getattr(sys, 'frozen', False)
 BASE = Path(sys._MEIPASS) if FROZEN else Path(__file__).resolve().parent.parent      # noqa: SLF001
 HOME_HTML = (BASE / 'roadview' / 'app_home' / 'index.html') if not FROZEN else (BASE / 'app_home' / 'index.html')
