@@ -58,7 +58,7 @@ def run(w, api):
     try:
         ok('화면 준비', wait('!!window.RVCluster && !!window.RV', 20))
         time.sleep(1.5)
-        ok('처음 화면 [도우미 모드] 보임 · 꺼짐', vis('bHelper') and not on('bHelper') and txt('bHelper') == '도우미 모드', txt('bHelper'))
+        ok('처음 화면 [병렬 처리 참여] 보임 · 꺼짐', vis('bHelper') and not on('bHelper') and txt('bHelper') == '병렬 처리 참여', txt('bHelper'))
         ok('왼쪽 메뉴 «함께 처리»', J('!!document.querySelector(".nav[data-page=cluster]")'))
         # 공유 폴더 없이 도우미 모드 → 알림 + «함께 처리» 화면으로
         click('bHelper')
@@ -87,7 +87,7 @@ def run(w, api):
         # 처음 화면 단추도 켜짐
         J('RV.page("home")')
         ok('처음 화면 단추 켜짐', wait('document.getElementById("bHelper").classList.contains("on")', 10), txt('bHelper'))
-        ok('처음 화면 단추 글', wait('document.getElementById("bHelper").textContent.indexOf("도우미 · ") === 0', 10), txt('bHelper'))
+        ok('처음 화면 단추 글', wait('document.getElementById("bHelper").textContent.indexOf("병렬 처리 · ") === 0', 10), txt('bHelper'))
         # 매핑 화면 «함께 처리» 줄 · 예상 시간
         J('RVMap.open()')
         ok('매핑 화면 «함께 처리» 줄', wait('document.getElementById("mClu").textContent === "켜짐"', 10) and vis('mClu'), [txt('mClu'), txt('mCluSub')])

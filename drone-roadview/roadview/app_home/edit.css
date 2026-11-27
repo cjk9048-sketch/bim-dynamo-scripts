@@ -249,109 +249,86 @@ button.chip.on { background:#2f6fd6; color:#fff; box-shadow:none; }
 #mBar { height:100%; width:0; background:linear-gradient(90deg,#2f81f7,#22d3ee); transition:width .4s; }
 
 /* ================================================================================================
-   도화 꼴 — 3D 매핑 화면만 (JACK 1126 «어두운 톤 → 도화 톤 · 도화 스타일 · 도화 로고 · Terra 와 너무 똑같음»)
-   색 = DH 정지(DhBrand.cs)와 같음: 짙은 청록 #00484E · 밝은 바탕 #F5F8F8 · 흰 카드 · 옅은 선 #DCE3E4
+   3D 매핑 화면 — 어두운 톤 (JACK 1127 «프로그램 모든 톤만 도화색상 다 버리고 그냥 처음 어두움으로»)
+   틀 (카드 · 번호 · 둥근 정도 · 여백 · 시간 크게 · 기록 칸 끌기 · i 설명 · 범례) 은 도화 꼴 때 그대로, 색만 위쪽 어두운 기본 색
    ================================================================================================ */
-.mp { --dh:#00484E; --dhHi:#0A6269; --dhDim:#E3ECEC; --dhLn:#A9C9CB; --ink:#1B2628; --sub:#6B7A7C; --line:#DCE3E4; --wall:#F5F8F8;
-      --warn:#C2581B; background:var(--wall); color:var(--ink); }
-/* 머리띠 = 청록 + 흰 도화 로고 */
-.mp .etop { background:var(--dh); border-bottom:0; color:#fff; box-shadow:0 2px 8px rgba(0,40,44,.28); position:relative; z-index:3; }
-.mp .etop .ib { color:#cfe6e6; }
-.mp .etop .ib:hover:not(:disabled) { background:rgba(255,255,255,.14); color:#fff; }
+.mp { --dh:#2f6fd6; --dhHi:#3b7cf0; --dhDim:#3a3a3a; --dhLn:#4a4a4a; --ink:#e9e9e9; --sub:#9a9a9a; --line:#333; --wall:#141414;
+      --warn:#ffb86b; background:var(--wall); color:var(--ink); }
+/* 머리띠 + 도화 로고 (흰 그림이라 어두운 바탕에서 그대로 보임) */
+.mp .etop { position:relative; z-index:3; }
 .mp .mlogo { height:17px; width:auto; margin:0 2px 0 4px; user-select:none; -webkit-user-drag:none; flex:none; }
-.mp .mkind { color:#bfe0e0; font-size:13px; font-weight:600; padding:0 8px 0 12px; margin-left:8px; border-left:1px solid rgba(255,255,255,.3); white-space:nowrap; }
-.mp .mtop input.mname { color:#fff; }
-.mp .mtop input.mname::placeholder { color:#8fbcbf; }
-.mp .mtop input.mname:hover { border-color:rgba(255,255,255,.35); }
-.mp .mtop input.mname:focus { border-color:#8FD6DA; background:rgba(0,0,0,.18); }
+.mp .mkind { color:#9aa4b2; font-size:13px; font-weight:600; padding:0 8px 0 12px; margin-left:8px; border-left:1px solid rgba(255,255,255,.2); white-space:nowrap; }
+.mp .mtop input.mname::placeholder { color:#777; }
 /* 지도 위 단추 · 범위 */
-.mp .map { background:#dfe7e8; }
-.mp .mt { background:#fff; color:var(--dh); font-weight:600; box-shadow:0 1px 5px rgba(0,0,0,.3); }
-.mp .mt:hover:not(:disabled) { background:var(--dhDim); }
+.mp .mt { background:#f4f4f4; color:#222; font-weight:600; box-shadow:0 1px 4px #0007; }
+.mp .mt:hover:not(:disabled) { background:#fff; }
 .mp .mt:disabled { opacity:.55; cursor:default; }
-.mp #mArea.on { background:var(--dh); color:#fff; }
-.mp .msel { background:rgba(0,72,78,.88); color:#fff; }
 /* 실행 기록 칸 (높이 끌기 · logGrip) · 장치 성능 */
-.mp .mlogbox { background:#fff; border-top:2px solid var(--dh); box-shadow:0 -6px 16px rgba(0,40,44,.12); }
-.mp pre#mLog { color:#33474a; }
 .logGrip { position:absolute; left:0; right:0; top:-5px; height:9px; cursor:row-resize; z-index:5; }
-.logGrip:hover, .logGrip.on { background:rgba(0,72,78,.32); }
-.mp .mdevpop { background:#fff; border:1px solid var(--line); color:var(--ink); box-shadow:0 8px 24px rgba(0,40,44,.18); }
-.mp .mdevpop b { color:var(--dh); }
+.logGrip:hover, .logGrip.on { background:rgba(47,129,247,.4); }
+.mp .mdevpop { background:#252525; border:1px solid #3a3a3a; color:#ddd; box-shadow:0 8px 24px rgba(0,0,0,.5); }
+.mp .mdevpop b { color:#fff; }
 /* 아래 줄 */
-.mp .mbar { background:#fff; border-top:1px solid var(--line); color:var(--sub); }
-.mp .mbb { color:var(--ink); }
-.mp .mbb:hover, .mp .mbb.on { background:var(--dhDim); color:var(--dh); }
-.mp .mbb .car { color:var(--sub); }
-.mp .mbcrs b { color:var(--dh); font-weight:700; }
-/* 오른쪽 «만들기 설정» = 흰 카드 · 번호 · 청록 */
-.mp > .sideGrip:hover, .mp > .sideGrip.on { background:rgba(0,72,78,.3); }
-.mp .eside.tset { background:var(--wall); border-left:1px solid var(--line); }
-.mp .tshead { background:#fff; border-bottom:1px solid var(--line); }
-.mp .tshead b { color:var(--dh); font-size:15px; }
-.mp .tshead .ib { color:var(--sub); }
-.mp .tshead .ib:hover:not(:disabled) { background:var(--dhDim); color:var(--dh); }
+.mp .mbcrs b { color:#e8efff; font-weight:700; }
+/* 오른쪽 «만들기 설정» = 카드 · 번호 */
+.mp > .sideGrip:hover, .mp > .sideGrip.on { background:rgba(47,129,247,.35); }
+.mp .tshead b { color:#fff; font-size:15px; }
 .mp .tsbody { padding:2px 12px 16px; }
-.mp .tsec { background:#fff; border:1px solid var(--line); border-radius:10px; margin-top:12px; padding:2px 12px 12px; box-shadow:0 1px 2px rgba(0,40,44,.05); }
-.mp .tsec:last-child { border-bottom:1px solid var(--line); }
+.mp .tsec { background:#262626; border:1px solid #333; border-radius:10px; margin-top:12px; padding:2px 12px 12px; box-shadow:none; }
+.mp .tsec:last-child { border-bottom:1px solid #333; }
 .mp .tsh { color:var(--ink); }
-.mp .chev { border-color:var(--sub); }
-.mp .num { display:inline-flex; width:20px; height:20px; border-radius:50%; background:var(--dh); color:#fff; font-size:11.5px; font-weight:700;
+.mp .chev { border-color:#9a9a9a; }
+.mp .num { display:inline-flex; width:20px; height:20px; border-radius:50%; background:#2f6fd6; color:#fff; font-size:11.5px; font-weight:700;
            align-items:center; justify-content:center; flex:none; margin-right:-2px; }
-.mp .tgrp { display:flex; align-items:center; gap:8px; margin:18px 0 2px; font-size:14px; font-weight:700; color:var(--ink); }
-.mp .tgrpsub { font-size:11.5px; color:var(--sub); font-weight:400; }
-.mp .tbtn { background:var(--dhDim); color:var(--dh); border-radius:6px; }
-.mp .tbtn:hover:not(:disabled) { background:#d2e2e3; }
+.mp .tgrp { display:flex; align-items:center; gap:8px; margin:18px 0 2px; font-size:14px; font-weight:700; color:#e9e9e9; }
+.mp .tgrpsub { font-size:11.5px; color:#8b8b8b; font-weight:400; }
+.mp .tbtn { border-radius:6px; }
 .mp .tpair { display:flex; gap:6px; }
 .mp .tpair .tbtn { flex:1; min-width:0; }
-.mp .tnote { color:#33474a; }
-.mp .tnote.dim { color:var(--sub); }
+.mp .tnote { color:#bdbdbd; }
+.mp .tnote.dim { color:#8b8b8b; }
 .mp .tnote.warn { color:var(--warn); }
-.mp .tlab { color:var(--sub); font-size:12px; }
-.mp .tset select, .mp .tset input[type=text], .mp .tset input[type=number] { background:#fff; border:1px solid var(--line); color:var(--ink); border-radius:6px; }
-.mp .tset select:hover:not(:disabled), .mp .tset input:hover:not(:disabled) { border-color:var(--dhLn); }
-.mp .tset select:focus, .mp .tset input:focus { border-color:var(--dh); box-shadow:0 0 0 2px rgba(0,72,78,.14); }
-.mp .tcard { background:var(--wall); border:1px solid var(--line); border-left:3px solid var(--dh); border-radius:8px; }
-.mp .tcard.off { border-left-color:#c9d3d4; }
-.mp .tch { color:var(--ink); }
-.mp .tch .tri { border-top-color:var(--sub); }
-.mp .tl { color:#33474a; }
-.mp .tlink:hover .tl { color:var(--dh); }
-.mp .tlink .tv { color:var(--dh); font-weight:600; }
-.mp .tnum i { background:var(--dhDim); color:var(--dh); }
-.mp .qi { border-color:#93a5a7; color:var(--sub); }
-.mp .qi:hover { border-color:var(--dh); color:var(--dh); background:var(--dhDim); }
-.mp .chip { background:var(--dhDim); color:var(--dh); }
-.mp button.chip { background:#fff; color:var(--sub); box-shadow:inset 0 0 0 1px var(--line); }
-.mp button.chip.on { background:var(--dh); color:#fff; box-shadow:none; }
-.mp .tfix { color:var(--sub); }
-.mp .seg, .mp #mQ.seg { background:var(--dhDim); border-radius:6px; }
-.mp .seg button { color:var(--dh); }
-.mp .seg button.on { background:var(--dh); color:#fff; }
-.mp .tog { background:#fff; color:var(--sub); box-shadow:inset 0 0 0 1px var(--line); }
-.mp .tog:hover { background:var(--dhDim); }
-.mp .tog.on { background:var(--dh); color:#fff; box-shadow:none; }
-.mp .sw { background:#c9d3d4; border-color:#c9d3d4; }
-.mp .sw::after { background:#fff; box-shadow:0 1px 2px rgba(0,0,0,.2); }
-.mp .sw.on { background:var(--dh); border-color:var(--dh); }
-.mp .sw.on::after { background:#fff; }
-.mp .sub { color:var(--sub); }
+.mp .tlab { color:#9a9a9a; font-size:12px; }
+.mp .tset select, .mp .tset input[type=text], .mp .tset input[type=number] { background:#141414; border:1px solid #3a3a3a; color:#ddd; border-radius:6px; }
+.mp .tset select:hover:not(:disabled), .mp .tset input:hover:not(:disabled) { border-color:#4a4a4a; }
+.mp .tset select:focus, .mp .tset input:focus { border-color:#2f6fd6; box-shadow:0 0 0 2px rgba(47,129,247,.22); }
+.mp .tcard { background:#2e2e2e; border:1px solid #3a3a3a; border-left:3px solid #2f6fd6; border-radius:8px; }
+.mp .tcard.off { border-left-color:#555; }
+.mp .tch { color:#e9e9e9; }
+.mp .tch .tri { border-top-color:#9a9a9a; }
+.mp .tl { color:#bdbdbd; }
+.mp .tlink:hover .tl { color:#8bb8ff; }
+.mp .tlink .tv { color:#8bb8ff; font-weight:600; }
+.mp .tnum i { background:#3a3a3a; color:#8bb8ff; }
+.mp .qi { border-color:#9a9a9a; color:#bbb; }
+.mp .qi:hover { border-color:#fff; color:#fff; background:#3a3a3a; }
+.mp .chip { background:#3a3a3a; color:#ddd; }
+.mp button.chip { background:#1a1a1a; color:#8d8d8d; box-shadow:inset 0 0 0 1px #3a3a3a; }
+.mp button.chip.on { background:#2f6fd6; color:#fff; box-shadow:none; }
+.mp .tfix { color:#9a9a9a; }
+.mp .seg, .mp #mQ.seg { background:#141414; border-radius:6px; }
+.mp .seg button { color:#aaa; }
+.mp .seg button.on { background:#3a3a3a; color:#fff; }
+.mp .tog { background:#1a1a1a; color:#8d8d8d; box-shadow:inset 0 0 0 1px #3a3a3a; }
+.mp .tog:hover { background:#2a2a2a; }
+.mp .tog.on { background:#2f6fd6; color:#fff; box-shadow:none; }
+.mp .sw { background:#121212; border-color:#474747; }
+.mp .sw::after { background:#5a5a5a; box-shadow:none; }
+.mp .sw.on { background:#2f6fd6; border-color:#2f6fd6; }
+.mp .sw.on::after { background:#e8efff; }
+.mp .sub { color:#9a9a9a; }
 /* 아래 칸: 시간 (예상 · 남은) 크게 · 막대 · 만들기 시작 */
-.mp .tsfoot { background:#fff; border-top:1px solid var(--line); box-shadow:0 -4px 10px rgba(0,40,44,.05); }
+.mp .tsfoot { box-shadow:none; }
 .mp .tclock { display:grid; grid-template-columns:auto 1fr; align-items:baseline; column-gap:10px; }
-.mp .tclock .tk { font-size:12.5px; color:var(--sub); font-weight:600; }
-.mp .tclock .tbig { font-size:26px; font-weight:800; color:var(--dh); letter-spacing:-.5px; line-height:1.15; }
-.mp .tclock.idle .tbig { color:#a9b6b7; }
-.mp .tclock .tsm { grid-column:1 / -1; font-size:12px; color:var(--sub); line-height:1.6; margin-top:2px; word-break:keep-all; }
-.mp .tclock .tsm b { color:var(--ink); }
-.mp .prog { background:var(--dhDim); height:8px; border-radius:4px; }
-.mp #mBar { background:linear-gradient(90deg, #00484E, #2A9DA4); }
-.mp .tgo { background:var(--dh); border-radius:6px; }
-.mp .tgo:hover:not(:disabled) { background:var(--dhHi); }
-.mp .tgo:disabled { background:#9db6b8; color:#eef5f5; }
-.mp .tlinkb { color:var(--dh); }
+.mp .tclock .tk { font-size:12.5px; color:#9a9a9a; font-weight:600; }
+.mp .tclock .tbig { font-size:26px; font-weight:800; color:#5b9bff; letter-spacing:-.5px; line-height:1.15; }
+.mp .tclock.idle .tbig { color:#5a5a5a; }
+.mp .tclock .tsm { grid-column:1 / -1; font-size:12px; color:#9a9a9a; line-height:1.6; margin-top:2px; word-break:keep-all; }
+.mp .tclock .tsm b { color:#e9e9e9; }
+.mp .prog { background:#2c2c2c; height:8px; border-radius:4px; }
+.mp .tgo { border-radius:6px; }
 /* i 설명 칸 (body 아래 · 매핑 화면에서만 씀) */
-.qpop { background:#fff; color:#1B2628; border:1px solid #A9C9CB; border-left:3px solid #00484E; box-shadow:0 6px 18px rgba(0,40,44,.18); }
+.qpop { background:#2b2b2b; color:#e9e9e9; border:1px solid #3a3a3a; border-left:3px solid #2f81f7; box-shadow:0 6px 18px rgba(0,0,0,.5); }
 
 /* 지도 점 (찍은 자리 → 바라본 곳) · 범례 — JACK 1126 «직관적이고 예쁘게» */
 .mp .dShot { fill:#16B3BA; stroke:#fff; stroke-width:1.6; }
@@ -361,11 +338,11 @@ button.chip.on { background:#2f6fd6; color:#fff; box-shadow:none; }
 .mp .dOff { fill:#c9d3d4; fill-opacity:.75; stroke:#fff; stroke-opacity:.6; stroke-width:.8; }
 .mp .dRange { fill:rgba(255,176,32,.12); stroke:#ffb020; stroke-width:1.6; stroke-dasharray:3 2; }
 .mp .mmap svg.ov circle.dShot, .mp .mmap svg.ov circle.dOff { pointer-events:auto; cursor:default; }
-.mp .mlegend { position:absolute; right:12px; top:12px; z-index:2; display:flex; gap:12px; align-items:center; background:rgba(255,255,255,.94);
-               border-radius:8px; padding:6px 12px; font-size:12px; color:#1B2628; box-shadow:0 1px 6px rgba(0,0,0,.3); white-space:nowrap; }
+.mp .mlegend { position:absolute; right:12px; top:12px; z-index:2; display:flex; gap:12px; align-items:center; background:rgba(31,31,31,.94);
+               border-radius:8px; padding:6px 12px; font-size:12px; color:#e9e9e9; box-shadow:0 1px 6px rgba(0,0,0,.5); white-space:nowrap; }
 .mp .mlegend span { display:inline-flex; align-items:center; gap:5px; }
 .mp .mlegend svg { height:12px; width:auto; }
 .mp .mlegend svg[viewBox^="0 0 26"] { width:26px; }
 .mp .mlegend svg[viewBox^="0 0 12"] { width:12px; }
 .mp .mlegend svg[viewBox^="0 0 16"] { width:16px; }
-.mp .mlegend .dRay { stroke:#7d9a9c; stroke-opacity:1; }
+.mp .mlegend .dRay { stroke:#bbb; stroke-opacity:1; }

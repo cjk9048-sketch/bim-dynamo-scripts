@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>드론 로드뷰</title>
+<title>DH 에어로사이트</title>
 <link rel="stylesheet" href="home.css">
 <link rel="stylesheet" href="edit.css">
 </head>
@@ -13,37 +13,43 @@
   <img class="brand" src="dohwa_logo.png" alt="DOHWA">
   <nav>
     <a class="nav on" data-page="home"><svg viewBox="0 0 24 24"><path d="M3 11.5 12 4l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg>홈</a>
-    <a class="nav" data-page="share"><svg viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zm6.9 8h-3a14 14 0 0 0-1.2-5.2A7 7 0 0 1 18.9 11zM12 5.1c.9 1.2 1.8 3.3 2 5.9h-4c.2-2.6 1.1-4.7 2-5.9zM9.3 5.8A14 14 0 0 0 8.1 11h-3a7 7 0 0 1 4.2-5.2zM5.1 13h3a14 14 0 0 0 1.2 5.2A7 7 0 0 1 5.1 13zm6.9 5.9c-.9-1.2-1.8-3.3-2-5.9h4c-.2 2.6-1.1 4.7-2 5.9zm2.7-.7a14 14 0 0 0 1.2-5.2h3a7 7 0 0 1-4.2 5.2z"/></svg>웹 공유</a>
     <a class="nav" data-page="cluster"><svg viewBox="0 0 24 24" fill-rule="evenodd"><path d="M1 5h10v8H1zM2.5 6.5v5h7v-5zM5.4 13h1.2v2H5.4zM3.5 15h5v1.6h-5zM13 5h10v8H13zM14.5 6.5v5h7v-5zM17.4 13h1.2v2h-1.2zM15.5 15h5v1.6h-5z"/></svg>함께 처리</a>
   </nav>
   </div>
   <div class="appcard">
     <div class="logo"></div>
-    <div><b>드론 로드뷰</b><br><span id="ver"></span></div>
+    <div><b>DH 에어로사이트</b><br><span id="ver"></span></div>
   </div>
 </aside>
 
-<div class="wm">DOHWA Digital Design Team</div>
+<img class="wm" src="dohwa_logo.png" alt="" draggable="false">
+<div class="copy">© 도화디지털디자인팀</div>
 <main>
   <!-- 홈 -->
   <section id="pageHome">
     <div class="creates">
-      <button id="bCreate" class="create"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M12 8v8M8 12h8" stroke="#1b1b1b" stroke-width="2.2"/></svg>프로젝트 생성 <span class="cs">360 영상</span></button>
-      <button id="bMapping" class="create"><svg viewBox="0 0 24 24"><path d="M12 2 3 7v10l9 5 9-5V7zm0 2.3 6.6 3.7L12 11.7 5.4 8zM5 9.7l6 3.4v6.6l-6-3.4zm8 10V13.1l6-3.4v6.6z"/></svg>3D 매핑 <span class="cs">경사촬영 사진</span></button>
+      <!-- 큰 그림 카드 (그림은 전부 직접 그린 canvas · home.js «큰 카드 그림») · 왼쪽 = 3D 매핑 · 오른쪽 = OSV 로드뷰 -->
+      <button id="bMapping" class="hero heromap" aria-label="3D 매핑 · 경사촬영 사진 · ex) DJI Matrice4E">
+        <span class="art"><canvas id="hCvMap" aria-hidden="true"></canvas>
+          <span class="ttl"><b>3D 매핑</b></span></span>
+        <span class="hrow"><svg viewBox="0 0 24 24"><path d="M12 2 3 7v10l9 5 9-5V7zm0 2.3 6.6 3.7L12 11.7 5.4 8zM5 9.7l6 3.4v6.6l-6-3.4zm8 10V13.1l6-3.4v6.6z"/></svg><span class="cs">경사촬영 사진</span><span class="ex">ex) DJI Matrice4E</span></span>
+      </button>
+      <button id="bCreate" class="hero hero360" aria-label="OSV 파일로 로드뷰 작성 · 어안렌즈용 드론 · ex) DJI Avata360">
+        <span class="art"><canvas id="hCv360" aria-hidden="true"></canvas>
+          <span class="ttl"><b>OSV 파일로 로드뷰 작성</b></span></span>
+        <span class="hrow"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M12 8v8M8 12h8" stroke="#1b1b1b" stroke-width="2.2"/></svg><span class="cs">어안렌즈용 드론</span><span class="ex">ex) DJI Avata360</span></span>
+      </button>
+    </div>
+    <div id="tutBox" class="hide">
+      <div class="bar"><div class="h">튜토리얼 <span>· 매핑 결과 예시</span></div></div>
+      <div id="tuts" class="grid"></div>
     </div>
     <div class="bar">
       <div class="h">최근 프로젝트 <span id="cnt"></span></div>
-      <div class="tools"><button id="bHelper" class="tog" title="이 PC 가 옆 PC 의 3D 매핑을 도움 (공유 폴더 = 왼쪽 «함께 처리»)">도우미 모드</button><button id="bOpen" class="mini">폴더 열기</button></div>
+      <div class="tools"><button id="bHelper" class="tog" title="이 PC 가 옆 PC 의 3D 매핑을 나눠 처리 (병렬 처리 · 공유 폴더 = 왼쪽 «함께 처리»)">병렬 처리 참여</button><button id="bOpen" class="mini">폴더 열기</button></div>
     </div>
     <div id="grid" class="grid"></div>
-    <div id="empty" class="empty hide">아직 없음 · 위 [프로젝트 생성]</div>
-  </section>
-
-  <!-- 웹 공유 -->
-  <section id="pageShare" class="hide">
-    <div class="bar"><div class="h">웹 공유 <span id="scnt"></span></div></div>
-    <div id="shares" class="shares"></div>
-    <div id="sempty" class="empty hide">아직 올린 것 없음 · 프로젝트 화면 [내보내기] → 웹 주소로 올리기</div>
+    <div id="empty" class="empty hide">아직 없음 · 위 카드를 눌러 시작</div>
   </section>
 
   <!-- 함께 처리 (JACK 1126 · 옆 PC 와 3D 매핑 점구름을 나눠 처리 · cluster.js) -->
@@ -55,11 +61,11 @@
       <label>내 매핑</label>
       <div class="row crow"><button id="cUse" class="tog" title="내 3D 매핑 점구름을 옆 PC 도우미와 나눠 처리">옆 PC 와 나눠 처리</button><span id="cUseSub" class="sub"></span></div>
       <label>이 PC</label>
-      <div class="row crow"><button id="cHelp" class="tog" title="이 PC 가 옆 PC 의 매핑 일감을 받아 처리 (앱을 켜 두면 됨)">도우미 모드</button><span id="cMe" class="sub"></span></div>
+      <div class="row crow"><button id="cHelp" class="tog" title="이 PC 가 옆 PC 의 매핑 일감을 받아 나눠 처리 (앱을 켜 두면 됨)">병렬 처리 참여</button><span id="cMe" class="sub"></span></div>
     </div>
     <div class="bar"><div class="h">도우미 <span id="cCnt"></span></div></div>
     <div id="cList" class="shares"></div>
-    <div id="cEmpty" class="empty hide">켜 둔 도우미 없음 · 옆 PC 에서 앱 → [도우미 모드]</div>
+    <div id="cEmpty" class="empty hide">참여한 PC 없음 · 옆 PC 에서 앱 → [병렬 처리 참여]</div>
   </section>
 </main>
 
@@ -71,7 +77,7 @@
   <header class="etop">
     <button id="eBack" class="ib" title="처음 화면 (편집은 남음)"><svg viewBox="0 0 24 24"><path d="M15 5 8 12l7 7" fill="none" stroke="currentColor" stroke-width="2.2"/></svg></button>
     <b class="etitle">프로젝트 생성</b>
-    <input id="title" class="tname" type="text" placeholder="이름">
+    <input id="title" class="tname" type="text" placeholder="프로젝트 이름">
     <div class="sp"></div>
     <span id="est" class="est"></span>
     <button id="bBuild" class="pri">만들기</button>
@@ -160,8 +166,8 @@
   <header class="etop mtop">
     <button id="mBack" class="ib" title="처음 화면"><svg viewBox="0 0 24 24"><path d="M15 5 8 12l7 7" fill="none" stroke="currentColor" stroke-width="2.2"/></svg></button>
     <img class="mlogo" src="dohwa_logo.png" alt="DOHWA"><span class="mkind">3D 매핑</span>
-    <input id="mTitle" class="mname" type="text" placeholder="이름" spellcheck="false">
-    <button id="mRen" class="ib" title="이름 고치기"><svg viewBox="0 0 24 24"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75zM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75z"/></svg></button>
+    <input id="mTitle" class="mname" type="text" placeholder="프로젝트 이름" spellcheck="false">
+    <button id="mRen" class="ib" title="프로젝트 이름 고치기"><svg viewBox="0 0 24 24"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75zM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75z"/></svg></button>
     <div class="sp"></div>
     <button id="mHdrLog" class="ib" title="실행 기록"><svg viewBox="0 0 24 24"><path d="M13 3a9 9 0 0 0-9 9H1l3.9 3.9L9 12H6a7 7 0 1 1 2.05 4.95l-1.42 1.42A9 9 0 1 0 13 3zm-1 5v5l4.3 2.5.7-1.2-3.5-2.1V8z"/></svg></button>
     <button id="mHdrSet" class="ib" title="설정 칸 펼치기 · 접기"><svg viewBox="0 0 24 24"><path d="M19.14 12.94a7.3 7.3 0 0 0 0-1.88l2.03-1.58a.5.5 0 0 0 .12-.61l-1.92-3.32a.5.5 0 0 0-.59-.22l-2.39.96a7 7 0 0 0-1.62-.94l-.36-2.54a.5.5 0 0 0-.48-.41h-3.84a.5.5 0 0 0-.47.41l-.36 2.54a7 7 0 0 0-1.62.94l-2.39-.96a.5.5 0 0 0-.59.22L2.74 8.87a.5.5 0 0 0 .12.61l2.03 1.58a7.3 7.3 0 0 0 0 1.88l-2.03 1.58a.5.5 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54a7 7 0 0 0 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32a.5.5 0 0 0-.12-.61zM12 15.6a3.6 3.6 0 1 1 0-7.2 3.6 3.6 0 0 1 0 7.2z"/></svg></button>
@@ -299,11 +305,11 @@
       <section class="tsec tips" data-sec="tips" id="mTips">
         <div class="tsh"><i class="chev"></i>도움말</div>
         <div class="tsb tnote"><ol>
-          <li>만들기는 시간이 걸림 · 예상 시간은 아래</li>
-          <li>만드는 중에 사진 폴더의 사진을 옮기거나 지우지 말 것</li>
+          <li>3D 매핑은 컴퓨터 성능에 따라 많은 재구성 시간이 소요됨</li>
+          <li>매핑 중에 사진 폴더의 사진을 옮기거나 지우지 말 것</li>
           <li>재기 · 주석 = 결과 3D 화면 오른쪽 메뉴 «재기»</li>
-          <li>NVIDIA 그래픽카드가 있어야 빠름 (없으면 CPU 로 느리게)</li>
-          <li>결과물 더하기 · 잘라내기 = 결과 3D 화면 «결과물 다듬기» (앞 단계를 다시 씀)</li>
+          <li>처리 속도 NVIDIA GPU &gt; CPU</li>
+          <li>결과물 추가 · 자르기 = 끝난 뒤 결과 3D 화면 «결과물 다듬기»</li>
         </ol></div>
       </section>
     </div>
@@ -311,7 +317,7 @@
       <div id="mEst" class="tclock"></div>
       <div class="prog"><div id="mBar"></div></div>
       <div id="mStatus" class="sub"></div>
-      <div class="trun"><button id="mBuild" class="tgo">만들기 시작</button><button id="mStop" class="tbtn sm" disabled>멈추기</button></div>
+      <div class="trun"><button id="mBuild" class="tgo">3D 매핑</button><button id="mStop" class="tbtn sm" disabled>정지</button></div>
       <button id="mTplSave" class="tlinkb">이 설정 저장</button>
       <div id="mTplRow" class="trow2 hide"><input id="mTplName" type="text" placeholder="설정 이름"><button id="mTplOk" class="tbtn sm">저장</button><button id="mTplX" class="tbtn sm">취소</button></div>
     </div>

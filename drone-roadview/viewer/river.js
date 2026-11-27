@@ -6,6 +6,7 @@
  *   RVRiver.clean(q, len)            → 구간 기록 다듬기 (모자란 값 = 기본값) · 못 쓰면 null
  *   RVRiver.path([[x, y], …])         → 관 줄 { len, at(s) → {x, y, tx, ty} }  (s = 관 처음부터 평면 거리 m)
  *   RVRiver.plan(q, path, ground, od) → 계획 (ground(x, y) = 땅 표고 절대 · 없으면 NaN · od = 관 바깥지름 m)
+ *                                       ta · tb = 터파기가 빠지는 측점 구간 (추진 = 두 수직구 바깥 벽 사이 · 횡단 = a · b)
  *   RVRiver.qty(plan)                 → 수량 {jack, shaft, exc, hp, hpm, lag, liner, linerA, open, dam, bag, sheet}
  *   RVRiver.rows(plan)                → 이 구간 표 [[이름, 값 글], …]
  *   RVRiver.svg(plan, {W, col})       → 종단 그림 {w, h, body} (svg viewBox = 0 0 w h · innerHTML = body)
@@ -34,6 +35,10 @@
   const HP_EMB = 1.5;                // m, H-파일 근입 (수직구 바닥 아래)
   const BAG_W = 1.1, BAG_H = 0.8;    // m, 톤마대 한 개 자리 (가로 · 세로 간격) · 한 단 높이 · 쌓기 = 피라미드 (맨 위 1 줄 · 한 단 내려갈 때마다 1 줄 더)
   const SP_PITCH = 0.8;              // m, 시트파일 한 장 폭
+  // 수직구 바깥 벽 (가운데 → 관 방향 바깥 면): 사각 = 내공 l/2 + 토류판 0.08 + H-파일 중심 0.15 + 플랜지 0.15 + 2 cm · 원형 = 내경/2 + 라이너 0.05 + 2 cm
+  // 터파기는 여기서 끝남 (수직구 안으로 안 들어감 · 수직구 자리 = 수직구 굴착으로만 셈 · JACK 1127 «터파기와 겹쳐져서 이상»)
+  const SHAFT_OUT_RECT = 0.4, SHAFT_OUT_CIRC = 0.07;
+  const shaftOut = (sh) => (sh.shape === 'rect' ? sh.l / 2 + SHAFT_OUT_RECT : sh.w / 2 + SHAFT_OUT_CIRC);
 
   const isNum = (v) => v !== null && v !== undefined && v !== '' && typeof v !== 'boolean' && Number.isFinite(Number(v));
   const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
@@ -105,7 +110,7 @@
     if (!q) return null;
     od = od > 0 ? Number(od) : 0.3;
     const G = (x, y) => { const g = ground(x, y); return Number.isFinite(g) ? g : NaN; };
-    const out = { q: q, k: q.k, a: q.a, b: q.b, od: od, ok: true, msg: '' };
+    const out = { q: q, k: q.k, a: q.a, b: q.b, ta: q.a, tb: q.b, od: od, ok: true, msg: '' };   // ta · tb = 터파기 빠지는 구간 (추진 = 두 수직구 바깥 벽 사이)
     const n = Math.max(8, Math.ceil((q.b - q.a) / STEP));
     let gMin = Infinity, sMin = q.a;
     for (let i = 0; i <= n; i++) {
@@ -145,6 +150,8 @@
       else if (noGround) { out.ok = false; out.msg = '수직구 자리 땅 높이 없음'; }
       else if (bends(P.between(c0, c1))) { out.ok = false; out.msg = '추진 구간 안에서 관이 꺾임 · 곧은 구간으로'; }
       ext = Math.max(L.l, A.l) / 2 + 2;
+      const shA = q.rev ? A : L, shB = q.rev ? L : A;                    // 측점 a 쪽 · b 쪽 수직구 (관 끝에서 멈춤)
+      out.ta = Math.max(0, q.a - shaftOut(shA)); out.tb = Math.min(P.len, q.b + shaftOut(shB));
     } else {
       const sm = (q.a + q.b) / 2, damTop = gMin + q.h;
       const leg = (pts) => {                       // [[x, y]…] → 점마다 땅 · 길이

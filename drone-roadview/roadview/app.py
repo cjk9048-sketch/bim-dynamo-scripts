@@ -19,11 +19,25 @@ import time
 import uuid
 from pathlib import Path
 
-APP_NAME = '드론 로드뷰'
-APP_VERSION = '1.0.20'
+APP_NAME = 'DH 에어로사이트'   # JACK 1127 (드론 로드뷰 → 360 · 3D 매핑 · 노선검토 · 실행 파일 · 설정 폴더 이름은 그대로)
+APP_VERSION = '1.0.21'
 FROZEN = getattr(sys, 'frozen', False)
 BASE = Path(sys._MEIPASS) if FROZEN else Path(__file__).resolve().parent.parent      # noqa: SLF001
 HOME_HTML = (BASE / 'roadview' / 'app_home' / 'index.html') if not FROZEN else (BASE / 'app_home' / 'index.html')
+TUT_USER = Path(os.environ.get('LOCALAPPDATA', str(Path.home()))) / 'DH.Roadview' / 'tutorial'   # 튜토리얼을 열 때 복사해 두는 곳
+
+
+def _tut_dir():
+    """튜토리얼 원본 폴더 (설치본 = exe 옆 tutorial · 개발 = drone-roadview/tutorial · 저장소엔 안 올림)."""
+    cands = [Path(sys.executable).parent / 'tutorial', BASE / 'tutorial'] if FROZEN else [BASE / 'tutorial']
+    return next((c for c in cands if c.is_dir()), None)
+
+
+def _tut_meta(d):
+    try:
+        return json.loads((Path(d) / 'tutorial.json').read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return {}
 CFG_DIR = Path(os.environ.get('APPDATA', str(Path.home()))) / 'DH.Roadview'
 PROJ_LIST = CFG_DIR / 'projects.json'
 CLUSTER_CFG = CFG_DIR / 'cluster.json'     # 함께 처리 (공유 폴더 · 내 매핑에 쓰기 · 도우미 모드)
@@ -293,6 +307,7 @@ class Api:
             s = (Path(folder) / 'data' / 'project.js').read_text(encoding='utf-8')
             P = json.loads(s.split('=', 1)[1].strip().rstrip(';'))
             info['title'] = P.get('title') or info['title']
+            info.setdefault('kind', '360')
             shots = P.get('shots', [])
             info['shots'] = len(shots)
             info['videos'] = len(P.get('videos', []))
@@ -325,8 +340,63 @@ class Api:
             t = x.get('thumb')
             x['thumb_url'] = Path(t).as_uri() if t and os.path.exists(t) else ''
             x['cut_urls'] = [Path(c).as_uri() for c in x.get('cuts', []) if os.path.exists(c)]
+            if x.get('kind') not in ('mapping', '360'):       # 옛 기록 = 폴더를 보고 (3D 매핑 = data/mapping.js)
+                x['kind'] = 'mapping' if (Path(x['path']) / 'data' / 'mapping.js').exists() else '360'
+            x['tutorial'] = os.path.normcase(str(Path(x['path']).parent)) == os.path.normcase(str(TUT_USER))
             out.append(x)
         return out
+
+    # ------------------------------------------------------------ 튜토리얼 (JACK 1127 «매핑된 결과는 튜토리얼로 프로그램에 이미 담겨있으면 · 3d · 360 둘 다»)
+    # 설치본 = 프로그램 폴더 tutorial\<이름>\ (보기 자료만 · tutorial.json = 제목 · 설명 · 판) · 열 때 사용자 폴더로 복사 (설치 폴더는 쓰기 안 됨 · 고친 것은 남음)
+    def tutorials(self):
+        out = []
+        d0 = _tut_dir()
+        if not d0:
+            return out
+        for d in sorted(d0.iterdir()):
+            if not d.is_dir() or not (d / 'index.html').exists():
+                continue
+            meta = _tut_meta(d)
+            kind = 'mapping' if (d / 'data' / 'mapping.js').exists() else '360'
+            th = d / meta.get('thumb', '')
+            out.append({'key': d.name, 'kind': kind, 'title': meta.get('title') or d.name, 'desc': meta.get('desc', ''),
+                        'thumb_url': th.as_uri() if meta.get('thumb') and th.is_file() else ''})
+        out.sort(key=lambda x: x['kind'] != 'mapping')     # 3D 매핑 먼저 (처음 화면 카드 차례와 같게)
+        return out
+
+    def open_tutorial(self, key):
+        d0 = _tut_dir()
+        names = {d.name for d in d0.iterdir() if d.is_dir()} if d0 else set()
+        if not key or key not in names:                  # 이름만 받음 (경로 넘기기 막음)
+            return {'ok': False, 'msg': '튜토리얼 없음'}
+        def put(k):                                      # 원본 → 사용자 폴더 (판이 바뀌면 새로)
+            src, dst = d0 / k, TUT_USER / k
+            ver = str(_tut_meta(src).get('ver', ''))
+            mark = dst / '.tutorial_ver'
+            if not dst.exists() or not mark.exists() or mark.read_text(encoding='utf-8') != ver:
+                if dst.exists():
+                    shutil.rmtree(dst, ignore_errors=True)
+                shutil.copytree(src, dst)
+                mark.write_text(ver, encoding='utf-8')
+            return dst
+        try:
+            dst = put(key)
+            pair = _tut_meta(d0 / key).get('pair')
+            if pair in names:                            # 같은 구간 3D ↔ 360 짝: 같이 복사 · AI 확인을 같이 저장 · 3D 화면 «사진» = 360 튜토리얼 사진
+                pd = put(pair)
+                try:
+                    from . import ai_budae
+                    ai_budae.link(str(dst), str(pd))
+                    for a, b in ((dst, pd), (pd, dst)):
+                        dd = ai_budae.load(str(a))
+                        if dd and (a / 'data' / 'mapping.js').exists() and dd.get('src360') != str(b):
+                            dd['src360'] = str(b)
+                            ai_budae.save(str(a), dd)
+                except Exception:                        # noqa: BLE001 — 짝이 안 돼도 튜토리얼은 열림
+                    pass
+        except OSError as ex:
+            return {'ok': False, 'msg': '튜토리얼 복사 못 함 · %s' % str(ex)[:80]}
+        return self.open_project(str(dst))
 
     def list_shares(self):
         """NAS 에 올린 로드뷰 (share.py 기록)."""
@@ -1234,6 +1304,17 @@ class Api:
         args = ['run', proj]
         if o.get('project360'):
             args += ['--p360', str(o['project360'])]
+        zone = o.get('zone')                            # 임시점용 영역 (도면 좌표 다각형들) → 그 둘레만 인식 (JACK 1127)
+        if isinstance(zone, list) and zone:
+            try:
+                zp = os.path.join(proj, 'work', 'ai', 'zone.json')
+                os.makedirs(os.path.dirname(zp), exist_ok=True)
+                polys = [[[float(q[0]), float(q[1])] for q in p] for p in zone if isinstance(p, list) and len(p) >= 3]
+                with open(zp, 'w', encoding='utf-8') as fp:
+                    json.dump({'polys': polys}, fp)
+                args += ['--zone', zp]
+            except (OSError, TypeError, ValueError, IndexError) as ex:
+                return {'ok': False, 'msg': '임시점용 영역 못 씀 · %s' % str(ex)[:80]}
         cmd, cwd = _cli('ai', args)
         j = Job('ai', cmd, cwd, out=proj)
         self._jobs[j.id] = j
@@ -1306,6 +1387,109 @@ class Api:
         except (OSError, ValueError) as ex:
             return {'ok': False, 'msg': str(ex)[:160]}
         return {'ok': True, 'path': path}
+
+    # ---------------------------------------------------------------- 3D 보기 간단 부지정지 (JACK 1127 · 다각형 SHP · 저장 = data/grade.js)
+    def grade_shp(self):
+        """부지 다각형 SHP 고르기 → {ok, polys: [{name, el?, pts: [[E, N], …]}], note} (좌표 = 프로젝트 좌표계)."""
+        import webview
+        r = self._window.create_file_dialog(webview.FileDialog.OPEN, file_types=('부지 다각형 SHP (*.shp;*.SHP)', '모든 파일 (*.*)'))
+        if not r:
+            return None
+        return self._grade_read(r[0] if isinstance(r, (list, tuple)) else r)
+
+    def _grade_read(self, path):
+        """다각형 SHP (5 · 15 · 25) → 바깥 고리마다 한 부지 (구멍 뺌) · .prj 가 다르면 프로젝트 좌표계로 · 매핑 범위 (+100 m) 밖은 뺌."""
+        import struct
+        from .shp import prj_crs, read_dbf, read_shp_lines
+        try:
+            with open(path, 'rb') as f:
+                head = f.read(100)
+            if len(head) < 100 or struct.unpack_from('>i', head, 0)[0] != 9994:
+                return {'ok': False, 'msg': 'SHP 파일이 아님'}
+            if struct.unpack_from('<i', head, 32)[0] not in (5, 15, 25):
+                return {'ok': False, 'msg': '다각형 SHP 아님'}
+            rings = read_shp_lines(path)
+            fields, recs = read_dbf(path)
+        except (OSError, ValueError, struct.error) as ex:
+            return {'ok': False, 'msg': 'SHP 못 읽음 · %s' % str(ex)[:120]}
+        M = {}
+        try:
+            if self._project:
+                M = json.loads((Path(self._project) / 'data' / 'mapping.js').read_text(encoding='utf-8').split('=', 1)[1].strip().rstrip(';'))
+        except (OSError, ValueError, IndexError):
+            M = {}
+        dst = M.get('crs') or 'EPSG:5186'
+        note = []
+        tr = None
+        src = prj_crs(path)
+        if src is not None:
+            try:
+                from pyproj import CRS, Transformer
+                if not src.equals(CRS.from_user_input(dst)):
+                    tr = Transformer.from_crs(src, CRS.from_user_input(dst), always_xy=True)
+                    note.append('좌표계 → %s' % dst)
+            except Exception:                           # noqa: BLE001
+                tr = None
+        else:
+            note.append('.prj 없음 → %s 로 봄' % dst)
+        names = [f[0] for f in fields]
+        pick = lambda words: next((n for n in names if any(w.lower() in n.lower() for w in words)), None)   # noqa: E731
+        f_name = pick(('이름', '명칭', '부지', 'NAME', 'NAM'))
+        f_el = next((n for n in names if '계획고' in n or n.upper() in ('EL', 'FH', 'FL', 'ELEV', 'ELEVATION')), None)
+        area = lambda q: 0.5 * sum(q[i - 1][0] * q[i][1] - q[i][0] * q[i - 1][1] for i in range(len(q)))   # noqa: E731
+        by_rec = {}
+        for idx, pts in rings:
+            q = [[float(p[0]), float(p[1])] for p in pts]
+            if len(q) > 3 and abs(q[0][0] - q[-1][0]) + abs(q[0][1] - q[-1][1]) < 1e-6:
+                q.pop()
+            if len(q) >= 3:
+                by_rec.setdefault(idx, []).append(q)
+        bb = M.get('bbox') or []
+        polys, out_n = [], 0
+        for idx, qs in sorted(by_rec.items()):
+            outer = [q for q in qs if area(q) < 0] or [max(qs, key=lambda q: abs(area(q)))]   # SHP 바깥 고리 = 시계 방향 (구멍 = 반시계 · 뺌)
+            rec = (recs[idx] if idx < len(recs) else None) or {}             # 지운 줄 = None
+            for k, q in enumerate(outer):
+                if tr is not None:
+                    q = [list(tr.transform(p[0], p[1])) for p in q]
+                if abs(area(q)) < 1:
+                    continue
+                if len(bb) == 4 and (max(p[0] for p in q) < bb[0] - 100 or min(p[0] for p in q) > bb[2] + 100
+                                     or max(p[1] for p in q) < bb[1] - 100 or min(p[1] for p in q) > bb[3] + 100):
+                    out_n += 1
+                    continue
+                d = {'pts': [[round(p[0], 3), round(p[1], 3)] for p in q]}
+                nm = str(rec.get(f_name) or '').strip() if f_name else ''
+                if nm:
+                    d['name'] = nm if len(outer) == 1 else '%s %d' % (nm, k + 1)
+                try:
+                    el = float(rec.get(f_el)) if f_el and rec.get(f_el) not in (None, '') else None
+                except (TypeError, ValueError):
+                    el = None
+                if el is not None and math.isfinite(el) and -1000 < el < 9000:
+                    d['el'] = el
+                polys.append(d)
+                if len(polys) >= 100:
+                    break
+            if len(polys) >= 100:
+                note.append('100곳까지만')
+                break
+        if out_n:
+            note.append('범위 밖 %d곳 뺌' % out_n)
+        return {'ok': True, 'polys': polys, 'note': ' · '.join(note)}
+
+    def save_grade(self, text):
+        """보기 화면의 부지정지 목록 (window.RV_GRADE = …;) → data/grade.js."""
+        if not self._project:
+            return {'ok': False, 'msg': '열린 프로젝트 없음'}
+        t = str(text)
+        if not t.lstrip().startswith('window.RV_GRADE'):
+            return {'ok': False, 'msg': '저장할 자료가 이상함'}
+        p = Path(self._project) / 'data' / 'grade.js'
+        tmp = p.with_suffix('.js.tmp')
+        tmp.write_text(t if t.endswith('\n') else t + '\n', encoding='utf-8')
+        os.replace(tmp, p)
+        return {'ok': True}
 
 
 def _selftest(api, w, out_path, project):

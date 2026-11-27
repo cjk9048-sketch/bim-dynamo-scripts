@@ -81,8 +81,8 @@ def run(w, api):
     # Terra 꼴 틀
     secs = jv('[...document.querySelectorAll("#mp [data-sec]")].map(e => e.dataset.sec)')
     ok('칸 차례 (도화 꼴)', secs == ['data', 'proc', 'at', 'ortho', 'mesh', 'gs', 'las', 'dtm', 'contour', 'dsm', 'tips'], secs)
-    ok('설정 머리 · 만들기 시작 · 설정 저장 · 아래 줄', J('document.querySelector(".tshead b").textContent') == '만들기 설정'
-       and J('document.getElementById("mBuild").textContent') == '만들기 시작' and J('document.getElementById("mTplSave").textContent') == '이 설정 저장'
+    ok('설정 머리 · [3D 매핑] · 설정 저장 · 아래 줄', J('document.querySelector(".tshead b").textContent') == '만들기 설정'
+       and J('document.getElementById("mBuild").textContent') == '3D 매핑' and J('document.getElementById("mTplSave").textContent') == '이 설정 저장'
        and J('__t.vis("#mDev") && __t.vis("#mLogBtn") && __t.vis("#mCrsBar")'), J('document.getElementById("mCrsBar").textContent'))
     ok('함께 처리 단추 (cluster.js 그대로)', J('__t.vis("#mClu")') and J('document.getElementById("mClu").textContent') in ('켜짐', '꺼짐'))
     # 장치 성능

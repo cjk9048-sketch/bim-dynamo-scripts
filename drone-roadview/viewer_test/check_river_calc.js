@@ -55,6 +55,23 @@ eq('토피 3 · 여유 0.8 → 바닥 = (7 − 3) − 0.7 − 0.8', pl.zb, 2.5, 
 eq('깊이 = 10 − 2.5', pl.shafts[1].depth, 7.5, 1e-9);
 eq('굴착 = (18 + 7.5) × 7.5', R.qty(pl).exc, 25.5 * 7.5, 1e-6);
 
+console.log('== 터파기 빠지는 구간 = 수직구 바깥 벽 사이 (JACK 1127 «터파기와 겹쳐져서 이상»)');
+pl = R.plan({ k: 'jack', a: 30, b: 70 }, P, ground, OD);
+eq('사각 시점 = 30 − (6/2 + 0.4)', pl.ta, 26.6, 1e-9);
+eq('사각 종점 = 70 + (3/2 + 0.4)', pl.tb, 71.9, 1e-9);
+pl = R.plan({ k: 'jack', a: 30, b: 70, rev: true }, P, ground, OD);
+eq('바꾸기 → 시점 쪽 = 도달 (3/2 + 0.4)', pl.ta, 28.1, 1e-9);
+eq('바꾸기 → 종점 쪽 = 발진 (6/2 + 0.4)', pl.tb, 73.4, 1e-9);
+pl = R.plan({ k: 'jack', a: 30, b: 70, shape: 'circ' }, P, ground, OD);
+eq('원형 시점 = 30 − (6/2 + 0.07)', pl.ta, 26.93, 1e-9);
+eq('원형 종점 = 70 + (4/2 + 0.07)', pl.tb, 72.07, 1e-9);
+pl = R.plan({ k: 'jack', a: 1, b: 99 }, P, ground, OD);
+eq('관 끝 넘으면 0 에서 멈춤', pl.ta, 0);
+eq('관 끝 넘으면 100 에서 멈춤', pl.tb, 100);
+pl = R.plan({ k: 'open', a: 40, b: 60 }, P, ground, OD);
+eq('횡단 = 구간 그대로 (a)', pl.ta, 40);
+eq('횡단 = 구간 그대로 (b)', pl.tb, 60);
+
 pl = R.plan({ k: 'jack', a: 30, b: 70, rev: true }, P, ground, OD);
 eq('바꾸기 → 발진 = 종점 (70)', pl.shafts[0].s, 70);
 eq('바꾸기 → 케이싱 시작 = 70 − 3', pl.c0, 67);

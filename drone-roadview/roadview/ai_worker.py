@@ -100,8 +100,13 @@ CLIP_CURB = {'concrete': ['a photo of a concrete curb along a road'], 'granite':
              'none': ['a photo of a flat road with no curb']}
 CURB_MAT = {'concrete': '콘크리트 연석', 'granite': '화강석 연석', 'none': '연석 안 보임'}
 CLIP_WALL = {'stone': ['a photo of a stone masonry retaining wall'], 'concrete': ['a photo of a concrete retaining wall'],
-             'block': ['a photo of a concrete block retaining wall'], 'slope': ['a photo of a grassy slope with no wall']}
-WALL_MAT = {'stone': '석축 (돌쌓기)', 'concrete': '콘크리트 옹벽', 'block': '블록 옹벽', 'slope': '벽 안 보임 (비탈)'}
+             'block': ['a photo of a concrete block retaining wall'], 'slope': ['a photo of a grassy slope with no wall'],
+             # 벽 아님 갈래 더함 (JACK 1127 «도랑에 흙더미인데 죄다 석축») — 흙더미 · 흙 둑 · 덤불
+             'soil': ['a photo of a dirt mound in a drainage ditch', 'a photo of an earth bank of a ditch'],
+             'bush': ['a photo of dry grass and bushes on a bank']}
+WALL_MAT = {'stone': '석축 (돌쌓기)', 'concrete': '콘크리트 옹벽', 'block': '블록 옹벽', 'slope': '벽 안 보임 (비탈)',
+            'soil': '벽 안 보임 (흙 둑 · 흙더미)', 'bush': '벽 안 보임 (풀 · 덤불)'}
+WALL_REAL = ('stone', 'concrete', 'block')
 
 
 # ---------------------------------------------------------------- 읽기
@@ -119,6 +124,37 @@ def read_ortho(project, cell):
     rgba = im.convert('RGBA')
     sm = np.asarray(rgba.resize((W, H), Image.BILINEAR))
     return sm[..., :3].copy(), sm[..., 3] > 127, x0, y1, c0, rgba
+
+
+ZONE_MARGIN = 3.0          # m, 임시점용 영역 둘레 여유 (화면에서 터파기 설정을 조금 넓혀도 보이게 · 결과는 이 안만)
+ZONE_CTX = 20.0            # m, 정사를 잘라 읽는 둘레 (타일 그림이 주변을 보고 판단하게)
+
+
+def zone_crop(path, rgb, valid, x0, y1, cell):
+    """임시점용 영역 (json · 도면 좌표 다각형들) → 정사를 영역 + 20 m 로 자름 · 영역 + 3 m 칸 → (rgb, valid, x0, y1, zone bool)."""
+    import cv2
+    import numpy as np
+    polys = [p for p in json.load(open(path, encoding='utf-8')).get('polys', []) if isinstance(p, list) and len(p) >= 3]
+    if not polys:
+        raise RuntimeError('임시점용 영역 없음 → 관로를 먼저 불러오기')
+    E = np.array([q[0] for p in polys for q in p], float); N = np.array([q[1] for p in polys for q in p], float)
+    H, W = valid.shape
+    c_lo = max(0, int(np.floor((E.min() - ZONE_CTX - x0) / cell))); c_hi = min(W, int(np.ceil((E.max() + ZONE_CTX - x0) / cell)))
+    r_lo = max(0, int(np.floor((y1 - N.max() - ZONE_CTX) / cell))); r_hi = min(H, int(np.ceil((y1 - N.min() + ZONE_CTX) / cell)))
+    if c_hi <= c_lo or r_hi <= r_lo:
+        raise RuntimeError('임시점용 영역이 정사영상 밖 → 관로 자리 확인')
+    rgb, valid = rgb[r_lo:r_hi, c_lo:c_hi].copy(), valid[r_lo:r_hi, c_lo:c_hi].copy()
+    x0, y1 = x0 + c_lo * cell, y1 - r_lo * cell
+    m = np.zeros(valid.shape, np.uint8)
+    for p in polys:
+        px = np.array([[(q[0] - x0) / cell, (y1 - q[1]) / cell] for q in p], np.float32)
+        cv2.fillPoly(m, [np.round(px).astype(np.int32)], 1)
+    zone = cv2.distanceTransform(1 - m, cv2.DIST_L2, 5) * cell <= ZONE_MARGIN
+    if not (zone & valid).any():
+        raise RuntimeError('임시점용 영역에 정사영상 없음 → 관로 자리 확인')
+    log('임시점용 영역 %d 조각 · %.0f m² (+ 여유 %.0f m = %.0f m²) · 정사 %d×%d 로 자름' % (
+        len(polys), float(m.sum()) * cell ** 2, ZONE_MARGIN, float(zone.sum()) * cell ** 2, valid.shape[1], valid.shape[0]))
+    return rgb, valid, x0, y1, zone
 
 
 def read_grid(path, x0, y1, cell, shape):
@@ -301,9 +337,10 @@ def _square(im):
 
 
 # ---------------------------------------------------------------- 2. 영역
-def segment_ortho(M, rgb, valid, cell, tile=800, overlap=200, dbg=None):
+def segment_ortho(M, rgb, valid, cell, tile=800, overlap=200, dbg=None, zone=None):
     """타일마다 상자 → 영역 → CLIP 확인 → (종류 칸, 신뢰도 칸) + 연석 · 석축 AI 칸.
-    겹치면 큰 영역 먼저 칠하고 작은 영역이 위에 덮음 (1126 시험: 타일 전체 «밭» 영역이 길가 마당 «콘크리트» 를 덮었음)."""
+    겹치면 큰 영역 먼저 칠하고 작은 영역이 위에 덮음 (1126 시험: 타일 전체 «밭» 영역이 길가 마당 «콘크리트» 를 덮었음).
+    zone (bool 칸 · 임시점용 + 여유) = 그 영역에 걸친 타일만 봄 · 보충 점도 그 안만 (타일 그림은 통째 = 둘레를 보고 판단 · JACK 1127)."""
     import numpy as np
     from PIL import Image
     H, W = valid.shape
@@ -323,7 +360,7 @@ def segment_ortho(M, rgb, valid, cell, tile=800, overlap=200, dbg=None):
     for ti, (r0, c0) in enumerate(tiles):
         say(10 + 30.0 * ti / len(tiles), '영역 찾기 · 타일 %d / %d' % (ti + 1, len(tiles)))
         r1, c1 = min(H, r0 + tile), min(W, c0 + tile)
-        if valid[r0:r1, c0:c1].mean() < 0.05:
+        if valid[r0:r1, c0:c1].mean() < 0.05 or (zone is not None and not zone[r0:r1, c0:c1].any()):
             continue
         sub = rgb[r0:r1, c0:c1].copy()
         sub[~valid[r0:r1, c0:c1]] = (124, 116, 104)
@@ -382,6 +419,8 @@ def segment_ortho(M, rgb, valid, cell, tile=800, overlap=200, dbg=None):
         say(40 + 15.0 * ti / len(tiles), '빈 곳 보충 · 타일 %d / %d' % (ti + 1, len(tiles)))
         r1, c1 = min(H, r0 + tile), min(W, c0 + tile)
         un = valid[r0:r1, c0:c1] & ~cov[r0:r1, c0:c1]
+        if zone is not None:
+            un &= zone[r0:r1, c0:c1]
         if un.mean() < 0.03:
             continue
         g = 50
@@ -749,6 +788,15 @@ def wall_lines(lab, dsm, wall_ai, valid, x0, y1, cell, origin, dtm=None, near=No
                 best[v] = (L, ids)
         if True not in best or False not in best:
             continue
+        # 곧음 (JACK 1127 «도랑 흙더미가 죄다 석축»): 석축 = 길고 곧은 벽 → 위 선 길이 2.5 m 이상 · 양 끝 거리 ≥ 선 길이 절반 (흙더미 둘레 고리 · U 자 뺌)
+        tl, bl = cont[best[True][1]].astype(float), cont[best[False][1]].astype(float)
+        if best[True][0] < 2.5 or math.hypot(*(tl[-1] - tl[0])) * cell < 0.5 * best[True][0]:
+            continue
+        # 경사: 위 선 → 아래 선 수평 거리 (가운데값 · 띠를 0.25 m 씩 넓힌 것 포함) ≤ 0.75 × 높이 + 0.7 — 석축 1:0.3 ~ 1:0.5 · 흙 비탈 (1:1 보다 눕힘) 은 뺌
+        ts_, bs_ = tl[::max(1, len(tl) // 200)], bl[::max(1, len(bl) // 200)]
+        run = float(np.median(np.sqrt(((ts_[:, None, :] - bs_[None, :, :]) ** 2).sum(-1)).min(1))) * cell
+        if run > 0.75 * relief + 0.7:
+            continue
         if dtm is not None:                               # 땅 높이(DTM)에서도 위 · 아래 차가 있어야 땅의 턱 (394장 시험: 비닐하우스 가장자리)
             pt_ = cont[best[True][1]] + [c0, a0]; pb_ = cont[best[False][1]] + [c0, a0]
             zt_ = np.nanmedian(dtm[pt_[:, 1], pt_[:, 0]]) if np.isfinite(dtm[pt_[:, 1], pt_[:, 0]]).any() else np.nan
@@ -756,7 +804,8 @@ def wall_lines(lab, dsm, wall_ai, valid, x0, y1, cell, origin, dtm=None, near=No
             if np.isfinite(zt_) and np.isfinite(zb_) and zt_ - zb_ < 0.4:
                 continue
         aiw = float(wall_ai[a0:b0, c0:d0][md.astype(bool)].astype(np.float32).max())
-        conf = min(1.0, 0.4 + 0.1 * min(3.0, relief) + 0.3 * aiw - 0.3 * badf)
+        # 높이 차만으로는 약한 후보 (1127: 근거 없는 DSM 후보 22 / 27 이 도랑 흙더미) → AI 상자 (정사) · 360 이 석축이라고 봐야 문턱 (0.3) 넘음 · 2 m 넘는 높은 벽만 높이로도 남음
+        conf = min(1.0, 0.22 + 0.05 * min(3.0, relief) + 0.5 * aiw - 0.3 * badf)
         pair = []
         for v, edge in ((True, 'top'), (False, 'bottom')):
             ids = best[v][1]
@@ -765,7 +814,7 @@ def wall_lines(lab, dsm, wall_ai, valid, x0, y1, cell, origin, dtm=None, near=No
             pts = _px_to_xyz(ap, Zs, gx0, gy1, cell)
             f = {'cls': 'wall', 'kind': 'line', 'pts': pts, 'height': round(float(relief), 2), 'conf': round(conf, 2),
                  'src': ['dsm'] + (['ortho'] if aiw > 0.2 else []),
-                 'attrs': {'state': '모름', 'material': '', 'photo': None, 'edge': edge, 'length': round(_len(pts), 1)},
+                 'attrs': {'state': '모름', 'material': '', 'photo': None, 'edge': edge, 'length': round(_len(pts), 1), 'pair': 'w%d' % j},
                  'status': 'ai', 'note': '석축 %s 선%s' % ('위' if edge == 'top' else '아래', ' (수량은 위 선으로)' if edge == 'bottom' else ''),
                  '_px': ap, '_pair': j}
             pair.append(f)
@@ -946,7 +995,12 @@ def evidence_360(M, P, feats, origin, dbg_dir=None):
             pw = _avg(M.classify(ims, CLIP_WALL))
             m = max(pw, key=pw.get)
             a['material'] = WALL_MAT[m]
-            f['conf'] = round(min(1.0, max(0.05, f['conf'] + 0.15 * (2 * pw[m] - 1))), 2) if m != 'slope' else                 round(max(0.05, min(f['conf'] - 0.15, 0.25 if pw[m] >= 0.5 else 1.0)), 2)   # 360 에 벽이 안 보이면 (흙 비탈 · 둑) 버림
+            pr = sum(pw[k] for k in WALL_REAL)               # 벽 (돌 · 콘크리트 · 블록) 쪽 합 · 나머지 = 비탈 · 흙 둑 · 덤불
+            if pr >= 0.5 and m in WALL_REAL:
+                f['conf'] = round(min(1.0, f['conf'] + 0.1 + 0.3 * (pr - 0.5)), 2)
+            else:                                         # 360 에 벽이 안 보임 → 버림 (문턱 아래)
+                f['conf'] = round(max(0.05, min(f['conf'] - 0.15, 0.25)), 2)
+                f['note'] = (f['note'] + ' · 360 은 %s' % WALL_MAT[m]).strip(' ·')
             a['p360'] = {k: round(v, 2) for k, v in pw.items()}
         a['photo'] = P.shots[views[0][0]]['id']
         if '360' not in f['src']:
@@ -1046,15 +1100,19 @@ def run(a):
     say(5, '정사 · 3D 면 읽기')
     t = time.time()
     rgb, valid, x0, y1, c0, _ = read_ortho(a.project, a.cell)
+    zm = None
+    if a.zone:                                            # 임시점용 영역만 (JACK 1127 «관로를 불러왔을 때 · 터파기 임시점용에 걸린 것만»)
+        rgb, valid, x0, y1, zm = zone_crop(a.zone, rgb, valid, x0, y1, a.cell)
     dsm, dsm_src = mesh_dsm(a.project, origin, x0, y1, a.cell, valid.shape)
     tm['정사 · DSM'] = time.time() - t
     log('정사 %d×%d (원래 %.1f cm → %.1f cm) · DSM = %s · 빈칸 %.1f%%' % (
         valid.shape[1], valid.shape[0], 100 * c0, 100 * a.cell, dsm_src, 100 * float(np.isnan(dsm)[valid].mean())))
     t = time.time()
     dl = [] if dbg else None
-    lab0, mx0, curb_ai, wall_ai, nmask, ntile = segment_ortho(M, rgb, valid, a.cell, dbg=dl)
+    lab0, mx0, curb_ai, wall_ai, nmask, ntile = segment_ortho(M, rgb, valid, a.cell, dbg=dl, zone=zm)
     tm['영역 찾기'] = time.time() - t
-    lab, mx = label_map(lab0, mx0, valid, a.cell)
+    vz = valid & zm if zm is not None else valid          # 결과 = 영역 (+ 여유) 안만
+    lab, mx = label_map(lab0, mx0, vz, a.cell)
     cover = {k: round(float((lab == j).sum()) * a.cell ** 2, 1) for j, k in enumerate(KEYS)}
     log('영역 %d개 (타일 %d) · 넓이 m² %s' % (nmask, ntile, cover))
     say(58, '영역 다각형 · 연석 · 석축')
@@ -1068,7 +1126,7 @@ def run(a):
         paved = np.isin(lab, [KEYS.index(k) for k in AREA]).astype(np.uint8)
         near = (cv2.distanceTransform(1 - paved, cv2.DIST_L2, 5) * a.cell <= NEAR_M) if paved.any() else None
         log('석축 거르기: DTM %s · 포장 둘레 %s' % ('있음 (%.2f m)' % dg[1] if dg else '없음', '%d m' % NEAR_M if near is not None else '없음 (포장 못 찾음 → 전부)'))
-        walls = wall_lines(lab, dsm, wall_ai, valid, x0, y1, a.cell, origin, dtm=dg[0] if dg else None, near=near)
+        walls = wall_lines(lab, dsm, wall_ai, vz, x0, y1, a.cell, origin, dtm=dg[0] if dg else None, near=near)
     else:                                                 # 높이 자료 없음 → 영역만
         log('높이 자료(3D 면 · 지면.tif) 없음 → 연석 · 석축 선은 못 찾음')
         curbs, walls = [], []
@@ -1131,6 +1189,7 @@ def main(argv=None):
     r.add_argument('--models', required=True)
     r.add_argument('--p360', default=None)
     r.add_argument('--debug', default=None)
+    r.add_argument('--zone', default=None, help='임시점용 영역 json {polys: [[[E, N], …], …]} · 없으면 정사 전체')
     a = ap.parse_args(argv)
     try:
         sys.stdout.reconfigure(encoding='utf-8', errors='replace')

@@ -110,7 +110,7 @@ def make_data(out):
     rect = lambda s0, s1, t0, t1: [(s0, t0), (s1, t0), (s1, t1), (s0, t1)]   # noqa: E731
     F = [
         ('c1', 'curb', 'line', [(10, 0.6), (30, 0.6)], 0.15, 0.9, ['ortho', 'dsm', '360'], 'ai', None, A),
-        ('c2', 'curb', 'line', [(10, 3.0), (30, 3.0)], 0.15, 0.4, ['ortho'], 'ai', None, A),
+        ('c2', 'curb', 'line', [(10, 0.9), (30, 0.9)], 0.15, 0.4, ['ortho'], 'ai', None, A),
         ('c3', 'curb', 'line', [(50, -0.6), (70, -0.6)], 0.15, 0.7, ['ortho', '360'], 'ai', None, A),
         ('w1', 'wall', 'line', [(40, -5), (40, 5)], 2.0, 0.55, ['dsm'], 'ai', None, A),
         ('sw1', 'sidewalk', 'area', rect(5, 25, 0.2, 4), None, 0.8, ['ortho', '360'], 'ai', None, A),
@@ -156,10 +156,13 @@ def page(ed, url):
     return ok
 
 
+OUTZ = {'co1'}                   # 임시점용 영역 밖 (관 A 옆 3 ~ 6 m · 반폭 약 1.03 m) = 안 보임 (JACK 1127 «임시점용 영역에 걸렸을 경우만»)
+
+
 def want_order(ai):
-    """손으로 정한 차례: 미확인 → (360 을 같이 봤으면) 360 다름 → 신뢰도 낮은 것 → 파일 차례 · 맞음 · 아님 은 뒤."""
+    """손으로 정한 차례: 미확인 → (360 을 같이 봤으면) 360 다름 → 신뢰도 낮은 것 → 파일 차례 · 맞음 · 아님 은 뒤 · 영역 밖은 뺌."""
     rk = {'ai': 0, 'ok': 1, 'no': 2}
-    fs = list(enumerate(ai['features']))
+    fs = [p for p in enumerate(ai['features']) if p[1]['id'] not in OUTZ]
     key = lambda p: (rk[p[1]['status']], 0 if '360' not in p[1]['src'] else 1, p[1]['conf'], p[0])   # noqa: E731
     return [f['id'] for _, f in sorted(fs, key=key)]
 
@@ -200,9 +203,12 @@ def main():
         print('== k 카테고리 · 종류 단추')
         cat_open(ed, inp, 'hd_ai')
         kd = J(ed, "[...document.querySelectorAll('#aiKinds .tg')].map((b) => [b.dataset.k, Number(b.querySelector('.n').textContent), b.classList.contains('on')])")
-        wantn = {'curb': 3, 'wall': 1, 'sidewalk': 2, 'asphalt': 1, 'concrete': 1, 'unpaved': 1}
+        wantn = {'curb': 3, 'wall': 1, 'sidewalk': 2, 'asphalt': 1, 'concrete': 0, 'unpaved': 1}   # 콘크리트 co1 = 영역 밖
         report('k 종류 단추 여섯 · 개수 (아님 뺌) · 모두 켜짐', len(kd) == 6 and all(n == wantn[k] and on for k, n, on in kd), str(kd))
-        report('k 머리줄 «미확인 8»', J(ed, "document.getElementById('aiTag').textContent") == '미확인 8')
+        report('k 머리줄 «미확인 7» (영역 밖 co1 뺌)', J(ed, "document.getElementById('aiTag').textContent") == '미확인 7')
+        zs = J(ed, '__map3d.ai.zone()')
+        report('z 임시점용 영역 안 = 9 · 밖 (co1) 숨김 · 목록에도 없음', sorted(zs) == sorted(f['id'] for f in ai['features'] if f['id'] not in OUTZ) and
+               J(ed, "!__ai.row('co1')"), str(sorted(zs)))
         report('k 프로그램 = [AI 인식] · [360 고르기] 보임 · «AI 인식 안 함» 숨김',
                J(ed, "!document.getElementById('aiRun').hidden && !document.getElementById('ai360').hidden && document.getElementById('aiNone').hidden"))
         ed.js('__t.look(0, 20, 34, 89.5, 0)')
@@ -218,10 +224,10 @@ def main():
         dif = np.abs(b1 - b2).sum(2)
         report('k 연석 끄기 → 연석 자리 화소 바뀜', (dif > 40).mean() > 0.3, '%.0f %%' % (100 * (dif > 40).mean()))
         od = J(ed, '__ai.order()')
-        report('k 연석 끄기 → 목록에서 빠짐', not any(i.startswith('c') and i[1:].isdigit() for i in od) and len(od) == 7, str(od))
+        report('k 연석 끄기 → 목록에서 빠짐', not any(i.startswith('c') and i[1:].isdigit() for i in od) and len(od) == 6, str(od))
         ui_click(ed, inp, 'aiK_curb')
         ed.frames(2)
-        report('k 다시 켜기 → 10 줄', len(J(ed, '__ai.order()')) == 10 and J(ed, '__map3d.ai.st().vis.curb') is True)
+        report('k 다시 켜기 → 9 줄', len(J(ed, '__ai.order()')) == 9 and J(ed, '__map3d.ai.st().vis.curb') is True)
         errs(ed, '종류')
 
         print('== o 목록 차례 · 고르기')
@@ -252,7 +258,7 @@ def main():
         wv = lambda D: D / 2 + tr['margin'] + tr['n'] * max(0, cover + D + tr['bed'] - tr['tp'])   # noqa: E731
         wa, wb, ext = wv(0.5), wv(0.3), max(tr['margin'], 0.05)
         print('    반폭 A %.3f · B %.3f · 끝 여유 %.2f' % (wa, wb, ext))
-        hand_a = {'bd_curb': 20 + (LA + ext - 50), 'bd_wall': 2 * wa, 'bd_wallA': 2 * wa * 2.0, 'bd_sidewalk': 20 * (wa - 0.2) + 10 * (wa - 0.5),
+        hand_a = {'bd_curb': 20 + 20 + (LA + ext - 50), 'bd_wall': 2 * wa, 'bd_wallA': 2 * wa * 2.0, 'bd_sidewalk': 20 * (wa - 0.2) + 10 * (wa - 0.5),
                   'bd_asphalt': 10 * wa + 5 * 2 * wa, 'bd_concrete': 0, 'bd_unpaved': 0}
         hand_b = {k: 0 for k in hand_a}
         hand_b['bd_unpaved'] = 10 * 2 * wb
@@ -267,7 +273,7 @@ def main():
         report('q 이 관 (A) = 손셈', all(near(got_a[k], hand_a[k], 1e-3) for k in hand_a), str({k: round(v, 3) for k, v in got_a.items()}))
         report('q 전체 = A + B 손셈', all(near(got_t[k], hand_a[k] + hand_b[k], 1e-3) for k in hand_a), str({k: round(v, 3) for k, v in got_t.items()}))
         note = J(ed, "document.getElementById('qNote').textContent")
-        report('q «확인 안 함 6개 포함» 표시', '확인 안 함 6개 포함' in note, note)
+        report('q «확인 안 함 7개 포함» 표시', '확인 안 함 7개 포함' in note, note)
         report('q 수량 전체 갈래에도 부대공 줄 (AI 결과 있을 때)', (ui_click(ed, inp, 'tgQty') or True) and all(k in J(ed, '__ai.rows()') for k in hand_a))
         ui_click(ed, inp, 'aiQty')
         ed.frames(2)
@@ -311,10 +317,10 @@ def main():
         got2 = {k: J(ed, "__ai.q('%s')" % k) for k in hand_a}
         want2 = dict(hand_a)
         want2['bd_asphalt'] += 2 * 2 * wa          # as2 아님 → 미확인 = 다시 셈
-        want2['bd_curb'] += 2 * wa                 # w1 석축 → 연석
+        want2['bd_curb'] += 2 * wa - 20            # w1 석축 → 연석 · c2 아님 → 뺌
         want2['bd_wall'] = 0
         want2['bd_wallA'] = 0
-        report('m 수량 바로 바뀜 (as2 들어감 · w1 연석으로)', all(near(got2[k], want2[k], 1e-3) for k in want2), str({k: round(v, 3) for k, v in got2.items()}))
+        report('m 수량 바로 바뀜 (as2 들어감 · w1 연석으로 · c2 빠짐)', all(near(got2[k], want2[k], 1e-3) for k in want2), str({k: round(v, 3) for k, v in got2.items()}))
         report('m 석축 → 연석 = 높이 면 그물 없음', J(ed, '__map3d.ai.tris()') == 0)
         shot(ed, SD, '05_확인뒤_수량.png')
         cat_open(ed, inp, 'hd_ai', fresh=True)
@@ -324,11 +330,28 @@ def main():
                 f['status'], f['cls'] = fs[f['id']]['status'], fs[f['id']]['cls']
                 f['src'] = fs[f['id']]['src']
         report('m 다시 펴면 새 차례 (맞음 · 아님 아래로)', J(ed, '__ai.order()') == want_order(ai2), str(J(ed, '__ai.order()')))
-        report('m 머리줄 «미확인 6»', J(ed, "document.getElementById('aiTag').textContent") == '미확인 6')
+        report('m 머리줄 «미확인 5»', J(ed, "document.getElementById('aiTag').textContent") == '미확인 5')
         inp.key('Escape', 'Escape', 27)
         ed.frames(2)
         report('m Esc → 고른 것 풀기', J(ed, '__map3d.ai.st().sel') is None)
         errs(ed, '확인')
+
+        print('== z 관로 없음 = AI 후보 안 보임 (JACK 1127 «관로는 불러왔을 경우만»)')
+        ed.js('window.__pz = window.RV_PIPES; window.RV_PIPES = { layers: window.__pz.layers, origin: window.__pz.origin, lines: [] }; __map3d.rebuild()')
+        ed.frames(3)
+        cat_open(ed, inp, 'hd_ai', fresh=True)
+        report('z 관로 없음 → 목록 · 종류 · 머리줄 비고 «관로 없음 …» 안내',
+               J(ed, "!document.querySelector('#aiList .aiRow') && document.getElementById('aiKinds').hidden && document.getElementById('aiTag').textContent === '' && "
+                     "!document.getElementById('aiNone').hidden && document.getElementById('aiNone').textContent.indexOf('관로 없음') === 0"),
+               J(ed, "document.getElementById('aiNone').textContent"))
+        ui_click(ed, inp, 'aiRun')
+        ed.frames(2)
+        report('z 관로 없음 → [AI 인식] = 안내만 (ai_run 안 부름)', '관로 없음' in J(ed, "document.getElementById('toast').textContent") and
+               not any(c['name'] == 'ai_status' for c in J(ed, '__host.calls')[-3:]), J(ed, "document.getElementById('toast').textContent"))
+        ed.js('window.RV_PIPES = window.__pz; __map3d.rebuild()')
+        ed.frames(3)
+        report('z 관로 다시 → 9 줄', len(J(ed, '__ai.order()')) == 9 or (cat_open(ed, inp, 'hd_ai', fresh=True) or True) and len(J(ed, '__ai.order()')) == 9)
+        errs(ed, '관로 없음')
 
         print('== r AI 인식 (결과 없는 프로젝트)')
         page(ed, base + 'index_ai_run_host.html')
@@ -353,7 +376,11 @@ def main():
         cl = [c['name'] for c in J(ed, '__host.calls') if c['name'].startswith('ai_')]
         run = [c['arg'] for c in J(ed, '__host.calls') if c['name'] == 'ai_run']
         report('r ai_status → ai_setup (일 끝) → ai_run', ok and cl[:3] == ['ai_status', 'ai_setup', 'ai_run'], str(cl))
-        report('r ai_run 에 360 넘김', bool(run) and run[0].get('project360') == 'D:\\시험\\360_구간' and 'project' in run[0], str(run and run[0]))
+        report('r ai_run 에 360 넘김', bool(run) and run[0].get('project360') == 'D:\\시험\\360_구간' and 'project' in run[0], str(run and {k: run[0][k] for k in ('project', 'project360')}))
+        zp = (run and run[0].get('zone')) or []
+        org_ = J(ed, '__map3d.T()')
+        okz = bool(zp) and all(len(p) == 4 for p in zp) and all(abs(q[0]) > 1000 and abs(q[1]) > 1000 for p in zp for q in p)
+        report('r ai_run 에 임시점용 영역 (도면 좌표 네모들) 넘김', okz, '%d 조각 · 첫 점 %s' % (len(zp), zp[0][0] if zp else None))
         ed.wait_js("document.getElementById('aiLine').textContent.indexOf('50%') >= 0", 5)
         report('r 진행 막대 (이 카테고리 · AI 인식 중)', J(ed, "!document.getElementById('aiProg').hidden && document.getElementById('aiProg').dataset.st === 'run' && document.getElementById('aiRun').disabled"))
         shot(ed, SD, '07_AI인식_진행.png')
@@ -361,7 +388,7 @@ def main():
         ed.js('__host.arDone = true')
         ok = ed.wait_js('__map3d.ai.st().n === 10', 10)
         ed.frames(4)
-        report('r 끝 → 결과 다시 읽음 · 목록 10 · 막대 끝', ok and len(J(ed, '__ai.order()')) == 10 and J(ed, "document.getElementById('aiProg').dataset.st") == 'done' and
+        report('r 끝 → 결과 다시 읽음 · 목록 9 (영역 안) · 막대 끝', ok and len(J(ed, '__ai.order()')) == 9 and J(ed, "document.getElementById('aiProg').dataset.st") == 'done' and
                J(ed, "document.querySelector('#aiRun span').textContent") == 'AI 다시 인식')
         ed.js('__t.look(0, 30, 75, 55, 20)')
         shot(ed, SD, '08_AI인식_끝.png')
@@ -378,12 +405,12 @@ def main():
         page(ed, base + 'index_ai.html')
         report('b 프로그램 없음', J(ed, '!window.pywebview'))
         cat_open(ed, inp, 'hd_ai')
-        report('b [AI 인식] · [360 고르기] 숨김 · 목록 10 · 맞음/아님 단추 없음',
-               J(ed, "document.getElementById('aiRun').hidden && document.getElementById('ai360').hidden && document.querySelectorAll('#aiList .aiRow').length === 10 && "
+        report('b [AI 인식] · [360 고르기] 숨김 · 목록 9 · 맞음/아님 단추 없음',
+               J(ed, "document.getElementById('aiRun').hidden && document.getElementById('ai360').hidden && document.querySelectorAll('#aiList .aiRow').length === 9 && "
                      "!document.querySelector('#aiList .aiL2') && !document.querySelector('#aiList .aiOk')"))
         ui_click(ed, inp, 'aiK_unpaved')
         ed.frames(2)
-        report('b 종류 단추 (비포장 끔 → 9 줄)', len(J(ed, '__ai.order()')) == 9)
+        report('b 종류 단추 (비포장 끔 → 8 줄)', len(J(ed, '__ai.order()')) == 8)
         ui_click(ed, inp, 'aiK_unpaved')
         ed.js('__t.look(0, 30, 60, 60, 0)')
         ed.frames(3)

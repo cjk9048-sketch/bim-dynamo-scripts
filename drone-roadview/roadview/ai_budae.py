@@ -231,7 +231,49 @@ def load(project):
     return None
 
 
+# 3D 매핑 ↔ 360 짝 (같은 구간) — 프로그램 설정 폴더에만 (프로젝트 폴더엔 경로를 안 씀 = 웹 공유에 안 나감)
+LINKS = Path(os.environ.get('APPDATA', str(Path.home()))) / 'DH.Roadview' / 'ai_links.json'
+
+
+def _links():
+    try:
+        m = json.load(open(LINKS, encoding='utf-8'))
+        return m if isinstance(m, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def link(a, b):
+    """두 프로젝트를 짝으로 (어느 쪽에서 확인 · 저장해도 다른 쪽에 같이 씀)."""
+    m = _links()
+    a, b = os.path.abspath(a), os.path.abspath(b)
+    m[os.path.normcase(a)] = b
+    m[os.path.normcase(b)] = a
+    LINKS.parent.mkdir(parents=True, exist_ok=True)
+    tmp = str(LINKS) + '.tmp'
+    with open(tmp, 'w', encoding='utf-8') as fp:
+        json.dump(m, fp, ensure_ascii=False, indent=1)
+    os.replace(tmp, LINKS)
+
+
+def twin(project):
+    return _links().get(os.path.normcase(os.path.abspath(project)))
+
+
 def save(project, data):
+    """저장 + 짝 프로젝트도 (같은 인식 결과 = made 가 같을 때만 · 다른 인식이면 덮지 않음)."""
+    _write(project, data)
+    tw = twin(project)
+    if tw and os.path.isdir(os.path.join(tw, 'data')):
+        old = load(tw)
+        if old is None or old.get('made') == data.get('made'):
+            try:
+                _write(tw, data)
+            except OSError:
+                pass
+
+
+def _write(project, data):
     """ai_budae.json + ai_budae.js (같은 내용) — 화면 확인 결과 · 인식 결과 모두. 반쯤 쓴 파일이 남지 않게 바꿔치기."""
     d = os.path.join(project, 'data')
     os.makedirs(d, exist_ok=True)
@@ -297,8 +339,39 @@ def merge(old, new):
     return new, len(keep)
 
 
-def run(project, p360=None, cell=0.05, dets=None):
-    """인식 실행 (환경이 없으면 먼저 준비) → 결과 경로. 진행은 «@진행» 줄."""
+def _is360(d):
+    return os.path.isfile(os.path.join(d, 'data', 'project.js')) and not os.path.isfile(os.path.join(d, 'data', 'mapping.js'))
+
+
+def find_360(p360, origin, reach=600.0):
+    """고른 폴더가 360 프로젝트면 그대로 · 아니면 안쪽 (두 단계) 360 프로젝트 중 매핑 원점 둘레 (600 m) 사진이 가장 많은 것.
+    1127 실측: 원본 OSV 폴더 (AVATA360) 를 골라 360 근거 0 건 → 도랑 흙더미가 석축으로 남음."""
+    import glob
+    if not p360 or not os.path.isdir(p360):
+        return None, '360 폴더 없음'
+    if _is360(p360):
+        return os.path.abspath(p360), ''
+    best, bn = None, 0
+    for pj in glob.glob(os.path.join(glob.escape(p360), '*', 'data', 'project.js')) + glob.glob(os.path.join(glob.escape(p360), '*', '*', 'data', 'project.js')):
+        d = os.path.dirname(os.path.dirname(pj))
+        if not _is360(d):
+            continue
+        try:
+            pr = _read_js(pj, 'RV_PROJECT') or {}
+            E0, N0 = float(pr['origin']['E']), float(pr['origin']['N'])
+            n = sum(1 for s in pr.get('shots', []) if math.hypot(s['e'] + E0 - origin[0], s['n'] + N0 - origin[1]) <= reach)
+        except (OSError, KeyError, TypeError, ValueError):
+            continue
+        if n > bn:
+            best, bn = os.path.abspath(d), n
+    if not best:
+        return None, '고른 폴더에 360 프로젝트 없음 (로드뷰 폴더를 고르기)'
+    return best, '고른 폴더 안 360 프로젝트 «%s» 씀 (매핑 둘레 사진 %d장)' % (os.path.basename(best), bn)
+
+
+def run(project, p360=None, cell=0.05, dets=None, zone=None):
+    """인식 실행 (환경이 없으면 먼저 준비) → 결과 경로. 진행은 «@진행» 줄.
+    zone = 임시점용 영역 json 경로 (화면이 만든 다각형 · 그 영역 + 여유만 인식 · JACK 1127) · 없으면 정사 전체."""
     project = os.path.abspath(project)
     origin, crs = project_origin(project)
     if not status()['ready']:                   # 엔진 없음 → 먼저 설치 (막대 0~40 %) · 인식은 40~100 %
@@ -308,9 +381,10 @@ def run(project, p360=None, cell=0.05, dets=None):
     ortho = os.path.join(project, '결과물', '정사영상.tif')
     if not os.path.exists(ortho):
         raise RuntimeError('정사영상 없음 → 매핑 결과물에서 «정사영상» 을 골라 다시 만들기')
-    if p360 and not os.path.isdir(p360):
-        print('  360 프로젝트 폴더 없음 → 360 근거 없이', flush=True)
-        p360 = None
+    if p360:
+        p360, why = find_360(p360, origin)
+        if why:
+            print('  %s%s' % (why, '' if p360 else ' → 360 근거 없이'), flush=True)
     work = os.path.join(project, 'work', 'ai')
     os.makedirs(work, exist_ok=True)
     raw = os.path.join(work, 'result_raw.json')
@@ -322,6 +396,10 @@ def run(project, p360=None, cell=0.05, dets=None):
         args += ['--p360', os.path.abspath(p360)]
     if dets:
         args += ['--debug', dets]
+    if zone:
+        if not os.path.exists(zone):
+            raise RuntimeError('임시점용 영역 파일 없음')
+        args += ['--zone', os.path.abspath(zone)]
     env = _env()
     env['HF_HUB_OFFLINE'] = '1'                 # 모델은 준비 때 받음 (작업 중엔 인터넷 안 씀)
     t0 = time.time()
@@ -339,7 +417,14 @@ def run(project, p360=None, cell=0.05, dets=None):
     new.update(version=1, made=time.strftime('%Y-%m-%d %H:%M'), crs=crs, origin=origin,
                src360=os.path.basename(os.path.normpath(p360)) if p360 else None, classes=CLASSES)
     data, kept = merge(load(project), new)
-    save(project, data)
+    _write(project, data)
+    if p360:                                    # 같은 구간 360 에도 (360 화면 «AI 부대공» · 웹 공유에도 보임) · 짝 기억 (확인 저장을 같이)
+        try:
+            _write(p360, dict(data, src3d=os.path.basename(os.path.normpath(project))))
+            link(project, p360)
+            print('  360 «%s» 에도 넣음' % os.path.basename(os.path.normpath(p360)), flush=True)
+        except OSError as ex:
+            print('  360 에 못 넣음 (%s)' % ex, flush=True)
     n = {}
     for f in data['features']:
         n[f['cls']] = n.get(f['cls'], 0) + 1
@@ -359,6 +444,7 @@ def main(argv=None):
     r.add_argument('--p360', default=None)
     r.add_argument('--cell', type=float, default=0.05)
     r.add_argument('--debug', default=None, help='확인 그림 폴더')
+    r.add_argument('--zone', default=None, help='임시점용 영역 json (화면이 만듦) · 없으면 정사 전체')
     sub.add_parser('status')
     a = ap.parse_args(argv)
     try:                                        # 진행 줄 (한글 · 받기 막대 글자) 이 cp949 창에서 끊기지 않게
@@ -369,7 +455,7 @@ def main(argv=None):
         if a.cmd == 'setup':
             print(json.dumps(ensure_env(a.force), ensure_ascii=False), flush=True)
         elif a.cmd == 'run':
-            print(run(a.project, a.p360, a.cell, a.debug), flush=True)
+            print(run(a.project, a.p360, a.cell, a.debug, a.zone), flush=True)
         elif a.cmd == 'status':
             print(json.dumps(status(), ensure_ascii=False), flush=True)
         else:

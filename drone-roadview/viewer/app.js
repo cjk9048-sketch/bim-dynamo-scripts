@@ -27,6 +27,11 @@
   const AREA_TMP = '#ff9a1f';      // 터파기 영역: 임시점용 (주황 점선 · 옅은 채움)
   // 가시설 (흙막이): RV_PIPES.lines[i].shore = [{ a, b = 측점 m (그 줄 첫 점부터 평면 길이), t = 종류 }] · 그 구간은 터파기 기울기 0 (곧은 벽)
   const SHORE_T = ['panel', 'hpile', 'sheet'];
+  // 가시설 세부 (JACK 1127 «세부조종은 그 목록에서 · 폭이나 기타 등등» · 목록 줄 누르면 그 줄 안에 펼침):
+  //   w = 흙막이 안쪽 폭 m (없으면 관경 + 여유 × 2 = 터파기 바닥 폭) · emb = 근입 m (터파기 바닥 아래 · 토류벽 · 시트파일) · pitch = H-파일 간격 m (토류벽)
+  const SHORE_EMB = { panel: 0, hpile: 1.5, sheet: 3.0 }, SHORE_PITCH = 1.8, SHORE_LIM = { w: [0.3, 12], emb: [0, 20], pitch: [0.6, 4] };
+  const shoreOpt = (q) => { const o = {}; for (const k of ['w', 'emb', 'pitch']) if (q && isNum(q[k]) && +q[k] >= SHORE_LIM[k][0] && +q[k] <= SHORE_LIM[k][1]) o[k] = Math.round(+q[k] * 100) / 100; return o; };
+  const shEmb = (q) => (q && isNum(q.emb) ? +q.emb : SHORE_EMB[q && q.t] || 0);
   const SHORE_NAME = { panel: '조립식 간이흙막이', hpile: '토류벽 흙막이', sheet: '시트파일' };
   const SHORE_COL = { panel: '#f2b33d', hpile: '#b07a45', sheet: '#9aa6b4' }; // 지도 · 목록
   // 관종 (JACK 1124): RV_PIPES.lines[i].mat = ci (주철관) · steel (강관) · plastic (비금속관) · 없으면 이름 + 관로 층 글자로 짐작 (프로그램 SHP 와 같은 규칙)
@@ -234,7 +239,7 @@
     const len = cum[cum.length - 1];
     // 가시설 구간 (줄 안으로 자름 · i = RV_PIPES 의 shore 번호)
     const shore = (Array.isArray(l.shore) ? l.shore : []).map((q, i) => (q && isNum(q.a) && isNum(q.b) && SHORE_T.indexOf(q.t) >= 0
-      ? { a: clamp(Math.min(+q.a, +q.b), 0, len), b: clamp(Math.max(+q.a, +q.b), 0, len), t: q.t, i: i } : null))
+      ? Object.assign({ a: clamp(Math.min(+q.a, +q.b), 0, len), b: clamp(Math.max(+q.a, +q.b), 0, len), t: q.t, i: i }, shoreOpt(q)) : null))
       .filter((q) => q && q.b - q.a > 1e-3).sort((x, y) => x.a - y.a);
     // 하천 구간 (river.js clean = 줄 안으로 · 모자란 값 = 기본값 · i = RV_PIPES 의 river 번호)
     const river = RV ? (Array.isArray(l.river) ? l.river : []).map((q, i) => { const c = RV.clean(q, len); return c ? Object.assign(c, { i: i }) : null; })
@@ -266,6 +271,10 @@
   }
   function rvAny() { return !!RV && lines.some((L) => L.river && L.river.length); }
   function rvPipeZ(L) { return rvPlans(L).filter((p) => Number.isFinite(p.zc)).map((p) => ({ a: p.a, b: p.b, zc: p.zc })); }
+  // 측점 s 의 하천 계획 (터파기 · 수량): 추진 = 두 수직구 바깥 벽 사이 (river.js ta · tb · 수직구 안에 터파기 없음 · JACK 1127) · 횡단 = 구간 a ~ b
+  function rvTa(p) { return Number.isFinite(p.ta) ? p.ta : p.a; }
+  function rvTb(p) { return Number.isFinite(p.tb) ? p.tb : p.b; }
+  function rvAt(rp, s) { return rp.find((p) => p.k === 'jack' && s > rvTa(p) && s < rvTb(p)) || rp.find((p) => s > p.a && s < p.b) || null; }
   // 관 줄 → [x, y, z, 측점] (하천 구간 안 = 그 깊이로 수평 · 구간 끝 = 같은 자리에서 수직으로 꺾임 · 3D 화면과 같음)
   function rvPath(L, secs, zf) {
     const P = L.pts, C = L.cum, cnt = P.length / 3, out = [];
@@ -571,7 +580,7 @@
   const SHOW_KEY = 'rv_ui:show';
   const SHOW = (function () { const v = lsGet(SHOW_KEY) || {}; return { lbl: v.lbl !== false, tmp: v.tmp !== false, perm: v.perm !== false }; })();
   // 가시설 만들기: arm = 고른 종류 (누르는 중) · a = 찍은 시작점 { src, s, e, n, g } · sig = 목록 지문
-  const SH = { arm: null, a: null, sig: '' };
+  const SH = { arm: null, a: null, sig: '', open: '' };   // open = 세부를 펼친 줄 (관 번호:기록 번호)
   // 사진점 지우기 (지도 · 프로그램만): on · a = 처음 고른 사진 (shots 번호) · b = 둘째 · ids = 지울 사진 id · busy
   const TM = { on: false, a: -1, b: -1, ids: [], busy: false };
 
@@ -611,6 +620,7 @@
     cfUI(); // 간섭 카테고리 (간섭 자리 바뀐 때만 다시)
     shUI(); // 가시설 목록 (바뀐 때만 다시)
     rvUI(); // 하천 목록 · 설정 칸 · 종단 창 (바뀐 때만 다시)
+    aiUI(); // AI 부대공 목록 (바뀐 때만 다시)
     if (ED.on) $('edChip').dataset.sel = String(ED.sel); // 고른 관 (확인 · 시험)
   }
 
@@ -1236,9 +1246,9 @@
   const LAY_CSS = { pav: '#45484f', fill: '#7d5634', prot: '#f0dfae', bed: '#d8b56a' }; // 다 지은 층 (단면 그림 · 360 단면 덧그림)
   // 단면 값 (관 길 방향에 수직): 관경 D · 지표 g · 관 중심 zc · 더 넓힘 ex · 기울기 n (없으면 TR.n · 가시설 0)
   // → { zs, zb, wb, zt, wv, zm, ws, n }
-  function sectAt(D, g, zc, ex, n) {
+  function sectAt(D, g, zc, ex, n, wo) {   // wo = 가시설 안 반폭 (목록에서 폭을 고친 구간 · 없으면 관경/2 + 여유)
     n = n === undefined ? TR.n : n;
-    const zs = Math.min(zc - D / 2, g - 0.01), zb = zs - TR.bed, wb = D / 2 + TR.margin + (ex || 0), zt = g - TR.tp;
+    const zs = Math.min(zc - D / 2, g - 0.01), zb = zs - TR.bed, wb = wo > 0 ? wo : D / 2 + TR.margin + (ex || 0), zt = g - TR.tp;
     const wv = wb + n * Math.max(0, zt - zb);
     return zt > zs ? { zs, zb, wb, zt, wv, zm: zt, ws: wb + n * (zs - zb), n } : { zs, zb, wb, zt, wv, zm: zs, ws: wv, n };
   }
@@ -1400,11 +1410,11 @@
       }
       // 하천 구간 (river.js · 3D 화면과 같음): 추진 = 터파기 없음 (띠를 끊음 · 끊긴 끝 = 끝벽) · 횡단 (개착) = 관 깊이를 하천 깊이로 (구간 끝 = 단차)
       let V, pc;
-      const pieces = [], fresh = () => { V = { PE: [], PN: [], LX: [], LY: [], TX: [], TY: [], G: [], ZC: [], ST: [] }; pc = []; };
+      const pieces = [], fresh = () => { V = { PE: [], PN: [], LX: [], LY: [], TX: [], TY: [], G: [], ZC: [], ST: [], SW: [], SR: [] }; pc = []; };
       fresh();
-      const put = (q, dx, dy, st) => {
+      const put = (q, dx, dy, st, sw, sr) => { // sw = 가시설 안 반폭 (폭 고친 구간 · 아니면 0) · sr = 관 번호 (점 v−1 → v 칸 · AI 부대공 «이 관»)
         V.PE.push(q[0]); V.PN.push(q[1]); V.LX.push(q[2]); V.LY.push(q[3]); V.G.push(q[4]); V.ZC.push(q[5]);
-        V.TX.push(dx); V.TY.push(dy); V.ST.push(st);
+        V.TX.push(dx); V.TY.push(dy); V.ST.push(st); V.SW.push(sw || 0); V.SR.push(sr);
       };
       const cut = (tail) => { if (V.PE.length >= 2) pieces.push({ V: V, pc: pc, head: !pieces.length && !cut.any, tail: tail }); cut.any = true; fresh(); };
       cut.any = false;
@@ -1416,7 +1426,7 @@
         const ts = [0, 1]; // 이 마디 안 가시설 · 하천 구간 끝 (그 관 측점 → 마디 매개)
         if ((L.shore.length || rp.length) && Math.abs(sb - sa) > 1e-9) {
           const lo = Math.min(sa, sb), hi = Math.max(sa, sb);
-          for (const q of L.shore.concat(rp)) for (const s of [q.a, q.b]) if (s > lo + 1e-6 && s < hi - 1e-6) ts.push((s - sa) / (sb - sa));
+          for (const q of L.shore.concat(rp)) for (const s of [q.a, q.b, q.ta, q.tb]) if (Number.isFinite(s) && s > lo + 1e-6 && s < hi - 1e-6) ts.push((s - sa) / (sb - sa));
           ts.sort((x, y) => x - y);
         }
         // 마디 매개 t 자리 [e, n, lx, ly, g, zc] (끝 = 원래 꼭짓점 · 사이 = 마디 수직)
@@ -1427,16 +1437,16 @@
         for (let i = 0; i + 1 < ts.length; i++) {
           const t0 = ts[i], t1 = ts[i + 1];
           if (t1 - t0 < 1e-9) continue;
-          const sm = sa + (sb - sa) * (t0 + t1) / 2, rq = rp.length ? rp.find((p) => sm > p.a && sm < p.b) : null;
-          if (rq && rq.k === 'jack') { cut(false); last = null; continue; } // 추진 = 땅을 안 팜
+          const sm = sa + (sb - sa) * (t0 + t1) / 2, rq = rp.length ? rvAt(rp, sm) : null;
+          if (rq && rq.k === 'jack') { cut(false); last = null; continue; } // 추진 · 수직구 자리 (바깥 벽까지) = 땅을 안 팜 (JACK 1127)
           const rz = rq && Number.isFinite(rq.zc) ? rq.zc : null;
-          const q = L.shore.length ? shoreAt(L, sm) : null, st = q ? q.t : '', key = st + (rz == null ? '' : '|' + rz);
-          if (!last) put(withZ(at(t0), rz), dx, dy, st);
-          else if (last.key !== key) put(withZ(last.raw, rz), dx, dy, st); // 기울기 · 깊이 바뀜 → 같은 자리 하나 더
+          const q = L.shore.length ? shoreAt(L, sm) : null, st = q ? q.t : '', sw = q && q.w ? q.w / 2 : 0, key = st + '|' + sw + (rz == null ? '' : '|' + rz);
+          if (!last) put(withZ(at(t0), rz), dx, dy, st, sw, L.src);
+          else if (last.key !== key) put(withZ(last.raw, rz), dx, dy, st, sw, L.src); // 기울기 · 깊이 · 폭 바뀜 → 같은 자리 하나 더
           const raw = at(t1), e = withZ(raw, rz);
-          put(e, dx, dy, st);
+          put(e, dx, dy, st, sw, L.src);
           last = { raw: raw, key: key };
-          if (q) pc.push({ va: V.PE.length - 2, ls0: sa + (sb - sa) * t0, ls1: sa + (sb - sa) * t1, a: q.a, b: q.b, t: st });
+          if (q) pc.push({ va: V.PE.length - 2, ls0: sa + (sb - sa) * t0, ls1: sa + (sb - sa) * t1, a: q.a, b: q.b, t: st, emb: shEmb(q), pitch: q.pitch || SHORE_PITCH });
         }
       }
       cut(true);
@@ -1445,13 +1455,13 @@
         const W = pz.V, n = W.PE.length, F = () => new Float64Array(n);
         const E = Float64Array.from(W.PE), N = Float64Array.from(W.PN), ZM = F(), ZS = F(), WV = F(), WS = F(), WB = F();
         for (let v = 0; v < n; v++) {
-          const x = sectAt(D, W.G[v], W.ZC[v], 0, W.ST[v] ? 0 : undefined);
+          const x = sectAt(D, W.G[v], W.ZC[v], 0, W.ST[v] ? 0 : undefined, W.SW[v]);
           ZS[v] = x.zs; WV[v] = x.wv; ZM[v] = x.zm; WS[v] = x.ws; WB[v] = x.wb;
         }
         if (pz.head && c.ext[0]) { E[0] -= W.TX[0] * ext; N[0] -= W.TY[0] * ext; }
         if (pz.tail && c.ext[1]) { E[n - 1] += W.TX[n - 1] * ext; N[n - 1] += W.TY[n - 1] * ext; }
         const pad = ext + 10;
-        out.push({ c, m: n, D: D, E, N, LX: W.LX, LY: W.LY, TX: W.TX, TY: W.TY, G: W.G, ST: W.ST, wall: [pz.head ? c.wall[0] : true, pz.tail ? c.wall[1] : true],
+        out.push({ c, m: n, D: D, E, N, LX: W.LX, LY: W.LY, TX: W.TX, TY: W.TY, G: W.G, ST: W.ST, SR: W.SR, wall: [pz.head ? c.wall[0] : true, pz.tail ? c.wall[1] : true],
           ZM, ZS, WV, WS, WB, pc: pz.pc, e0: c.e0 - pad, e1: c.e1 + pad, n0: c.n0 - pad, n1: c.n1 + pad });
       }
     }
@@ -1612,11 +1622,11 @@
         }
       } else if (p.t === 'hpile') {
         // 토류벽 (굴착선에 박은 H형강 300 · 앞 날개만 안으로 3 cm): 1.8 m 쯤 · 지표 + 0.2 · 사이 토류판 (앞 날개 뒤 · 지표까지) · 버팀 (말뚝 둘에 하나)
-        const nP = Math.max(1, Math.round((p.b - p.a) / 1.8)), sp = (p.b - p.a) / nP, fw = du(0.15);
+        const nP = Math.max(1, Math.round((p.b - p.a) / (p.pitch || SHORE_PITCH))), sp = (p.b - p.a) / nP, fw = du(0.15);
         for (let k = 0; k <= nP; k++) {
           const s = p.a + k * sp;
           if (!inS(s, k === nP)) continue;
-          const f = fOf(s), z0 = zsf(f), z1 = gf(f) + 0.2;
+          const f = fOf(s), z0 = zsf(f) - (p.emb || 0), z1 = gf(f) + 0.2;   // 근입 = 바닥 아래
           for (const sg of [1, -1]) {
             wbox(f - fw, f + fw, sg, 0.01, 0.03, z0, z1, SH_HP, 10);
             wbox(f - fw, f + fw, sg, -0.27, -0.25, z0, z1, SH_HP, 10);
@@ -1643,7 +1653,7 @@
             const u0 = p.a + k * PT + prof[i][0], u1 = p.a + k * PT + prof[i + 1][0], c0 = Math.max(u0, lo, p.a), c1 = Math.min(u1, hi, p.b);
             if (c1 - c0 < 1e-4) continue;
             const dAt = (u) => prof[i][1] + (prof[i + 1][1] - prof[i][1]) * (u - u0) / (u1 - u0), e0 = dAt(c0), e1 = dAt(c1);
-            const f0 = fOf(c0), f1 = fOf(c1), z0 = zsf, z1 = (f) => gf(f) + 0.3;
+            const f0 = fOf(c0), f1 = fOf(c1), z0 = (f) => zsf(f) - (p.emb || 0), z1 = (f) => gf(f) + 0.3;   // 근입 = 바닥 아래
             for (const sg of [1, -1]) {
               box([[f0, sg, e0 - T2, z0(f0)], [f1, sg, e1 - T2, z0(f1)], [f1, sg, e1 + T2, z0(f1)], [f0, sg, e0 + T2, z0(f0)],
                 [f0, sg, e0 - T2, z1(f0)], [f1, sg, e1 - T2, z1(f1)], [f1, sg, e1 + T2, z1(f1)], [f0, sg, e0 + T2, z1(f0)]], SH_SHEET, 11);
@@ -2117,6 +2127,42 @@
         ov.strokeStyle = 'rgba(8, 10, 14, 0.6)'; ov.lineWidth = 4.2; ov.stroke();
         ov.strokeStyle = RV_COL[kk]; ov.lineWidth = 2.2; ov.stroke();
       }
+    }
+
+    // ---- AI 부대공 (임시점용에 걸린 후보만 · 땅 위 그림 · 3D 화면과 같은 색 · 아님 = 점선 · 맞음 = 진하게 · 고른 것 = 흰 테두리)
+    if (AI.feats.length && S.pipes) {
+      const A4 = [0, 0, 0], B4 = [0, 0, 0], SG4 = [0, 0, 0, 0];
+      const rank = (F) => (F.id === AI.sel ? 3 : { no: 0, ai: 1, ok: 2 }[aiSt(F)]);
+      const list = AI.feats.filter((F) => aiShow(F) && Math.max(F.bb[0] - Cx, 0, Cx - F.bb[2], F.bb[1] - Cy, Cy - F.bb[3]) < FADE0).sort((a, b) => rank(a) - rank(b));
+      ov.lineCap = 'round'; ov.lineJoin = 'round';
+      for (const F of list) {
+        const st = aiSt(F), col = AI_COL[F.f.cls], sel = F.id === AI.sel;
+        ov.setLineDash(st === 'no' ? [6, 5] : []);
+        if (F.line) {
+          const seg = [];
+          for (let i = 0; i + 1 < F.P.length; i++) {
+            const p = F.P[i], q = F.P[i + 1];
+            vc(p[0], p[1], p[2], A4); vc(q[0], q[1], q[2], B4);
+            if (projSeg(A4, B4, SG4)) seg.push(SG4[0], SG4[1], SG4[2], SG4[3]);
+          }
+          if (!seg.length) continue;
+          path(seg);
+          if (sel) { ov.globalAlpha = 1; ov.strokeStyle = '#fff'; ov.lineWidth = 8; ov.stroke(); }
+          ov.globalAlpha = st === 'no' ? 0.55 : 0.95;
+          ov.strokeStyle = 'rgba(8, 10, 14, 0.6)'; ov.lineWidth = st === 'ok' ? 6 : 4.6; ov.stroke();
+          ov.strokeStyle = col; ov.lineWidth = st === 'ok' ? 3.6 : 2.6; ov.stroke();
+        } else {
+          const Q = [];
+          for (const p of F.P) { vc(p[0], p[1], p[2], A4); Q.push(A4[0], A4[1], A4[2]); }
+          const pg = projPoly(Q);
+          if (!pg) continue;
+          ov.beginPath(); tracePg(pg);
+          if (st !== 'no') { ov.globalAlpha = st === 'ok' ? 0.34 : 0.2; ov.fillStyle = col; ov.fill(); }
+          if (sel) { ov.globalAlpha = 1; ov.strokeStyle = '#fff'; ov.lineWidth = 5; ov.stroke(); }
+          ov.globalAlpha = st === 'no' ? 0.55 : 0.95; ov.strokeStyle = col; ov.lineWidth = st === 'ok' ? 2.6 : 1.8; ov.stroke();
+        }
+      }
+      ov.setLineDash([]); ov.globalAlpha = 1; ov.lineCap = 'butt';
     }
 
     // ---- 지장물 (고치지 않음 · 관로 밑에): 노면 = 땅 위 띠 (폭 max(관경, 0.15 m) · 어두운 점선 테두리) ·
@@ -3078,7 +3124,7 @@
   function secDraw() {
     const L = secCtx && lines.find((q) => q.src === secCtx.src), C = L && secCtx.k < L.pts.length / 3 - 1 ? secAt(L, secCtx.k, secCtx.t) : null;
     secDlg.dataset.at = C ? String(round(C.s, 2)) : ''; // 그 자리 단면 (측점 · 확인 · 시험)
-    if (C) { secPic(secSvg, { D: C.D, col: L.color, zc: C.zc - C.g, el: C.g, W: 380, shore: C.shore }); return; }
+    if (C) { secPic(secSvg, { D: C.D, col: L.color, zc: C.zc - C.g, el: C.g, W: 380, shore: C.shore, sw: C.sw }); return; }
     const mm = Number(secDia.value) || 300, D = mm / 1000;
     const L0 = lines.find((q) => Math.round(q.dia * 1000) === mm);
     secPic(secSvg, { D: D, col: L0 ? L0.color : '#00e5ff', zc: -S.cover - D / 2, el: null, W: 380 });
@@ -3087,7 +3133,7 @@
   // o = { D, col, zc (지표 기준 관 중심, 아래 −), el (지반고 EL → 오른쪽에 EL 글 · 없으면 null), W (그림 폭), shore (가시설 종류 · 곧은 벽 · 없으면 null) }
   function secPic(svg, o) {
     const D = o.D, mm = Math.round(D * 1000), t = TR, zc = o.zc, top = zc + D / 2, c = -top, W = o.W || 380, el = o.el, sh = o.shore || null;
-    const x = sectAt(D, 0, zc, 0, sh ? 0 : undefined), pb = zc - D / 2, zb = x.zb, wb = x.wb, zt = x.zt, wv = x.wv, zm = Math.max(zt, zb);
+    const x = sectAt(D, 0, zc, 0, sh ? 0 : undefined, o.sw || 0), pb = zc - D / 2, zb = x.zb, wb = x.wb, zt = x.zt, wv = x.wv, zm = Math.max(zt, zb);
     const X = Object.assign({}, x, { g: 0, zc: zc, D: D, zp: protTop(x, zc, D) });
     const wAt = (z) => (z >= zt ? wv : wb + x.n * Math.max(0, z - zb));
     const pl = 72, pr = el != null ? 104 : 80, ptop = 40, pbot = 38, half = wv + 0.45, zl = zb - 0.25;
@@ -3185,11 +3231,11 @@
     for (let j = 0; j < k; j++) s += Math.hypot(P[j * 3 + 3] - P[j * 3], P[j * 3 + 4] - P[j * 3 + 1]);
     const dx = P[k * 3 + 3] - P[k * 3], dy = P[k * 3 + 4] - P[k * 3 + 1], dl = Math.hypot(dx, dy) || 1;
     s += t * dl;
-    const sq = shoreAt(L, s), x = sectAt(D, g, zc, 0, sq ? 0 : undefined), zp = protTop(x, zc, D), top = zc + D / 2; // 가시설 구간 = 곧은 벽
+    const sq = shoreAt(L, s), x = sectAt(D, g, zc, 0, sq ? 0 : undefined, sq && sq.w ? sq.w / 2 : 0), zp = protTop(x, zc, D), top = zc + D / 2; // 가시설 구간 = 곧은 벽
     return {
       L: L, k: k, t: t, s: s, e: P[k * 3] + dx * t, n: P[k * 3 + 1] + dy * t, nx: -dy / dl, ny: dx / dl, color: L.color,
       g: g, zc: zc, top: top, bot: zc - D / 2, cover: g - top, D: D, depth: g - x.zb, wtop: 2 * x.wv, wbot: 2 * x.wb,
-      bed: TR.bed, prot: Math.max(0, zp - top), X: Object.assign({}, x, { g: g, zc: zc, D: D, zp: zp }), shore: sq ? sq.t : null,
+      bed: TR.bed, prot: Math.max(0, zp - top), X: Object.assign({}, x, { g: g, zc: zc, D: D, zp: zp }), shore: sq ? sq.t : null, sw: sq && sq.w ? sq.w / 2 : 0,
     };
   }
   const f2 = (v) => v.toFixed(2);
@@ -3729,6 +3775,21 @@
         mx.setLineDash([]);
         mx.lineCap = 'round';
       }
+    }
+    // AI 부대공 (임시점용에 걸린 후보만 · 360 사진 위 그림과 같은 색)
+    if (AI.feats.length && S.pipes && SIM) {
+      const atA = (e, n) => { const m = en2m(e, n); return [m[0] * k + ox, m[1] * k + oy]; };
+      for (const F of AI.feats) {
+        if (!aiShow(F)) continue;
+        const st = aiSt(F), col = AI_COL[F.f.cls];
+        mx.beginPath();
+        F.P.forEach((p, i) => { const q = atA(p[0], p[1]); if (i) mx.lineTo(q[0], q[1]); else mx.moveTo(q[0], q[1]); });
+        if (!F.line) mx.closePath();
+        mx.setLineDash(st === 'no' ? [4, 3] : []);
+        if (!F.line && st !== 'no') { mx.globalAlpha = st === 'ok' ? 0.42 : 0.26; mx.fillStyle = col; mx.fill(); }
+        mx.globalAlpha = 1; mx.strokeStyle = F.id === AI.sel ? '#fff' : col; mx.lineWidth = F.line ? 3 : 1.5; mx.stroke();
+      }
+      mx.setLineDash([]); mx.globalAlpha = 1;
     }
     // 가시설 구간 (관 밑 굵은 띠 · 종류 색)
     if (S.pipes) {
@@ -4515,7 +4576,7 @@
     if (Array.isArray(l.shore)) {
       let len = 0;
       for (let i = 1; i < pts.length; i++) len += Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]);
-      l.shore = l.shore.filter((q) => q && isNum(q.a) && isNum(q.b)).map((q) => ({ a: round(clamp(Math.min(+q.a, +q.b), 0, len), 2), b: round(clamp(Math.max(+q.a, +q.b), 0, len), 2), t: q.t }))
+      l.shore = l.shore.filter((q) => q && isNum(q.a) && isNum(q.b)).map((q) => Object.assign({ a: round(clamp(Math.min(+q.a, +q.b), 0, len), 2), b: round(clamp(Math.max(+q.a, +q.b), 0, len), 2), t: q.t }, shoreOpt(q)))
         .filter((q) => q.b - q.a >= 0.01);
       if (!l.shore.length) delete l.shore;
     }
@@ -5028,8 +5089,8 @@
       const out = [];
       for (const q of list) { // 새 구간과 겹친 곳은 자름
         if (!(q.b > a && q.a < b)) { out.push(q); continue; }
-        if (q.a < a) out.push({ a: q.a, b: a, t: q.t });
-        if (q.b > b) out.push({ a: b, b: q.b, t: q.t });
+        if (q.a < a) out.push(Object.assign({}, q, { b: a }));         // 잘린 앞뒤 = 세부 값 그대로
+        if (q.b > b) out.push(Object.assign({}, q, { a: b }));
       }
       return out.concat([{ a: a, b: b, t: t }]);
     });
@@ -5042,7 +5103,7 @@
     const before = JSON.stringify(raw);
     const next = f((Array.isArray(raw.shore) ? raw.shore : []).map((q) => Object.assign({}, q)))
       .filter((q) => q && isNum(q.a) && isNum(q.b) && SHORE_T.indexOf(q.t) >= 0)
-      .map((q) => ({ a: round(Math.min(+q.a, +q.b), 2), b: round(Math.max(+q.a, +q.b), 2), t: q.t }))
+      .map((q) => Object.assign({ a: round(Math.min(+q.a, +q.b), 2), b: round(Math.max(+q.a, +q.b), 2), t: q.t }, shoreOpt(q)))
       .filter((q) => q.b - q.a >= 0.01).sort((p, q) => p.a - q.a);
     if (next.length) raw.shore = next; else delete raw.shore;
     const after = JSON.stringify(raw);
@@ -5052,6 +5113,52 @@
     shUI();
   }
   // 줄 L 의 측점 s 자리 (나눈 점 마디 k · t)
+  // 가시설 줄 세부 (줄 안에 펼침 · 값 바꾸면 (입력 끝 = Enter · 칸 나감) 바로 터파기 · 3D · 수량 · 단면)
+  function shDetail(L, q) {
+    const box = document.createElement('div');
+    box.className = 'shSet';
+    box.style.cssText = 'flex:1 0 100%;display:flex;flex-wrap:wrap;gap:2px 12px;padding:6px 2px 2px';
+    const wd = Math.round((L.dia + 2 * TR.margin) * 100) / 100;
+    const num = (key, name, val, step, lo, hi, title, ph) => {
+      const lab = document.createElement('label');
+      lab.className = 'numbox'; lab.title = title;
+      lab.appendChild(document.createTextNode(name));
+      const inp = document.createElement('input');
+      inp.type = 'number'; inp.step = String(step); inp.min = String(lo); inp.max = String(hi); inp.inputMode = 'decimal';
+      inp.id = 'sh_' + key; inp.style.width = '68px';
+      inp.value = val == null ? '' : String(Math.round(val * 100) / 100);
+      if (ph != null) inp.placeholder = String(ph);
+      inp.addEventListener('change', () => shSetVal(L, q, key, inp.value));
+      lab.append(inp, document.createTextNode('m'));
+      return lab;
+    };
+    box.append(num('a', '시점', q.a, 0.1, 0, L.len, '관 처음부터 측점'), num('b', '종점', q.b, 0.1, 0, L.len, '관 처음부터 측점'),
+      num('w', '폭', q.w != null ? q.w : null, 0.05, SHORE_LIM.w[0], SHORE_LIM.w[1], '흙막이 안쪽 폭 · 비우면 관경 + 여유 × 2 (' + wd.toFixed(2) + ' m)', wd.toFixed(2)));
+    if (q.t !== 'panel') box.appendChild(num('emb', '근입', shEmb(q), 0.1, SHORE_LIM.emb[0], SHORE_LIM.emb[1], '터파기 바닥 아래 땅속 길이'));
+    if (q.t === 'hpile') box.appendChild(num('pitch', 'H-파일 간격', q.pitch || SHORE_PITCH, 0.1, SHORE_LIM.pitch[0], SHORE_LIM.pitch[1], 'H-파일 가운데 사이'));
+    return box;
+  }
+  // 세부 값 → 기록 (폭 · 근입 · 간격 = 비우면 기본 · 시점 · 종점 = 관 안 · 이웃 가시설과 안 겹치게 · 0.1 m 이상)
+  function shSetVal(L, q, key, v) {
+    shEdit(L.src, (list) => {
+      const r = list[q.i];
+      if (!r) return list;
+      if (key === 'w' || key === 'emb' || key === 'pitch') {
+        if (v === '' || !isNum(v)) delete r[key]; else r[key] = clamp(+v, SHORE_LIM[key][0], SHORE_LIM[key][1]);
+      } else if (isNum(v)) {
+        const others = list.filter((o, j) => j !== q.i && o && isNum(o.a) && isNum(o.b));
+        if (key === 'a') {
+          const lo = Math.max(0, ...others.filter((o) => Math.max(o.a, o.b) <= q.a + 1e-6).map((o) => Math.max(o.a, o.b)));
+          r.a = clamp(+v, lo, r.b - 0.1);
+        } else {
+          const hi = Math.min(L.len, ...others.filter((o) => Math.min(o.a, o.b) >= q.b - 1e-6).map((o) => Math.min(o.a, o.b)));
+          r.b = clamp(+v, r.a + 0.1, hi);
+        }
+      }
+      return list;
+    });
+    SH.sig = ''; shUI();
+  }
   function lineAtS(L, s) {
     const C = L.cum;
     let k = 0;
@@ -5089,7 +5196,7 @@
     if (shBox.hidden) return;
     const rows = [];
     for (const L of lines) for (const q of L.shore) rows.push([L, q]);
-    const sig = rows.map(([L, q]) => [L.src, q.i, q.a, q.b, q.t].join(':')).join('|');
+    const sig = rows.map(([L, q]) => [L.src, q.i, q.a, q.b, q.t, q.w, q.emb, q.pitch].join(':')).join('|') + '|' + SH.open + '|' + TR.margin;
     if (sig === SH.sig) return;
     SH.sig = sig;
     const box = $('shList');
@@ -5110,7 +5217,10 @@
       go.className = 'shGo';
       go.title = '그쪽 보기';
       go.textContent = (L.label || dTxt(L.dia)) + ' · ' + (q.b - q.a).toFixed(2) + ' m';
-      go.addEventListener('click', () => shGo(L, q));
+      const oid = L.src + ':' + q.i, opened = SH.open === oid;
+      go.textContent += opened ? '  ▴' : '  ▾';
+      go.title = '그쪽 보기 · 세부 (시점 · 종점 · 폭 · 근입)';
+      go.addEventListener('click', () => { SH.open = opened ? '' : oid; shGo(L, q); shUI(); });
       const del = document.createElement('button');
       del.type = 'button';
       del.className = 'shDel';
@@ -5119,6 +5229,7 @@
       del.textContent = '×';
       del.addEventListener('click', () => shEdit(L.src, (list) => list.filter((r, j) => j !== q.i)));
       row.append(sel, go, del);
+      if (opened) { row.classList.add('sel'); Object.assign(row.style, { flexWrap: 'wrap', height: 'auto', minHeight: '28px', paddingBottom: '4px' }); row.appendChild(shDetail(L, q)); }
       box.appendChild(row);
     }
   }
@@ -5498,6 +5609,307 @@
     }).catch((e) => { omBusy(false); omMsg(errText(e)); });
   });
 
+  // ---------------------------------------------------------------- AI 부대공 (JACK 1127 «AI 결과 360 화면에도» · 인식 = 3D 매핑 화면 · 같은 구간 360 을 고르면 결과가 이 폴더 data/ai_budae.js 에도 들어옴)
+  // 좌표: 결과 pts = 3D 매핑 원점 (origin) 기준 → + origin − 이 로드뷰 원점 = 360 격자 (e, n) · 높이 = 매핑 표고 + (이 화면 땅 − 매핑 표고 가운데값) · 없으면 땅
+  // 보이는 것 = 임시점용 영역 (터파기 띠 trSecGet · 수량과 같은 칸) 에 걸린 후보만 (JACK 1127 «관로를 불러왔을 때 · 임시점용 영역에 걸렸을 경우만») · 석축 위 · 아래 선은 짝 (attrs.pair)
+  // 줄 누르기 = 그 후보를 잘 보는 사진 (attrs.photo) 으로 옮겨 그쪽을 봄 · 맞음 · 아님 · 종류 = 프로그램에서만 → ai_save (이 폴더 · 프로그램이 짝 3D 매핑 프로젝트에도 같이 씀)
+  const AI_T = ['curb', 'wall', 'sidewalk', 'asphalt', 'concrete', 'unpaved'];
+  const AI_COL = { curb: '#f43f5e', wall: '#a855f7', sidewalk: '#22c55e', asphalt: '#3b82f6', concrete: '#eab308', unpaved: '#b45309' };
+  const AI_LINE = new Set(['curb', 'wall']);
+  const AI_ST = { ai: '미확인', ok: '맞음', no: '아님' };
+  const AI_VIS_KEY = 'rv_ai:vis', AI_ROWS = 300;
+  const BD_Q = [['bd_curb', '연석', 'm'], ['bd_wall', '석축', 'm'], ['bd_wallA', '석축', 'm²'], ['bd_sidewalk', '보도블록', 'm²'], ['bd_asphalt', '아스팔트', 'm²'],
+    ['bd_concrete', '콘크리트', 'm²'], ['bd_unpaved', '비포장', 'm²']];
+  const AI = { data: null, feats: [], byId: new Map(), gen: 0, lgen: 0, openN: 0, sel: null, vis: {}, sig: '', ordK: '', order: [], kBuilt: false, saveT: 0, bad: '',
+    name: { curb: '연석', wall: '석축', sidewalk: '보도블록', asphalt: '아스팔트', concrete: '콘크리트', unpaved: '비포장' } };
+  (function () { const v = lsGet(AI_VIS_KEY) || {}; AI_T.forEach((k) => { AI.vis[k] = v[k] !== false; }); })();
+  const aiSt = (F) => (F.f.status === 'ok' || F.f.status === 'no' ? F.f.status : 'ai');
+  const aiMis = (F) => !!(AI.data && AI.data.src360) && !(Array.isArray(F.f.src) && F.f.src.indexOf('360') >= 0);
+  const aiMeas = (F) => F.meas.toFixed(1) + (F.line ? ' m' : ' m²');
+  function aiArea2(P) { let a = 0; for (let i = 0; i < P.length; i++) { const p = P[i], q = P[(i + 1) % P.length]; a += p[0] * q[1] - q[0] * p[1]; } return a; }
+  function aiSet(D) {
+    AI.data = D && typeof D === 'object' && Array.isArray(D.features) ? D : null;
+    AI.feats = []; AI.byId = new Map(); AI.bad = '';
+    if (AI.data) {
+      const o = Array.isArray(AI.data.origin) ? AI.data.origin.map(Number) : [];
+      const crs = String(AI.data.crs || ''), pcrs = String(PRJ.crs || '');
+      if (crs && pcrs && crs !== pcrs) AI.bad = '좌표계 다름 (' + crs + ' · 이 로드뷰 ' + pcrs + ')';
+      else if (!(o.length >= 2 && Number.isFinite(o[0]) && Number.isFinite(o[1]))) AI.bad = '결과에 원점 없음';
+      if (!AI.bad) {
+        const po = PRJ.origin || {}, oe = o[0] - num(po.E, 0), on = o[1] - num(po.N, 0), oz = Number.isFinite(o[2]) ? o[2] : 0;
+        const cn = AI.data.classes && typeof AI.data.classes === 'object' ? AI.data.classes : {};
+        AI_T.forEach((k) => { if (cn[k]) AI.name[k] = String(cn[k]); });
+        const dzs = [];                                                  // 높이 맞춤 (매핑 표고 → 이 화면 땅 · 가운데값)
+        AI.data.features.forEach((f) => {
+          if (!f || !Array.isArray(f.pts) || f.cls === 'wall') return;
+          for (let i = 0; i < f.pts.length; i += Math.max(1, f.pts.length >> 3)) {
+            const q = f.pts[i];
+            if (!Array.isArray(q) || !isNum(q[2])) continue;
+            const g = groundAt(+q[0] + oe, +q[1] + on);
+            if (Number.isFinite(g)) dzs.push(g - (+q[2] + oz));
+          }
+        });
+        dzs.sort((a, b) => a - b);
+        const dz = dzs.length ? dzs[dzs.length >> 1] : 0;
+        AI.data.features.forEach((f, i) => {
+          if (!f || AI_T.indexOf(f.cls) < 0 || !Array.isArray(f.pts)) return;
+          const line = f.kind === 'line' || f.kind === 'area' ? f.kind === 'line' : AI_LINE.has(f.cls);
+          const P = [];
+          for (const q of f.pts) {
+            if (!Array.isArray(q) || !isNum(q[0]) || !isNum(q[1])) continue;
+            const e = +q[0] + oe, n = +q[1] + on;
+            let z = isNum(q[2]) ? +q[2] + oz + dz : NaN;
+            if (!Number.isFinite(z)) z = groundAt(e, n);
+            P.push([e, n, Number.isFinite(z) ? z : S.gz]);
+          }
+          if (!line && P.length > 3 && Math.abs(P[0][0] - P[P.length - 1][0]) + Math.abs(P[0][1] - P[P.length - 1][1]) < 1e-9) P.pop();
+          if (P.length < (line ? 2 : 3)) return;
+          let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+          for (const p of P) { x0 = Math.min(x0, p[0]); x1 = Math.max(x1, p[0]); y0 = Math.min(y0, p[1]); y1 = Math.max(y1, p[1]); }
+          let meas = 0, c = [(x0 + x1) / 2, (y0 + y1) / 2, P.reduce((s, p) => s + p[2], 0) / P.length];
+          if (line) { for (let k = 1; k < P.length; k++) meas += Math.hypot(P[k][0] - P[k - 1][0], P[k][1] - P[k - 1][1]); c = P[P.length >> 1].slice(); } else meas = Math.abs(aiArea2(P)) / 2;
+          let id = f.id != null && f.id !== '' ? String(f.id) : '#' + i;
+          if (AI.byId.has(id)) id += '#' + i;
+          const F = { f: f, i: i, id: id, line: line, P: P, bb: [x0, y0, x1, y1], c: c, meas: meas };
+          AI.feats.push(F); AI.byId.set(id, F);
+        });
+      }
+    }
+    if (AI.sel != null && !AI.byId.has(AI.sel)) AI.sel = null;
+    AI.gen++; AI.lgen++; AI.sig = '';
+    dirty();
+  }
+  // 겹침 셈 (3D 화면 map3d.js 와 같은 셈): 임시점용 칸 (네모) → 볼록 세모 둘 · 다각형 ∩ 세모 넓이 · 꺾은선이 세모 안에 든 길이
+  function aiTri(a, b, c) { return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]) >= 0 ? [a, b, c] : [a, c, b]; }
+  function aiQuadTris(Q) {
+    const cr = (a, b, c) => (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]), s = aiArea2(Q);
+    const ok = cr(Q[0], Q[1], Q[2]) * s > 0 && cr(Q[0], Q[2], Q[3]) * s > 0;
+    const T = ok ? [[Q[0], Q[1], Q[2]], [Q[0], Q[2], Q[3]]] : [[Q[0], Q[1], Q[3]], [Q[1], Q[2], Q[3]]];
+    return T.filter((t) => Math.abs(cr(t[0], t[1], t[2])) > 1e-12).map((t) => aiTri(t[0], t[1], t[2]));
+  }
+  function aiClipArea(P, T) {
+    let out = P.map((p) => [p[0], p[1]]);
+    for (let i = 0; i < 3 && out.length; i++) {
+      const a = T[i], b = T[(i + 1) % 3], inp = out, side = (p) => (b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0]);
+      out = [];
+      for (let k = 0; k < inp.length; k++) {
+        const p = inp[k], q = inp[(k + 1) % inp.length], sp = side(p), sq = side(q);
+        if (sp >= 0) out.push(p);
+        if ((sp >= 0) !== (sq >= 0)) { const t = sp / (sp - sq); out.push([p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t]); }
+      }
+    }
+    return out.length >= 3 ? Math.abs(aiArea2(out)) / 2 : 0;
+  }
+  function aiLineInTri(P, T) {
+    let s = 0;
+    for (let k = 0; k + 1 < P.length; k++) {
+      const a = P[k], b = P[k + 1], dx = b[0] - a[0], dy = b[1] - a[1];
+      let t0 = 0, t1 = 1;
+      for (let i = 0; i < 3 && t0 < t1; i++) {
+        const u = T[i], v = T[(i + 1) % 3], ex = v[0] - u[0], ey = v[1] - u[1];
+        const fa = ex * (a[1] - u[1]) - ey * (a[0] - u[0]), fd = ex * dy - ey * dx;
+        if (Math.abs(fd) < 1e-15) { if (fa < 0) t1 = -1; continue; }
+        if (fd > 0) t0 = Math.max(t0, -fa / fd); else t1 = Math.min(t1, -fa / fd);
+      }
+      if (t1 > t0) s += (t1 - t0) * Math.hypot(dx, dy);
+    }
+    return s;
+  }
+  // 임시점용 칸마다 (T = trSecGet 띠 하나 · j = 칸) → fn(Q 네모, 세모 얻기, 관 번호)
+  function aiEachCell(fn) {
+    for (const T of trSecGet()) {
+      const pt = (k, sg) => [T.E[k] + T.LX[k] * T.WV[k] * sg, T.N[k] + T.LY[k] * T.WV[k] * sg];
+      for (let j = 0; j + 1 < T.m; j++) {
+        if (Math.abs(T.E[j + 1] - T.E[j]) + Math.abs(T.N[j + 1] - T.N[j]) < 1e-9) continue;
+        const Q = [pt(j, 1), pt(j + 1, 1), pt(j + 1, -1), pt(j, -1)];
+        const bb = [Math.min(Q[0][0], Q[1][0], Q[2][0], Q[3][0]), Math.min(Q[0][1], Q[1][1], Q[2][1], Q[3][1]), Math.max(Q[0][0], Q[1][0], Q[2][0], Q[3][0]), Math.max(Q[0][1], Q[1][1], Q[2][1], Q[3][1])];
+        let tris = null;
+        fn(bb, () => (tris = tris || aiQuadTris(Q)), T.SR ? T.SR[j + 1] : -1);
+      }
+    }
+  }
+  const aiHit = (F, bb) => !(F.bb[2] < bb[0] || F.bb[0] > bb[2] || F.bb[3] < bb[1] || F.bb[1] > bb[3]);
+  const AIZ = { of: null, lgen: -1, set: new Set(), ver: 0 };
+  function aiZone() {
+    const T3 = lines.length && AI.feats.length ? trSecGet() : null;
+    if (AIZ.of === T3 && AIZ.lgen === AI.lgen) return AIZ.set;
+    AIZ.of = T3; AIZ.lgen = AI.lgen; AIZ.ver++;
+    const set = new Set(), pairs = new Set();
+    if (T3) {
+      aiEachCell((bb, tris) => {
+        for (const F of AI.feats) {
+          if (set.has(F.id) || !aiHit(F, bb)) continue;
+          if (tris().some((tq) => (F.line ? aiLineInTri(F.P, tq) : aiClipArea(F.P, tq)) > 1e-9)) { set.add(F.id); if (F.f.attrs && F.f.attrs.pair) pairs.add(String(F.f.attrs.pair)); }
+        }
+      });
+      if (pairs.size) for (const F of AI.feats) if (F.f.attrs && F.f.attrs.pair && pairs.has(String(F.f.attrs.pair))) set.add(F.id);
+    }
+    AIZ.set = set;
+    return set;
+  }
+  const aiInZ = (F) => aiZone().has(F.id);
+  const aiShow = (F) => !!AI.vis[F.f.cls] && aiInZ(F);
+  // 관마다 부대공 (관 번호 → {bd_…}) · m.un = 들어간 미확인 후보 수 (3D 화면과 같은 셈 · 석축 = 위 선만)
+  const AIQ = { of: null, gen: -1, m: null };
+  function aiQtyAll() {
+    const T3 = trSecGet();
+    if (AIQ.m && AIQ.of === T3 && AIQ.gen === AI.gen) return AIQ.m;
+    AIQ.of = T3; AIQ.gen = AI.gen;
+    const m = new Map(), un = new Set(), feats = AI.feats.filter((F) => aiSt(F) !== 'no' && F.line === AI_LINE.has(F.f.cls) && !(F.f.cls === 'wall' && F.f.attrs && F.f.attrs.edge === 'bottom'));
+    const acc = (src) => { let q = m.get(src); if (!q) { q = {}; BD_Q.forEach(([k]) => { q[k] = 0; }); m.set(src, q); } return q; };
+    if (feats.length) {
+      aiEachCell((bb, tris, sr) => {
+        for (const F of feats) {
+          if (!aiHit(F, bb)) continue;
+          let v = 0;
+          for (const t of tris()) v += F.line ? aiLineInTri(F.P, t) : aiClipArea(F.P, t);
+          if (!(v > 1e-9)) continue;
+          const q = acc(sr), c = F.f.cls;
+          if (c === 'wall') { q.bd_wall += v; q.bd_wallA += v * Math.max(0, num(F.f.height, 0)); } else q['bd_' + c] += v;
+          if (aiSt(F) === 'ai') un.add(F.id);
+        }
+      });
+    }
+    m.un = un.size;
+    AIQ.m = m;
+    return m;
+  }
+  function aiQtyPut(L, q) {
+    const z = AI.feats.length ? aiQtyAll().get(L.src) : null;
+    BD_Q.forEach(([k]) => { q[k] = z ? z[k] : 0; });
+    return q;
+  }
+  function aiQtyNote() {
+    if (!AI.data) return 'AI 인식 안 함 (3D 매핑 화면에서)';
+    if (!lines.length) return '관로 없음';
+    const n = aiQtyAll().un;
+    return '임시점용 테두리 안 · 아님 뺌 · ' + (n ? '확인 안 함 ' + n + '개 포함' : '모두 확인함');
+  }
+  // 확인 · 저장 (프로그램에서만 · 0.8 초 모아)
+  function aiSaveTxt(t, bad) { const e = $('aiSave'); e.textContent = t || ''; e.classList.toggle('bad', !!bad); }
+  function aiFlush() {
+    if (!AI.saveT) return Promise.resolve();
+    clearTimeout(AI.saveT); AI.saveT = 0;
+    const h = HOST();
+    if (!h || typeof h.ai_save !== 'function' || !AI.data) return Promise.resolve();
+    const data = JSON.parse(JSON.stringify(AI.data));
+    aiSaveTxt('저장 중');
+    return Promise.resolve().then(() => h.ai_save(projDir(), data)).then((r) => {
+      const ok = !!r && r.ok !== false;
+      aiSaveTxt(ok ? '저장됨' : '저장 안 됨', !ok);
+      if (!ok) toast('AI 확인 저장 안 됨' + (r && r.msg ? ' · ' + r.msg : ''));
+      return r;
+    }, (e) => { aiSaveTxt('저장 안 됨', true); toast('AI 확인 저장 안 됨 · ' + String(e && e.message || e).slice(0, 80)); return null; });
+  }
+  function aiSaveSoon() { const h = HOST(); if (!h || typeof h.ai_save !== 'function') return; clearTimeout(AI.saveT); AI.saveT = setTimeout(aiFlush, 800); aiSaveTxt('저장 대기'); }
+  function aiMark(F, patch) {
+    if (!HOST()) return;                                                 // 브라우저 (웹 공유) = 보기만
+    Object.assign(F.f, patch);
+    AI.gen++; AI.sel = F.id; AI.sig = '';
+    dirty(); aiSaveSoon();
+  }
+  // 줄 누르기 = 그 후보를 잘 보는 사진 (인식 때 고른 attrs.photo) 으로 옮겨 그쪽을 봄 · 없으면 가까운 사진
+  function aiGo(F) {
+    AI.sel = F.id; AI.sig = '';
+    const c = F.c, ph = F.f.attrs && F.f.attrs.photo != null ? String(F.f.attrs.photo) : '', s = ph ? shots.find((x) => x.id === ph) : null;
+    if (SIM) { const m = en2m(c[0], c[1]); M.cx = m[0]; M.cy = m[1]; mapDirty(); }
+    const cur = S.want >= 0 ? S.want : S.cur;
+    if (s && s.i !== cur) { S.look = c.slice(); openShot(s.i); } else if (s) lookAt(c); else cfGo({ e: c[0], n: c[1], g: c[2] });
+    dirty();
+  }
+  function aiKindsBuild() {
+    const box = $('aiKinds');
+    box.textContent = '';
+    AI_T.forEach((k) => {
+      const b = document.createElement('button');
+      b.type = 'button'; b.className = 'tg'; b.id = 'aiK_' + k; b.dataset.k = k;
+      b.innerHTML = '<i class="sw"></i><span></span><i class="n"></i>';
+      b.querySelector('.sw').style.background = AI_COL[k];
+      b.addEventListener('click', () => { AI.vis[k] = !AI.vis[k]; lsSet(AI_VIS_KEY, AI.vis); AI.sig = ''; dirty(); });
+      box.appendChild(b);
+    });
+    AI.kBuilt = true;
+  }
+  function aiRow(F, host) {
+    const st = aiSt(F), cls = F.f.cls, row = document.createElement('div');
+    row.className = 'aiRow' + (F.id === AI.sel ? ' sel' : '');
+    row.style.setProperty('--c', AI_COL[cls]);
+    Object.assign(row.dataset, { id: F.id, st: st, cls: cls });
+    const l1 = document.createElement('div'); l1.className = 'aiL1';
+    const go = document.createElement('button');
+    go.type = 'button'; go.className = 'aiGo'; go.title = (F.f.note ? String(F.f.note) + ' · ' : '') + '그 자리 보기 (360 사진)';
+    const b = document.createElement('b'); b.textContent = AI.name[cls];
+    const a = F.f.attrs || {}, cf = isNum(F.f.conf) ? ' · ' + Math.round(clamp(Number(F.f.conf), 0, 1) * 100) + '%' : '';
+    go.append(b, ' · ' + aiMeas(F) + (cls === 'wall' && isNum(F.f.height) ? ' · 높이 ' + Number(F.f.height).toFixed(1) : '') + cf + (a.state && a.state !== '모름' ? ' · ' + a.state : ''));
+    go.addEventListener('click', () => aiGo(F));
+    l1.appendChild(go);
+    if (st === 'ai' && aiMis(F)) { const m = document.createElement('span'); m.className = 'tag bad'; m.textContent = '360 다름'; m.title = '360 에서 못 찾음'; l1.appendChild(m); }
+    const tg = document.createElement('span'); tg.className = 'tag' + (st === 'ok' ? ' ok' : st === 'no' ? ' bad' : ''); tg.textContent = AI_ST[st];
+    l1.appendChild(tg);
+    row.appendChild(l1);
+    if (!host) return row;
+    const l2 = document.createElement('div'); l2.className = 'aiL2';
+    const ok = document.createElement('button'); ok.type = 'button'; ok.className = 'aiOk' + (st === 'ok' ? ' on' : ''); ok.textContent = '맞음'; ok.title = st === 'ok' ? '확인 풀기' : '맞음';
+    ok.addEventListener('click', () => aiMark(F, { status: st === 'ok' ? 'ai' : 'ok' }));
+    const no = document.createElement('button'); no.type = 'button'; no.className = 'aiNo' + (st === 'no' ? ' on' : ''); no.textContent = '아님'; no.title = st === 'no' ? '확인 풀기' : '아님 (수량에서 뺌)';
+    no.addEventListener('click', () => aiMark(F, { status: st === 'no' ? 'ai' : 'no' }));
+    const sel = document.createElement('select'); sel.className = 'aiCls'; sel.title = '종류 바꿈 (바꾸면 맞음)'; sel.setAttribute('aria-label', '종류 바꿈');
+    AI_T.filter((k) => AI_LINE.has(k) === F.line).forEach((k) => { const o = document.createElement('option'); o.value = k; o.textContent = AI.name[k]; sel.appendChild(o); });
+    sel.value = cls;
+    sel.addEventListener('change', () => aiMark(F, { cls: sel.value, status: 'ok' }));
+    l2.append(ok, no, sel);
+    row.appendChild(l2);
+    return row;
+  }
+  function aiUI() {
+    if (!CAT.ai) return;
+    const host = !!HOST(), open = catIs('ai');
+    aiZone();
+    const sig = [AI.gen, AI.sel, AI_T.map((k) => (AI.vis[k] ? 1 : 0)).join(''), AIZ.ver, host, open, AI.openN, lines.length > 0].join('|');
+    if (sig === AI.sig) return;
+    AI.sig = sig;
+    const has = !!AI.data && !AI.bad, cnt = {}, cntNo = {};
+    AI_T.forEach((k) => { cnt[k] = 0; cntNo[k] = 0; });
+    const inZ = AI.feats.filter(aiInZ), nz = inZ.length;
+    let nAi = 0, nOk = 0, nNo = 0;
+    for (const F of inZ) { const st = aiSt(F); if (st === 'no') { cntNo[F.f.cls]++; nNo++; } else cnt[F.f.cls]++; if (st === 'ai') nAi++; else if (st === 'ok') nOk++; }
+    const tg = $('aiTag');
+    tg.textContent = !has || !nz ? '' : nAi ? '미확인 ' + nAi : '확인 끝';
+    tg.classList.toggle('ok', has && nz > 0 && !nAi);
+    if (!open) return;
+    $('aiNone').hidden = has && nz > 0;
+    $('aiNone').textContent = AI.bad ? 'AI 결과 못 씀 · ' + AI.bad : !AI.data ? 'AI 인식 안 함 → 3D 매핑 화면 [AI 인식] (이 360 함께 고름)'
+      : !lines.length ? '관로 없음 → 관로를 불러오면 임시점용 영역에 걸린 것만 봄' : 'AI 찾은 것 없음 (임시점용 안)';
+    $('aiKinds').hidden = !has || !nz;
+    if (!AI.kBuilt) aiKindsBuild();
+    AI_T.forEach((k) => {
+      const b = $('aiK_' + k);
+      b.querySelector('span').textContent = AI.name[k];
+      b.querySelector('.n').textContent = String(cnt[k]);
+      b.title = AI.name[k] + ' · 후보 ' + cnt[k] + (cntNo[k] ? ' · 아님 ' + cntNo[k] : '') + ' (누르기 = 보이기 켜고 끄기)';
+      b.disabled = !cnt[k] && !cntNo[k];
+      setOn(b, AI.vis[k]);
+    });
+    $('aiHead').hidden = !has || !nz;
+    $('aiSum').textContent = '후보 ' + (nz - nNo) + ' · 확인 ' + (nOk + nNo) + ' / ' + nz + ' (임시점용 안)';
+    const ordK = AI.lgen + '|' + AI.openN + '|' + AI_T.map((k) => (AI.vis[k] ? 1 : 0)).join('') + '|' + AIZ.ver;
+    if (ordK !== AI.ordK) {                                              // 차례 = 열 때 · 읽을 때 · 종류 단추 바꿀 때만 (누르는 동안 줄이 안 뜀)
+      AI.ordK = ordK;
+      const rk = { ai: 0, ok: 1, no: 2 };
+      AI.order = AI.feats.filter(aiShow).sort((a, b) => rk[aiSt(a)] - rk[aiSt(b)] || aiMis(b) - aiMis(a) || num(a.f.conf, 1) - num(b.f.conf, 1) || a.i - b.i).map((F) => F.id);
+    }
+    const box = $('aiList'), ids = AI.order.filter((id) => AI.byId.has(id) && aiShow(AI.byId.get(id)));
+    box.textContent = '';
+    ids.slice(0, AI_ROWS).forEach((id) => box.appendChild(aiRow(AI.byId.get(id), host)));
+    $('aiMore').textContent = ids.length > AI_ROWS ? '… ' + (ids.length - AI_ROWS) + '개 더 (종류 단추로 줄이기)' : '';
+    const sr = box.querySelector('.aiRow.sel');
+    if (sr) sr.scrollIntoView({ block: 'nearest' });
+  }
+  if (CAT.ai) CAT.ai.hook = (on) => { if (on) AI.openN++; AI.sig = ''; aiUI(); };
+  $('aiQty').addEventListener('click', () => (QT.on && QT.view === 'budae' ? qShow(false) : qShow(true, 'budae')));
+  window.addEventListener('pagehide', () => { if (AI.saveT) aiFlush(); });
+  aiSet(window.RV_AI);
+
   // ---------------------------------------------------------------- 수량 (보기만 · 그때그때)
   // 고른 관 (관로 고치기) · 없으면 화면 가운데 땅에서 가장 가까운 관 + 모든 관 합. 단면은 터파기 구덩이와 같은 식 (trSecGet):
   // 연장 = 평면 길이 · 터파기 = 단면적 (포장 직각 2·wv·tp + 기울기 사다리꼴 wb ~ wv · 포장이 바닥보다 깊으면 2·wb·깊이) 을
@@ -5514,50 +5926,51 @@
   const RV_Q = RV ? RV.QROWS.map(([k, n, u]) => ['rv_' + k, n, u]) : [];          // 하천 추진 · 횡단 (river.js qty · 3D 화면과 같은 줄)
   const RV_QINT = new Set(['rv_shaft', 'rv_hp', 'rv_bag']);                        // 개수 = 소수 없이
   Q_ROWS.push(...RV_Q);
+  Q_ROWS.push(...BD_Q);                                                            // AI 부대공 (임시점용 테두리 안 · 아님 뺌 · 3D 화면과 같은 줄)
   const Q_KIND = { all: ['수량', null], pipe: ['관로', ['len']], earth: ['토공', ['cut', 'sand', 'fill']], pave: ['포장', ['pav']], occ: ['점용', ['tmp', 'perm']],
-    shore: ['가시설', SHORE_T.map((t) => 'sh_' + t)], river: ['하천', RV_Q.map((r) => r[0])] };
+    shore: ['가시설', SHORE_T.map((t) => 'sh_' + t)], river: ['하천', RV_Q.map((r) => r[0])], budae: ['부대공', BD_Q.map((r) => r[0])] };
   function gQ(L, k) { const g = L.g[k]; return Number.isFinite(g) ? g : groundAt(L.pts[k * 3], L.pts[k * 3 + 1]); }
   function zcQ(L, k) { const z = L.pts[k * 3 + 2]; return L.hasZ && Number.isFinite(z) ? z : gQ(L, k) - S.cover - L.dia / 2; }
-  function secQ(D, g, zc, n) { // → [단면적 m², 지표 반폭 wv] · n = 기울기 (가시설 구간 = 0)
-    const zs = Math.min(zc - D / 2, g - 0.01), zb = zs - TR.bed, wb = D / 2 + TR.margin, zt = g - TR.tp;
+  function secQ(D, g, zc, n, wo) { // → [단면적 m², 지표 반폭 wv] · n = 기울기 (가시설 구간 = 0)
+    const zs = Math.min(zc - D / 2, g - 0.01), zb = zs - TR.bed, wb = wo > 0 ? wo : D / 2 + TR.margin, zt = g - TR.tp;   // wo = 가시설 폭 고친 구간 반폭
     const wv = wb + n * Math.max(0, zt - zb);
     return [2 * wv * (g - Math.max(zt, zb)) + (wb + wv) * Math.max(0, zt - zb), wv];
   }
   function lineQty(L) {
     const key = [TR.tp, TR.n, TR.margin, TR.bed, S.cover].join('|');
     const m = QT.memo.get(L);
-    if (m && m.key === key) return m.q;
+    if (m && m.key === key) return aiQtyPut(L, m.q);
     const P = L.pts, D = L.dia, cnt = P.length / 3, C = L.cum;
-    let len = 0, tlen = 0, cut = 0, pav = 0, g0 = gQ(L, 0), z0 = zcQ(L, 0);
+    let len = 0, tlen = 0, cut = 0, pav = 0, sandA = 0, g0 = gQ(L, 0), z0 = zcQ(L, 0);   // sandA = ∫ 바닥 폭 (가시설 폭 고친 구간은 그 폭)
     const rp = rvPlans(L); // 하천: 추진 = 터파기 없음 · 횡단 = 관 깊이 = 하천 깊이 (3D 화면과 같음)
     for (let k = 1; k < cnt; k++) {
       const g1 = gQ(L, k), z1 = zcQ(L, k), l = Math.hypot(P[k * 3] - P[k * 3 - 3], P[k * 3 + 1] - P[k * 3 - 2]);
       if (l > 0) {
         const ts = [0, 1]; // 가시설 · 하천 구간 끝에서 나눔 (가시설 안 = 기울기 0)
-        for (const q of L.shore.concat(rp)) for (const s of [q.a, q.b]) if (s > C[k - 1] + 1e-9 && s < C[k] - 1e-9) ts.push((s - C[k - 1]) / l);
+        for (const q of L.shore.concat(rp)) for (const s of [q.a, q.b, q.ta, q.tb]) if (Number.isFinite(s) && s > C[k - 1] + 1e-9 && s < C[k] - 1e-9) ts.push((s - C[k - 1]) / l);
         ts.sort((a, b) => a - b);
         for (let i = 0; i + 1 < ts.length; i++) {
           const ta = ts[i], tb = ts[i + 1], tm = (ta + tb) / 2, h = (tb - ta) * l, sm = C[k - 1] + tm * l;
-          const rq = rp.length ? rp.find((p) => sm > p.a && sm < p.b) : null, rz = rq && Number.isFinite(rq.zc) ? rq.zc : null;
+          const rq = rp.length ? rvAt(rp, sm) : null, rz = rq && Number.isFinite(rq.zc) ? rq.zc : null; // 추진 = 수직구 바깥 벽까지 터파기 없음
           if (rq && rq.k === 'jack') continue;
-          const n = shoreAt(L, sm) ? 0 : TR.n, sq = (t) => secQ(D, g0 + (g1 - g0) * t, rz == null ? z0 + (z1 - z0) * t : rz, n);
+          const sh0 = shoreAt(L, sm), n = sh0 ? 0 : TR.n, wo = sh0 && sh0.w ? sh0.w / 2 : 0, sq = (t) => secQ(D, g0 + (g1 - g0) * t, rz == null ? z0 + (z1 - z0) * t : rz, n, wo);
           const A = sq(ta), M = sq(tm), B = sq(tb);
           cut += h / 6 * (A[0] + 4 * M[0] + B[0]);
           pav += h / 3 * (A[1] + 4 * M[1] + B[1]);
-          tlen += h;
+          tlen += h; sandA += h * 2 * (wo > 0 ? wo : D / 2 + TR.margin);
         }
         len += l;
       }
       g0 = g1; z0 = z1;
     }
-    const sand = 2 * (D / 2 + TR.margin) * TR.bed * tlen, pipe = Math.PI * D * D / 4 * tlen; // 터파기 길이만 (추진 구간 빼고)
+    const sand = sandA * TR.bed, pipe = Math.PI * D * D / 4 * tlen; // 터파기 길이만 (추진 구간 빼고)
     const q = { len: len, cut: cut, pav: pav, sand: sand, fill: cut - pipe - sand, tmp: pav, perm: D * len }; // 임시점용 = 터파기 위 폭 × 길이 · 영구점용 = 관 바깥지름 × 길이
     SHORE_T.forEach((t) => { q['sh_' + t] = 0; });
     for (const s of L.shore) if (q['sh_' + s.t] != null) q['sh_' + s.t] += s.b - s.a;     // 가시설 연장 (관 측점 구간 b − a)
     RV_Q.forEach(([k]) => { q[k] = 0; });
     for (const pl of rp) { const z = RV.qty(pl); RV.QROWS.forEach(([k]) => { q['rv_' + k] += z[k]; }); }   // 하천 (구간마다 river.js)
     QT.memo.set(L, { key: key, q: q });
-    return q;
+    return aiQtyPut(L, q);
   }
   function qtyLine() { // 고른 관 · 없으면 화면 가운데가 닿는 땅 (하늘이면 사진 자리) 에서 가장 가까운 관
     const EL = edLine();
@@ -5589,7 +6002,8 @@
       if (b.dataset.v !== vb) { b.dataset.v = vb; b.textContent = fm(Number(vb)); }
     });
     if (QT.view === 'all') { const h = !rvAny(); RV_Q.forEach(([k]) => QT.rowEl[k].forEach((e) => { if (e.hidden !== h) e.hidden = h; })); } // 전체 = 하천 구간 있을 때만 하천 줄
-    qTxt($('qNote'), QT.view === 'river' ? (rvAny() ? '수직구 = 내공 × 깊이 · H-파일 근입 ' + RV.HP_EMB + ' m' : '하천 구간 없음') :
+    if (QT.view === 'all') { const hb = !AI.data; BD_Q.forEach(([k]) => QT.rowEl[k].forEach((e) => { if (e.hidden !== hb) e.hidden = hb; })); } // 전체 = AI 결과 있을 때만 부대공 줄
+    qTxt($('qNote'), QT.view === 'budae' ? aiQtyNote() : QT.view === 'river' ? (rvAny() ? '수직구 = 내공 × 깊이 · H-파일 근입 ' + RV.HP_EMB + ' m' : '하천 구간 없음') :
       QT.view !== 'pipe' && QT.view !== 'shore' && ['tp', 'n', 'margin', 'bed'].every((k) => TR[k] === TR_DEF[k]) ? '가시화 기본값 기준' : '');
   }
   // 수량 표 열기 · 닫기 (view = 갈래 · 그 갈래 단추 켜짐 · 표 = 그 갈래 줄만)
@@ -5601,7 +6015,7 @@
     $('qtyBox').dataset.view = QT.view;
     document.querySelectorAll('[data-q]').forEach((b) => setOn(b, QT.on && b.dataset.q === QT.view));
     const noRv = !rvAny(); // 전체 = 하천 구간 있을 때만 하천 줄
-    Q_ROWS.forEach(([k]) => { QT.rowEl[k].forEach((e) => { e.hidden = ks ? ks.indexOf(k) < 0 : noRv && k.indexOf('rv_') === 0; }); });
+    Q_ROWS.forEach(([k]) => { QT.rowEl[k].forEach((e) => { e.hidden = ks ? ks.indexOf(k) < 0 : (noRv && k.indexOf('rv_') === 0) || (!AI.data && k.indexOf('bd_') === 0); }); });
     qTxt($('qTitle'), Q_KIND[QT.view][0]);
     if (QT.on) { if (!catIs('qty')) catSet('qty', true); qtyUI(); $('qtyBox').scrollIntoView({ block: 'nearest' }); }
     dirty();
@@ -5838,11 +6252,16 @@
   window.addEventListener('resize', resizeAll);
 
   // ---------------------------------------------------------------- 시작
-  window.__rv360 = { reveal: reveal, catSet: catSet, catIs: catIs,   // 시험 (3D 화면 window.__map3d 와 같은 꼴)
+  window.__rv360 = { reveal: reveal, catSet: catSet, catIs: catIs,
+    ai: { st: () => ({ has: !!AI.data, n: AI.feats.length, sel: AI.sel, vis: Object.assign({}, AI.vis), gen: AI.gen, bad: AI.bad, saveT: !!AI.saveT }),
+      feat: (id) => { const F = AI.byId.get(String(id)); return F ? { id: F.id, cls: F.f.cls, st: aiSt(F), line: F.line, meas: F.meas, c: F.c, P: F.P } : null; },
+      zone: () => [...aiZone()], qty: () => { const m = aiQtyAll(), o = { un: m.un }; m.forEach((v, k) => { o[k] = Object.assign({}, v); }); return o; },
+      set: aiSet, flush: aiFlush, go: (id) => { const F = AI.byId.get(String(id)); if (F) aiGo(F); return !!F; }, order: () => AI.order.slice() }, shOpen: (id) => { SH.open = String(id || ''); SH.sig = ''; shUI(); },   // 시험 (3D 화면 window.__map3d 와 같은 꼴)
     SH: SH, lineQty: (src) => { const L = lines.find((q) => q.src === src); return L ? lineQty(L) : null; },
     rv: { ok: !!RV, arm: rvArm, set: rvSet, show: rvShow, ground: rvGround, plans: (src) => { const L = lines.find((q) => q.src === src); return L ? rvPlans(L) : []; },
       cur: () => { const c = rvCur(); return c ? { src: c.L.src, q: c.q } : null; }, pick: (src, a, b) => { RVS.cur = { src: src, a: a, b: b }; rvUI(); },
-      tris: () => (rvM.n - rvM.no) / 3, holes: () => rvM.no / 3 } };
+      tris: () => (rvM.n - rvM.no) / 3, holes: () => rvM.no / 3,
+      ends: () => trSecGet().map((T) => [[T.E[0], T.N[0]], [T.E[T.m - 1], T.N[T.m - 1]]]) } };   // 터파기 띠 끝점 (수직구 바깥 벽 시험)
   initGL();
   buildCal();
   hostShow();

@@ -21,7 +21,7 @@
     const on = C.me.state !== 'off';
     for (const id of ['bHelper', 'cHelp']) { const b = $(id); if (b) b.classList.toggle('on', on); }
     const b = $('bHelper');
-    if (b) b.textContent = on ? '도우미 · ' + (C.me.state === 'busy' ? Math.round(C.me.pct || 0) + '%' : '처리 ' + (C.me.done || 0)) : '도우미 모드';
+    if (b) b.textContent = on ? '병렬 처리 · ' + (C.me.state === 'busy' ? Math.round(C.me.pct || 0) + '%' : '처리 ' + (C.me.done || 0)) : '병렬 처리 참여';   // JACK 1127 «도우미 모드 → 병렬 처리 같은 이름»
     const s = $('cMe'); if (s) s.textContent = meText(C.me);
   }
   function paint(c) {
@@ -64,7 +64,7 @@
     const r = await call('helper_toggle', on);
     if (r && !r.ok) { toast(r.msg); if (!shown('pageCluster') && window.RV.page) window.RV.page('cluster'); return; }
     if (r) paintMe(r.me);
-    toast(on ? '도우미 모드 켬 · 이 PC 가 일감을 받음' : '도우미 모드 끔');
+    toast(on ? '병렬 처리 참여 켬 · 이 PC 가 일감을 받음' : '병렬 처리 참여 끔');
   }
   function init() {
     $('cPick').addEventListener('click', async () => { const c = await call('cluster_pick'); if (c) paint(c); });

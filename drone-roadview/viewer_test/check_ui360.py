@@ -38,7 +38,7 @@ import check_obst as co  # noqa: E402
 import check_view as cv  # noqa: E402
 from cdp import Edge  # noqa: E402
 
-CATS = ['view', 'pipe', 'trench', 'shore', 'river', 'qty', 'cf', 'cal', 'out', 'web']
+CATS = ['view', 'pipe', 'trench', 'shore', 'river', 'ai', 'qty', 'cf', 'cal', 'out', 'web']   # ai = AI 부대공 (1127)
 HEAD = {'view': 'hd_view', 'pipe': 'hd_pipe', 'trench': 'hd_trench', 'shore': 'tgShore', 'river': 'hd_river', 'qty': 'hd_qty', 'cf': 'hd_cf', 'cal': 'calHead', 'out': 'hd_out', 'web': 'hd_web'}
 SHORE = [{'a': 2.0, 'b': 7.0, 't': 'hpile'}, {'a': 10.0, 'b': 13.5, 't': 'sheet'}]   # T1 가시설 (시험용)
 R = {'ok': True, 'fails': [], 'errs': []}
@@ -161,7 +161,7 @@ def main():
         st = J(ed, "{logo: !!document.getElementById('dohwa').naturalWidth, title: document.getElementById('title').textContent, no: document.getElementById('shotNo').textContent,"
                    " top: document.getElementById('top').getBoundingClientRect().height, bg: getComputedStyle(document.getElementById('top')).backgroundColor,"
                    " ov: [Math.round(document.getElementById('ov').getBoundingClientRect().width), Math.round(document.getElementById('ov').getBoundingClientRect().height)]}")
-        report('t 청록 띠 48 px · 로고 · 이름 · 사진 번호 · 360 칸 1019×820', st['top'] == 48 and st['bg'] == 'rgb(0, 72, 78)' and st['logo'] and st['no'].startswith('2 /') and st['ov'] == [1019, 820],
+        report('t 어두운 윗줄 48 px · 로고 · 이름 · 사진 번호 · 360 칸 1019×820', st['top'] == 48 and st['bg'] == 'rgb(31, 31, 31)' and st['logo'] and st['no'].startswith('2 /') and st['ov'] == [1019, 820],
                json.dumps(st, ensure_ascii=False))
         shot(ed, '01_처음.png', SD)
         click(ed, inp, 'bHelp')
@@ -186,7 +186,7 @@ def main():
         order = J(ed, "[...document.querySelectorAll('#opts .cat')].map((c) => c.dataset.cat)")
         report('c 차례 = 3D 와 같음 (재기 · 검사 자리 = 맞춤)', order == CATS, json.dumps(order))
         names = J(ed, "[...document.querySelectorAll('#opts .cat .catH b')].map((b) => b.textContent)")
-        report('c 이름', names == ['보기', '관로', '터파기 · 점용', '가시설', '하천 추진 · 횡단', '수량', '간섭', '맞춤', '결과물', '웹 공유'], json.dumps(names, ensure_ascii=False))
+        report('c 이름', names == ['보기', '관로', '터파기 · 점용', '가시설', '하천 추진 · 횡단', 'AI 부대공', '수량', '간섭', '맞춤', '결과물', '웹 공유'], json.dumps(names, ensure_ascii=False))
         html = open(os.path.join(REPO, 'viewer', 'index.html'), encoding='utf-8').read()
         i_sh, i_rv, i_q = html.index('data-cat="shore"'), html.find('<section class="cat" data-cat="river">'), html.index('data-cat="qty"')
         report('c «가시설» 다음 «하천 추진 · 횡단» 카테고리 (3D 와 같은 꼴 · 시험 = check_river360)', i_sh < i_rv < i_q and J(ed, "!document.querySelector('[data-cat=river]').hidden"), str(i_rv))

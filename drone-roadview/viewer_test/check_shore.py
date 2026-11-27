@@ -450,6 +450,65 @@ def test_shore_view(ed, out_dir, shots_dir):
     report('단면 (구간 밖): 폭 2·wv · 가시설 없음', ('폭 %.2f' % (2 * wv)) in sc2['svg'] and sc2['rects'] == 0, '측점 %s' % sc2['at'])
     ed.js("document.getElementById('secClose').click()")
 
+    print('== d  목록 줄 세부 (JACK 1127 «세부조종은 그 목록에서 · 폭이나 기타 등등»)')
+    ed.js("__rv360.shOpen('0:0')")
+    ed.frames(3)
+    det = js_json(ed, "{ids: [...document.querySelectorAll('#shList .shSet input')].map((i) => i.id), ph: (document.getElementById('sh_w') || {}).placeholder, "
+                      "w: (document.getElementById('sh_w') || {}).value, a: (document.getElementById('sh_a') || {}).value, emb: (document.getElementById('sh_emb') || {}).value, "
+                      "pitch: (document.getElementById('sh_pitch') || {}).value, sel: !!document.querySelector('#shList .shRow.sel')}")
+    report('d 줄 안에 세부 (시점 · 종점 · 폭 · 근입 · H-파일 간격) · 폭 빈칸 = 기본 2·wb · 근입 1.5 · 간격 1.8',
+           det['ids'] == ['sh_a', 'sh_b', 'sh_w', 'sh_emb', 'sh_pitch'] and det['ph'] == '%.2f' % (2 * wb) and det['w'] == '' and abs(float(det['a'] or 0) - a) < 0.01
+           and det['emb'] == '1.5' and det['pitch'] == '1.8' and det['sel'], json.dumps(det))
+    setv = lambda k, v: ed.js("(function(){ const i = document.getElementById('sh_%s'); i.value = '%s'; i.dispatchEvent(new Event('change', {bubbles: true})); })()" % (k, v))  # noqa: E731
+    ed.js("document.getElementById('tgQty').click()")    # 수량 칸 열기 (터파기 값)
+    ed.frames(3)
+    qd0 = qty_total(ed)
+    W2 = round(2 * wb + 0.6, 2)
+    setv('w', W2)
+    ed.frames(4)
+    qd1 = qty_total(ed)
+    A_w, _, _ = sect_area(D, g, zc, dict(TR_DEF, margin=W2 / 2 - D / 2), 0.0)
+    want_w = (A_w - A_0) * (b - a)
+    report('d 폭 %.2f → 기록 w · 저장 · 터파기 = 넓어진 만큼 (따로 셈)' % W2, abs((shore_of(ed)[0].get('w') or 0) - W2) < 1e-6 and abs(((stored_shore(ed) or [{}])[0].get('w') or 0) - W2) < 1e-6
+           and abs((qd1 - qd0) - want_w) <= 1e-3, '%.4f → %.4f m³ · 늘어남 %.4f · 따로 %.4f' % (qd0, qd1, qd1 - qd0, want_w))
+    report('d 고친 뒤에도 그 줄 세부 펼친 채', bool(js_json(ed, "!!document.getElementById('sh_w') && document.getElementById('sh_w').value === '%s'" % ('%g' % W2))))
+    ed.js("document.getElementById('tgQty').click()")
+    ed.frames(2)
+    sc3 = sec_at((A_E + B_E) / 2)
+    report('d 단면 (구간 안) = 고친 폭 %.2f' % W2, ('폭 %.2f' % W2) in sc3['svg'], '측점 %s' % sc3['at'])
+    ed.screenshot(os.path.join(shots_dir, 'd_sec_w.png'))
+    ed.js("document.getElementById('secClose').click()")
+    ed.frames(2)
+    ed.js("__rv360.shOpen('0:0')")
+    ed.frames(2)
+    setv('emb', 2.5)
+    ed.frames(2)
+    setv('pitch', 1.2)
+    ed.frames(2)
+    q = shore_of(ed)[0]
+    report('d 근입 2.5 · 간격 1.2 → 기록 (저장)', q.get('emb') == 2.5 and q.get('pitch') == 1.2 and (stored_shore(ed) or [{}])[0].get('pitch') == 1.2, json.dumps(q))
+    grab(ed, os.path.join(shots_dir, 'd_detail.png'))
+    setv('b', round(b - 1.0, 2))
+    ed.frames(2)
+    report('d 종점 −1 m → 기록 b', abs(shore_of(ed)[0]['b'] - round(b - 1.0, 2)) < 1e-6, json.dumps(shore_of(ed)))
+    setv('a', -5)
+    ed.frames(2)
+    report('d 시점 −5 → 관 처음 (0) 에서 멈춤', abs(shore_of(ed)[0]['a']) < 1e-6, json.dumps(shore_of(ed)))
+    setv('a', a)
+    ed.frames(1)
+    setv('b', b)
+    ed.frames(1)
+    for k in ('w', 'emb', 'pitch'):
+        setv(k, '')
+        ed.frames(1)
+    ed.frames(3)
+    q = shore_of(ed)[0]
+    report('d 비우기 → 기본 (w · emb · pitch 없음) · 구간 제자리', not any(k in q for k in ('w', 'emb', 'pitch')) and abs(q['a'] - a) < 1e-6 and abs(q['b'] - b) < 1e-6, json.dumps(q))
+    ed.js("__rv360.shOpen('')")
+    ed.frames(2)
+    report('d 접기 → 세부 없음', not js_json(ed, "!!document.querySelector('#shList .shSet')"))
+    errs(ed, 'd')
+
     print('== r  세 종류 그림 · 종류 바꾸기')
     set_t = lambda t: ed.js("(function(){ const s = document.querySelector('#shList .shRow select'); s.value = '%s'; s.dispatchEvent(new Event('change', {bubbles: true})); })()" % t)  # noqa: E731
     sec_at((A_E + B_E) / 2)  # 설정 창 = 구간 안 단면 (종류 바꾸면 바로 다시)

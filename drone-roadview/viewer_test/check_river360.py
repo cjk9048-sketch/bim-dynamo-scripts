@@ -275,6 +275,12 @@ def main():
         report('j 추진 길이 = 구간 − 3 − 1.5', near(pl['jackLen'], (B - A) - 4.5, 1e-6), '%.3f' % pl['jackLen'])
         cut1 = J(ed, '__rv360.lineQty(%d).cut' % src0)
         report('j 추진 구간 = 터파기 없음 (토공 줄어듦)', cut1 < cut0 - 0.5 * (B - A), '%.1f → %.1f m³' % (cut0, cut1))
+        # JACK 1127: 터파기 띠 끝 = 수직구 바깥 벽 (발진 6/2 + 0.4 · 도달 3/2 + 0.4) · 수직구 가운데엔 끝 없음
+        ends = [e for pr in J(ed, '__rv360.rv.ends()') for e in pr]
+        dmin = lambda s: min(math.hypot(e[0] - __p[0], e[1] - __p[1]) for e in ends for __p in [J(ed, '__rc.at(%d, %f)' % (src0, s))])   # noqa: E731
+        dl_, da_, cl_, ca_ = dmin(A - 3.4), dmin(B + 1.9), dmin(A), dmin(B)
+        report('j 터파기 끝 = 수직구 바깥 벽 (발진 3.4 · 도달 1.9 m 바깥) · 가운데엔 없음', dl_ < 0.05 and da_ < 0.05 and cl_ > 1.0 and ca_ > 1.0,
+               '바깥 벽 %.3f · %.3f / 가운데 %.2f · %.2f' % (dl_, da_, cl_, ca_))
         shot(ed, SD, '01_추진_영역_테두리.png')
         errs(ed, 'j 찍기')
 
