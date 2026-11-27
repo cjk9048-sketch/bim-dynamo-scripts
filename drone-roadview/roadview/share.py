@@ -284,6 +284,14 @@ def gb(n):
     return f"{n / 1073741824:.1f} GB" if n >= 1073741824 else f"{n / 1048576:.0f} MB"
 
 
+def bust(html, stamp):
+    """index.html 안 data/ · viewer/ 의 js · css 주소에 ?v=stamp (예전 ?v= 는 바꿈) → 브라우저가 새 파일을 받음."""
+    import re
+    t = html.decode("utf-8", "replace")
+    t = re.sub(r'((?:src|href)=")((?:data|viewer)/[^"?#]+\.(?:js|css))(?:\?v=[^"#]*)?"', lambda m_: m_.group(1) + m_.group(2) + "?v=" + stamp + '"', t)
+    return t.encode("utf-8")
+
+
 def web_url(cfg, name):
     return cfg["Web"].rstrip("/") + "/" + urllib.parse.quote(name) + "/index.html"
 
@@ -364,7 +372,8 @@ def do_upload(cfg, folder, name, new):
     ent["url"] = web_url(cfg, rn)
     m[key] = ent
     done_files = ent["files"]
-    todo = [(r, p, sz, mt) for r, p, sz, mt in items if done_files.get(r) != [sz, mt]]
+    # index.html 은 아래에서 늘 다시 올림 (자료 주소에 ?v=올린 시각 · JACK 1127 «다시 올리기 해도 예전 것이 나와» = 브라우저가 예전 data/*.js 를 씀)
+    todo = [(r, p, sz, mt) for r, p, sz, mt in items if r != "index.html" and done_files.get(r) != [sz, mt]]
     total_bytes = sum(sz for _, _, sz, _ in items)
     print(f"파일 {len(items)}개 ({gb(total_bytes)}) · 올릴 것 {len(todo)}개 · 이름 {rn}", flush=True)
     failed = []
@@ -443,6 +452,17 @@ def do_upload(cfg, folder, name, new):
             save_manifest(m)
             s.logout()
         print(f"PC 에서 없어진 파일 {gone}개 NAS 에서도 지움", flush=True)
+    stamp = time.strftime("%y%m%d%H%M%S")
+    idx = next(((p, sz, mt) for r, p, sz, mt in items if r == "index.html"), None)
+    s = Session(cfg)
+    try:
+        with open(idx[0], "rb") as f:
+            s.upload(cfg["Folder"].rstrip("/") + "/" + rn, "index.html", bust(f.read(), stamp))
+    finally:
+        s.logout()
+    done_files["index.html"] = [idx[1], idx[2]]
+    ent["url"] = web_url(cfg, rn) + "?v=" + stamp
+    save_manifest(m)
     bad = check_web(ent["url"])
     if bad:
         print("⚠ " + bad)
