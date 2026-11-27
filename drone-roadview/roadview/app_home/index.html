@@ -112,7 +112,8 @@
   <aside class="eside">
     <div id="map" class="map"><div class="tiles"></div><svg class="ov"></svg><div class="mapnote hide" id="mapNote">지도 키 없음</div></div>
     <div id="mapGrip" class="mapGrip" title="끌어서 지도 높이 바꾸기 · 두 번 누르면 처음 높이"></div>
-    <div class="gcp">
+    <!-- 좌표 보정 · GCP = 만들 때 말고 만든 뒤 360 화면 «사진 위치 보정 › 점 찍어 맞추기» 에서 (JACK 1127 «이전처럼») · 기능 코드는 두고 칸만 숨김 -->
+    <div class="gcp" hidden style="display:none">
       <div class="gh"><b>좌표 보정 · GCP</b><div class="sp"></div>
         <button id="gLoad" class="mini" title="GCP 파일 (이름, X, Y, 표고)">불러오기</button>
         <button id="gMap" class="mini" title="위성지도에서 점 찍어 GCP 더하기">지도에 점</button></div>

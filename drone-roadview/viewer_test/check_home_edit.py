@@ -202,6 +202,7 @@ def run(w):
     zz = J('[RVEdit._map ? RVEdit._map.z : -1, (document.querySelector("#map .tiles img") || {}).style ? document.querySelector("#map .tiles img").style.width : ""]')
     ok('지도 확대 22 단계까지 (19 넘으면 타일 늘림)', zz[0] == 22 and zz[1] == '2048px', zz)
     J('(() => { const m = document.getElementById("map"), r = m.getBoundingClientRect(); for (let i = 0; i < 6; i++) m.dispatchEvent(new WheelEvent("wheel", { deltaY: 100, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, bubbles: true, cancelable: true })); })()')
+    ok('생성 화면에 좌표 보정 칸 없음 (만든 뒤 360 화면 «사진 위치 보정» 에서 · JACK 1127)', J('getComputedStyle(document.querySelector(".eside .gcp")).display') == 'none')
     J('RVEdit._G.active = -1; document.getElementById("gMap").click()')
     ok('[지도에 점] 켬 · 안내 띠(지도 단계)', J('RVEdit._G.mapAdd') and not J('document.getElementById("gHint").classList.contains("hide")')
        and '지도' in J('document.getElementById("gHint").textContent'), J('document.getElementById("gHint").textContent'))
