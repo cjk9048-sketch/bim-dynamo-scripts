@@ -110,7 +110,7 @@ def main():
         errs(ed, '카테고리')
 
         print('== q 수량 «부대공»')
-        click(ed, inp, 'aiQty')
+        ed.js("document.getElementById('qkBudae').click()")   # AI 칸 [부대공 수량] 단추는 뺌 (1127) → 개략공사비 «부대공» 갈래
         ed.frames(3)
         q = J(ed, '__rv360.ai.qty()')
         tot = {k: 0.0 for k in ('bd_curb', 'bd_wall', 'bd_asphalt', 'bd_concrete', 'bd_sidewalk')}

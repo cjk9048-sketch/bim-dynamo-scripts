@@ -3,7 +3,12 @@
 
     python -I check_map3d_ctx.py --out <3D 매핑 결과 폴더 (check_map3d_ug 와 같은 것)> --shots <그림 폴더>
 
-  m  메뉴: 빈 땅 = 보기 · 재기 · 새 관 · 기타 (관 항목 없음) · 관 위 = 관 항목 (새 관 없음) · 맨 위 좌표 = 누른 자리 ·
+  c  간섭 고리 (JACK 1127): 간섭 카테고리 접으면 없음 · 펴면 있음 · 화면 자리 = toScr(e, n, z 관 · 지장물 가장 가까운 두 점 가운데 높이) · 목록 누름 → 그 높이
+  z  꼭짓점 높이: 점 넣기 → 위아래 화살표 (ns-resize) · 끌기 (0.05 m · hasZ · 이웃 보간) · 간섭 풀림 · PageUp · Alt+↓ · Ctrl+Z/Y ·
+     한계 (관 윗면 ≤ 땅 − 0.3 · 알림) · [저장] → save_pipes (hasZ · z) · [토피로 되돌리기]
+  x  관 자르기: 메뉴 «여기서 관 자르기» (두 줄 · 길이 합 · -1 · -2 · 가시설 둘로) · Ctrl+Z 한 번 · 고치기 [자르기] 두 곳 → 사이 구간 → Delete 바로
+  s  새 관 스냅: 관 위 = «분기» (Alt = 끔 · 점 = 관 위 1 cm) · 다른 관 끝점 = «이어 그리기» → 같은 관이 늘어남 (관 개수 그대로 · 끝점 일치) · Ctrl+Z
+  m  메뉴: 빈 땅 = 보기 · 재기 · 새 관 · 기타 (관 항목 없음 · JACK 1127 뺀 것 없음) · 관 위 = 관 항목 (자르기 · 새 관 없음) · 맨 위 좌표 = 누른 자리 ·
      Esc · 바깥 누르기 · 휠로 닫힘 · 오른쪽 아래 구석에서 열어도 화면 안 · 관로 고치기 켜진 동안에도 열림 · 오른쪽 끌기 = 메뉴 없음
   v  보기: 여기 가운데로 · 좌표 · 표고 복사 (X, Y, Z) · 화면 그림 저장 (PNG) · 처음 시점 · 위에서 / 비스듬히 · 북쪽 보기
   d  재기: 거리 (점 셋 · Enter · 평면 / 경사 합 = 따로 셈) · 면적 (두 번 누르기로 닫기 · 평면 면적 = 따로 셈) ·
@@ -37,6 +42,8 @@ import check_map3d_ug as ug  # noqa: E402
 from check_map3d_ug import J, errs, report, serve, setup_page, shot  # noqa: E402
 
 WIN = ug.WIN
+ALT = 1                                                                  # CDP 누름쇠 (Alt 1 · Ctrl 2 · Shift 8)
+GONE = ['copy', 'home', 'top', 'north', 'dtm', 'files', 'ck', 'crop', 'ngHere']   # JACK 1127 «빨간 줄 = 오른쪽 메뉴에서 빼 · 옵션창에서»
 
 
 def rbtn(ed, typ, x, y, buttons):
@@ -121,6 +128,233 @@ def copy_site(out):
         html.replace('<script src="viewer/map3d.js"></script>', '<script src="viewer/hostmock.js"></script>\n<script src="viewer/map3d.js"></script>'))
 
 
+def cat_set(ed, inp, hid, on):
+    """오른쪽 칸 카테고리 머리줄을 진짜 마우스로 펴거나 접음."""
+    ed.js("(() => { if (document.getElementById('side').hidden) document.getElementById('tgSide').click(); document.getElementById('%s').scrollIntoView({ block: 'nearest' }); })()" % hid)
+    ed.frames(2)
+    if (J(ed, "document.getElementById('%s').getAttribute('aria-expanded')" % hid) == 'true') != on:
+        inp.el_click(hid)
+    ed.frames(3)
+
+
+SEG_JS = r"""(src, e, n) => {                     // 관 src 위 (e, n) 에 가장 가까운 곳 → {s (측점), d (평면 거리), zc (관 중심 보간)}
+  const M = __map3d, L = M.lines().find((q) => q.src === src), P = L.pts; let best = null;
+  for (let k = 0; k + 1 < P.length / 3; k++) {
+    const ax = P[k * 3], ay = P[k * 3 + 1], dx = P[k * 3 + 3] - ax, dy = P[k * 3 + 4] - ay, l2 = dx * dx + dy * dy;
+    const t = l2 > 0 ? Math.max(0, Math.min(1, ((e - ax) * dx + (n - ay) * dy) / l2)) : 0, d = Math.hypot(e - ax - t * dx, n - ay - t * dy);
+    if (!best || d < best.d) best = { s: L.cum[k] + (L.cum[k + 1] - L.cum[k]) * t, d: d, zc: M.zcAt(L, k) + (M.zcAt(L, k + 1) - M.zcAt(L, k)) * t };
+  }
+  return best;
+}"""
+
+
+def zcut(ed, inp, SD, s0, A):
+    """JACK 1127: 간섭 고리 (접기 · 진짜 높이) · 꼭짓점 높이 (위아래 화살표) · 관 자르기 · 새 관 스냅 (분기 · 끝점 이어 그리기 · Alt)."""
+    seg = lambda src, e, n: J(ed, '(%s)(%d, %f, %f)' % (SEG_JS, src, e, n))   # noqa: E731
+    ed.js('__map3d.edMode(false)')
+    print('== c 간섭 고리 (간섭 카테고리 펼 때만 · 자리 = 관 · 지장물 가장 가까운 두 점 가운데 높이)')
+    if not J(ed, "document.getElementById('tgObst').classList.contains('on')"):
+        ug.ui_click(ed, inp, 'tgObst')
+    okc = ed.wait_js('__map3d.cf().length > 0', 5)
+    sp = J(ed, '__map3d.cf()[0]')
+    report('c 간섭 자리 있음', okc and sp is not None, str(sp and {k: round(sp[k], 3) for k in ('e', 'n', 'z', 'g', 'c')}))
+    if not sp:
+        return
+    ed.js('(() => { const M = __map3d, T = M.T(); M.V.tgt = [%f + T[0], %f + T[1], %f + T[2]]; M.V.d = 16; M.V.el = 40; M.V.az = 30; M.redraw(); })()' % (sp['e'], sp['n'], sp['g']))
+    ed.js("__map3d.setMode('trench')")
+    cat_set(ed, inp, 'hd_cf', False)
+    r0 = J(ed, '__map3d.cfr()')
+    shot(ed, SD, '40_간섭_접음.png')
+    cat_set(ed, inp, 'hd_cf', True)
+    r1 = J(ed, '__map3d.cfr()')
+    shot(ed, SD, '41_간섭_폄.png')
+    exp = J(ed, '(() => { const M = __map3d; M.view(); return M.cf().map((q) => [M.toScr(q.e, q.n, q.z), M.toScr(q.e, q.n, q.g)]).filter((q) => q[0]); })()')
+    report('c 접으면 고리 없음 · 펴면 고리', len(r0) == 0 and len(r1) == len(exp) > 0, '접음 %d · 폄 %d' % (len(r0), len(r1)))
+    dz = max((math.hypot(a[0] - b[0][0], a[1] - b[0][1]) for a, b in zip(r1, exp)), default=99)
+    dg = min((math.hypot(a[0] - b[1][0], a[1] - b[1][1]) for a, b in zip(r1, exp) if b[1]), default=0)
+    report('c 고리 화면 자리 = toScr(e, n, z 관 높이) · 땅 g 아님', dz < 0.5 and dg > 5, '높이 자리 어긋남 %.2f px · 땅 자리와 %.0f px' % (dz, dg))
+    pz = seg(sp['src'], sp['e'], sp['n'])
+    oz = J(ed, '(() => { const O = __map3d.obst()[%d], P = O.pts; let best = null; for (let k = 0; k + 1 < P.length / 3; k++) { const ax = P[k * 3], ay = P[k * 3 + 1], dx = P[k * 3 + 3] - ax, dy = P[k * 3 + 4] - ay, l2 = dx * dx + dy * dy; '
+                'const t = l2 > 0 ? Math.max(0, Math.min(1, ((%f - ax) * dx + (%f - ay) * dy) / l2)) : 0, d = Math.hypot(%f - ax - t * dx, %f - ay - t * dy); if (!best || d < best[0]) best = [d, P[k * 3 + 2] + (P[k * 3 + 5] - P[k * 3 + 2]) * t]; } return best[1]; })()'
+                % (sp['oi'], sp['e'], sp['n'], sp['e'], sp['n']))
+    report('c 고리 높이 = 관 중심 ↔ 지장물 중심 사이 (땅 아래)', min(pz['zc'], oz) - 0.02 <= sp['z'] <= max(pz['zc'], oz) + 0.02 and sp['z'] < sp['g'] - 0.3,
+           'z %.3f · 관 %.3f · 지장물 %.3f · 땅 %.3f' % (sp['z'], pz['zc'], oz, sp['g']))
+    ed.js("document.querySelector('#qList button').click()"); ed.frames(2)
+    t = J(ed, '__map3d.V.tgt'); T = J(ed, '__map3d.T()')
+    report('c 목록 누름 → 그 자리 (높이 z)', abs(t[0] - sp['e'] - T[0]) < 1e-6 and abs(t[1] - sp['n'] - T[1]) < 1e-6 and abs(t[2] - sp['z'] - T[2]) < 1e-6, str([round(v, 3) for v in t]))
+    errs(ed, '간섭 고리')
+
+    print('== z 꼭짓점 높이 (위아래 화살표 · 0.05 m · Shift 0.01 · PageUp/PageDown · Alt+↓ · 한계 · Ctrl+Z · 저장 · 토피로)')
+    src = sp['src']
+    n_cf0 = J(ed, '__map3d.cf().length')
+    ed.js('__t.look(%d, %f, 14, 30, 120)' % (src, pz['s'])); ed.frames(3)
+    ed.js('__map3d.edMode(true); __map3d.ED.sel = %d; __map3d.redraw()' % src); ed.frames(3)
+    nc0 = J(ed, '__t.L(%d).ctrl.length' % src)
+    q = J(ed, '__t.at(%d, %f, true)' % (src, pz['s']))
+    inp.dblclick(q[0], q[1])                                   # 간섭 자리에 점 넣기 → 그 점 고름 → 화살표
+    ed.frames(3)
+    hi = J(ed, '__map3d.ED.hi')
+    zg = J(ed, '__map3d.zg()')
+    report('z 점 넣기 → 그 점 고름 → 화살표 보임', J(ed, '__t.L(%d).ctrl.length' % src) == nc0 + 1 and hi > 0 and zg['on'], 'hi %s · %s' % (hi, zg))
+    L = J(ed, '(() => { const L = __t.L(%d); return { ctrl: L.ctrl, cum: Array.from(L.cum), zc: Array.from({ length: L.pts.length / 3 }, (_, k) => __map3d.zcAt(L, k)), g: Array.from({ length: L.pts.length / 3 }, (_, k) => __map3d.gAt(L, k)), D: L.dia }; })()' % src)
+    k = L['ctrl'][hi]; k0 = L['ctrl'][hi - 1]; k1 = L['ctrl'][hi + 1]
+    s0z, u = zg['s0'], zg['u']
+    dn = (s0z[0] - u[0] * 24, s0z[1] - u[1] * 24)             # 아래 화살표 가운데
+    inp.move(*dn)
+    cur = J(ed, "getComputedStyle(document.getElementById('c')).cursor")
+    report('z 화살표 위 커서 = ns-resize', cur == 'ns-resize', cur)
+    inp.press(dn[0], dn[1])
+    inp.drag_to(dn, (dn[0] - u[0] * 30, dn[1] - u[1] * 30), steps=10)   # 아래로 30 px
+    shot(ed, SD, '42_높이_끄는중.png')
+    inp.release(dn[0] - u[0] * 30, dn[1] - u[1] * 30)
+    raw = J(ed, 'window.RV_PIPES.lines[%d]' % src)
+    zs = [p[2] for p in raw['pts']]
+    znew, dzv = zs[k], zs[k] - L['zc'][k]
+    okw = raw.get('hasZ') is True and dzv < -0.1 and abs(znew * 20 - round(znew * 20)) < 1e-6
+    errn = 0.0
+    for b in range(len(zs)):                                   # 이웃 = 바뀐 만큼을 직선으로 나눔 · 나머지 그대로
+        w = 1.0 if b == k else (L['cum'][b] - L['cum'][k0]) / (L['cum'][k] - L['cum'][k0]) if k0 < b < k else (L['cum'][k1] - L['cum'][b]) / (L['cum'][k1] - L['cum'][k]) if k < b < k1 else 0.0
+        errn = max(errn, abs(zs[b] - (L['zc'][b] + dzv * w)))
+    report('z 끌기 → 그 점 z 바뀜 (0.05 m 단위) · hasZ · 이웃 보간', okw and errn < 0.002, 'Δ %+.3f m · 표고 %.3f · 이웃 어긋남 %.4f m' % (dzv, znew, errn))
+    ok = ed.wait_js('__map3d.cf().length < %d' % n_cf0, 3)
+    report('z 내리면 간섭 풀림 → 고리 줄어듦', ok, '%d → %d' % (n_cf0, J(ed, '__map3d.cf().length')))
+    shot(ed, SD, '43_높이_내림.png')
+    nu = J(ed, '__map3d.ED.undo.length')
+    inp.key('PageUp', 'PageUp', 33)
+    z2 = J(ed, 'window.RV_PIPES.lines[%d].pts[%d][2]' % (src, k))
+    inp.key('ArrowDown', 'ArrowDown', 40, ALT)
+    z3 = J(ed, 'window.RV_PIPES.lines[%d].pts[%d][2]' % (src, k))
+    report('z PageUp +0.1 · Alt+↓ −0.1 (기록 2개)', abs(z2 - znew - 0.1) < 1e-6 and abs(z3 - znew) < 1e-6 and J(ed, '__map3d.ED.undo.length') == nu + 2, '%.3f → %.3f → %.3f' % (znew, z2, z3))
+    inp.key('z', 'KeyZ', 90, ce.CTRL)
+    report('z Ctrl+Z → 앞 높이', abs(J(ed, 'window.RV_PIPES.lines[%d].pts[%d][2]' % (src, k)) - z2) < 1e-6)
+    inp.key('y', 'KeyY', 89, ce.CTRL)
+    ed.js('__map3d.ED.hi = %d; __map3d.redraw()' % hi)
+    for _ in range(40):                                        # 한계: 관 윗면 ≤ 땅 − 0.3
+        inp.key('PageUp', 'PageUp', 33)
+    zt = J(ed, 'window.RV_PIPES.lines[%d].pts[%d][2]' % (src, k))
+    tt = J(ed, "document.getElementById('toast').textContent")
+    zs = [p[2] for p in J(ed, 'window.RV_PIPES.lines[%d].pts' % src)]
+    over = [zs[b] + L['D'] / 2 - (L['g'][b] - 0.3) for b in range(len(zs))]     # 0 이하 = 관 윗면이 땅 0.3 m 아래
+    report('z 한계 = 관 윗면 땅 0.3 m 아래 (닿은 곳 0) · 알림', max(over) <= 0.002 and max(over) > -0.002 and zt + L['D'] / 2 <= L['g'][k] - 0.3 + 0.002 and '0.3 m 아래' in tt,
+           '가장 높은 곳 %.4f m · 고른 점 윗면 %.3f / 땅 %.3f · %s' % (max(over), zt + L['D'] / 2, L['g'][k], tt))
+    nsv = len(calls(ed, 'save_pipes'))
+    time.sleep(1.0)                                            # 고친 것 모음 (0.8 초) 뒤 [저장]
+    ed.js("document.getElementById('bSave').click()")
+    ed.wait_js("__host.calls.filter((c) => c.name === 'save_pipes').length > %d" % nsv, 5)
+    time.sleep(0.3)
+    sv = calls(ed, 'save_pipes')
+    got = json.loads(sv[-1].split('=', 1)[1].strip().rstrip(';'))['lines'][src] if sv else {}
+    report('z [저장] → save_pipes 에 hasZ · z', got.get('hasZ') is True and abs(got['pts'][k][2] - zt) < 1e-6 and all(p[2] is not None for p in got['pts']), '%d 번' % len(sv))
+    shot(ed, SD, '44_높이_고침.png')
+    ok0 = J(ed, "!document.getElementById('edZ0').hidden")
+    inp.el_click('edZ0')
+    raw = J(ed, 'window.RV_PIPES.lines[%d]' % src)
+    zz = J(ed, '(() => { const L = __t.L(%d); return [__map3d.zcAt(L, %d), __map3d.gAt(L, %d) - __map3d.S.cover - L.dia / 2]; })()' % (src, k, k))
+    report('z [토피로 되돌리기] → hasZ 끔 · 평균매설깊이', ok0 and raw.get('hasZ') is False and abs(zz[0] - zz[1]) < 1e-9 and J(ed, "document.getElementById('edZ0').hidden"), str([round(v, 3) for v in zz]))
+    inp.key('z', 'KeyZ', 90, ce.CTRL)
+    report('z Ctrl+Z → 높이 다시', J(ed, 'window.RV_PIPES.lines[%d].hasZ' % src) is True)
+    errs(ed, '높이')
+
+    print('== x 관 자르기 (메뉴 «여기서 관 자르기» · 고치기 [자르기] 두 곳 → 사이 구간 → Delete · Ctrl+Z)')
+    ed.js('__map3d.edMode(false)')
+    orig0 = J(ed, 'JSON.stringify(window.RV_PIPES.lines[0])')
+    n0 = J(ed, 'window.RV_PIPES.lines.length')
+    len0 = J(ed, '__t.L(0).len')
+    sc = s0 + 4
+    ed.js('__t.look(0, %f, 40, 50, 60)' % sc); ed.frames(3)
+    pt = J(ed, '__t.at(0, %f, true)' % sc)
+    okm = menu(ed, inp, pt[0], pt[1], 'pCut')
+    ed.frames(2)
+    a_, b_ = J(ed, 'window.RV_PIPES.lines[0]'), J(ed, 'window.RV_PIPES.lines[%d]' % n0)
+    la, lb = J(ed, '__t.L(0).len'), J(ed, '__t.L(%d).len' % n0)
+    sa = J(ed, 'window.RV_PIPES.lines[0].shore || []'); sb = J(ed, 'window.RV_PIPES.lines[%d].shore || []' % n0)
+    ea, eb = a_['pts'][-1], b_['pts'][0]
+    okx = okm and J(ed, 'window.RV_PIPES.lines.length') == n0 + 1 and abs(la + lb - len0) < 0.01 and abs(la - sc) < 0.6 and math.hypot(ea[0] - eb[0], ea[1] - eb[1]) < 1e-6
+    okx = okx and a_['label'].endswith('-1') and b_['label'].endswith('-2') and a_['dia'] == b_['dia'] and a_.get('mat') == b_.get('mat')
+    report('x 메뉴 자르기 → 두 줄 (길이 합 · 끝 = 시작 · 관경 · 관종 · 이름 -1 · -2)', okx, '%.2f + %.2f = %.2f / %.2f · %s · %s' % (la, lb, la + lb, len0, a_['label'], b_['label']))
+    oks = any(abs(q['b'] - la) < 0.02 for q in sa) and any(abs(q['a']) < 0.02 for q in sb)
+    report('x 가시설 걸친 것 = 자른 자리에서 둘로', oks, '%s | %s' % ([(q['a'], q['b']) for q in sa], [(q['a'], q['b']) for q in sb]))
+    shot(ed, SD, '45_관자름.png')
+    inp.key('z', 'KeyZ', 90, ce.CTRL)
+    report('x Ctrl+Z → 한 번에 두 줄 되돌림', J(ed, 'JSON.stringify(window.RV_PIPES.lines[0])') == orig0 and J(ed, 'window.RV_PIPES.lines[%d].pts.length' % n0) == 0)
+    p1, p2 = J(ed, '__t.at(0, %f, true)' % (sc - 6)), J(ed, '__t.at(0, %f, true)' % (sc + 6))
+    ed.js('__map3d.edMode(true)'); ed.frames(2)
+    inp.el_click('edCut')
+    cur = J(ed, "getComputedStyle(document.getElementById('c')).cursor")
+    inp.click(p1[0], p1[1])
+    inp.click(p2[0], p2[1])
+    sel = J(ed, '__map3d.ED.sel')
+    ls = J(ed, '__t.L(%d) ? __t.L(%d).len : -1' % (sel, sel)) if sel >= 0 else -1
+    report('x [자르기] 켬 (십자) → 두 곳 → 사이 구간 고름 (12 m)', cur == 'crosshair' and sel >= 0 and abs(ls - 12) < 0.6 and not J(ed, '__map3d.ED.cut'), '%s · 고른 %s · %.2f m' % (cur, sel, ls))
+    shot(ed, SD, '46_구간고름.png')
+    nv = J(ed, '__map3d.lines().length')
+    inp.key('Delete', 'Delete', 46)
+    report('x Delete → 그 구간 바로 지움 (알림 단추 없음)', J(ed, '__map3d.lines().length') == nv - 1 and J(ed, 'window.RV_PIPES.lines[%d].pts.length' % sel) == 0 and not J(ed, "!!document.querySelector('#toast.show button')"))
+    shot(ed, SD, '47_구간지움.png')
+    tl = J(ed, '__map3d.lines().reduce((s, L) => s + L.len, 0)')
+    ed.js('__map3d.edMode(false)')
+    for _ in range(6):
+        if J(ed, 'JSON.stringify(window.RV_PIPES.lines[0])') == orig0:
+            break
+        inp.key('z', 'KeyZ', 90, ce.CTRL)
+    report('x Ctrl+Z 여러 번 → 처음 관 그대로', J(ed, 'JSON.stringify(window.RV_PIPES.lines[0])') == orig0 and J(ed, '__map3d.lines().reduce((s, L) => s + L.len, 0)') > tl + 11)
+    errs(ed, '자르기')
+
+    print('== s 새 관 스냅 (관 위 = 분기 · 끝점 = 이어 그리기 · Alt = 끔)')
+    ed.js('__t.look(0, %f, 40, 50, 60)' % s0); ed.frames(3)
+    ug.ui_click(ed, inp, 'pNew')
+    q = J(ed, '__t.at(0, %f, true)' % (s0 + 3))
+    h = (q[0] + 3, q[1] + 4)
+    inp.move(*h)
+    sn = J(ed, '__map3d.MS.snap && { kind: __map3d.MS.snap.kind, src: __map3d.MS.snap.src, name: __map3d.MS.snap.name }')
+    report('s 관 가까이 → 스냅 표시 «분기 · 이름»', J(ed, '__map3d.MS.kind') == 'pipe' and sn and sn['kind'] == 'mid' and sn['src'] == 0, str(sn))
+    shot(ed, SD, '48_스냅_분기.png')
+    inp._m('mouseMoved', h[0], h[1], mods=ALT); ed.frames(2)
+    report('s Alt → 스냅 없음', J(ed, '__map3d.MS.snap') is None)
+    inp.click(*h)
+    p0 = J(ed, '__map3d.MS.pts[0]'); T = J(ed, '__map3d.T()')
+    on = seg(0, p0[0] - T[0], p0[1] - T[1])
+    report('s 누르기 → 점 = 관 위 (평면 1 cm · 관 중심 높이)', on['d'] < 0.01 and abs(p0[2] - T[2] - on['zc']) < 0.01, '%.4f m · 높이 차 %.4f m' % (on['d'], p0[2] - T[2] - on['zc']))
+    inp.click(*A)
+    inp.key('Enter', 'Enter', 13)
+    inp.el_click('npGo')
+    time.sleep(0.5)
+    nr = J(ed, 'window.RV_PIPES.lines[window.RV_PIPES.lines.length - 1]')
+    fp = nr['pts'][0]
+    report('s 새 관 첫 점 = 기존 관 위 (분기 · 1 cm)', seg(0, fp[0], fp[1])['d'] < 0.01, '%.4f m' % seg(0, fp[0], fp[1])['d'])
+    inp.key('z', 'KeyZ', 90, ce.CTRL)
+    L1 = J(ed, '(() => { const L = __t.L(1), c = L.pts.length / 3; return { n: window.RV_PIPES.lines[1].pts.length, e: L.pts[c * 3 - 3], nn: L.pts[c * 3 - 2], len: L.len }; })()')
+    nl = J(ed, 'window.RV_PIPES.lines.length')
+    ed.js('__t.look(1, %f, 30, 55, 20)' % L1['len']); ed.frames(3)
+    se = J(ed, '(() => { const M = __map3d, L = __t.L(1), c = L.pts.length / 3 - 1; M.view(); return M.toScr(L.pts[c * 3], L.pts[c * 3 + 1], M.gAt(L, c)); })()')
+    ug.ui_click(ed, inp, 'pNew')
+    inp.move(se[0] + 5, se[1] + 4)
+    sn = J(ed, '__map3d.MS.snap && { kind: __map3d.MS.snap.kind, src: __map3d.MS.snap.src, end: __map3d.MS.snap.end }')
+    report('s 다른 관 끝점 가까이 → «이어 그리기» 스냅 (끝점 먼저)', sn and sn['kind'] == 'end' and sn['src'] == 1 and sn['end'] == 1, str(sn))
+    shot(ed, SD, '49_스냅_끝점.png')
+    inp.click(se[0] + 5, se[1] + 4)
+    far = None
+    for dx, dy in ((150, 70), (-150, 70), (150, -70), (-150, -70)):
+        if pick(ed, se[0] + dx, se[1] + dy) is not None and J(ed, '__map3d.snapAt(%f, %f)' % (se[0] + dx, se[1] + dy)) is None:
+            far = (se[0] + dx, se[1] + dy)
+            break
+    wf = pick(ed, *far) if far else None
+    if far:
+        inp.click(*far)
+    inp.key('Enter', 'Enter', 13)
+    time.sleep(0.3)
+    r1 = J(ed, 'window.RV_PIPES.lines[1]')
+    cps = [r1['pts'][i] for i in r1['ctrl']]
+    okj = any(math.hypot(c[0] - L1['e'], c[1] - L1['nn']) < 1e-3 for c in cps)
+    okl = wf is not None and math.hypot(cps[-1][0] - (wf[0] - T[0]), cps[-1][1] - (wf[1] - T[1])) < 0.002
+    report('s 끝점에서 이어 그리기 → 같은 관 점 늘어남 · 관 개수 그대로 · 끝점 일치', far and len(r1['pts']) > L1['n'] and J(ed, 'window.RV_PIPES.lines.length') == nl and okj and okl,
+           '점 %d → %d · 관 %d · %s' % (L1['n'], len(r1['pts']), J(ed, 'window.RV_PIPES.lines.length'), J(ed, "document.getElementById('toast').textContent")))
+    shot(ed, SD, '50_이어그리기.png')
+    inp.key('z', 'KeyZ', 90, ce.CTRL)
+    report('s Ctrl+Z → 이어 그린 것 되돌림', len(J(ed, 'window.RV_PIPES.lines[1].pts')) == L1['n'])
+    errs(ed, '스냅')
+
+
 def wait_reload(ed, timeout=20):
     return ed.wait_js("!window.__mark && performance.getEntriesByType('navigation')[0].type === 'reload' && window.__map3d && "
                       "document.getElementById('load').style.display === 'none' && window.__drawn > 0", timeout)
@@ -162,8 +396,9 @@ def main():
         rclick(ed, *A)
         cx = J(ed, '__map3d.ctx()')
         it = cx['items']
-        want = ['center', 'copy', 'shot', 'home', 'top', 'north', 'dtm', 'mDist', 'mArea', 'mHeight', 'mProf', 'pNew', 'photo', 'xray', 'pipes', 'files', 'ck', 'crop', 'ngHere']
+        want = ['center', 'shot', 'mDist', 'mArea', 'mHeight', 'mProf', 'pNew', 'photo', 'xray', 'pipes']
         report('m 빈 땅 항목', it == want, str(it))
+        report('m 뺀 항목 없음 (JACK 1127 · 옵션 칸에서)', not any(k in it for k in GONE), str([k for k in GONE if k in it]))
         report('m 묶음 사이 구분선 3', J(ed, "document.querySelectorAll('#ctxMenu .sep').length") == 3)
         w = pick(ed, *A)
         hd = J(ed, "document.querySelector('#ctxMenu .cHd').textContent")
@@ -196,7 +431,7 @@ def main():
         pt = J(ed, '__t.at(0, %f, true)' % s0)
         rclick(ed, pt[0], pt[1])
         it = J(ed, '__map3d.ctx().items')
-        report('m 관 위 = 관 항목 · 새 관 없음', all(k in it for k in ('pInfo', 'pEdit', 'pShore', 'pDel')) and 'pNew' not in it, str(it))
+        report('m 관 위 = 관 항목 (자르기 포함) · 새 관 없음', all(k in it for k in ('pInfo', 'pEdit', 'pShore', 'pCut', 'pDel')) and it.index('pCut') == it.index('pDel') - 1 and 'pNew' not in it, str(it))
         shot(ed, SD, '20b_메뉴_관.png')
         inp.key('Escape', 'Escape', 27)
         ed.js('__map3d.edMode(true)')
@@ -212,27 +447,20 @@ def main():
         t = J(ed, '__map3d.V.tgt')
         report('v 여기 가운데로', max(abs(t[i] - w[i]) for i in range(3)) < 1e-3, str([round(v, 3) for v in t]))
         ed.js('__t.look(0, %f, 40, 50, 60)' % s0); ed.frames(3)
-        w = pick(ed, *A)
-        menu(ed, inp, A[0], A[1], 'copy')
-        cp = calls(ed, 'copy_text')
-        val = [float(v) for v in cp[-1].split(',')] if cp else []
-        report('v 좌표 · 표고 복사 «X, Y, Z»', len(val) == 3 and max(abs(val[i] - (w[i] + O[i])) for i in range(3)) < 0.0011, cp[-1] if cp else '-')
         menu(ed, inp, A[0], A[1], 'shot')
         time.sleep(0.3)
         si = calls(ed, 'save_image')
         report('v 화면 그림 저장 (PNG)', si and si[-1]['head'] == 'data:image/png;base64,' and si[-1]['len'] > 20000 and si[-1]['name'].endswith('.png'), str(si[-1] if si else '-'))
-        menu(ed, inp, A[0], A[1], 'top')
+        ug.ui_click(ed, inp, 'bTop')                               # 위에서 · 북쪽 · 처음 시점 = 옵션 칸 «보기» 단추 (JACK 1127 메뉴에서 뺌)
         el1 = J(ed, '__map3d.V.el')
-        rclick(ed, 640, 450)
-        lab = J(ed, "document.querySelector('#ctxMenu [data-id=\"top\"] span').textContent")
-        q = item_xy(ed, 'top'); inp.click(*q)
-        report('v 위에서 보기 → 비스듬히', el1 > 80 and lab == '비스듬히 보기' and J(ed, '__map3d.V.el') < 80, '%.1f · %s' % (el1, lab))
-        menu(ed, inp, 640, 450, 'north')
-        report('v 북쪽 보기', J(ed, '__map3d.V.az') == 0)
+        ug.ui_click(ed, inp, 'bTop')
+        report('v [위에서] → 비스듬히 (옵션 칸)', el1 > 80 and J(ed, '__map3d.V.el') < 80, '%.1f' % el1)
+        ug.ui_click(ed, inp, 'vNorth')
+        report('v [북쪽] (옵션 칸)', J(ed, '__map3d.V.az') == 0)
         ed.js('(() => { const V = __map3d.V; V.az = 133; V.el = 70; V.d = 11; V.tgt = [5, 5, 0]; __map3d.redraw(); })()'); ed.frames(2)
-        menu(ed, inp, 640, 450, 'home')
+        ug.ui_click(ed, inp, 'vHome')
         hv = J(ed, '[__map3d.V.az, __map3d.V.el, __map3d.V.d]')
-        report('v 처음 시점', hv[0] == 25 and hv[1] == 38 and hv[2] > 50, str([round(v, 1) for v in hv]))
+        report('v [처음 시점] (옵션 칸)', hv[0] == 25 and hv[1] == 38 and hv[2] > 50, str([round(v, 1) for v in hv]))
         errs(ed, '보기')
 
         print('== d 재기')
@@ -355,10 +583,9 @@ def main():
         ed.frames(2)
         inp.key('Delete', 'Delete', 46)
         ed.frames(2)
-        okc = toast_btn(ed, inp)
-        ed.frames(2)
-        report('nb 고치기 · 점 안 고르고 Delete → 확인 → 관 지움', okm and okc and J(ed, 'window.RV_PIPES.lines[%d].pts.length' % sb) == 0 and sb not in J(ed, '__map3d.lines().map((L) => L.src)'),
-               str([okm, okc]))
+        nob = not J(ed, "!!document.querySelector('#toast.show button')")
+        report('nb 고치기 · 점 안 고르고 Delete → 바로 지움 (알림 단추 없음 · JACK 1127)', okm and nob and J(ed, 'window.RV_PIPES.lines[%d].pts.length' % sb) == 0 and sb not in J(ed, '__map3d.lines().map((L) => L.src)'),
+               str([okm, nob, J(ed, "document.getElementById('toast').textContent")]))
         inp.key('Escape', 'Escape', 27)
         errs(ed, '분기')
 
@@ -391,19 +618,35 @@ def main():
         q1 = J(ed, '__t.at(1, 9, false)')
         b1 = J(ed, 'JSON.stringify(window.RV_PIPES.lines[1])')
         if q1:
+            nv0 = J(ed, '__map3d.lines().length')
             okm = menu(ed, inp, q1[0], q1[1], 'pDel')
-            okc = okm and toast_btn(ed, inp)
             ed.frames(2)
             gone = J(ed, 'window.RV_PIPES.lines[1].pts.length') == 0 and 1 not in J(ed, '__map3d.lines().map((L) => L.src)')
-            report('p 지우기 (확인 → 빈 줄 · 보기에서 빠짐)', okc and gone)
+            nob = not J(ed, "!!document.querySelector('#toast.show button')")
+            report('p 지우기 = 바로 (빈 줄 · 보기에서 빠짐 · 관 −1 · 알림 단추 없음)', okm and gone and nob and J(ed, '__map3d.lines().length') == nv0 - 1, J(ed, "document.getElementById('toast').textContent"))
             shot(ed, SD, '27_관지움.png')
-            oku = toast_btn(ed, inp)
-            report('p 되돌리기', oku and J(ed, 'JSON.stringify(window.RV_PIPES.lines[1])') == b1 and 1 in J(ed, '__map3d.lines().map((L) => L.src)'))
+            ok_out = J(ed, '__map3d.ED.on') is False
+            inp.key('z', 'KeyZ', 90, ce.CTRL)                      # 고치기 밖에서도 Ctrl+Z (JACK 1127 «상시»)
+            back = J(ed, 'JSON.stringify(window.RV_PIPES.lines[1])') == b1 and 1 in J(ed, '__map3d.lines().map((L) => L.src)')
+            report('p 고치기 밖 Ctrl+Z → 되살아남', ok_out and back)
+            inp.key('y', 'KeyY', 89, ce.CTRL)
+            redo = J(ed, 'window.RV_PIPES.lines[1].pts.length') == 0
+            inp.key('z', 'KeyZ', 90, ce.CTRL)
+            report('p Ctrl+Y → 다시 지움 · Ctrl+Z → 되살아남', redo and J(ed, 'JSON.stringify(window.RV_PIPES.lines[1])') == b1)
+            ed.js("__map3d.reveal('qGap')"); ed.frames(2)
+            ed.js("document.getElementById('qGap').focus()")
+            nu = J(ed, '__map3d.ED.undo.length')
+            inp.key('z', 'KeyZ', 90, ce.CTRL)
+            report('p 입력 칸 안 Ctrl+Z = 무시', J(ed, '__map3d.ED.undo.length') == nu and J(ed, 'JSON.stringify(window.RV_PIPES.lines[1])') == b1)
+            ed.js("document.activeElement && document.activeElement.blur()")
         else:
             report('p 가지 관 화면에 보임', False)
         errs(ed, '관')
 
+        zcut(ed, inp, SD, s0, A)                                   # JACK 1127: 간섭 고리 · 관 높이 · 관 자르기 · 새 관 스냅
+
         print('== o 기타')
+        ed.js("__map3d.setMode('area'); __map3d.edMode(false)")
         ed.js('__t.look(0, %f, 40, 50, 60)' % s0); ed.frames(3)
         w = pick(ed, *A)
         menu(ed, inp, A[0], A[1], 'photo')
@@ -431,26 +674,33 @@ def main():
         p1 = J(ed, '__map3d.S.pipes')
         menu(ed, inp, A[0], A[1], 'pipes')
         report('o 관로 숨기기 · 보이기', p1 is False and J(ed, '__map3d.S.pipes') is True)
-        menu(ed, inp, A[0], A[1], 'files')
+        ug.ui_click(ed, inp, 'bFiles')                             # 결과물 폴더 · 검사점 = 옵션 칸 단추 (JACK 1127 메뉴에서 뺌)
         time.sleep(0.2)
-        report('o 결과물 폴더', len(calls(ed, 'open_results')) == 1)
+        report('o [결과물 폴더] (옵션 칸)', len(calls(ed, 'open_results')) == 1)
         w = pick(ed, *B)
         ed.js("__host.ckpicks = [{ ok: true, points: [{ name: 'K1', E: %f, N: %f, Z: %f }, { name: 'K2', E: %f, N: %f, Z: null }], note: '' }]"
               % (w[0] + O[0] + 0.3, w[1] + O[1] - 0.2, w[2] + O[2], w[0] + O[0] + 80, w[1] + O[1] + 80))
-        menu(ed, inp, B[0], B[1], 'ck')
+        ug.ui_click(ed, inp, 'bCheck')
+        ed.wait_js("document.getElementById('ck').style.display === 'flex'", 5)
+        w = pick(ed, *B)
+        inp.click(*B)
         ok = ed.wait_js('window.__ck && window.__ck.measured === 1', 5)
         m = J(ed, '__map3d.CK.pts[0].m')
-        report('o 검사점 찍기 (파일 고르기 → 가까운 K1 = 이 자리)', ok and len(calls(ed, 'pick_checkpoints')) == 1 and m and math.hypot(m[0] - w[0] - O[0], m[1] - w[1] - O[1]) < 1e-3, str(J(ed, 'window.__ck')))
+        report('o [검사점] (파일 고르기) → 모델 누르기 → K1 = 이 자리', ok and len(calls(ed, 'pick_checkpoints')) == 1 and m and w and math.hypot(m[0] - w[0] - O[0], m[1] - w[1] - O[1]) < 1e-3, str(J(ed, 'window.__ck')))
         shot(ed, SD, '29_검사점.png')
         errs(ed, '기타')
 
         print('== k 잘라내기')
         ed.js("document.getElementById('ckClose').click()")
         ed.js('__t.look(0, %f, 60, 50, 60)' % s0); ed.frames(3)
-        w = pick(ed, *A)
-        menu(ed, inp, A[0], A[1], 'crop')
-        st = J(ed, '{ k: __map3d.MS.kind, rect: __map3d.MS.rect, n: __map3d.MS.pts.length, el: __map3d.V.el, tb: !document.getElementById("trimBox").hidden }')
-        report('k 위에서 보기 · 네모 · 첫 구석 = 누른 자리 · 다듬기 칸', st['k'] == 'crop' and st['rect'] and st['n'] == 1 and st['el'] > 80 and st['tb'] and len(calls(ed, 'crop_get')) >= 1, str(st))
+        ug.ui_click(ed, inp, 'tbCut')                              # 잘라내기 = 옵션 칸 «결과물» [잘라내기] (JACK 1127 메뉴에서 뺌) → 첫 구석 누르기
+        ed.frames(3)
+        F = (WIN[0] * 0.4 - 130, WIN[1] * 0.5 - 75)
+        w = pick(ed, *F)
+        inp.click(*F)
+        st = J(ed, '{ k: __map3d.MS.kind, rect: __map3d.MS.rect, n: __map3d.MS.pts.length, el: __map3d.V.el, tb: !document.getElementById("trimBox").hidden, p: __map3d.MS.pts[0] }')
+        report('k [잘라내기] → 위에서 보기 · 네모 · 첫 구석 = 누른 자리 · 다듬기 칸', st['k'] == 'crop' and st['rect'] and st['n'] == 1 and st['el'] > 80 and st['tb'] and len(calls(ed, 'crop_get')) >= 1
+               and w and max(abs(st['p'][i] - w[i]) for i in range(3)) < 1e-3, str({k: st[k] for k in ('k', 'rect', 'n', 'el', 'tb')}))
         ed.frames(3)
         c0 = J(ed, '__map3d.toScr(__map3d.MS.pts[0][0] - __map3d.T()[0], __map3d.MS.pts[0][1] - __map3d.T()[1], __map3d.MS.pts[0][2] - __map3d.T()[2])')
         q2 = (c0[0] + 260, c0[1] + 150)

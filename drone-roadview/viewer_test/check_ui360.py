@@ -190,19 +190,84 @@ def main():
         html = open(os.path.join(REPO, 'viewer', 'index.html'), encoding='utf-8').read()
         i_sh, i_rv, i_q = html.index('data-cat="shore"'), html.find('<section class="cat" data-cat="river">'), html.index('data-cat="qty"')
         report('c «가시설» 다음 «하천 추진 · 횡단» 카테고리 (3D 와 같은 꼴 · 시험 = check_river360)', i_sh < i_rv < i_q and J(ed, "!document.querySelector('[data-cat=river]').hidden"), str(i_rv))
-        report('c 처음 = 보기 · 관로 · 터파기 펴짐', opened(ed) == ['view', 'pipe', 'trench'], json.dumps(opened(ed)))
-        for c in ('view', 'shore', 'qty', 'cf'):
+        report('c 처음 = 보기 만 펼침 (JACK 1127) · 사진 위치 보정도 접힘', opened(ed) == ['view'], json.dumps(opened(ed)))
+        for c in ('pipe', 'trench', 'shore', 'qty', 'cf'):
             click(ed, inp, HEAD[c])
+        click(ed, inp, HEAD['view'])
         o1 = opened(ed)
         shot(ed, '02_카테고리_펼침.png', SD)
         report('c 머리줄 누르기 = 펴고 접기', o1 == ['pipe', 'trench', 'shore', 'qty', 'cf'], json.dumps(o1))
         pg.load(True, clear=False)
-        report('c 다시 열어도 기억 (rv_360:cats)', opened(ed) == o1, json.dumps(opened(ed)))
+        report('c 다시 열면 보기만 펼침 (기억한 펼침 안 씀)', opened(ed) == ['view'], json.dumps(opened(ed)))
+        for c in ('pipe', 'trench'):
+            click(ed, inp, HEAD[c])
+        report('c 처음 모양으로 (아래 시험이 기대)', opened(ed) == ['view', 'pipe', 'trench'], json.dumps(opened(ed)))
         errs(ed, 'c')
+
+        # ------------------------------------------------------------ g 지도 높이 · 폭 손잡이 (JACK 1127)
+        print('== g  폭 · 높이 손잡이')
+        rc = lambda eid: json.loads(ed.js("JSON.stringify(document.getElementById('%s').getBoundingClientRect())" % eid))   # noqa: E731
+        ovw = lambda: rc('ov')['width']   # noqa: E731
+        h0 = rc('mapPane')['height']
+        gr = rc('mapGrip')
+        inp.drag((gr['left'] + 60, gr['top'] + 4), (gr['left'] + 60, gr['top'] + 4 + 80))
+        ed.frames(6)
+        h1, mh = rc('mapPane')['height'], rc('map')
+        report('g 지도 높이 끌기 → +80 · 지도 그림 칸 크기 맞음', abs(h1 - h0 - 80) < 3 and abs(mh['height'] - h1) < 3, '%.0f → %.0f' % (h0, h1))
+        gr = rc('mapGrip')
+        inp.drag((gr['left'] + 60, gr['top'] + 4), (gr['left'] + 60, gr['top'] - 900))
+        ed.frames(4)
+        report('g 지도 높이 최소 120', abs(rc('mapPane')['height'] - 120) < 2, str(rc('mapPane')['height']))
+        gr = rc('mapGrip')
+        inp.drag((gr['left'] + 60, gr['top'] + 4), (gr['left'] + 60, gr['top'] + 1600))
+        ed.frames(4)
+        sh = J(ed, "document.getElementById('side').clientHeight")
+        report('g 지도 높이 최대 = 옵션 칸 75 %', abs(rc('mapPane')['height'] - sh * 0.75) < 8, '%.0f / %.0f' % (rc('mapPane')['height'], sh))
+        gr = rc('mapGrip')
+        inp.drag((gr['left'] + 60, gr['top'] + 4), (gr['left'] + 60, gr['top'] + 4 - 120))
+        ed.frames(4)
+        hk = rc('mapPane')['height']
+        pg.load(True, clear=False)
+        report('g 다시 열면 그 높이 기억', abs(rc('mapPane')['height'] - hk) < 2, '%.0f → %.0f' % (hk, rc('mapPane')['height']))
+        gr = rc('mapGrip')
+        inp.dblclick(gr['left'] + 60, gr['top'] + 4)
+        ed.frames(4)
+        report('g 두 번 누르기 → 기본 높이', abs(rc('mapPane')['height'] - h0) < 3, '%.0f' % rc('mapPane')['height'])
+        w0, o0 = rc('side')['width'], ovw()
+        sg = rc('sideGrip')
+        inp.drag((sg['left'] + 4, 500), (sg['left'] + 4 - 100, 500))
+        ed.frames(6)
+        w1, o1w = rc('side')['width'], ovw()
+        mm = rc('map')
+        report('g 폭 끌기 → 옵션 칸 +100 · 360 칸 좁아짐 · 지도 그림 칸 맞음', abs(w1 - w0 - 100) < 3 and o1w < o0 - 90 and abs(mm['width'] - rc('mapPane')['width']) < 3, '%.0f → %.0f · 360 %.0f → %.0f' % (w0, w1, o0, o1w))
+        shot(ed, '40_폭_높이_끌기.png', SD)
+        sg = rc('sideGrip')
+        inp.drag((sg['left'] + 4, 500), (sg['left'] + 4 + 1500, 500))
+        ed.frames(4)
+        report('g 폭 최소 260', abs(rc('side')['width'] - 260) < 2, str(rc('side')['width']))
+        sg = rc('sideGrip')
+        inp.drag((sg['left'] + 4, 500), (sg['left'] + 4 - 3000, 500))
+        ed.frames(4)
+        report('g 폭 최대 = 창의 60 %', abs(rc('side')['width'] - 0.6 * J(ed, 'window.innerWidth')) < 3, str(rc('side')['width']))
+        sg = rc('sideGrip')
+        inp.drag((sg['left'] + 4, 500), (sg['left'] + 4 + 200, 500))
+        ed.frames(4)
+        wk = rc('side')['width']
+        pg.load(True, clear=False)
+        report('g 다시 열면 그 폭 기억', abs(rc('side')['width'] - wk) < 2, '%.0f → %.0f' % (wk, rc('side')['width']))
+        sg = rc('sideGrip')
+        inp.dblclick(sg['left'] + 4, 500)
+        ed.frames(4)
+        report('g 두 번 누르기 → 기본 폭 (360 칸 처음 크기)', abs(ovw() - o0) < 2, '%.0f vs %.0f' % (ovw(), o0))
+        for c in ('pipe', 'trench'):
+            click(ed, inp, HEAD[c])      # 아래 시험이 기대하는 처음 모양
+        errs(ed, 'g')
 
         # ------------------------------------------------------------ v 보기
         print('== v  보기')
         pg.load(True)
+        for c in ('pipe', 'trench'):
+            click(ed, inp, HEAD[c])      # 처음엔 보기만 펼침 (JACK 1127) → 아래 시험이 기대하는 관로 · 터파기 펴 둠
         n0 = J(ed, "document.getElementById('shotNo').textContent")
         click(ed, inp, 'vNext')
         ed.wait_js("document.getElementById('shotNo').textContent.indexOf('3 /') === 0", 10)
@@ -230,6 +295,8 @@ def main():
         report('v 처음 시점 = 처음 연 그림 (찍은 방향 · 45° 아래 · 90°)', d(a3, a0) <= 3, '차이 %d' % d(a3, a0))
         # 그림 저장: 프로그램 = save_image
         pg.load(True, clear=False)
+        for c in ('pipe', 'trench'):
+            click(ed, inp, HEAD[c])      # 처음엔 보기만 펼침 → 아래 시험이 기대하는 관로 · 터파기 펴 둠
         click(ed, inp, 'vShot')
         ed.wait_js("window.__host.calls.some((c) => c.name === 'save_image')", 5)
         sv = J(ed, "window.__host.calls.filter((c) => c.name === 'save_image').map((c) => c.arg)")
@@ -355,7 +422,7 @@ def main():
                     ('강관', 300): 224952 * 1.10 + 406424 * 1.50, ('강관', 800): 604266 * 1.10 + 806578 * 1.50}
             pl = C('pipe.list')
             known = [p for p in pl if (p['name'], p['Dt']) in hand]
-            w_pipe = sum(hand[(p['name'], p['Dt'])] * p['len'] for p in known)
+            w_pipe = sum(hand[(p['name'], p['Dt'])] * p['len'] for p in known) * J(ed, 'RVCost.K_DEF')   # 기본 보정 계수 (2026 · 1127)
             report('$ 관로 본공사 = Σ m당 (손셈) × 개착 길이 · 합계 = 관로 + 부대', len(known) == len(pl) > 0 and abs(ck('pipe') - w_pipe) < 0.5 and abs(ck('pipe') + ck('extra') - ck('total')) < 0.5,
                    '관로 %.0f · 손셈 %.0f · 합계 %.0f · 관 %s' % (ck('pipe'), w_pipe, ck('total'), [(p['name'], p['Dt']) for p in pl]))
             shot(ed, '30_개략공사비_전체.png', SD)
@@ -458,6 +525,8 @@ def main():
         # ------------------------------------------------------------ b 브라우저
         print('== b  브라우저 (프로그램 밖)')
         pg.load(False)
+        for c in ('pipe', 'trench'):
+            click(ed, inp, HEAD[c])      # 처음엔 보기만 펼침 (JACK 1127) → 아래 시험이 기대하는 관로 · 터파기 펴 둠
         hid = J(ed, "['hHome', 'hPipes', 'hObst', 'bShpOut', 'tgTrim'].filter((i) => document.getElementById(i).getClientRects().length)")
         cats = J(ed, "[...document.querySelectorAll('#opts .cat')].filter((c) => c.getClientRects().length).map((c) => c.dataset.cat)")
         report('b 프로그램 단추 · 결과물 · 웹 공유 숨김 · 고치기 보임 · 직접 그리기 없음', hid == [] and cats == CATS[:-2] and vis(ed, 'tgEdit') and not J(ed, "document.body.innerText.indexOf('직접 그리기') >= 0"),

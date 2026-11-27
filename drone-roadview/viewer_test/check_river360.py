@@ -399,6 +399,54 @@ def main():
         print('== d 지우기 · 저장 · 다시 열기 (프로그램 흉내)')
         pg.load(True, V_J, 'area', clear=True)
         report('d 파일 구간 둘 읽힘', len(J(ed, 'window.RV_PIPES.lines[%d].river || []' % src0)) == 2)
+        # ---- k 객체 누르기 → 카테고리 펼침 · 줄 열림 · 파란 테두리 · Delete 바로 지움 · Ctrl+Z (JACK 1127)
+        print('== k 객체 누르기 · Delete · Ctrl+Z (하천 = 사진 · 가시설 = 지도)')
+        ed.js("window.RV_PIPES.lines[%d].shore = [{ a: 3, b: 9, t: 'hpile' }, { a: 14, b: 18, t: 'sheet' }]; __rv360.obj.rebuild()" % src0)
+        ed.frames(3)
+        TOAST = "(() => { const t = document.getElementById('toast'); return { txt: t.textContent, btn: !!t.querySelector('button') }; })()"
+        for kind, view, cat, listid, nm, cid in (('rv', 'v', 'river', 'rvList', '하천', 'ov'), ('sh', 'm', 'shore', 'shList', '가시설', 'map')):
+            objs = J(ed, "__rv360.obj.list('%s')" % kind)
+            report('k %s 객체 있음' % nm, len(objs) >= 1, str(objs))
+            if not objs:
+                continue
+            osrc, oidx = objs[0]
+            n0 = len(objs)
+            ed.js("__rv360.catSet('shore', false); __rv360.catSet('river', false)")
+            ed.frames(3)
+            def xy_of():
+                q = J(ed, "__rv360.obj.xy('%s', '%s', %d, %d)" % (view, kind, osrc, oidx))
+                r = J(ed, "(() => { const r = document.getElementById('%s').getBoundingClientRect(); return [r.left, r.top]; })()" % cid)
+                return None if q is None else (r[0] + q[0], r[1] + q[1])
+            xy = xy_of()
+            report('k %s 누를 자리 있음 (%s 화면)' % (nm, '사진' if view == 'v' else '지도'), xy is not None, str(xy))
+            if xy is None:
+                continue
+            inp.click(*xy)
+            ed.frames(4)
+            st = J(ed, '__rv360.obj.st()')
+            sel = J(ed, "!!document.querySelector('#%s .shRow.sel')" % listid)
+            report('k %s 누르기 → 선택 · 카테고리 펼침 · 줄 파란 테두리' % nm, st['k'] == kind and J(ed, "__rv360.catIs('%s')" % cat) and sel, json.dumps(st))
+            shot(ed, SD, '60_객체선택_%s.png' % kind)
+            inp.key('Escape', 'Escape', 27)
+            report('k %s Esc → 선택 풀림' % nm, J(ed, '__rv360.obj.st().k') == '')
+            xy = xy_of()
+            inp.click(*xy)
+            ed.frames(3)
+            ed.js("(() => { const i = document.createElement('input'); i.id = 'tmpIn'; document.body.appendChild(i); i.focus(); })()")
+            inp.key('Delete', 'Delete', 46)
+            report('k %s 입력 칸 안 Delete → 무시' % nm, J(ed, "__rv360.obj.count('%s')" % kind) == n0)
+            ed.js("document.getElementById('tmpIn').remove()")
+            inp.key('Delete', 'Delete', 46)
+            ed.frames(3)
+            tt = J(ed, TOAST)
+            report('k %s Delete 한 번 → 개수 -1 · 확인 단추 없음 · 알림 «Ctrl+Z»' % nm,
+                   J(ed, "__rv360.obj.count('%s')" % kind) == n0 - 1 and not tt['btn'] and 'Ctrl+Z' in tt['txt'], json.dumps(tt, ensure_ascii=False))
+            inp.key('z', 'KeyZ', 90, 2)
+            ed.frames(4)
+            report('k %s Ctrl+Z → 되살아남 (목록)' % nm, J(ed, "__rv360.obj.count('%s')" % kind) == n0 and J(ed, "document.querySelectorAll('#%s .shRow').length" % listid) == n0)
+        ed.js("delete window.RV_PIPES.lines[%d].shore; __rv360.obj.rebuild(); __rv360.catSet('shore', false)" % src0)
+        errs(ed, '객체 누르기')
+
         cat_open(ed, inp, 'hd_river')
         n0 = len(ci_calls(ed))
         ed.js("[...document.querySelectorAll('#rvList .shRow')].find((x) => x.dataset.k === 'jack').querySelector('.shDel').scrollIntoView({ block: 'nearest' })")

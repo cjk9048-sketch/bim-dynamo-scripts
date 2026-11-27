@@ -299,6 +299,52 @@ def main():
         report('m Esc = 취소', not J(ed, '__map3d.SH.arm'))
         errs(ed, '메뉴')
 
+        print('== k 객체 누르기 → 카테고리 펼침 · 줄 열림 · 파란 테두리 · Delete 바로 지움 · Ctrl+Z (JACK 1127)')
+        ed.js("window.RV_PIPES.lines[0].shore = [{ a: 5, b: 14, t: 'hpile' }, { a: 20, b: 23.5, t: 'sheet' }]; __map3d.rebuild()")
+        ed.frames(3)
+        TOAST = "(() => { const t = document.getElementById('toast'); return { txt: t.textContent, btn: !!t.querySelector('button') }; })()"
+        for kind, cat, listid, nm in (('sh', 'shore', 'shList', '가시설'), ('rv', 'river', 'rvList', '하천')):
+            objs = J(ed, "__map3d.obj.list('%s')" % kind)
+            report('k %s 객체 있음' % nm, len(objs) >= 1, str(objs))
+            if not objs:
+                continue
+            src, idx = objs[0]
+            n0 = len(objs)
+            ed.js("__map3d.catSet('shore', false); __map3d.catSet('river', false); document.getElementById('side').hidden = true")
+            ed.js('__t.look(%d, %f, 90, 60, 60)' % (src, 16))
+            ed.frames(4)
+            xy = J(ed, "__map3d.obj.xy('%s', %d, %d)" % (kind, src, idx))
+            inp.click(xy[0], xy[1])
+            ed.frames(4)
+            st = J(ed, '__map3d.obj.st()')
+            sel = J(ed, "!!document.querySelector('#%s .shRow.sel')" % listid)
+            report('k %s 누르기 → 선택 · 카테고리 펼침 · 오른쪽 칸 띄움 · 줄 파란 테두리' % nm,
+                   st['k'] == kind and J(ed, "__map3d.catIs('%s')" % cat) and not J(ed, "document.getElementById('side').hidden") and sel, json.dumps(st))
+            shot(ed, SD, '60_객체선택_%s.png' % kind)
+            inp.click(200, 860)
+            ed.frames(3)
+            report('k %s 빈 곳 누르기 → 선택 풀림' % nm, J(ed, '__map3d.obj.st().k') == '' and not J(ed, "!!document.querySelector('#%s .shRow.sel')" % listid))
+            inp.click(xy[0], xy[1])
+            ed.frames(3)
+            inp.key('Escape', 'Escape', 27)
+            report('k %s Esc → 선택 풀림' % nm, J(ed, '__map3d.obj.st().k') == '')
+            inp.click(xy[0], xy[1])
+            ed.frames(3)
+            ed.js("(() => { const i = document.createElement('input'); i.id = 'tmpIn'; document.body.appendChild(i); i.focus(); })()")
+            inp.key('Delete', 'Delete', 46)
+            report('k %s 입력 칸 안 Delete → 무시' % nm, J(ed, "__map3d.obj.count('%s')" % kind) == n0)
+            ed.js("document.getElementById('tmpIn').remove()")
+            inp.key('Delete', 'Delete', 46)
+            ed.frames(3)
+            tt = J(ed, TOAST)
+            report('k %s Delete 한 번 → 개수 -1 · 확인 단추 없음 · 알림 «Ctrl+Z»' % nm,
+                   J(ed, "__map3d.obj.count('%s')" % kind) == n0 - 1 and not tt['btn'] and 'Ctrl+Z' in tt['txt'], json.dumps(tt, ensure_ascii=False))
+            inp.key('z', 'KeyZ', 90, 2)
+            ed.frames(4)
+            report('k %s Ctrl+Z → 되살아남 (목록 · 3D)' % nm, J(ed, "__map3d.obj.count('%s')" % kind) == n0 and J(ed, "document.querySelectorAll('#%s .shRow').length" % listid) == n0)
+        ed.js("delete window.RV_PIPES.lines[0].shore; __map3d.catSet('shore', false); __map3d.catSet('river', true); __map3d.rebuild()")
+        errs(ed, '객체 누르기')
+
         print('== d 지우기 · 저장 · 다시 열기')
         n0 = len(calls(ed, 'save_pipes'))
         ed.js("(() => { const r = [...document.querySelectorAll('#rvList .shRow')].find((x) => x.dataset.k === 'jack'); r.querySelector('.shDel').scrollIntoView({ block: 'nearest' }); })()")

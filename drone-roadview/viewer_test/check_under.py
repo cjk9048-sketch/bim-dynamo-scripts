@@ -87,6 +87,9 @@ def url(out_dir, view, mode='', extra='', base=None):
 def load(ed, u):
     ed.goto(u)
     ok = ed.wait_js(cv.READY, timeout=60)
+    # 처음엔 «보기» 만 펼침 (JACK 1127) → 이 시험이 쓰는 관로 · 터파기 칸을 펴고 씀
+    ed.js("document.querySelectorAll('#opts .cat').forEach((s) => { if (['pipe', 'trench'].includes(s.dataset.cat)"
+          " && s.querySelector('.catB') && s.querySelector('.catB').hidden) s.querySelector('.catH').click(); })")
     ed.frames(4)
     return ok
 

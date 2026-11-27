@@ -43,18 +43,20 @@ eq('0.3 m 부동소수 (299.99999) = 표 안', C.pipeRate('ci', 0.3 * 1000, 'asp
 console.log('== 금액 (관로 · 보정 계수)');
 const tot = { len: 120, tlen: 100, sh_hpile: 9, sh_hpN: 14, sh_hpA: 40, sh_sheet: 3.5, sh_spN: 18, sh_panel: 5, gd_cut: 1000, gd_fill: 500, bd_curb: 12, rv_hp: 10, rv_lag: 30, rv_spN: 0, rv_jack: 20 };
 const pipes = [{ mat: 'ci', dia: 0.3, tlen: 60 }, { mat: 'steel', dia: 0.8, tlen: 40 }];
-const pr = (124441 * 1.10 + 361041 * 1.50) * 60 + (604266 * 1.10 + 806578 * 1.50) * 40;
+const KD = C.K_DEF;   // 기본 보정 계수 (건설공사비지수 2026.7 ÷ 2015 평균 · 1127)
+eq('기본 보정 계수 = 1.64', KD, 1.64);
+const prB = (124441 * 1.10 + 361041 * 1.50) * 60 + (604266 * 1.10 + 806578 * 1.50) * 40, pr = prB * KD;
 let c = C.calc(tot, pipes, {});
 eq('관로 본공사 = Σ m당 × 개착 길이', c.pipe.amt, pr, 1e-6);
 eq('개착 길이 합', c.pipe.len, 100);
 eq('  연장 줄 금액 = 관로', c.rows.len.amt, pr, 1e-6);
 eq('  연장 줄 단가 = 평균 m당', c.rows.len.unit, pr / 100, 1e-6);
 let c2 = C.calc(tot, pipes, { k: 1.37 });
-eq('보정 계수 1.37 → 관로 × 1.37', c2.pipe.amt, pr * 1.37, 1e-6);
+eq('보정 계수 1.37 → 관로 × 1.37', c2.pipe.amt, prB * 1.37, 1e-6);
 eq('보정 계수는 부대 공종에 안 곱함', c2.extra, c.extra, 1e-6);
-eq('보정 계수 한도 밖 (50) = 1', C.calc(tot, pipes, { k: 50 }).opt.k, 1);
+eq('보정 계수 한도 밖 (50) = 기본 1.64', C.calc(tot, pipes, { k: 50 }).opt.k, KD);
 const pc = (124441 * 1.10 + 294663 * 1.50) * 60 + (604266 * 1.10 + 712100 * 1.50) * 40;
-eq('포장 콘크리트', C.calc(tot, pipes, { pave: 'concrete' }).pipe.amt, pc, 1e-6);
+eq('포장 콘크리트', C.calc(tot, pipes, { pave: 'concrete' }).pipe.amt, pc * KD, 1e-6);
 
 console.log('== 부대 공종 (단가 × 1.50)');
 const hp = (115883 + 58284) * 1.5 * 14 + (40212 + 32031) * 1.5 * 40;
@@ -125,7 +127,7 @@ eq('연석 글 = 단가 25,085원/m', t.l, '단가 ' + C.won(16723 * 1.5) + '원
 t = C.rowText('len', C.calc(tot, [{ mat: 'ci', dia: 1.2, tlen: 10 }], {}), 'm');
 eq('표 밖 관 = 글에 «표 밖» · 경고', t.cls, 'warn');
 t = C.rowText('len', C.calc(tot, [{ mat: 'ci', dia: 0.5, tlen: 30 }, { mat: 'ci', dia: 0.5, tlen: 70 }], {}), 'm');
-eq('같은 관 둘 = «단가 …원/m»', t.l, '단가 ' + C.won(246898 * 1.10 + 476740 * 1.50) + '원/m');
+eq('같은 관 둘 = «단가 …원/m»', t.l, '단가 ' + C.won((246898 * 1.10 + 476740 * 1.50) * KD) + '원/m');
 t = C.rowText('len', c, 'm');
 eq('관경 다른 관 둘 = «관 2개 · 평균 …원/m» (평균 = 금액 ÷ 개착 길이)', t.l, '관 2개 · 평균 ' + C.won(pr / 100) + '원/m');
 

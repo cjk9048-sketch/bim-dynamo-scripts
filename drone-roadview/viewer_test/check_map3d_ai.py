@@ -47,7 +47,7 @@ MOCK_JS = r"""(function () {
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   const job0 = api.job;
   H.aiEngine = false; H.arDone = false;
-  api.ai_status = () => { rec('ai_status'); return wait(10).then(() => ({ engine: !!H.aiEngine, gpu: true })); };
+  api.ai_status = () => { rec('ai_status'); return wait(10).then(() => ({ ready: !!H.aiEngine, gpu: 'GPU', dir: 'AI' })); };   // 실제 프로그램 꼴 (ai_budae.status = ready · 1127)
   api.ai_setup = () => { rec('ai_setup'); return wait(10).then(() => ({ ok: true, job: 'AS' })); };
   api.ai_run = (o) => { rec('ai_run', o); return wait(10).then(() => ({ ok: true, job: 'AR' })); };
   api.ai_save = (project, data) => { rec('ai_save', { project: project, data: data }); return wait(10).then(() => ({ ok: true })); };
@@ -276,9 +276,12 @@ def main():
         note = J(ed, "document.getElementById('qNote').textContent")
         report('q «확인 안 함 7개 포함» 표시', '확인 안 함 7개 포함' in note, note)
         report('q 수량 전체 갈래에도 부대공 줄 (AI 결과 있을 때)', (ui_click(ed, inp, 'tgQty') or True) and all(k in J(ed, '__ai.rows()') for k in hand_a))
-        ui_click(ed, inp, 'aiQty')
+        ui_click(ed, inp, 'qkBudae')   # AI 칸 [부대공 수량] 단추는 뺌 (JACK 1127 «개략공사비에 부대공이 있으니 AI 구조물에서는 빼») → 개략공사비 «부대공» 갈래
         ed.frames(2)
-        report('q AI 카테고리 [부대공 수량] → 수량 부대공 표', J(ed, "!document.getElementById('qtyBox').hidden && document.getElementById('qtyBox').dataset.view === 'budae'"))
+        if J(ed, "document.getElementById('qtyBox').hidden"):
+            ui_click(ed, inp, 'qkBudae')
+            ed.frames(2)
+        report('q AI 칸 [부대공 수량] 숨김 · 개략공사비 «부대공» 갈래 → 부대공 표', J(ed, "document.getElementById('aiQty').hidden && !document.getElementById('qtyBox').hidden && document.getElementById('qtyBox').dataset.view === 'budae'"))
         shot(ed, SD, '04_수량_부대공.png')
         errs(ed, '수량')
 
@@ -373,7 +376,7 @@ def main():
         report('r 360 고르기 → 이름 · [빼기]', J(ed, "document.getElementById('ai360Name').textContent") == '360 · 360_구간' and J(ed, "document.getElementById('ai360').classList.contains('on')"))
         ui_click(ed, inp, 'aiRun')
         ok = ed.wait_js("document.getElementById('toast').classList.contains('show') && !!document.querySelector('#toast button')", 5)
-        report('r 엔진 없음 → «받기 (약 3 GB)» 묻기', ok and '3 GB' in J(ed, "document.getElementById('toast').textContent"), J(ed, "document.getElementById('toast').textContent"))
+        report('r 엔진 없음 → «받기 (약 6 GB)» 묻기', ok and '6 GB' in J(ed, "document.getElementById('toast').textContent"), J(ed, "document.getElementById('toast').textContent"))
         shot(ed, SD, '06_엔진받기_묻기.png')
         ed.js("document.querySelector('#toast button').click()")
         ok = ed.wait_js("__host.calls.some((c) => c.name === 'ai_run')", 10)

@@ -71,7 +71,9 @@ def cost_check(ed, ui, SD):
     ui('tgQty')
     Ls = J(ed, "__map3d.lines().map((L) => [L.src, L.mat, Math.round(L.dia * 1000), __map3d.rv.lineQty(L.src).tlen])")
     bd = J(ed, "Object.fromEntries(['bd_curb', 'bd_sidewalk', 'bd_wallA'].map((k) => [k, Number(document.getElementById('qt_' + k).dataset.v) || 0]))")
-    def want_tot(pave, k=1.0, hp_in=115883):
+    KD = J(ed, 'RVCost.K_DEF')   # 기본 보정 계수 (2026 · 건설공사비지수 · 1127)
+    def want_tot(pave, k=None, hp_in=115883):
+        k = KD if k is None else k
         pipe = 0.0
         for src, mat, D, tl in Ls:
             r = CI500[pave] if (mat, D) == ('ci', 500) else J(ed, "RVCost.pipeRate('%s', %d, '%s').rate" % (mat, D, pave))
@@ -86,7 +88,7 @@ def cost_check(ed, ui, SD):
     report('$ 합계 밑 «억 · 만» 글', ('억' in ko or '만' in ko) if wt >= 1e4 else ko == '', ko)
     # 연장 밑줄: m당 단가가 하나 = «단가 …원/m» · 관마다 다름 = «관 N개 · 평균 …원/m» (평균 = 관로 본공사 ÷ Σ 개착 길이)
     ql = J(ed, "document.getElementById('qc_len').firstChild.textContent")
-    rates = {round(CI500['asphalt']) if (m, D) == ('ci', 500) else round(J(ed, "RVCost.pipeRate('%s', %d, 'asphalt').rate" % (m, D))) for _, m, D, _ in Ls}
+    rates = {round(CI500['asphalt'] * KD) if (m, D) == ('ci', 500) else round(J(ed, "RVCost.pipeRate('%s', %d, 'asphalt').rate" % (m, D)) * KD) for _, m, D, _ in Ls}
     avg = J(ed, "RVCost.won(%r)" % (wp / sum(t for *_, t in Ls)))
     want_l = ('단가 ' if len(rates) == 1 else '관 %d개 · 평균 ' % len(Ls)) + avg + '원/m'
     report('$ 연장 밑줄 = %s · 금액' % ('단가 원/m' if len(rates) == 1 else '관 %d개 · 평균 원/m' % len(Ls)), ql == want_l, '%s · 기대 %s' % (ql, want_l))
@@ -111,7 +113,7 @@ def cost_check(ed, ui, SD):
     ed.js("(() => { const e = document.getElementById('cp_hp_in'); e.value = '200000'; e.dispatchEvent(new Event('change', { bubbles: true })); })()"); ed.frames(2)
     _, wt2 = want_tot('asphalt', hp_in=200000)
     report('$ H파일 항타 단가 200,000 → 합계 = 손셈 · 고친 칸 굵게', close(ck('total'), wt2) and J(ed, "document.getElementById('cp_hp_in').classList.contains('mod')"), '%.0f · 손셈 %.0f' % (ck('total'), wt2))
-    report('$ 고친 값 = 이 PC 에 기억', J(ed, "JSON.parse(localStorage.getItem('rv_cost:v1')).price.hp_in") == 200000)
+    report('$ 고친 값 = 이 PC 에 기억', J(ed, "JSON.parse(localStorage.getItem('rv_cost:v2')).price.hp_in") == 200000)
     ed.js("(() => { const e = document.getElementById('cpK'); e.value = '1.2'; e.dispatchEvent(new Event('change', { bubbles: true })); })()"); ed.frames(2)
     ed.js("(() => { const e = document.getElementById('qPave'); e.value = 'concrete'; e.dispatchEvent(new Event('change', { bubbles: true })); })()"); ed.frames(2)
     wp3, wt3 = want_tot('concrete', k=1.2, hp_in=200000)
@@ -140,6 +142,7 @@ def main():
     srv, base = serve(out)
     ed = Edge(os.path.join(SD, '_prof'), WIN, gl=False).__enter__()
     inp = ce.Inp(ed)
+    ed.net(block=['*openstreetmap.org*', '*vworld.kr*'])      # 지도 타일은 밖으로 안 나감 (캔버스 오염 없이 박스 색 읽기)
     ui = lambda eid: ug.ui_click(ed, inp, eid)        # noqa: E731
     esc = lambda: inp.key('Escape', 'Escape', 27)      # noqa: E731
     try:
@@ -166,8 +169,10 @@ def main():
 
         print('== c 카테고리 펴고 접기 · 기억')
         o0 = opened(ed)
-        report('c 처음 = 보기 · 관로 · 터파기 · 점용', o0 == ['view', 'pipe', 'trench'], str(o0))
+        report('c 처음 = 보기 만 펼침 (JACK 1127)', o0 == ['view'], str(o0))
         shot(ed, SD, '01_처음.png')
+        for c in ('pipe', 'trench'):
+            ug.cat_open(ed, inp, HEAD[c])
         for c in ('shore', 'river', 'qty', 'cf', 'meas', 'out', 'web'):
             ug.cat_open(ed, inp, HEAD[c])
         o1 = opened(ed)
@@ -179,14 +184,101 @@ def main():
         report('c 머리줄 다시 → 접힘 (aria-expanded)', o2 == ['shore', 'river', 'qty', 'cf', 'meas', 'out', 'web'] and J(ed, "document.getElementById('hd_view').getAttribute('aria-expanded')") == 'false', str(o2))
         setup_page(ed, base + 'index_host.html')
         o3 = opened(ed)
-        report('c 다시 열어도 기억', o3 == o2, str(o3))
-        for c in ('shore', 'river', 'qty', 'cf', 'meas', 'out', 'web'):
-            ed.js("document.getElementById('%s').scrollIntoView({ block: 'nearest' })" % HEAD[c]); ed.frames(1)
-            inp.el_click(HEAD[c])
-        for c in ('view', 'pipe', 'trench'):
+        report('c 다시 열면 보기만 펼침 (기억한 펼침 안 씀 · JACK 1127)', o3 == ['view'], str(o3))
+        for c in ('pipe', 'trench'):
             ug.cat_open(ed, inp, HEAD[c])
-        report('c 처음 모양으로', opened(ed) == ['view', 'pipe', 'trench'])
+        report('c 처음 모양으로 (관로 · 터파기 펴 둠 · 아래 시험이 기대)', opened(ed) == ['view', 'pipe', 'trench'])
         errs(ed, '카테고리')
+
+        print('== g 위성 지도 칸 · 폭 · 높이 손잡이')
+        mp = lambda: J(ed, 'window.__map3dMap.st()')      # noqa: E731
+        rc = lambda eid: ce.rect(ed, eid)                  # noqa: E731
+        first = J(ed, "document.getElementById('side').firstElementChild.id")
+        report('g 지도 칸 = 오른쪽 칸 맨 위 · 보임', first == 'mapPane' and vis(ed, 'mapPane') and vis(ed, 'map'), first)
+        from pyproj import Transformer
+        tr = Transformer.from_crs('EPSG:5186', 'EPSG:4326', always_xy=True)
+        bb = J(ed, 'window.__map3dMap.bbox')
+        worst = 0.0
+        for e, n in ((bb[0], bb[1]), (bb[2], bb[3]), (bb[0], bb[3]), (bb[2], bb[1])):
+            lo, la = tr.transform(e, n)
+            m = J(ed, 'window.__map3dMap.ll(%r, %r)' % (e, n))
+            worst = max(worst, abs(m[0] - lo), abs(m[1] - la))
+        report('g 격자 → 위경도 = pyproj 와 같음 (오차 %.2e 도 · 1 cm = 1e-7)' % worst, worst < 2e-8, '%.3e' % worst)
+        st0 = mp()
+        box = st0['box']
+        mr = rc('map')
+        inside = all(-2 <= q[0] <= mr['width'] + 2 and -2 <= q[1] <= mr['height'] + 2 for q in box)
+        px = J(ed, "(() => { const c = document.getElementById('map'), x = c.getContext('2d'), s = c.width / c.getBoundingClientRect().width, b = window.__map3dMap.st().box;"
+                   " const d = x.getImageData(Math.round(((b[0][0] + b[1][0]) / 2) * s), Math.round(((b[0][1] + b[1][1]) / 2) * s) - 1, 1, 1).data; return [d[0], d[1], d[2]]; })()")   # 아래 변 가운데 (파랑 테두리)
+        report('g 매핑 범위 박스 = bbox 4 구석 (지도 칸 안 · 파랑 테두리)', inside and len(box) == 4 and abs(box[0][0] - box[1][0]) > 10 and px[2] > px[0] + 60, json.dumps([box, px]))
+        v0 = st0['view']
+        report('g 지금 보는 곳 = 사각 + 가운데 점', bool(v0) and len(v0) == 4 and bool(st0['c']), json.dumps([v0, st0['c']]))
+        shot(ed, SD, '40_지도칸.png')
+        cr = rc('c')
+        inp.drag((cr['width'] * 0.3, cr['height'] * 0.5), (cr['width'] * 0.3 + 160, cr['height'] * 0.5 - 40))
+        ed.frames(6)
+        st1 = mp()
+        report('g 3D 돌리기 → 보는 곳 표시가 바뀜', json.dumps(st1['view']) != json.dumps(v0) or json.dumps(st1['c']) != json.dumps(st0['c']), json.dumps([st1['view'], st1['c']]))
+        s0 = st1['c']
+        mrr = rc('map')
+        inp.click(mrr['left'] + mrr['width'] * 0.25, mrr['top'] + mrr['height'] * 0.3)
+        ed.frames(6)
+        st2 = mp()
+        want = [mrr['width'] * 0.25, mrr['height'] * 0.3]
+        report('g 지도 누르기 → 3D 중심이 그 자리 (오차 %.1f px)' % max(abs(st2['c'][0] - want[0]), abs(st2['c'][1] - want[1])), abs(st2['c'][0] - want[0]) < 3 and abs(st2['c'][1] - want[1]) < 3, json.dumps([s0, st2['c'], want]))
+        # 높이 손잡이
+        h0 = rc('mapPane')['height']
+        gr = rc('mapGrip')
+        inp.drag((gr['left'] + 60, gr['top'] + 4), (gr['left'] + 60, gr['top'] + 4 + 90))
+        ed.frames(6)
+        h1 = rc('mapPane')['height']
+        st3 = mp()
+        report('g 높이 손잡이 끌기 → 지도 높이 +90 · 그림 칸 크기 맞춤', abs(h1 - h0 - 90) < 3 and abs(st3['h'] - rc('map')['height']) < 1.5, '%.0f → %.0f · 그림 %.0f' % (h0, h1, st3['h']))
+        gr = rc('mapGrip')
+        inp.drag((gr['left'] + 60, gr['top'] + 4), (gr['left'] + 60, gr['top'] - 600))
+        ed.frames(4)
+        report('g 높이 최소 120 px', abs(rc('mapPane')['height'] - 120) < 2, str(rc('mapPane')['height']))
+        gr = rc('mapGrip')
+        inp.drag((gr['left'] + 60, gr['top'] + 4), (gr['left'] + 60, gr['top'] + 1500))
+        ed.frames(4)
+        sh = J(ed, "document.getElementById('side').clientHeight")
+        report('g 높이 최대 = 옵션 칸의 75 %', abs(rc('mapPane')['height'] - sh * 0.75) < 6, '%.0f / %.0f' % (rc('mapPane')['height'], sh))
+        gr = rc('mapGrip')
+        inp.drag((gr['left'] + 60, gr['top'] + 4), (gr['left'] + 60, gr['top'] + 4 - 100))
+        ed.frames(4)
+        hk = rc('mapPane')['height']
+        setup_page(ed, base + 'index_host.html')
+        report('g 다시 열면 그 높이 기억', abs(rc('mapPane')['height'] - hk) < 2, '%.0f → %.0f' % (hk, rc('mapPane')['height']))
+        gr = rc('mapGrip')
+        inp.dblclick(gr['left'] + 60, gr['top'] + 4)
+        ed.frames(4)
+        report('g 두 번 누르기 → 기본 높이 220', abs(rc('mapPane')['height'] - 220) < 2, str(rc('mapPane')['height']))
+        # 폭 손잡이
+        w0 = rc('side')['width']
+        sg = rc('sideGrip')
+        inp.drag((sg['left'] + 4, 500), (sg['left'] + 4 - 100, 500))
+        ed.frames(6)
+        w1 = rc('side')['width']
+        report('g 폭 손잡이 끌기 → 옵션 칸 +100', abs(w1 - w0 - 100) < 3, '%.0f → %.0f' % (w0, w1))
+        sg = rc('sideGrip')
+        inp.drag((sg['left'] + 4, 500), (sg['left'] + 4 + 900, 500))
+        ed.frames(4)
+        report('g 폭 최소 260 px', abs(rc('side')['width'] - 260) < 2, str(rc('side')['width']))
+        sg = rc('sideGrip')
+        inp.drag((sg['left'] + 4, 500), (sg['left'] + 4 - 150, 500))
+        ed.frames(4)
+        wk = rc('side')['width']
+        setup_page(ed, base + 'index_host.html')
+        report('g 다시 열면 그 폭 기억 · 지도 그림 칸도 맞음', abs(rc('side')['width'] - wk) < 2 and abs(mp()['w'] - rc('map')['width']) < 1.5, '%.0f → %.0f' % (wk, rc('side')['width']))
+        shot(ed, SD, '41_폭_높이_기억.png')
+        sg = rc('sideGrip')
+        inp.dblclick(sg['left'] + 4, 500)
+        ed.frames(4)
+        report('g 두 번 누르기 → 기본 폭 300', abs(rc('side')['width'] - 300) < 2, str(rc('side')['width']))
+        for c in ('pipe', 'trench'):
+            ug.cat_open(ed, inp, HEAD[c])      # 아래 시험이 기대하는 처음 모양
+        ed.js("document.getElementById('vHome').click()"); ed.frames(4)      # 3D 시점 처음대로 (아래 시험이 화면 자리를 찍음)
+        errs(ed, '지도 칸')
 
         print('== v 보기')
         ug.T_JS and ed.js(ug.T_JS)
@@ -412,6 +504,8 @@ def main():
         ed.js('localStorage.clear()')
         setup_page(ed, base + 'index.html')
         report('b 프로그램 전용 숨김 (처음 · SHP · 지장물 · 검사점 · 결과물 · 웹 공유)', J(ed, ug.HOST_HIDDEN) and not vis(ed, 'bHome') and not vis(ed, 'bPipes') and not vis(ed, 'bCheck') and not vis(ed, 'bTrim') and not vis(ed, 'hd_web'))
+        ed.js("(() => { const s = document.querySelector('#side .cat[data-cat=pipe]'); if (s && s.querySelector('.catB').hidden) s.querySelector('.catH').click(); })()")   # 처음엔 보기만 펼침 (1127) → 관로 칸 폄
+        ed.frames(2)
         report('b 직접 그리기 · 고치기 · 보기 보임', vis(ed, 'pNew') and vis(ed, 'tgEdit') and vis(ed, 'bTop'))
         ui('pNew')
         report('b 직접 그리기 됨', J(ed, '__map3d.MS.kind') == 'pipe')

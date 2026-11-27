@@ -27,6 +27,8 @@ svg { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; 
 #c.point:not(.drag) { cursor: pointer; }
 #c.move:not(.drag) { cursor: move; }
 #c.pick:not(.drag) { cursor: crosshair; }
+#c.zmove:not(.drag) { cursor: ns-resize; }
+#c.cut:not(.drag) { cursor: crosshair; }
 #ov { pointer-events: none; }
 input[type=number], input[type=text], select { background: var(--bg); border: 1px solid var(--line-2); border-radius: 6px; color: var(--ink); outline: none; }
 input[type=number] { -moz-appearance: textfield; appearance: textfield; width: 56px; height: 26px; padding: 0 6px; text-align: right; font-variant-numeric: tabular-nums; }
@@ -51,6 +53,8 @@ input[type=number]::-webkit-outer-spin-button, input[type=number]::-webkit-inner
 .tag.ok { background: rgba(34, 197, 94, .16); color: #4ade80; }
 .tag:empty { display: none; }
 .beta { flex: none; margin-left: 2px; padding: 0 6px; border-radius: 999px; background: rgba(168, 85, 247, .18); color: #c4a3fa; font-size: 10px; font-weight: 700; letter-spacing: .3px; line-height: 16px; text-transform: uppercase; }   /* 시험판 표시 (AI 구조물 인식 · 1127) */
+.ii { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 15px; height: 15px; margin-left: 3px; border-radius: 50%; box-shadow: inset 0 0 0 1.3px currentColor; color: var(--sub); font: italic 700 10px/1 Georgia, 'Times New Roman', serif; cursor: help; }   /* 설명 i (마우스 올리면 설명 · 1127) */
+.ii:hover { color: var(--text); }
 .pb2 { flex: none; height: 26px; padding: 0 10px; border: 0; border-radius: var(--r-s); background: var(--wall); box-shadow: inset 0 0 0 1px var(--line); color: var(--ink); font-size: 12px; font-weight: 600; white-space: nowrap; }
 .pb2:hover { background: var(--dhDim); }
 .pb2:disabled { opacity: .45; pointer-events: none; }
@@ -330,6 +334,7 @@ body.sideOn #cpDlg { right: calc(var(--sideW, 300px) + 12px); }
 #edTip, #msTip { color: var(--ink); min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 #edChip #edEnd { background: var(--dh); color: #fff; box-shadow: none; font-weight: 700; }
 #edChip #edEnd:hover { background: var(--dhHi); }
+#edChip #edCut.on { background: var(--dhDim); box-shadow: inset 0 0 0 1.5px #22d3ee; color: #fff; }
 #msChip.crop { box-shadow: 0 4px 14px rgba(0, 0, 0, .35), inset 0 0 0 1.5px #f87171; padding-left: 6px; }
 #msChip #msEnd { background: #facc15; color: #11141a; box-shadow: none; }
 #msChip.crop #msEnd { background: #ef4444; color: #fff; }
@@ -436,6 +441,35 @@ body.sideOn #phBox { width: min(760px, calc(100% - var(--sideW, 300px) - 24px));
 #ctxMenu .sub button { flex: 1; height: 24px; padding: 0 6px; border: 0; border-radius: 5px; background: var(--wall); box-shadow: inset 0 0 0 1px var(--line); font-size: 11.5px; font-weight: 600; white-space: nowrap; }
 #ctxMenu .sub button:hover { background: var(--dhDim); }
 
+/* 위성 지도 칸 (맨 위) · 높이 손잡이 (지도와 카테고리 사이) */
+#mapPane { position: relative; flex: none; height: var(--mapH, 220px); min-height: 120px; overflow: hidden; border-radius: var(--r); background: #1a1a1a; box-shadow: 0 1px 4px rgba(0, 0, 0, .18); }
+#mapPane canvas { position: absolute; left: 0; top: 0; width: 100%; height: 100%; display: block; touch-action: none; cursor: grab; }
+#map.grabbing { cursor: grabbing; }
+#mapPane .mapBtns { position: absolute; right: 8px; top: 8px; display: flex; flex-direction: column; gap: 5px; }
+#mapPane .mapBtns button { width: 28px; height: 28px; padding: 0; display: flex; align-items: center; justify-content: center; border: 0; border-radius: var(--r-s);
+  background: rgba(31, 31, 31, .92); color: var(--ink); box-shadow: 0 1px 4px rgba(0, 0, 0, .45); font-size: 16px; font-weight: 600; line-height: 1; }
+#mapPane .mapBtns button svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+#mapPane .mapBtns button:hover { background: var(--panel-3); color: #fff; }
+#attrib { position: absolute; right: 0; bottom: 0; padding: 2px 8px; border-top-left-radius: 6px; background: rgba(24, 24, 24, .7); color: var(--dim); font-size: 11px; }
+#attrib:empty { display: none; }
+#attrib a { color: var(--dim); text-decoration: none; }
+#mapNote { position: absolute; left: 8px; top: 8px; display: none; max-width: calc(100% - 52px); padding: 3px 9px; border-radius: 6px; background: rgba(24, 24, 24, .8); color: var(--dim);
+  font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none; }
+#mapNote.show { display: block; }
+#keyBtn { position: absolute; left: 8px; bottom: 8px; height: 24px; padding: 0 10px; border: 0; border-radius: 999px; background: rgba(31, 31, 31, .92); box-shadow: 0 1px 4px rgba(0, 0, 0, .45);
+  color: var(--dim); font-size: 12px; font-weight: 600; }
+#keyBtn:hover { color: #fff; }
+#keyBtn.on { color: #fff; background: rgba(47, 129, 247, .6); }
+#keyBox { position: absolute; left: 8px; bottom: 40px; display: none; flex-direction: column; gap: 8px; width: calc(100% - 16px); max-width: 280px; padding: 10px; background: var(--panel); border-radius: var(--r); box-shadow: 0 10px 30px rgba(0, 0, 0, .55); z-index: 3; }
+#keyBox.show { display: flex; }
+#keyIn { height: 30px; padding: 0 10px; font-size: 12px; }
+.keyRow { display: flex; gap: 8px; }
+.keyRow button { flex: 1; height: 30px; border: 0; border-radius: var(--r-s); background: var(--bg); box-shadow: inset 0 0 0 1px var(--line); font-weight: 600; }
+.keyRow button:hover { background: var(--dhDim); }
+.keyRow button.primary { background: var(--dh); color: #fff; box-shadow: none; }
+#mapGrip { position: absolute; z-index: 3; height: 8px; cursor: row-resize; border-radius: 4px; }
+#mapGrip:hover, #mapGrip.on { background: rgba(47, 129, 247, .32); }
+#mapGrip[hidden] { display: none; }
 /* 오른쪽 칸 폭 손잡이 (JACK 1126 · map3d.js sideGripInit) */
 #sideGrip { position: absolute; width: 8px; cursor: col-resize; z-index: 3; border-radius: 4px; }
 #sideGrip:hover, #sideGrip.on { background: rgba(47, 129, 247, .32); }
@@ -465,6 +499,7 @@ body.flat.host.sideOn #flat { right: var(--sideW, 300px); }
 body.flat #side .cat:not([data-flat]) { display: none; }
 body.flat:not(.host) #side, body.flat:not(.host) #tgSide, body.flat #bHelp { display: none; }
 @media (max-width: 860px) {
+  #mapPane { height: 150px; min-height: 120px; }
   #side { top: auto; left: 0; bottom: 0; width: auto; max-height: 45vh; border-left: 0; border-top: 1px solid var(--line); }
   body.sideOn #secDlg, body.sideOn #phBox, body.sideOn #rvDlg { right: 12px; }
   body.sideOn #phBox { width: min(760px, calc(100% - 24px)); }
@@ -491,6 +526,25 @@ body.flat:not(.host) #side, body.flat:not(.host) #tgSide, body.flat #bHelp { dis
     <dt>Ctrl+Z · Y</dt><dd>고치기 · 되돌리기 · 다시</dd><dt>← →</dt><dd>원본 사진 넘기기</dd></dl>
 </div>
 <aside id="side">
+  <!-- 위성 지도 (맨 위 · JACK 1127 «360 처럼 맨 위에 위성지도창 · 매핑 범위 박스 + 지금 보는 곳») · map3d.js mapPaneInit -->
+  <section id="mapPane">
+    <canvas id="map"></canvas>
+    <div class="mapBtns">
+      <button id="zIn" type="button" title="확대">+</button>
+      <button id="zOut" type="button" title="축소">&minus;</button>
+      <button id="zFit" type="button" class="wide" title="매핑 범위 전체 보기"><svg viewBox="0 0 24 24"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/></svg></button>
+    </div>
+    <div id="mapNote">지도: 웹 공유 주소에서 보임 · 또는 지도 키</div>
+    <div id="attrib"></div>
+    <button id="keyBtn" type="button">지도 키</button>
+    <div id="keyBox">
+      <input id="keyIn" type="text" placeholder="VWorld 인증키" spellcheck="false" autocomplete="off">
+      <div class="keyRow">
+        <button id="keyClear" type="button">지우기</button>
+        <button id="keyOk" type="button" class="primary">적용</button>
+      </div>
+    </div>
+  </section>
   <!-- 보기 -->
   <section class="cat" data-cat="view">
     <button class="catH" id="hd_view" type="button"><svg viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg><b>보기</b><i class="chev"></i></button>
@@ -587,18 +641,18 @@ body.flat:not(.host) #side, body.flat:not(.host) #tgSide, body.flat #bHelp { dis
   </section>
   <!-- AI 부대공 (JACK 1126 · 결과 = data/ai_budae.js · 엔진 = 프로그램 ai_status · ai_setup · ai_run · ai_save · 셈 = map3d.js «AI 부대공») -->
   <section class="cat" data-cat="ai">
-    <button class="catH" id="hd_ai" type="button" title="AI 구조물 인식 (beta · 연석 · 석축 · 보도 · 포장 인식 → 확인 → 부대공 수량)"><svg viewBox="0 0 24 24"><path d="M3 21l4.5-13M14.5 21L10 8"/><path d="M2.5 21h13" opacity=".55"/><path d="M18.5 2.5l.9 2.4 2.4.9-2.4.9-.9 2.4-.9-2.4-2.4-.9 2.4-.9z"/></svg><b>AI 구조물 인식</b><span class="beta" title="시험판 (beta) · 결과는 사람이 확인">beta</span><span id="aiTag" class="tag"></span><i class="chev"></i></button>
+    <button class="catH" id="hd_ai" type="button" title="AI 구조물 인식 (beta · 연석 · 석축 · 보도 · 포장 인식 → 확인)"><svg viewBox="0 0 24 24"><path d="M3 21l4.5-13M14.5 21L10 8"/><path d="M2.5 21h13" opacity=".55"/><path d="M18.5 2.5l.9 2.4 2.4.9-2.4.9-.9 2.4-.9-2.4-2.4-.9 2.4-.9z"/></svg><b>AI 구조물 인식</b><span class="beta" title="시험판 (beta) · 결과는 사람이 확인">beta</span><span class="ii" title="AI로 임시점용 구간 내 포함된 지표면 구조물을 추적합니다.">i</span><i class="chev"></i></button>
     <div class="catB" id="aiBox">
-      <div class="fgrid c3" role="group" aria-label="AI 부대공">
+      <div class="fgrid c2" role="group" aria-label="AI 구조물 인식">
         <button class="fb" id="aiRun" type="button" title="AI 인식 (3D 매핑 + 같은 구간 360) · 처음이면 AI 엔진 받기" data-host hidden><svg viewBox="0 0 24 24"><path d="M12 2.5l1.6 4.3 4.3 1.6-4.3 1.6L12 14.3l-1.6-4.3-4.3-1.6 4.3-1.6z"/><path d="M18.5 14l.8 2.1 2.1.8-2.1.8-.8 2.1-.8-2.1-2.1-.8 2.1-.8zM6 15.5l.6 1.6 1.6.6-1.6.6L6 19.9l-.6-1.6-1.6-.6 1.6-.6z" opacity=".7"/></svg><span>AI 인식</span></button>
         <button class="fb act" id="ai360" type="button" title="같은 구간 360 프로젝트 (고르면 함께 판단 · 안 고르면 3D 만)" data-host hidden><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><ellipse cx="12" cy="12" rx="8.5" ry="3.2"/><path d="M12 3.5v17" opacity=".5"/></svg><span>360 고르기</span></button>
-        <button class="fb" id="aiQty" type="button" title="부대공 수량 (임시점용 테두리 안 · 이 관 / 전체)"><svg viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="12" rx="1.5" stroke-dasharray="3 2.5"/><path d="M6 15l4-5 3 3 2-2 3 4"/></svg><span>부대공 수량</span></button>
+        <button class="fb" id="aiQty" type="button" hidden title="부대공 수량 (임시점용 테두리 안 · 이 관 / 전체)"><svg viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="12" rx="1.5" stroke-dasharray="3 2.5"/><path d="M6 15l4-5 3 3 2-2 3 4"/></svg><span>부대공 수량</span></button>
       </div>
       <div id="ai360Row" class="row" hidden><span id="ai360Name" class="dimTxt"></span><button id="ai360X" class="pb2" type="button" title="360 빼기 (3D 만으로 인식)">빼기</button></div>
       <div id="aiProg" hidden><div class="bar"><i id="aiBar"></i></div><div id="aiLine"></div></div>
       <div id="aiNone" class="dimTxt">AI 인식 안 함</div>
       <div id="aiKinds" class="chips" role="group" aria-label="부대공 종류 (보이기)"></div>
-      <div id="aiHead" class="row" hidden><span id="aiSum"></span><span id="aiSave"></span></div>
+      <div id="aiHead" class="row" hidden><span id="aiTag" class="tag"></span><span id="aiSum"></span><span id="aiSave"></span></div>
       <div id="aiList"></div>
       <div id="aiMore"></div>
     </div>
@@ -686,7 +740,7 @@ body.flat:not(.host) #side, body.flat:not(.host) #tgSide, body.flat #bHelp { dis
     </div>
   </section>
 </aside>
-<div id="edChip"><span id="edTip">관로 고치기 · 점 끌기 · 두 번 누르기 = 점 추가 · Delete = 삭제 · Shift 끌기 = 통째로</span><button id="edShp" type="button" hidden>SHP로 내보내기</button><button id="edDrop" type="button" hidden>고친 것 버리기</button><button id="edEnd" type="button">끝</button></div>
+<div id="edChip"><span id="edTip">관로 고치기 · 점 끌기 · 화살표 = 높이 · 두 번 누르기 = 점 추가 · Delete = 삭제 · Shift 끌기 = 통째로</span><button id="edCut" type="button" title="관 위를 누르면 그 자리에서 자름 · 두 곳 자르면 그 사이 구간을 고름 (Delete = 지우기)">자르기</button><button id="edZ0" type="button" hidden title="고른 관 높이를 지우고 평균매설깊이로">토피로 되돌리기</button><button id="edShp" type="button" hidden>SHP로 내보내기</button><button id="edDrop" type="button" hidden>고친 것 버리기</button><button id="edEnd" type="button">끝</button></div>
 <div id="shChip"><b id="shTip">시작점</b><span id="shName"></span><button id="shCancel" type="button" title="취소 (Esc)">취소</button></div>
 <div id="msChip"><span id="msSeg" hidden><button id="msRect" type="button" title="두 구석 끌기">네모</button><button id="msPoly" type="button" title="점 찍기">다각형</button></span><span id="msTip"></span><button id="msEnd" type="button">끝</button><button id="msX" type="button" title="취소 (Esc)">취소</button></div>
 <div id="msBox" class="card" hidden>

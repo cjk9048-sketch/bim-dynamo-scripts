@@ -502,6 +502,7 @@ def clear_ref(lines, gap, cover, step=0.01):
                 near = seg[c[seg] <= mn + 0.01]
                 q = near[(len(near) - 1) // 2]
                 out.append(dict(pipe=ln['label'], kind=kind, c=float(mn), e=float((S[q][0] + Qb[q][0]) / 2), n=float((S[q][1] + Qb[q][1]) / 2),
+                                z=float((S[q][2] + Qb[q][2]) / 2),   # 고리 높이 = 관 중심 · 지장물 중심 가장 가까운 두 점 가운데 (JACK 1127)
                                 run=(float(S[i][0]), float(S[j][0]))))
                 i = j + 1
     return out
@@ -550,9 +551,15 @@ def red_ring(img, cam, P, z_cam_r=None):
     return hit / 48
 
 
-def look_view(shot, e, n, fov=60, name='look'):
+def cf_set(ed, on):
+    """간섭 카테고리 펴기 · 접기 (JACK 1127: 고리는 펼 때만)."""
+    ed.js("(() => { const h = document.getElementById('hd_cf'); if ((h.getAttribute('aria-expanded') === 'true') !== %s) h.click(); })()" % ('true' if on else 'false'))
+    ed.frames(3)
+
+
+def look_view(shot, e, n, fov=60, name='look', z=None):
     s = ms.SHOTS[int(shot) - 1]
-    de, dn, dz = e - s[0], n - s[1], GZ - (GZ + ms.HEIGHT)
+    de, dn, dz = e - s[0], n - s[1], (GZ if z is None else z) - (GZ + ms.HEIGHT)
     return (name, shot, math.degrees(math.atan2(de, dn)) % 360, math.degrees(math.atan2(dz, math.hypot(de, dn))), fov)
 
 
@@ -584,20 +591,27 @@ def test_clear(ed, out_dir, shots_dir):
     report('e 이격 0.45 → «간섭 2곳»', ok, st['hit'])
     cmp_spots('e 이격 0.45 ↔ 따로 잰 값 (가로지름 = 정확히)', st, ref2)
     report('e 이격 기준 이 브라우저 기억', ed.js("localStorage.getItem('rv_gap:' + window.RV_PROJECT.title)") == '0.45')
-    # 360 고리: 통신 간섭 자리를 따로 정한 방향으로 봄 (사진 0001 에서)
+    # 360 고리: 통신 간섭 자리를 따로 정한 방향으로 봄 (사진 0001 에서) · 고리 = 간섭 카테고리 펼 때만 · 높이 = 두 관 가장 가까운 곳 가운데 (JACK 1127)
     if ref_b:
-        vb = look_view('0001', ref_b['e'], ref_b['n'], 60, 'e_ring')
+        vb = look_view('0001', ref_b['e'], ref_b['n'], 60, 'e_ring', ref_b['z'])
         load(ed, page_url(out_dir, vb))
         click(ed, 'tgQty')
         wait_hit(ed, '간섭 2곳')  # 셈이 끝난 뒤 (창은 왼쪽 위 · 고리는 가운데)
-        img, _ = grab(ed, os.path.join(shots_dir, 'e_ring.png'))
+        cf_set(ed, False)
+        img, _ = grab(ed, os.path.join(shots_dir, 'e_ring_fold.png'))
         cam = ct.Cam(vb, img.shape[1], img.shape[0])
-        fr = red_ring(img, cam, np.array([ref_b['e'], ref_b['n'], GZ]))
-        report('e 360 빨간 고리 = 간섭 자리 (따로 투영)', fr >= 0.6, '고리 위 %.0f %%' % (fr * 100))
+        fr0 = red_ring(img, cam, np.array([ref_b['e'], ref_b['n'], ref_b['z']]))
+        cf_set(ed, True)
+        img, _ = grab(ed, os.path.join(shots_dir, 'e_ring.png'))
+        fr = red_ring(img, cam, np.array([ref_b['e'], ref_b['n'], ref_b['z']]))
+        frg = red_ring(img, cam, np.array([ref_b['e'], ref_b['n'], GZ]))
+        report('e 간섭 접으면 고리 없음 · 펴면 고리', fr0 < 0.2 and fr >= 0.6, '접음 %.0f %% · 폄 %.0f %%' % (fr0 * 100, fr * 100))
+        report('e 360 빨간 고리 = 간섭 자리 높이 (따로 투영 · 땅 아님)', fr >= 0.6 and frg < 0.3, '고리 위 %.0f %% · 땅 높이 %.0f %% · z %.2f (땅 %.2f)' % (fr * 100, frg * 100, ref_b['z'], GZ))
         # 목록 누름 → 그쪽을 봄 (사진 0002 에서 25 m · 옮기지 않음)
         load(ed, page_url(out_dir, v))
         click(ed, 'tgQty')
         wait_hit(ed, '간섭 2곳')
+        cf_set(ed, True)
         btn = ed.js("[...document.querySelectorAll('#qList button')].findIndex((b) => b.textContent.indexOf('통신') >= 0)")
         ed.js("document.querySelectorAll('#qList button')[%d].click()" % btn)
         time.sleep(0.3)
@@ -605,9 +619,9 @@ def test_clear(ed, out_dir, shots_dir):
         img, _ = grab(ed, os.path.join(shots_dir, 'e_go.png'))
         got = spots_of(panel(ed))
         sp = next(q for q in got if '통신' in q['text'])
-        vg = look_view('0002', sp['e'], sp['n'], 70, 'e_go')
+        vg = look_view('0002', sp['e'], sp['n'], 70, 'e_go', ref_b['z'])
         cam = ct.Cam(vg, img.shape[1], img.shape[0])
-        fr = red_ring(img, cam, np.array([sp['e'], sp['n'], GZ]))
+        fr = red_ring(img, cam, np.array([sp['e'], sp['n'], ref_b['z']]))
         report('e 목록 누름 → 그쪽을 봄 (고리가 가운데)', fr >= 0.6, '고리 위 %.0f %% · 사진 %s' % (fr * 100, ed.js("document.getElementById('shotNo').textContent")))
         r = ce.rect(ed, 'map')
         ed.screenshot(os.path.join(shots_dir, 'e_go_full.png'))
@@ -622,12 +636,13 @@ def test_clear(ed, out_dir, shots_dir):
         load(ed, page_url(out_dir, ('far', '0003', 0, -60, 70)))  # 사진 3 (10, 0) 에서 30.4 m
         click(ed, 'tgQty')
         wait_hit(ed, '간섭 2곳')
+        cf_set(ed, True)
         ed.js("document.querySelectorAll('#qList button')[%d].click()" % btn)
         moved = ed.wait_js("document.getElementById('shotNo').textContent.indexOf('1 /') === 0", 10)
         time.sleep(0.3)
         img, _ = grab(ed, os.path.join(shots_dir, 'e_go_far.png'))
-        vf = look_view('0001', sp['e'], sp['n'], 70, 'e_far')
-        fr = red_ring(img, ct.Cam(vf, img.shape[1], img.shape[0]), np.array([sp['e'], sp['n'], GZ]))
+        vf = look_view('0001', sp['e'], sp['n'], 70, 'e_far', ref_b['z'])
+        fr = red_ring(img, ct.Cam(vf, img.shape[1], img.shape[0]), np.array([sp['e'], sp['n'], ref_b['z']]))
         report('e 30 m 넘음 → 가까운 사진 (1) 으로 옮긴 뒤 봄', moved and fr >= 0.6,
                '사진 %s · 고리 위 %.0f %%' % (ed.js("document.getElementById('shotNo').textContent"), fr * 100))
     # 관 옮김 (Shift 끌기) → 다시 셈 (끄는 동안에도) · 되돌림 → 다시

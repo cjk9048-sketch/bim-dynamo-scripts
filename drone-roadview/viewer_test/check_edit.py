@@ -321,6 +321,8 @@ def errs(ed, where):
 def load(ed, url):
     ed.goto(url)
     ok = ed.wait_js(cv.READY, timeout=60)
+    # 처음엔 «보기» 만 펼침 (JACK 1127) → [관로 고치기] 단추가 있는 «관로» 칸만 펴고 씀
+    ed.js("document.querySelectorAll('#opts .cat[data-cat=pipe]').forEach((s) => { const b = s.querySelector('.catB'); if (b && b.hidden) s.querySelector('.catH').click(); })")
     ed.frames(3)
     return ok
 

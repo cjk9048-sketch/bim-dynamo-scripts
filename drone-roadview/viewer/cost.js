@@ -4,7 +4,7 @@
  * 단가 출처 (정부 · 공공기관 공인 자료만):
  *   관로 본공사 = 환경부 «수도시설 운영비 및 공사비 개략산정기준»(2016.01 · 17~20쪽) 관종 × 관경 × 포장 m당 «자재비 + 포장상태별 공사비»
  *                 (토피 1.5 m · 개착 · 터파기 · 되메우기 · 모래 · 포장 깨기/복구는 이 값 안 → 그 줄은 금액을 다시 더하지 않음)
- *                 2026 산정프로그램 단가 DB 는 암호라 못 씀 → 2016 판 값 · 원문에 가격 기준 연도 없음 (2015 년 가격으로 보임) → 보정 계수 (기본 1.00)
+ *                 2026 산정프로그램 단가 DB 는 암호라 못 씀 → 2016 판 값 · 원문에 가격 기준 연도 없음 (2015 년 가격으로 보임) → 보정 계수 (기본 1.64 = 건설공사비지수 2026.7 ÷ 2015 평균)
  *   셈 방법     = 기후에너지환경부 «수도시설 개략공사비 산정 프로그램 세부 사용 매뉴얼»(2026): 신설관로 = 자재비 × 1.10 (부가세) + 공사비 × 1.50 (제비율 50 %)
  *                 그 밖 공종 = 단가 × 1.50
  *   그 밖 공종  = 국토교통부 공고 제2026-652호 «2026년 하반기 건설공사 표준시장단가» (직접공사비 · 2026.5.8 적용 · 간접비 · 이윤 · 부가세 빠짐)
@@ -31,7 +31,11 @@
   const PAVE_COL = { soil: 2, asphalt: 3, concrete: 4 };
   const SP_W = 0.4;                  // m, 시트파일 한 장 폭 (표준시장단가 Type3 = 400 × 150 × 13)
   const K_LIM = [0.1, 10];           // 보정 계수 범위
-  const STORE = 'rv_cost:v1';        // 이 PC 에 기억 (단가 고친 값 · 포장 · 보정 계수 · 3D 와 360 같이)
+  // 기본 보정 계수 (JACK 1127 «2026년에 맞는 보정계수로») = 건설공사비지수 (한국건설기술연구원 · 2020 = 100) 2026.7 138.59 (잠정)
+  //   ÷ 2015 연평균 84.54 (2015 = 100 계열의 100 을 2021.11 에서 접속: 2020 기준 117.19 [KICT 설명자료 2024.11 표 1] ÷ 2015 기준 138.62 [통계정보보고서 2022.1 표 4]) = 1.639 → 1.64
+  //   환경부 개략산정기준 (2016.01) 의 가격 = 2015 년 가격으로 봄
+  const K_DEF = 1.64, K_SRC = '건설공사비지수 2026.7 138.59 (잠정) ÷ 2015 평균 84.54 (2020 = 100 환산)';
+  const STORE = 'rv_cost:v2';   // v2 = 기본 보정 계수 1.64 (v1 에 기억된 1.00 을 안 쓰게 · 1127)        // 이 PC 에 기억 (단가 고친 값 · 포장 · 보정 계수 · 3D 와 360 같이)
 
   // ---------------------------------------------------------------- 관로 m당 (2016.01 환경부 개략산정기준 17~20쪽 · 숫자 = 원문 그대로)
   // [관경 mm, 자재비, 공사비 토사, 공사비 아스팔트, 공사비 콘크리트] 원/m · 합계 = 자재비 + 그 포장 공사비 (원문 합계 칸과 모두 같음)
@@ -89,7 +93,7 @@
     '관로 = 환경부 «수도시설 운영비 및 공사비 개략산정기준»(2016.01) 관종 · 관경 · 포장별 m당 공사비 (토피 1.5 m · 개착)',
     '관로 금액 = 자재비 × 1.10 + 공사비 × 1.50 (2026 산정프로그램 방법) · 터파기 · 되메우기 · 포장은 이 값 안',
     '그 밖 = 2026 하반기 건설공사 표준시장단가 (국토교통부 공고 제2026-652호) × 1.50',
-    '2016 기준 가격 → 보정 계수로 맞춤 · 공인 단가 없는 항목은 비움',
+    '2016 기준 가격 → 보정 계수 ' + K_DEF.toFixed(2) + ' (' + K_SRC + ') · 공인 단가 없는 항목은 비움',
     '설계비 · 감리비 · 보상비 · 예비비 빠짐',
   ];
 
@@ -113,7 +117,7 @@
 
   // ---------------------------------------------------------------- 고친 값 (이 PC)
   function optClean(o) {
-    const r = { pave: 'asphalt', k: 1, price: {} };
+    const r = { pave: 'asphalt', k: K_DEF, price: {} };
     if (!o || typeof o !== 'object') return r;
     if (PAVE.indexOf(o.pave) >= 0) r.pave = o.pave;
     if (isNum(o.k) && +o.k >= K_LIM[0] && +o.k <= K_LIM[1]) r.k = +o.k;
@@ -259,7 +263,7 @@
     lk.appendChild(ik);
     top.append(lp, lk);
     body.appendChild(top);
-    body.appendChild(mk(doc, 'div', 'cpHint', '보정 계수 = 관로 본공사에 곱함 · 2016 기준 · 건설공사비지수 비율 넣기'));
+    body.appendChild(mk(doc, 'div', 'cpHint', '보정 계수 = 관로 본공사에 곱함 · 기본 ' + K_DEF.toFixed(2) + ' = ' + K_SRC));
 
     body.appendChild(mk(doc, 'div', 'cpSec', '관로 본공사 · m당 (자재비 × 1.10 + 공사비 × 1.50)'));
     const pt = mk(doc, 'div', 'cpTab cpPipe');
@@ -298,7 +302,7 @@
     });
     body.appendChild(it);
   }
-  function dlgDefault(env) { const o = optClean(env.opt()); env.set({ pave: o.pave, k: 1, price: {} }); }
+  function dlgDefault(env) { const o = optClean(env.opt()); env.set({ pave: o.pave, k: K_DEF, price: {} }); }
   function dlgCsv(env) {
     const o = env.opt(), pipes = env.pipes();
     if (env.copy) { env.copy(csv(o, pipes, '\t')); return; }                    // 프로그램 안 = 클립보드 (엑셀에 붙여넣기)
@@ -309,7 +313,7 @@
     if (env.toast) env.toast('내려받기 · 단가표.csv');
   }
 
-  const API = { K_MAT: K_MAT, K_WORK: K_WORK, K_ITEM: K_ITEM, PAVE: PAVE, PAVE_NAME: PAVE_NAME, SP_W: SP_W, PIPE: PIPE, MAT_MAP: MAT_MAP, ITEMS: ITEMS, ITEM: ITEM,
+  const API = { K_DEF: K_DEF, K_SRC: K_SRC, K_MAT: K_MAT, K_WORK: K_WORK, K_ITEM: K_ITEM, PAVE: PAVE, PAVE_NAME: PAVE_NAME, SP_W: SP_W, PIPE: PIPE, MAT_MAP: MAT_MAP, ITEMS: ITEMS, ITEM: ITEM,
     ROWS: ROWS, EXTRA: EXTRA, INFO: INFO, STORE: STORE, pipeRate: pipeRate, optClean: optClean, load: load, save: save, price: price, calc: calc, sheetN: sheetN,
     won: won, wonKo: wonKo, rowText: rowText, sumRows: sumRows, csv: csv, pipeKinds: pipeKinds, infoFill: infoFill, dlgFill: dlgFill, dlgDefault: dlgDefault, dlgCsv: dlgCsv };
   root.RVCost = API;
